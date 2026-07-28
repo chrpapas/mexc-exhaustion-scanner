@@ -1,0 +1,18 @@
+CLEAN UPLOAD INSTRUCTIONS
+
+1. Create a NEW empty GitHub repository. Do not reuse the corrupted repository.
+2. Extract this ZIP.
+3. Upload the extracted CONTENTS, not the ZIP itself.
+4. The repository root must contain:
+   .gitignore
+   .python-version
+   README.md
+   UPLOAD-INSTRUCTIONS.txt
+   pyproject.toml
+   render.yaml
+   app/
+   migrations/
+   scripts/
+   tests/
+5. There should be NO Dockerfile and NO Makefile in this clean version.
+6. In Render choose New > Blueprint and set Blueprint Path to render.yaml.
