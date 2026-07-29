@@ -21,6 +21,8 @@ class Settings:
     database_url: str
     discord_webhook_url: str | None
     mexc_base_url: str
+    mexc_spot_base_url: str
+    require_mexc_spot_pair: bool
     log_level: str
     execution_enabled: bool
 
@@ -53,6 +55,8 @@ class Settings:
             database_url=database_url,
             discord_webhook_url=os.getenv("DISCORD_WEBHOOK_URL") or None,
             mexc_base_url=os.getenv("MEXC_BASE_URL", "https://contract.mexc.com"),
+            mexc_spot_base_url=os.getenv("MEXC_SPOT_BASE_URL", "https://api.mexc.com"),
+            require_mexc_spot_pair=_env_bool("REQUIRE_MEXC_SPOT_PAIR", True),
             log_level=os.getenv("LOG_LEVEL", "INFO").upper(),
             execution_enabled=_env_bool("EXECUTION_ENABLED", False),
             ticker_poll_seconds=int(os.getenv("TICKER_POLL_SECONDS", "60")),

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 from datetime import UTC, datetime
 from typing import Any
 
@@ -102,6 +103,127 @@ def parse_klines(symbol: str, interval: str, data: dict[str, Any]) -> list[Candl
     return result
 
 
+# A MEXC spot-pair requirement is the primary guard. These patterns are a second
+# line of defence for obvious synthetic traditional-market and leveraged products.
+_NON_CRYPTO_BASES = frozenset(
+    {
+        "UKOIL",
+        "USOIL",
+        "BRENT",
+        "WTI",
+        "NATGAS",
+        "NGAS",
+        "GOLD",
+        "SILVER",
+        "COPPER",
+        "XAU",
+        "XAG",
+        "NAS100",
+        "US100",
+        "US30",
+        "US500",
+        "SPX500",
+        "SP500",
+        "DJI",
+        "DOW",
+        "DE40",
+        "GER40",
+        "UK100",
+        "JP225",
+        "HK50",
+        "AUS200",
+        "FRA40",
+        "EU50",
+        "VIX",
+        "DXY",
+        "NVIDIA",
+        "NVDA",
+        "TESLA",
+        "TSLA",
+        "APPLE",
+        "AAPL",
+        "AMAZON",
+        "AMZN",
+        "META",
+        "GOOGLE",
+        "GOOG",
+        "GOOGL",
+        "MICROSOFT",
+        "MSFT",
+        "COINBASE",
+        "COIN",
+        "SAMSUNGSTOCK",
+        "QQQSTOCK",
+        "SKHYSTOCK",
+        "MUSTOCK",
+    }
+)
+_LEVERAGED_TOKEN_RE = re.compile(r"(?:3L|3S|4L|4S|5L|5S|BULL|BEAR|UP|DOWN)$")
+_SPOT_ASSET_ALIASES = {
+    "FILECOIN": "FIL",
+    "PUMPFUN": "PUMP",
+}
+_SCALE_PREFIXES = ("1000000", "100000", "10000", "1000")
+
+
+def _has_matching_spot_asset(base: str, spot_usdt_assets: set[str] | frozenset[str]) -> bool:
+    if base in spot_usdt_assets:
+        return True
+    alias = _SPOT_ASSET_ALIASES.get(base)
+    if alias and alias in spot_usdt_assets:
+        return True
+    for prefix in _SCALE_PREFIXES:
+        if base.startswith(prefix) and base.removeprefix(prefix) in spot_usdt_assets:
+            return True
+    return False
+
+
+def is_crypto_usdt_contract(
+    row: dict[str, Any],
+    spot_usdt_assets: set[str] | frozenset[str],
+    require_spot_pair: bool = True,
+) -> bool:
+    symbol = str(row.get("symbol") or "").upper()
+    base = str(row.get("baseCoin") or "").upper()
+    quote = str(row.get("quoteCoin") or "").upper()
+    settle = str(row.get("settleCoin") or "").upper()
+    display = " ".join(
+        str(row.get(key) or "").upper() for key in ("displayName", "displayNameEn")
+    )
+
+    if not symbol or not base or quote != "USDT" or settle != "USDT":
+        return False
+    if int(row.get("state") or 0) != 0 or bool(row.get("isHidden", False)):
+        return False
+    if base in _NON_CRYPTO_BASES or base.endswith("STOCK") or symbol.startswith("STOCK_"):
+        return False
+    if any(marker in display for marker in (" STOCK", "INDEX", "OIL(BRENT)", "COMMODITY")):
+        return False
+    if _LEVERAGED_TOKEN_RE.search(base):
+        return False
+    if require_spot_pair and not _has_matching_spot_asset(base, spot_usdt_assets):
+        return False
+    return True
+
+
+def parse_spot_usdt_assets(payload: dict[str, Any]) -> set[str]:
+    rows = payload.get("symbols", [])
+    if not isinstance(rows, list):
+        raise MexcApiError("Unexpected spot exchangeInfo payload")
+    assets: set[str] = set()
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        base = str(row.get("baseAsset") or "").upper()
+        quote = str(row.get("quoteAsset") or "").upper()
+        status = str(row.get("status") or "").upper()
+        permissions = {str(value).upper() for value in row.get("permissions", []) if value is not None}
+        online = status in {"1", "ENABLED"}
+        if base and quote == "USDT" and online and (not permissions or "SPOT" in permissions):
+            assets.add(base)
+    return assets
+
+
 INTERVAL_SECONDS = {
     "Min1": 60,
     "Min5": 300,
@@ -118,45 +240,62 @@ class MexcClient:
     def __init__(
         self,
         base_url: str,
+        spot_base_url: str = "https://api.mexc.com",
         request_rate_per_second: float = 8.0,
         request_concurrency: int = 4,
     ) -> None:
-        self._client = httpx.AsyncClient(
-            base_url=base_url.rstrip("/"),
-            timeout=httpx.Timeout(25.0),
-            headers={"User-Agent": "mexc-exhaustion-scanner/0.2"},
+        headers = {"User-Agent": "mexc-exhaustion-scanner/0.3"}
+        timeout = httpx.Timeout(25.0)
+        self._client = httpx.AsyncClient(base_url=base_url.rstrip("/"), timeout=timeout, headers=headers)
+        self._spot_client = httpx.AsyncClient(
+            base_url=spot_base_url.rstrip("/"), timeout=timeout, headers=headers
         )
         self._limiter = AsyncRateLimiter(request_rate_per_second)
         self._semaphore = asyncio.Semaphore(request_concurrency)
 
     async def close(self) -> None:
-        await self._client.aclose()
+        await asyncio.gather(self._client.aclose(), self._spot_client.aclose())
 
-    async def _get(self, path: str, params: dict[str, Any] | None = None) -> Any:
+    async def _request_json(
+        self,
+        client: httpx.AsyncClient,
+        path: str,
+        params: dict[str, Any] | None = None,
+    ) -> Any:
         last_error: Exception | None = None
         for attempt in range(1, 5):
             try:
                 async with self._semaphore:
                     await self._limiter.wait()
-                    response = await self._client.get(path, params=params)
+                    response = await client.get(path, params=params)
                 response.raise_for_status()
                 payload = response.json()
                 if isinstance(payload, dict) and payload.get("success") is False:
                     raise MexcApiError(
                         f"MEXC error {payload.get('code')}: {payload.get('message') or payload.get('msg')}"
                     )
-                return payload.get("data", payload) if isinstance(payload, dict) else payload
+                return payload
             except (httpx.HTTPError, ValueError, MexcApiError) as exc:
                 last_error = exc
                 if attempt < 4:
                     await asyncio.sleep(min(2 ** (attempt - 1), 8))
         raise MexcApiError(f"GET {path} failed after retries: {last_error}")
 
+    async def _get(self, path: str, params: dict[str, Any] | None = None) -> Any:
+        payload = await self._request_json(self._client, path, params)
+        return payload.get("data", payload) if isinstance(payload, dict) else payload
+
     async def get_contracts(self) -> list[dict[str, Any]]:
         data = await self._get("/api/v1/contract/detail")
         if not isinstance(data, list):
             raise MexcApiError("Unexpected contract/detail payload")
         return [row for row in data if isinstance(row, dict)]
+
+    async def get_spot_usdt_assets(self) -> set[str]:
+        payload = await self._request_json(self._spot_client, "/api/v3/exchangeInfo")
+        if not isinstance(payload, dict):
+            raise MexcApiError("Unexpected spot exchangeInfo payload")
+        return parse_spot_usdt_assets(payload)
 
     async def get_tickers(self) -> list[Ticker]:
         data = await self._get("/api/v1/contract/ticker")

@@ -11,7 +11,8 @@ This build is deliberately **shadow mode only**:
 
 ## What it collects
 
-- Active MEXC USDT perpetual contracts.
+- Active MEXC USDT perpetual contracts whose base asset also has an active MEXC USDT spot market.
+- Explicit rejection of stock, index, commodity and leveraged-token contract patterns.
 - Five-minute snapshots for the most liquid contracts: last price, bid/ask spread, 24-hour amount, funding, fair/index prices and `holdVol`.
 - 15-minute and four-hour candles.
 - Recent funding-rate history.
@@ -52,7 +53,7 @@ This clean build uses Render's native Python runtime, so there is **no Dockerfil
 
 ```text
 Database connected and migrations applied
-Refreshed contracts: ... active USDT perpetuals
+Refreshed contracts: total=... active_usdt=... crypto=... excluded_non_crypto=...
 Ticker refresh: received=... stored=...
 Candle sync complete: symbols=... failures=...
 Funding sync complete: symbols=... failures=...
@@ -85,6 +86,8 @@ pytest
 | `MIN_AMOUNT_24H` | `10000000` | Minimum MEXC 24-hour transaction amount in USDT |
 | `MAX_SPREAD_PCT` | `0.25` | Maximum bid/ask spread percentage |
 | `MAX_SYMBOLS` | `250` | Maximum liquid contracts stored and evaluated |
+| `REQUIRE_MEXC_SPOT_PAIR` | `true` | Admit only futures backed by an active MEXC USDT spot market |
+| `MEXC_SPOT_BASE_URL` | `https://api.mexc.com` | MEXC spot API used for crypto-universe validation |
 | `TICKER_STORE_SECONDS` | `300` | Ticker/OI snapshot interval |
 | `MIN_RUN_SCORE` | `5` | Discord candidate threshold |
 | `WATCH_RUN_SCORE` | `4` | Database watch threshold |

@@ -17,6 +17,10 @@ services:
         value: "3.12.11"
       - key: EXECUTION_ENABLED
         value: "false"
+      - key: MEXC_SPOT_BASE_URL
+        value: https://api.mexc.com
+      - key: REQUIRE_MEXC_SPOT_PAIR
+        value: "true"
       - key: LOG_LEVEL
         value: INFO
       - key: MIN_AMOUNT_24H

@@ -10,7 +10,7 @@ from typing import Awaitable, Callable
 from app.config import Settings
 from app.db import Database
 from app.indicators import atr, ema, pct_return, percentile_rank, zscore_last
-from app.mexc import MexcClient
+from app.mexc import MexcClient, is_crypto_usdt_contract
 from app.models import RunSignal, Ticker
 from app.notifier import DiscordNotifier
 from app.signals import RunFeatures, RunThresholds, score_run
@@ -24,6 +24,7 @@ class ScannerWorker:
         self.db = Database(settings.database_url)
         self.mexc = MexcClient(
             settings.mexc_base_url,
+            spot_base_url=settings.mexc_spot_base_url,
             request_rate_per_second=settings.request_rate_per_second,
             request_concurrency=settings.request_concurrency,
         )
@@ -89,13 +90,47 @@ class ScannerWorker:
                 pass
 
     async def refresh_contracts(self) -> None:
-        rows = await self.mexc.get_contracts()
+        rows, spot_usdt_assets = await asyncio.gather(
+            self.mexc.get_contracts(),
+            self.mexc.get_spot_usdt_assets(),
+        )
         await self.db.upsert_contracts(rows)
-        self.contracts = await self.db.active_usdt_contracts()
-        LOGGER.info("Refreshed contracts: %d active USDT perpetuals", len(self.contracts))
+
+        active_usdt = [
+            row
+            for row in rows
+            if str(row.get("quoteCoin") or "").upper() == "USDT"
+            and str(row.get("settleCoin") or "").upper() == "USDT"
+            and int(row.get("state") or 0) == 0
+            and not bool(row.get("isHidden", False))
+        ]
+        crypto_rows = [
+            row
+            for row in active_usdt
+            if is_crypto_usdt_contract(
+                row,
+                spot_usdt_assets,
+                require_spot_pair=self.settings.require_mexc_spot_pair,
+            )
+        ]
+        self.contracts = {str(row["symbol"]).upper() for row in crypto_rows}
+        excluded = sorted(
+            str(row.get("symbol") or "").upper()
+            for row in active_usdt
+            if str(row.get("symbol") or "").upper() not in self.contracts
+        )
+        LOGGER.info(
+            "Refreshed contracts: total=%d active_usdt=%d crypto=%d excluded_non_crypto=%d examples=%s",
+            len(rows),
+            len(active_usdt),
+            len(self.contracts),
+            len(excluded),
+            ",".join(excluded[:12]) or "none",
+        )
 
     async def collect_tickers(self, force_store: bool = False) -> None:
-        tickers = [ticker for ticker in await self.mexc.get_tickers() if ticker.symbol in self.contracts]
+        all_tickers = await self.mexc.get_tickers()
+        tickers = [ticker for ticker in all_tickers if ticker.symbol in self.contracts]
         self.latest_tickers = {ticker.symbol: ticker for ticker in tickers}
 
         loop_time = asyncio.get_running_loop().time()
@@ -107,7 +142,12 @@ class ScannerWorker:
             await self.db.insert_tickers([replace(ticker, observed_at=bucket) for ticker in selected])
             self.last_ticker_store = loop_time
             stored = len(selected)
-        LOGGER.info("Ticker refresh: received=%d stored=%d", len(tickers), stored)
+        LOGGER.info(
+            "Ticker refresh: received=%d crypto=%d stored=%d",
+            len(all_tickers),
+            len(tickers),
+            stored,
+        )
 
     def liquid_symbols(self, include_benchmark: bool = True) -> list[str]:
         eligible = [
