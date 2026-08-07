@@ -236,18 +236,19 @@ class Database:
                 values,
             )
 
-    async def recently_alerted(self, symbol: str, cooldown_minutes: int) -> bool:
+    async def recently_alerted(self, symbol: str, cooldown_minutes: int, level: str = "candidate") -> bool:
         cutoff = datetime.now(UTC) - timedelta(minutes=cooldown_minutes)
         return bool(
             await self.pool.fetchval(
                 """
                 SELECT EXISTS (
                     SELECT 1 FROM run_signals
-                    WHERE symbol=$1 AND level='candidate' AND signaled_at >= $2
+                    WHERE symbol=$1 AND level=$3 AND signaled_at >= $2
                 )
                 """,
                 symbol,
                 cutoff,
+                level,
             )
         )
 

@@ -38,6 +38,10 @@ class Settings:
     min_run_score: int
     watch_run_score: int
     alert_cooldown_minutes: int
+    watch_alert_cooldown_minutes: int
+    short_alert_cooldown_minutes: int
+    short_exhaustion_score: int
+    watch_alerts_enabled: bool
     max_symbols: int
     request_rate_per_second: float
     request_concurrency: int
@@ -65,11 +69,15 @@ class Settings:
             signal_poll_seconds=int(os.getenv("SIGNAL_POLL_SECONDS", "300")),
             contract_refresh_seconds=int(os.getenv("CONTRACT_REFRESH_SECONDS", "21600")),
             funding_refresh_seconds=int(os.getenv("FUNDING_REFRESH_SECONDS", "3600")),
-            min_amount_24h=float(os.getenv("MIN_AMOUNT_24H", "10000000")),
-            max_spread_pct=float(os.getenv("MAX_SPREAD_PCT", "0.25")),
-            min_run_score=int(os.getenv("MIN_RUN_SCORE", "5")),
-            watch_run_score=int(os.getenv("WATCH_RUN_SCORE", "4")),
-            alert_cooldown_minutes=int(os.getenv("ALERT_COOLDOWN_MINUTES", "360")),
+            min_amount_24h=float(os.getenv("MIN_AMOUNT_24H", "3000000")),
+            max_spread_pct=float(os.getenv("MAX_SPREAD_PCT", "0.35")),
+            min_run_score=int(os.getenv("MIN_RUN_SCORE", "4")),
+            watch_run_score=int(os.getenv("WATCH_RUN_SCORE", "3")),
+            alert_cooldown_minutes=int(os.getenv("ALERT_COOLDOWN_MINUTES", "180")),
+            watch_alert_cooldown_minutes=int(os.getenv("WATCH_ALERT_COOLDOWN_MINUTES", "120")),
+            short_alert_cooldown_minutes=int(os.getenv("SHORT_ALERT_COOLDOWN_MINUTES", "120")),
+            short_exhaustion_score=int(os.getenv("SHORT_EXHAUSTION_SCORE", "3")),
+            watch_alerts_enabled=_env_bool("WATCH_ALERTS_ENABLED", True),
             max_symbols=int(os.getenv("MAX_SYMBOLS", "250")),
             request_rate_per_second=float(os.getenv("REQUEST_RATE_PER_SECOND", "8")),
             request_concurrency=int(os.getenv("REQUEST_CONCURRENCY", "4")),

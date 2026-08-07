@@ -23,15 +23,38 @@ class RunFeatures:
 
 
 @dataclass(frozen=True, slots=True)
+class ExhaustionFeatures:
+    upper_wick_ratio_15m: float | None
+    close_location_15m: float | None
+    momentum_1h: float | None
+    previous_momentum_1h: float | None
+    momentum_decelerating: bool
+    below_ema9_15m: bool
+    lower_high_and_close: bool
+    structural_break_15m: bool
+    volume_zscore_15m: float | None
+
+    def as_dict(self) -> dict[str, object]:
+        return asdict(self)
+
+
+@dataclass(frozen=True, slots=True)
 class RunThresholds:
-    min_amount_24h: float = 10_000_000
-    max_spread_pct: float = 0.25
-    min_return_24h: float = 0.20
-    min_return_72h: float = 0.30
-    min_residual_return_24h: float = 0.15
-    min_cross_section_percentile: float = 0.95
-    min_volume_zscore_15m: float = 2.5
-    min_distance_ema_atr_4h: float = 2.5
+    min_amount_24h: float = 3_000_000
+    max_spread_pct: float = 0.35
+    min_return_24h: float = 0.12
+    min_return_72h: float = 0.20
+    min_residual_return_24h: float = 0.10
+    min_cross_section_percentile: float = 0.90
+    min_volume_zscore_15m: float = 1.5
+    min_distance_ema_atr_4h: float = 1.5
+
+
+@dataclass(frozen=True, slots=True)
+class ExhaustionThresholds:
+    min_upper_wick_ratio: float = 0.35
+    max_close_location: float = 0.45
+    min_volume_zscore: float = 1.25
 
 
 def score_run(features: RunFeatures, thresholds: RunThresholds) -> tuple[int, list[str], bool]:
@@ -75,3 +98,32 @@ def score_run(features: RunFeatures, thresholds: RunThresholds) -> tuple[int, li
     ]
     reasons = [label for passed, label in checks if passed]
     return len(reasons), reasons, True
+
+
+def score_exhaustion(
+    features: ExhaustionFeatures,
+    thresholds: ExhaustionThresholds,
+) -> tuple[int, list[str]]:
+    checks: list[tuple[bool, str]] = [
+        (
+            features.upper_wick_ratio_15m is not None
+            and features.upper_wick_ratio_15m >= thresholds.min_upper_wick_ratio,
+            f"15m upper wick >= {thresholds.min_upper_wick_ratio:.0%}",
+        ),
+        (
+            features.close_location_15m is not None
+            and features.close_location_15m <= thresholds.max_close_location,
+            f"15m close in bottom {thresholds.max_close_location:.0%} of range",
+        ),
+        (features.momentum_decelerating, "1h momentum decelerating"),
+        (features.below_ema9_15m, "15m close below EMA9"),
+        (features.lower_high_and_close, "lower high + lower close"),
+        (features.structural_break_15m, "15m structural break"),
+        (
+            features.volume_zscore_15m is not None
+            and features.volume_zscore_15m >= thresholds.min_volume_zscore,
+            f"15m volume z-score >= {thresholds.min_volume_zscore:g}",
+        ),
+    ]
+    reasons = [label for passed, label in checks if passed]
+    return len(reasons), reasons

@@ -1,4 +1,11 @@
-from app.signals import RunFeatures, RunThresholds, score_run
+from app.signals import (
+    ExhaustionFeatures,
+    ExhaustionThresholds,
+    RunFeatures,
+    RunThresholds,
+    score_exhaustion,
+    score_run,
+)
 
 
 def full_features() -> RunFeatures:
@@ -32,3 +39,20 @@ def test_illiquid_contract_is_rejected() -> None:
     assert not required_ok
     assert score == 0
     assert reasons == []
+
+
+def test_exhaustion_score_detects_reversal_structure() -> None:
+    features = ExhaustionFeatures(
+        upper_wick_ratio_15m=0.50,
+        close_location_15m=0.20,
+        momentum_1h=-0.01,
+        previous_momentum_1h=0.08,
+        momentum_decelerating=True,
+        below_ema9_15m=True,
+        lower_high_and_close=True,
+        structural_break_15m=True,
+        volume_zscore_15m=2.0,
+    )
+    score, reasons = score_exhaustion(features, ExhaustionThresholds())
+    assert score == 7
+    assert "15m structural break" in reasons

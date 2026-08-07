@@ -17,26 +17,48 @@ class DiscordNotifier:
     async def close(self) -> None:
         await self._client.aclose()
 
-    async def send_run_candidate(self, signal: RunSignal) -> None:
+    async def send_signal(self, signal: RunSignal) -> None:
         if not self._webhook_url:
             return
+        if signal.level == "short_setup":
+            title = f"🚨 **{signal.symbol} — SHORT SETUP (score {signal.score})**"
+        elif signal.level == "candidate":
+            title = f"🟠 **{signal.symbol} — RUN CANDIDATE (score {signal.score}/6)**"
+        else:
+            title = f"🟡 **{signal.symbol} — WATCH (score {signal.score}/6)**"
+
         features = signal.features
         lines = [
-            f"**{signal.symbol} — abnormal run candidate (score {signal.score}/6)**",
+            title,
             f"24h: {self._percent(features.get('return_24h'))}",
             f"72h: {self._percent(features.get('return_72h'))}",
             f"BTC residual: {self._percent(features.get('residual_return_24h'))}",
             f"Volume z-score: {self._number(features.get('volume_zscore_15m'))}",
             f"EMA distance: {self._number(features.get('distance_above_ema20_atr_4h'))} ATR",
             f"Funding: {self._percent(features.get('funding_rate'))}",
-            "Reasons: " + "; ".join(signal.reasons),
-            "Shadow mode only — this is not a short-entry signal.",
         ]
+        if signal.level == "short_setup":
+            lines.extend(
+                [
+                    f"Exhaustion score: {features.get('exhaustion_score', 'n/a')}/7",
+                    f"Structural break: {'YES' if features.get('structural_break_15m') else 'NO'}",
+                ]
+            )
+        lines.extend(
+            [
+                "Reasons: " + "; ".join(signal.reasons),
+                "Shadow mode only — no order is placed.",
+            ]
+        )
         try:
             response = await self._client.post(self._webhook_url, json={"content": "\n".join(lines)})
             response.raise_for_status()
         except httpx.HTTPError:
             LOGGER.exception("Discord alert failed for %s", signal.symbol)
+
+    # Compatibility with v0.3 callers.
+    async def send_run_candidate(self, signal: RunSignal) -> None:
+        await self.send_signal(signal)
 
     @staticmethod
     def _percent(value: object) -> str:

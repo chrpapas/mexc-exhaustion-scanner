@@ -9,11 +9,18 @@ from typing import Awaitable, Callable
 
 from app.config import Settings
 from app.db import Database
-from app.indicators import atr, ema, pct_return, percentile_rank, zscore_last
+from app.indicators import atr, close_location, ema, pct_return, percentile_rank, upper_wick_ratio, zscore_last
 from app.mexc import MexcClient, is_crypto_usdt_contract
 from app.models import RunSignal, Ticker
 from app.notifier import DiscordNotifier
-from app.signals import RunFeatures, RunThresholds, score_run
+from app.signals import (
+    ExhaustionFeatures,
+    ExhaustionThresholds,
+    RunFeatures,
+    RunThresholds,
+    score_exhaustion,
+    score_run,
+)
 
 LOGGER = logging.getLogger(__name__)
 
@@ -37,6 +44,7 @@ class ScannerWorker:
             min_amount_24h=settings.min_amount_24h,
             max_spread_pct=settings.max_spread_pct,
         )
+        self.exhaustion_thresholds = ExhaustionThresholds()
 
     async def run(self) -> None:
         await self.db.connect()
@@ -216,7 +224,9 @@ class ScannerWorker:
             return
         universe_returns = [self.latest_tickers[symbol].rise_fall_rate for symbol in symbols]
         evaluated = 0
+        watches = 0
         candidates = 0
+        short_setups = 0
 
         for symbol in symbols:
             ticker = self.latest_tickers[symbol]
@@ -252,13 +262,14 @@ class ScannerWorker:
                 and ticker.index_price > 0
                 else None
             )
+            volume_z = zscore_last(volumes_15m, 96)
             features = RunFeatures(
                 return_24h=ticker.rise_fall_rate,
                 return_72h=return_72h,
                 btc_return_24h=btc.rise_fall_rate,
                 residual_return_24h=ticker.rise_fall_rate - btc.rise_fall_rate,
                 cross_section_percentile=percentile_rank(ticker.rise_fall_rate, universe_returns),
-                volume_zscore_15m=zscore_last(volumes_15m, 96),
+                volume_zscore_15m=volume_z,
                 distance_above_ema20_atr_4h=distance_atr,
                 amount_24h=ticker.amount24,
                 spread_pct=ticker.spread_pct,
@@ -266,30 +277,95 @@ class ScannerWorker:
                 fair_index_premium_pct=premium_pct,
                 hold_vol=ticker.hold_vol,
             )
-            score, reasons, required_ok = score_run(features, self.thresholds)
-            if not required_ok or score < self.settings.watch_run_score:
+            run_score, run_reasons, required_ok = score_run(features, self.thresholds)
+            if not required_ok or run_score < self.settings.watch_run_score:
                 continue
 
             signaled_at = self._time_bucket(now, self.settings.signal_poll_seconds)
-            level = "candidate" if score >= self.settings.min_run_score else "watch"
-            signal_row = RunSignal(
+            level = "candidate" if run_score >= self.settings.min_run_score else "watch"
+            run_signal = RunSignal(
                 symbol=symbol,
                 signaled_at=signaled_at,
                 level=level,
-                score=score,
+                score=run_score,
                 features=features.as_dict(),
-                reasons=reasons,
+                reasons=run_reasons,
             )
-            if level == "candidate" and await self.db.recently_alerted(
-                symbol, self.settings.alert_cooldown_minutes
+
+            cooldown = (
+                self.settings.alert_cooldown_minutes
+                if level == "candidate"
+                else self.settings.watch_alert_cooldown_minutes
+            )
+            already_alerted = await self.db.recently_alerted(symbol, cooldown, level=level)
+            inserted = await self.db.insert_signal(run_signal)
+            if inserted and not already_alerted:
+                if level == "candidate":
+                    candidates += 1
+                    await self.notifier.send_signal(run_signal)
+                elif self.settings.watch_alerts_enabled:
+                    watches += 1
+                    await self.notifier.send_signal(run_signal)
+
+            if run_score < self.settings.min_run_score:
+                continue
+
+            latest = completed_15m[-1]
+            previous = completed_15m[-2]
+            ema9_15m = ema(closes_15m, 9)
+            momentum_1h = pct_return(closes_15m[-5], closes_15m[-1])
+            previous_momentum_1h = pct_return(closes_15m[-9], closes_15m[-5])
+            prior_support = min(item.low for item in completed_15m[-5:-1])
+            structural_break = latest.close < prior_support
+            exhaustion = ExhaustionFeatures(
+                upper_wick_ratio_15m=upper_wick_ratio(latest.open, latest.high, latest.low, latest.close),
+                close_location_15m=close_location(latest.high, latest.low, latest.close),
+                momentum_1h=momentum_1h,
+                previous_momentum_1h=previous_momentum_1h,
+                momentum_decelerating=(
+                    momentum_1h is not None
+                    and previous_momentum_1h is not None
+                    and momentum_1h < previous_momentum_1h
+                ),
+                below_ema9_15m=ema9_15m is not None and latest.close < ema9_15m,
+                lower_high_and_close=latest.high < previous.high and latest.close < previous.close,
+                structural_break_15m=structural_break,
+                volume_zscore_15m=volume_z,
+            )
+            exhaustion_score, exhaustion_reasons = score_exhaustion(
+                exhaustion, self.exhaustion_thresholds
+            )
+            if not structural_break or exhaustion_score < self.settings.short_exhaustion_score:
+                continue
+
+            short_features = features.as_dict()
+            short_features.update(exhaustion.as_dict())
+            short_features["run_score"] = run_score
+            short_features["exhaustion_score"] = exhaustion_score
+            short_signal = RunSignal(
+                symbol=symbol,
+                signaled_at=signaled_at,
+                level="short_setup",
+                score=run_score + exhaustion_score,
+                features=short_features,
+                reasons=run_reasons + exhaustion_reasons,
+            )
+            if await self.db.recently_alerted(
+                symbol, self.settings.short_alert_cooldown_minutes, level="short_setup"
             ):
                 continue
-            inserted = await self.db.insert_signal(signal_row)
-            if inserted and level == "candidate":
-                candidates += 1
-                await self.notifier.send_run_candidate(signal_row)
+            inserted_short = await self.db.insert_signal(short_signal)
+            if inserted_short:
+                short_setups += 1
+                await self.notifier.send_signal(short_signal)
 
-        LOGGER.info("Signal evaluation: evaluated=%d candidates=%d", evaluated, candidates)
+        LOGGER.info(
+            "Signal evaluation: evaluated=%d watches=%d candidates=%d short_setups=%d",
+            evaluated,
+            watches,
+            candidates,
+            short_setups,
+        )
 
     async def write_heartbeat(self) -> None:
         await self.db.heartbeat(
