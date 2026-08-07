@@ -20,30 +20,35 @@ class DiscordNotifier:
     async def send_signal(self, signal: RunSignal) -> None:
         if not self._webhook_url:
             return
-        if signal.level == "short_setup":
-            title = f"🚨 **{signal.symbol} — SHORT SETUP (score {signal.score})**"
-        elif signal.level == "candidate":
-            title = f"🟠 **{signal.symbol} — RUN CANDIDATE (score {signal.score}/6)**"
-        else:
-            title = f"🟡 **{signal.symbol} — WATCH (score {signal.score}/6)**"
 
         features = signal.features
+        run_score = features.get("run_score", signal.score)
+        exhaustion_score = features.get("exhaustion_score")
+        if signal.level == "short_setup":
+            title = f"🚨 **{signal.symbol} — SHORT SETUP**"
+        elif signal.level == "exhaustion_watch":
+            title = f"🟠 **{signal.symbol} — EXHAUSTION WATCH**"
+        else:
+            title = f"🟡 **{signal.symbol} — RUN WATCH**"
+
         lines = [
             title,
+            f"Run score: {run_score}/6",
             f"24h: {self._percent(features.get('return_24h'))}",
             f"72h: {self._percent(features.get('return_72h'))}",
             f"BTC residual: {self._percent(features.get('residual_return_24h'))}",
+            f"1h momentum: {self._percent(features.get('momentum_1h'))}",
             f"Volume z-score: {self._number(features.get('volume_zscore_15m'))}",
             f"EMA distance: {self._number(features.get('distance_above_ema20_atr_4h'))} ATR",
             f"Funding: {self._percent(features.get('funding_rate'))}",
         ]
+        if signal.level in {"exhaustion_watch", "short_setup"}:
+            lines.append(f"Exhaustion score: {exhaustion_score if exhaustion_score is not None else 'n/a'}/7")
         if signal.level == "short_setup":
-            lines.extend(
-                [
-                    f"Exhaustion score: {features.get('exhaustion_score', 'n/a')}/7",
-                    f"Structural break: {'YES' if features.get('structural_break_15m') else 'NO'}",
-                ]
+            lines.append(
+                f"Structural break: {'YES' if features.get('structural_break_15m') else 'NO'}"
             )
+
         lines.extend(
             [
                 "Reasons: " + "; ".join(signal.reasons),
@@ -55,10 +60,6 @@ class DiscordNotifier:
             response.raise_for_status()
         except httpx.HTTPError:
             LOGGER.exception("Discord alert failed for %s", signal.symbol)
-
-    # Compatibility with v0.3 callers.
-    async def send_run_candidate(self, signal: RunSignal) -> None:
-        await self.send_signal(signal)
 
     @staticmethod
     def _percent(value: object) -> str:

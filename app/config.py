@@ -35,10 +35,15 @@ class Settings:
 
     min_amount_24h: float
     max_spread_pct: float
-    min_run_score: int
-    watch_run_score: int
-    alert_cooldown_minutes: int
-    watch_alert_cooldown_minutes: int
+    state_min_run_score: int
+    run_watch_min_24h: float
+    run_watch_min_72h: float
+    exhaustion_watch_min_72h: float
+    exhaustion_watch_min_24h: float
+    exhaustion_watch_max_24h: float
+    active_exhaustion_min_score: int
+    run_watch_alert_cooldown_minutes: int
+    exhaustion_watch_alert_cooldown_minutes: int
     short_alert_cooldown_minutes: int
     short_exhaustion_score: int
     watch_alerts_enabled: bool
@@ -71,10 +76,19 @@ class Settings:
             funding_refresh_seconds=int(os.getenv("FUNDING_REFRESH_SECONDS", "3600")),
             min_amount_24h=float(os.getenv("MIN_AMOUNT_24H", "3000000")),
             max_spread_pct=float(os.getenv("MAX_SPREAD_PCT", "0.35")),
-            min_run_score=int(os.getenv("MIN_RUN_SCORE", "4")),
-            watch_run_score=int(os.getenv("WATCH_RUN_SCORE", "3")),
-            alert_cooldown_minutes=int(os.getenv("ALERT_COOLDOWN_MINUTES", "180")),
-            watch_alert_cooldown_minutes=int(os.getenv("WATCH_ALERT_COOLDOWN_MINUTES", "120")),
+            state_min_run_score=int(os.getenv("STATE_MIN_RUN_SCORE", "3")),
+            run_watch_min_24h=float(os.getenv("RUN_WATCH_MIN_24H", "0.08")),
+            run_watch_min_72h=float(os.getenv("RUN_WATCH_MIN_72H", "0.20")),
+            exhaustion_watch_min_72h=float(os.getenv("EXHAUSTION_WATCH_MIN_72H", "0.30")),
+            exhaustion_watch_min_24h=float(os.getenv("EXHAUSTION_WATCH_MIN_24H", "-0.05")),
+            exhaustion_watch_max_24h=float(os.getenv("EXHAUSTION_WATCH_MAX_24H", "0.08")),
+            active_exhaustion_min_score=int(os.getenv("ACTIVE_EXHAUSTION_MIN_SCORE", "2")),
+            run_watch_alert_cooldown_minutes=int(
+                os.getenv("RUN_WATCH_ALERT_COOLDOWN_MINUTES", "120")
+            ),
+            exhaustion_watch_alert_cooldown_minutes=int(
+                os.getenv("EXHAUSTION_WATCH_ALERT_COOLDOWN_MINUTES", "120")
+            ),
             short_alert_cooldown_minutes=int(os.getenv("SHORT_ALERT_COOLDOWN_MINUTES", "120")),
             short_exhaustion_score=int(os.getenv("SHORT_EXHAUSTION_SCORE", "3")),
             watch_alerts_enabled=_env_bool("WATCH_ALERTS_ENABLED", True),
@@ -101,5 +115,9 @@ class Settings:
                 raise ValueError(f"{name} must be positive")
         if self.ticker_store_seconds < self.ticker_poll_seconds:
             raise ValueError("TICKER_STORE_SECONDS must be >= TICKER_POLL_SECONDS")
-        if self.watch_run_score > self.min_run_score:
-            raise ValueError("WATCH_RUN_SCORE must be <= MIN_RUN_SCORE")
+        if self.state_min_run_score < 1 or self.state_min_run_score > 6:
+            raise ValueError("STATE_MIN_RUN_SCORE must be between 1 and 6")
+        if self.exhaustion_watch_min_24h > self.exhaustion_watch_max_24h:
+            raise ValueError("EXHAUSTION_WATCH_MIN_24H must be <= EXHAUSTION_WATCH_MAX_24H")
+        if self.short_exhaustion_score < 1 or self.short_exhaustion_score > 7:
+            raise ValueError("SHORT_EXHAUSTION_SCORE must be between 1 and 7")

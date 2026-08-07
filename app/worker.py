@@ -16,8 +16,10 @@ from app.notifier import DiscordNotifier
 from app.signals import (
     ExhaustionFeatures,
     ExhaustionThresholds,
+    MarketStateThresholds,
     RunFeatures,
     RunThresholds,
+    classify_market_state,
     score_exhaustion,
     score_run,
 )
@@ -45,6 +47,15 @@ class ScannerWorker:
             max_spread_pct=settings.max_spread_pct,
         )
         self.exhaustion_thresholds = ExhaustionThresholds()
+        self.state_thresholds = MarketStateThresholds(
+            min_run_score=settings.state_min_run_score,
+            run_watch_min_24h=settings.run_watch_min_24h,
+            run_watch_min_72h=settings.run_watch_min_72h,
+            exhaustion_watch_min_72h=settings.exhaustion_watch_min_72h,
+            exhaustion_watch_min_24h=settings.exhaustion_watch_min_24h,
+            exhaustion_watch_max_24h=settings.exhaustion_watch_max_24h,
+            active_exhaustion_min_score=settings.active_exhaustion_min_score,
+        )
 
     async def run(self) -> None:
         await self.db.connect()
@@ -222,10 +233,11 @@ class ScannerWorker:
         btc = self.latest_tickers.get("BTC_USDT")
         if not symbols or btc is None:
             return
+
         universe_returns = [self.latest_tickers[symbol].rise_fall_rate for symbol in symbols]
         evaluated = 0
-        watches = 0
-        candidates = 0
+        run_watches = 0
+        exhaustion_watches = 0
         short_setups = 0
 
         for symbol in symbols:
@@ -278,36 +290,7 @@ class ScannerWorker:
                 hold_vol=ticker.hold_vol,
             )
             run_score, run_reasons, required_ok = score_run(features, self.thresholds)
-            if not required_ok or run_score < self.settings.watch_run_score:
-                continue
-
-            signaled_at = self._time_bucket(now, self.settings.signal_poll_seconds)
-            level = "candidate" if run_score >= self.settings.min_run_score else "watch"
-            run_signal = RunSignal(
-                symbol=symbol,
-                signaled_at=signaled_at,
-                level=level,
-                score=run_score,
-                features=features.as_dict(),
-                reasons=run_reasons,
-            )
-
-            cooldown = (
-                self.settings.alert_cooldown_minutes
-                if level == "candidate"
-                else self.settings.watch_alert_cooldown_minutes
-            )
-            already_alerted = await self.db.recently_alerted(symbol, cooldown, level=level)
-            inserted = await self.db.insert_signal(run_signal)
-            if inserted and not already_alerted:
-                if level == "candidate":
-                    candidates += 1
-                    await self.notifier.send_signal(run_signal)
-                elif self.settings.watch_alerts_enabled:
-                    watches += 1
-                    await self.notifier.send_signal(run_signal)
-
-            if run_score < self.settings.min_run_score:
+            if not required_ok or run_score < self.settings.state_min_run_score:
                 continue
 
             latest = completed_15m[-1]
@@ -335,20 +318,61 @@ class ScannerWorker:
             exhaustion_score, exhaustion_reasons = score_exhaustion(
                 exhaustion, self.exhaustion_thresholds
             )
+            state, state_reasons = classify_market_state(
+                features,
+                run_score,
+                exhaustion,
+                exhaustion_score,
+                self.state_thresholds,
+            )
+            if state is None:
+                continue
+
+            signaled_at = self._time_bucket(now, self.settings.signal_poll_seconds)
+            state_features = features.as_dict()
+            state_features.update(exhaustion.as_dict())
+            state_features["run_score"] = run_score
+            state_features["exhaustion_score"] = exhaustion_score
+            state_signal = RunSignal(
+                symbol=symbol,
+                signaled_at=signaled_at,
+                level=state,
+                score=run_score,
+                features=state_features,
+                reasons=state_reasons + run_reasons + (
+                    exhaustion_reasons if state == "exhaustion_watch" else []
+                ),
+            )
+
+            cooldown = (
+                self.settings.exhaustion_watch_alert_cooldown_minutes
+                if state == "exhaustion_watch"
+                else self.settings.run_watch_alert_cooldown_minutes
+            )
+            already_alerted = await self.db.recently_alerted(symbol, cooldown, level=state)
+            inserted = await self.db.insert_signal(state_signal)
+            if inserted and not already_alerted and self.settings.watch_alerts_enabled:
+                if state == "exhaustion_watch":
+                    exhaustion_watches += 1
+                else:
+                    run_watches += 1
+                await self.notifier.send_signal(state_signal)
+
+            # A short setup is only allowed after the symbol has entered the
+            # exhaustion state. A structural support break is mandatory.
+            if state != "exhaustion_watch":
+                continue
             if not structural_break or exhaustion_score < self.settings.short_exhaustion_score:
                 continue
 
-            short_features = features.as_dict()
-            short_features.update(exhaustion.as_dict())
-            short_features["run_score"] = run_score
-            short_features["exhaustion_score"] = exhaustion_score
+            short_features = dict(state_features)
             short_signal = RunSignal(
                 symbol=symbol,
                 signaled_at=signaled_at,
                 level="short_setup",
                 score=run_score + exhaustion_score,
                 features=short_features,
-                reasons=run_reasons + exhaustion_reasons,
+                reasons=state_reasons + run_reasons + exhaustion_reasons,
             )
             if await self.db.recently_alerted(
                 symbol, self.settings.short_alert_cooldown_minutes, level="short_setup"
@@ -360,10 +384,10 @@ class ScannerWorker:
                 await self.notifier.send_signal(short_signal)
 
         LOGGER.info(
-            "Signal evaluation: evaluated=%d watches=%d candidates=%d short_setups=%d",
+            "Signal evaluation: evaluated=%d run_watches=%d exhaustion_watches=%d short_setups=%d",
             evaluated,
-            watches,
-            candidates,
+            run_watches,
+            exhaustion_watches,
             short_setups,
         )
 

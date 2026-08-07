@@ -57,6 +57,17 @@ class ExhaustionThresholds:
     min_volume_zscore: float = 1.25
 
 
+@dataclass(frozen=True, slots=True)
+class MarketStateThresholds:
+    min_run_score: int = 3
+    run_watch_min_24h: float = 0.08
+    run_watch_min_72h: float = 0.20
+    exhaustion_watch_min_72h: float = 0.30
+    exhaustion_watch_min_24h: float = -0.05
+    exhaustion_watch_max_24h: float = 0.08
+    active_exhaustion_min_score: int = 2
+
+
 def score_run(features: RunFeatures, thresholds: RunThresholds) -> tuple[int, list[str], bool]:
     required_ok = (
         features.amount_24h >= thresholds.min_amount_24h
@@ -127,3 +138,65 @@ def score_exhaustion(
     ]
     reasons = [label for passed, label in checks if passed]
     return len(reasons), reasons
+
+
+def classify_market_state(
+    run_features: RunFeatures,
+    run_score: int,
+    exhaustion_features: ExhaustionFeatures,
+    exhaustion_score: int,
+    thresholds: MarketStateThresholds,
+) -> tuple[str | None, list[str]]:
+    """Classify a runner as advancing or fading.
+
+    The cooling-band rule catches multi-day runners whose 24h return has already
+    flattened. The active-exhaustion rule catches a pump that is still strongly
+    positive over 24h but is already showing intraday reversal evidence.
+    """
+    if run_score < thresholds.min_run_score:
+        return None, []
+
+    r24 = run_features.return_24h
+    r72 = run_features.return_72h
+    if r24 is None or r72 is None:
+        return None, []
+
+    prior_run = r72 >= thresholds.exhaustion_watch_min_72h
+    in_cooling_band = (
+        thresholds.exhaustion_watch_min_24h
+        <= r24
+        <= thresholds.exhaustion_watch_max_24h
+    )
+    if prior_run and in_cooling_band:
+        return "exhaustion_watch", [
+            f"72h prior run >= {thresholds.exhaustion_watch_min_72h:.0%}",
+            (
+                "24h return cooled into "
+                f"{thresholds.exhaustion_watch_min_24h:.0%} to "
+                f"{thresholds.exhaustion_watch_max_24h:.0%} band"
+            ),
+        ]
+
+    active_reversal = (
+        prior_run
+        and r24 > thresholds.exhaustion_watch_max_24h
+        and exhaustion_score >= thresholds.active_exhaustion_min_score
+        and exhaustion_features.momentum_decelerating
+        and (exhaustion_features.below_ema9_15m or exhaustion_features.lower_high_and_close)
+    )
+    if active_reversal:
+        return "exhaustion_watch", [
+            f"72h prior run >= {thresholds.exhaustion_watch_min_72h:.0%}",
+            "24h run still positive but intraday reversal evidence is building",
+        ]
+
+    advancing = r24 > thresholds.run_watch_min_24h and (
+        r72 >= thresholds.run_watch_min_72h or run_score >= 4
+    )
+    if advancing:
+        return "run_watch", [
+            f"24h return > {thresholds.run_watch_min_24h:.0%}",
+            "run remains in advancing state",
+        ]
+
+    return None, []
