@@ -29,6 +29,7 @@ from app.signals import (
     MarketStateThresholds,
     RunFeatures,
     RunThresholds,
+    classify_execution_risk,
     classify_market_state,
     evaluate_failed_retest,
     score_exhaustion,
@@ -220,9 +221,11 @@ class ScannerWorker:
             bucket = self._time_bucket(
                 datetime.now(UTC), self.settings.ticker_store_seconds
             )
+            symbols = await self.discovery_symbols(include_benchmark=True)
             selected = [
                 self.latest_tickers[symbol]
-                for symbol in self.liquid_symbols(include_benchmark=True)
+                for symbol in symbols
+                if symbol in self.latest_tickers
             ]
             await self.db.insert_tickers(
                 [replace(ticker, observed_at=bucket) for ticker in selected]
@@ -236,7 +239,7 @@ class ScannerWorker:
             stored,
         )
 
-    def liquid_symbols(self, include_benchmark: bool = True) -> list[str]:
+    def execution_quality_symbols(self, include_benchmark: bool = True) -> list[str]:
         eligible = [
             ticker
             for ticker in self.latest_tickers.values()
@@ -245,7 +248,60 @@ class ScannerWorker:
             and ticker.spread_pct <= self.settings.max_spread_pct
         ]
         eligible.sort(key=lambda item: item.amount24, reverse=True)
-        symbols = [ticker.symbol for ticker in eligible[: self.settings.max_symbols]]
+        symbols = [ticker.symbol for ticker in eligible]
+        if (
+            include_benchmark
+            and "BTC_USDT" in self.latest_tickers
+            and "BTC_USDT" not in symbols
+        ):
+            symbols.append("BTC_USDT")
+        return symbols
+
+    async def discovery_symbols(self, include_benchmark: bool = True) -> list[str]:
+        """Symbols worth full candle analysis, independent of execution liquidity.
+
+        Standard-liquidity contracts are always kept. Low-liquidity contracts are
+        admitted when their 24h return is already unusual, when they rank in the
+        upper part of the MEXC crypto cross-section, or while they have a live pump
+        episode. This lets tiny runners such as CASHCAT become visible without
+        downloading full histories for every dormant contract on every cycle.
+        """
+        if not self.latest_tickers:
+            return []
+
+        active_episodes = await self.db.active_episode_symbols()
+        returns = [ticker.rise_fall_rate for ticker in self.latest_tickers.values()]
+        standard = set(self.execution_quality_symbols(include_benchmark=False))
+
+        selected: list[tuple[int, float, float, str]] = []
+        for ticker in self.latest_tickers.values():
+            rank = percentile_rank(ticker.rise_fall_rate, returns)
+            is_active = ticker.symbol in active_episodes
+            is_standard = ticker.symbol in standard
+            is_mover = ticker.rise_fall_rate >= self.settings.discovery_min_return_24h
+            is_relative_mover = (
+                rank is not None
+                and rank >= self.settings.discovery_min_cross_section_percentile
+            )
+            if not (is_active or is_standard or is_mover or is_relative_mover):
+                continue
+            selected.append(
+                (
+                    1 if is_active else 0,
+                    ticker.rise_fall_rate,
+                    ticker.amount24,
+                    ticker.symbol,
+                )
+            )
+
+        selected.sort(reverse=True)
+        symbols = [item[3] for item in selected[: self.settings.max_symbols]]
+
+        # Active episodes must never disappear because of the cap.
+        for symbol in sorted(active_episodes):
+            if symbol in self.latest_tickers and symbol not in symbols:
+                symbols.append(symbol)
+
         if (
             include_benchmark
             and "BTC_USDT" in self.latest_tickers
@@ -255,9 +311,9 @@ class ScannerWorker:
         return symbols
 
     async def collect_candles(self) -> None:
-        symbols = self.liquid_symbols(include_benchmark=True)
+        symbols = await self.discovery_symbols(include_benchmark=True)
         if not symbols:
-            LOGGER.info("No liquid symbols available for candle collection")
+            LOGGER.info("No discovery symbols available for candle collection")
             return
         semaphore = asyncio.Semaphore(self.settings.request_concurrency)
 
@@ -296,7 +352,7 @@ class ScannerWorker:
         await self.db.upsert_candles(candles)
 
     async def collect_funding(self) -> None:
-        symbols = self.liquid_symbols(include_benchmark=False)
+        symbols = await self.discovery_symbols(include_benchmark=False)
         semaphore = asyncio.Semaphore(self.settings.request_concurrency)
 
         async def sync_symbol(symbol: str) -> None:
@@ -315,7 +371,7 @@ class ScannerWorker:
     async def evaluate_signals(self) -> None:
         symbols = [
             symbol
-            for symbol in self.liquid_symbols(include_benchmark=False)
+            for symbol in await self.discovery_symbols(include_benchmark=False)
             if symbol not in self.settings.excluded_symbols
         ]
         btc = self.latest_tickers.get("BTC_USDT")
@@ -323,9 +379,12 @@ class ScannerWorker:
             return
 
         universe_returns = [
-            self.latest_tickers[symbol].rise_fall_rate for symbol in symbols
+            ticker.rise_fall_rate for ticker in self.latest_tickers.values()
         ]
         evaluated = 0
+        standard_evaluated = 0
+        high_risk_evaluated = 0
+        extreme_risk_evaluated = 0
         run_watches = 0
         exhaustion_watches = 0
         breakdown_watches = 0
@@ -395,7 +454,19 @@ class ScannerWorker:
                 fair_index_premium_pct=premium_pct,
                 hold_vol=ticker.hold_vol,
             )
-            run_score, run_reasons, required_ok = score_run(features, self.thresholds)
+            run_score, run_reasons, scorable = score_run(features, self.thresholds)
+            risk = classify_execution_risk(
+                features,
+                self.thresholds,
+                high_risk_min_amount_24h=self.settings.high_risk_min_amount_24h,
+                high_risk_max_spread_pct=self.settings.high_risk_max_spread_pct,
+            )
+            if risk.tier == "standard":
+                standard_evaluated += 1
+            elif risk.tier == "high_risk":
+                high_risk_evaluated += 1
+            else:
+                extreme_risk_evaluated += 1
 
             latest = completed_15m[-1]
             previous = completed_15m[-2]
@@ -444,6 +515,10 @@ class ScannerWorker:
             base_features["run_score"] = run_score
             base_features["exhaustion_score"] = exhaustion_score
             base_features["atr_15m"] = atr14_15m
+            base_features["risk_tier"] = risk.tier
+            base_features["execution_eligible"] = risk.execution_eligible
+            base_features["execution_risk_reasons"] = list(risk.reasons)
+            base_features["execution_risk_warning"] = risk.warning
 
             episode = await self.db.get_active_episode(symbol)
 
@@ -471,7 +546,7 @@ class ScannerWorker:
                     (candle.high for candle in post_confirm), default=0.0
                 )
                 can_rearm = (
-                    required_ok
+                    scorable
                     and run_score >= self.settings.state_min_run_score
                     and state is not None
                     and new_high
@@ -558,6 +633,7 @@ class ScannerWorker:
                                 symbol=symbol,
                                 confirmed_at=signaled_at,
                                 entry_price=retest.retest_close,
+                                risk_tier=risk.tier,
                             )
                         if inserted:
                             confirmed_shorts += 1
@@ -620,9 +696,9 @@ class ScannerWorker:
                     )
                     continue
 
-            # New watch states still require the normal run/liquidity gate.
+            # Discovery is intentionally independent of execution liquidity.
             if (
-                not required_ok
+                not scorable
                 or run_score < self.settings.state_min_run_score
                 or state is None
             ):
@@ -745,9 +821,13 @@ class ScannerWorker:
                     await self.notifier.send_signal(breakdown_signal)
 
         LOGGER.info(
-            "Signal evaluation: evaluated=%d run_watches=%d exhaustion_watches=%d "
-            "breakdown_watches=%d breakdown_waiting=%d confirmed_shorts=%d rearmed=%d",
+            "Signal evaluation: evaluated=%d standard=%d high_risk=%d extreme_risk=%d "
+            "run_watches=%d exhaustion_watches=%d breakdown_watches=%d "
+            "breakdown_waiting=%d confirmed_shorts=%d rearmed=%d",
             evaluated,
+            standard_evaluated,
+            high_risk_evaluated,
+            extreme_risk_evaluated,
             run_watches,
             exhaustion_watches,
             breakdown_watches,
@@ -927,6 +1007,15 @@ class ScannerWorker:
 
         returns_24h = [float(row["return_24h_pct"]) for row in matured]
         wins = sum(value > 0 for value in returns_24h)
+        standard_matured = [row for row in matured if row.get("risk_tier") == "standard"]
+        high_risk_matured = [row for row in matured if row.get("risk_tier") != "standard"]
+
+        def win_rate(group: list[dict[str, object]]) -> float | None:
+            values = [float(row["return_24h_pct"]) for row in group]
+            if not values:
+                return None
+            return sum(value > 0 for value in values) / len(values)
+
         best = max(matured, key=lambda row: float(row["return_24h_pct"]), default=None)
         worst = min(matured, key=lambda row: float(row["return_24h_pct"]), default=None)
         matured_mfe = [float(row["mfe_pct"]) for row in matured]
@@ -941,6 +1030,10 @@ class ScannerWorker:
             matured_total=len(matured),
             matured_today=matured_today,
             win_rate_24h=(wins / len(returns_24h)) if returns_24h else None,
+            standard_matured_total=len(standard_matured),
+            standard_win_rate_24h=win_rate(standard_matured),
+            high_risk_matured_total=len(high_risk_matured),
+            high_risk_win_rate_24h=win_rate(high_risk_matured),
             avg_return_1h=average(values_for("return_1h_pct")),
             avg_return_4h=average(values_for("return_4h_pct")),
             avg_return_12h=average(values_for("return_12h_pct")),
@@ -976,16 +1069,18 @@ class ScannerWorker:
         )
 
     async def write_heartbeat(self) -> None:
+        discovery = await self.discovery_symbols(include_benchmark=True)
         await self.db.heartbeat(
             "mexc-exhaustion-scanner",
             {
                 "contracts": len(self.contracts),
                 "latest_tickers": len(self.latest_tickers),
-                "liquid_symbols": len(
-                    self.liquid_symbols(include_benchmark=True)
+                "execution_quality_symbols": len(
+                    self.execution_quality_symbols(include_benchmark=True)
                 ),
+                "discovery_symbols": len(discovery),
                 "execution_enabled": self.settings.execution_enabled,
-                "strategy_version": "0.7",
+                "strategy_version": "0.8",
             },
         )
 

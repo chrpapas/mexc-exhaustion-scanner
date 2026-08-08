@@ -295,6 +295,16 @@ class Database:
         )
         return result == "INSERT 0 1"
 
+    async def active_episode_symbols(self) -> set[str]:
+        rows = await self.pool.fetch(
+            """
+            SELECT DISTINCT symbol
+            FROM pump_episodes
+            WHERE closed_at IS NULL
+            """
+        )
+        return {str(row["symbol"]) for row in rows}
+
     async def get_active_episode(self, symbol: str) -> PumpEpisode | None:
         row = await self.pool.fetchrow(
             """
@@ -468,24 +478,26 @@ class Database:
         symbol: str,
         confirmed_at: datetime,
         entry_price: float,
+        risk_tier: str = "standard",
     ) -> bool:
         result = await self.pool.execute(
             """
-            INSERT INTO shadow_trades (episode_id, symbol, confirmed_at, entry_price)
-            VALUES ($1,$2,$3,$4)
+            INSERT INTO shadow_trades (episode_id, symbol, confirmed_at, entry_price, risk_tier)
+            VALUES ($1,$2,$3,$4,$5)
             ON CONFLICT (episode_id) DO NOTHING
             """,
             episode_id,
             symbol,
             confirmed_at,
             entry_price,
+            risk_tier,
         )
         return result == "INSERT 0 1"
 
     async def fetch_shadow_trades(self) -> list[dict[str, Any]]:
         rows = await self.pool.fetch(
             """
-            SELECT episode_id, symbol, confirmed_at, entry_price, current_price,
+            SELECT episode_id, symbol, confirmed_at, entry_price, risk_tier, current_price,
                    current_return_pct, last_observed_at, mfe_pct, mae_pct,
                    return_1h_pct, return_4h_pct, return_12h_pct, return_24h_pct,
                    matured_at
@@ -594,7 +606,7 @@ class Database:
     async def performance_rows(self) -> list[dict[str, Any]]:
         rows = await self.pool.fetch(
             """
-            SELECT episode_id, symbol, confirmed_at, entry_price,
+            SELECT episode_id, symbol, confirmed_at, entry_price, risk_tier,
                    current_return_pct, mfe_pct, mae_pct,
                    return_1h_pct, return_4h_pct, return_12h_pct, return_24h_pct,
                    matured_at

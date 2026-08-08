@@ -3,6 +3,7 @@ from app.signals import (
     ExhaustionThresholds,
     RunFeatures,
     RunThresholds,
+    classify_execution_risk,
     score_exhaustion,
     score_run,
 )
@@ -32,13 +33,42 @@ def test_full_candidate_scores_six() -> None:
     assert len(reasons) == 6
 
 
-def test_illiquid_contract_is_rejected() -> None:
+def test_illiquid_contract_is_still_scored_but_flagged_high_risk() -> None:
     original = full_features()
     features = RunFeatures(**{**original.as_dict(), "amount_24h": 1_000_000})
-    score, reasons, required_ok = score_run(features, RunThresholds())
-    assert not required_ok
-    assert score == 0
-    assert reasons == []
+    score, reasons, scorable = score_run(features, RunThresholds())
+    risk = classify_execution_risk(features, RunThresholds())
+    assert scorable
+    assert score == 6
+    assert len(reasons) == 6
+    assert risk.tier == "high_risk"
+    assert not risk.execution_eligible
+
+
+def test_cashcat_like_tiny_runner_remains_visible_as_extreme_risk() -> None:
+    original = full_features()
+    features = RunFeatures(
+        **{
+            **original.as_dict(),
+            "amount_24h": 150_000,
+            "spread_pct": 1.40,
+            "return_24h": 0.80,
+            "return_72h": 2.50,
+        }
+    )
+    score, _, scorable = score_run(features, RunThresholds())
+    risk = classify_execution_risk(features, RunThresholds())
+    assert scorable
+    assert score >= 5
+    assert risk.tier == "extreme_risk"
+    assert not risk.execution_eligible
+    assert risk.warning is not None
+
+
+def test_standard_liquidity_is_execution_eligible() -> None:
+    risk = classify_execution_risk(full_features(), RunThresholds())
+    assert risk.tier == "standard"
+    assert risk.execution_eligible
 
 
 def test_exhaustion_score_detects_reversal_structure() -> None:

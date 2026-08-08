@@ -25,6 +25,8 @@ class DiscordNotifier:
         features = signal.features
         run_score = features.get("run_score", signal.score)
         exhaustion_score = features.get("exhaustion_score")
+        risk_tier = str(features.get("risk_tier") or "standard")
+        risk_warning = features.get("execution_risk_warning")
         if signal.level == "confirmed_short":
             title = f"🚨 **{signal.symbol} — CONFIRMED SHORT**"
         elif signal.level == "breakdown_watch":
@@ -34,8 +36,28 @@ class DiscordNotifier:
         else:
             title = f"🟡 **{signal.symbol} — RUN WATCH**"
 
-        lines = [
-            title,
+        lines = [title]
+        if risk_tier == "high_risk":
+            lines.extend(
+                [
+                    "⚠️ **HIGH-RISK / LOW-LIQUIDITY CANDIDATE**",
+                    "Execution-quality filter: FAIL — signal remains visible for research.",
+                ]
+            )
+        elif risk_tier == "extreme_risk":
+            lines.extend(
+                [
+                    "⛔ **EXTREME EXECUTION RISK**",
+                    "Analytics only — thin liquidity/spread can make this impractical to short safely.",
+                ]
+            )
+        else:
+            lines.append("🟢 Execution quality: STANDARD")
+        if risk_warning and risk_tier != "standard":
+            lines.append(str(risk_warning))
+        lines.extend([
+            f"24h futures turnover: {self._money(features.get('amount_24h'))}",
+            f"Bid/ask spread: {self._spread(features.get('spread_pct'))}",
             f"Episode: #{signal.episode_id}" if signal.episode_id is not None else "Episode: n/a",
             f"Run score: {run_score}/6",
             f"24h: {self._percent(features.get('return_24h'))}",
@@ -45,7 +67,7 @@ class DiscordNotifier:
             f"Volume z-score: {self._number(features.get('volume_zscore_15m'))}",
             f"EMA distance: {self._number(features.get('distance_above_ema20_atr_4h'))} ATR",
             f"Funding: {self._percent(features.get('funding_rate'))}",
-        ]
+        ])
         if signal.level in {"exhaustion_watch", "breakdown_watch", "confirmed_short"}:
             lines.append(
                 f"Exhaustion score: {exhaustion_score if exhaustion_score is not None else 'n/a'}/7"
@@ -65,6 +87,10 @@ class DiscordNotifier:
             lines.append(f"Retest high: {self._price(features.get('retest_high'))}")
             lines.append(f"Retest close: {self._price(features.get('retest_close'))}")
             lines.append("Episode locked: YES — no second short alert unless a new episode re-arms")
+
+        risk_reasons = features.get("execution_risk_reasons")
+        if risk_reasons and risk_tier != "standard":
+            lines.append("Risk flags: " + "; ".join(str(item) for item in risk_reasons))
 
         lines.extend(
             [
@@ -95,6 +121,13 @@ class DiscordNotifier:
             ),
             f"24h matured signals: {report.matured_total} all-time | {report.matured_today} today",
             f"24h win rate: {self._percent(report.win_rate_24h)}",
+            (
+                "24h by risk: "
+                f"STANDARD {report.standard_matured_total} signals / "
+                f"{self._percent(report.standard_win_rate_24h)} win | "
+                f"HIGH+EXTREME {report.high_risk_matured_total} signals / "
+                f"{self._percent(report.high_risk_win_rate_24h)} win"
+            ),
             (
                 "Average short return: "
                 f"1h {self._percent(report.avg_return_1h)} | "
@@ -136,6 +169,23 @@ class DiscordNotifier:
     @staticmethod
     def _number(value: object) -> str:
         return "n/a" if value is None else f"{float(value):.2f}"
+
+    @staticmethod
+    def _money(value: object) -> str:
+        if value is None:
+            return "n/a"
+        number = float(value)
+        if number >= 1_000_000_000:
+            return f"${number / 1_000_000_000:.2f}B"
+        if number >= 1_000_000:
+            return f"${number / 1_000_000:.2f}M"
+        if number >= 1_000:
+            return f"${number / 1_000:.1f}K"
+        return f"${number:,.0f}"
+
+    @staticmethod
+    def _spread(value: object) -> str:
+        return "n/a" if value is None else f"{float(value):.3f}%"
 
     @staticmethod
     def _price(value: object) -> str:

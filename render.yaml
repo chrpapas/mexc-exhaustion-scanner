@@ -27,6 +27,14 @@ services:
         value: "3000000"
       - key: MAX_SPREAD_PCT
         value: "0.35"
+      - key: HIGH_RISK_MIN_AMOUNT_24H
+        value: "500000"
+      - key: HIGH_RISK_MAX_SPREAD_PCT
+        value: "1.0"
+      - key: DISCOVERY_MIN_RETURN_24H
+        value: "0.05"
+      - key: DISCOVERY_MIN_CROSS_SECTION_PERCENTILE
+        value: "0.70"
       - key: STATE_MIN_RUN_SCORE
         value: "3"
       - key: RUN_WATCH_MIN_24H
@@ -64,7 +72,7 @@ services:
       - key: PERFORMANCE_REPORT_TIMEZONE
         value: Europe/Zurich
       - key: MAX_SYMBOLS
-        value: "250"
+        value: "400"
       - key: TICKER_POLL_SECONDS
         value: "60"
       - key: TICKER_STORE_SECONDS

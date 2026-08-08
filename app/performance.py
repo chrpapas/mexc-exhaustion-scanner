@@ -35,6 +35,10 @@ class PerformanceSummary:
     matured_total: int
     matured_today: int
     win_rate_24h: float | None
+    standard_matured_total: int
+    standard_win_rate_24h: float | None
+    high_risk_matured_total: int
+    high_risk_win_rate_24h: float | None
     avg_return_1h: float | None
     avg_return_4h: float | None
     avg_return_12h: float | None
@@ -57,6 +61,10 @@ class PerformanceSummary:
             "matured_total": self.matured_total,
             "matured_today": self.matured_today,
             "win_rate_24h": self.win_rate_24h,
+            "standard_matured_total": self.standard_matured_total,
+            "standard_win_rate_24h": self.standard_win_rate_24h,
+            "high_risk_matured_total": self.high_risk_matured_total,
+            "high_risk_win_rate_24h": self.high_risk_win_rate_24h,
             "avg_return_1h": self.avg_return_1h,
             "avg_return_4h": self.avg_return_4h,
             "avg_return_12h": self.avg_return_12h,

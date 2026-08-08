@@ -72,6 +72,14 @@ class MarketStateThresholds:
 
 
 @dataclass(frozen=True, slots=True)
+class ExecutionRisk:
+    tier: str
+    execution_eligible: bool
+    warning: str | None
+    reasons: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
 class RetestResult:
     confirmed: bool
     expired: bool
@@ -82,15 +90,72 @@ class RetestResult:
     reason: str | None = None
 
 
-def score_run(features: RunFeatures, thresholds: RunThresholds) -> tuple[int, list[str], bool]:
-    required_ok = (
+def classify_execution_risk(
+    features: RunFeatures,
+    thresholds: RunThresholds,
+    *,
+    high_risk_min_amount_24h: float = 500_000,
+    high_risk_max_spread_pct: float = 1.0,
+) -> ExecutionRisk:
+    spread = features.spread_pct
+    standard = (
         features.amount_24h >= thresholds.min_amount_24h
-        and features.spread_pct is not None
-        and features.spread_pct <= thresholds.max_spread_pct
+        and spread is not None
+        and spread <= thresholds.max_spread_pct
     )
-    if not required_ok:
-        return 0, [], False
+    if standard:
+        return ExecutionRisk(
+            tier="standard",
+            execution_eligible=True,
+            warning=None,
+            reasons=(),
+        )
 
+    reasons: list[str] = []
+    if features.amount_24h < thresholds.min_amount_24h:
+        reasons.append(
+            f"24h turnover below standard ${thresholds.min_amount_24h:,.0f}"
+        )
+    if spread is None:
+        reasons.append("spread unavailable")
+    elif spread > thresholds.max_spread_pct:
+        reasons.append(
+            f"spread above standard {thresholds.max_spread_pct:.2f}%"
+        )
+
+    high_risk = (
+        features.amount_24h >= high_risk_min_amount_24h
+        and spread is not None
+        and spread <= high_risk_max_spread_pct
+    )
+    if high_risk:
+        return ExecutionRisk(
+            tier="high_risk",
+            execution_eligible=False,
+            warning="HIGH RISK / LOW LIQUIDITY — elevated slippage and squeeze risk",
+            reasons=tuple(reasons),
+        )
+
+    if features.amount_24h < high_risk_min_amount_24h:
+        reasons.append(
+            f"24h turnover below high-risk floor ${high_risk_min_amount_24h:,.0f}"
+        )
+    if spread is not None and spread > high_risk_max_spread_pct:
+        reasons.append(
+            f"spread above high-risk ceiling {high_risk_max_spread_pct:.2f}%"
+        )
+    return ExecutionRisk(
+        tier="extreme_risk",
+        execution_eligible=False,
+        warning="EXTREME EXECUTION RISK — analytics only; do not auto-trade",
+        reasons=tuple(reasons),
+    )
+
+
+def score_run(features: RunFeatures, thresholds: RunThresholds) -> tuple[int, list[str], bool]:
+    # Liquidity is intentionally NOT a discovery gate. The third return value
+    # now means the feature set is scorable; execution quality is classified
+    # separately by classify_execution_risk().
     checks: list[tuple[bool, str]] = [
         (
             features.return_24h is not None and features.return_24h >= thresholds.min_return_24h,

@@ -35,6 +35,10 @@ class Settings:
 
     min_amount_24h: float
     max_spread_pct: float
+    high_risk_min_amount_24h: float
+    high_risk_max_spread_pct: float
+    discovery_min_return_24h: float
+    discovery_min_cross_section_percentile: float
     state_min_run_score: int
     run_watch_min_24h: float
     run_watch_min_72h: float
@@ -84,6 +88,10 @@ class Settings:
             funding_refresh_seconds=int(os.getenv("FUNDING_REFRESH_SECONDS", "3600")),
             min_amount_24h=float(os.getenv("MIN_AMOUNT_24H", "3000000")),
             max_spread_pct=float(os.getenv("MAX_SPREAD_PCT", "0.35")),
+            high_risk_min_amount_24h=float(os.getenv("HIGH_RISK_MIN_AMOUNT_24H", "500000")),
+            high_risk_max_spread_pct=float(os.getenv("HIGH_RISK_MAX_SPREAD_PCT", "1.0")),
+            discovery_min_return_24h=float(os.getenv("DISCOVERY_MIN_RETURN_24H", "0.05")),
+            discovery_min_cross_section_percentile=float(os.getenv("DISCOVERY_MIN_CROSS_SECTION_PERCENTILE", "0.70")),
             state_min_run_score=int(os.getenv("STATE_MIN_RUN_SCORE", "3")),
             run_watch_min_24h=float(os.getenv("RUN_WATCH_MIN_24H", "0.08")),
             run_watch_min_72h=float(os.getenv("RUN_WATCH_MIN_72H", "0.20")),
@@ -99,7 +107,7 @@ class Settings:
             ),
             short_exhaustion_score=int(os.getenv("SHORT_EXHAUSTION_SCORE", "3")),
             watch_alerts_enabled=_env_bool("WATCH_ALERTS_ENABLED", True),
-            max_symbols=int(os.getenv("MAX_SYMBOLS", "250")),
+            max_symbols=int(os.getenv("MAX_SYMBOLS", "400")),
             request_rate_per_second=float(os.getenv("REQUEST_RATE_PER_SECOND", "8")),
             request_concurrency=int(os.getenv("REQUEST_CONCURRENCY", "4")),
             excluded_symbols=_env_csv("EXCLUDED_SYMBOLS", "BTC_USDT,ETH_USDT"),
@@ -132,6 +140,16 @@ class Settings:
                 raise ValueError(f"{name} must be positive")
         if self.ticker_store_seconds < self.ticker_poll_seconds:
             raise ValueError("TICKER_STORE_SECONDS must be >= TICKER_POLL_SECONDS")
+        if self.min_amount_24h < 0 or self.high_risk_min_amount_24h < 0:
+            raise ValueError("liquidity amount thresholds must be non-negative")
+        if self.max_spread_pct <= 0 or self.high_risk_max_spread_pct <= 0:
+            raise ValueError("spread thresholds must be positive")
+        if self.high_risk_min_amount_24h > self.min_amount_24h:
+            raise ValueError("HIGH_RISK_MIN_AMOUNT_24H must be <= MIN_AMOUNT_24H")
+        if self.high_risk_max_spread_pct < self.max_spread_pct:
+            raise ValueError("HIGH_RISK_MAX_SPREAD_PCT must be >= MAX_SPREAD_PCT")
+        if not 0 <= self.discovery_min_cross_section_percentile <= 1:
+            raise ValueError("DISCOVERY_MIN_CROSS_SECTION_PERCENTILE must be between 0 and 1")
         if self.state_min_run_score < 1 or self.state_min_run_score > 6:
             raise ValueError("STATE_MIN_RUN_SCORE must be between 1 and 6")
         if self.exhaustion_watch_min_24h > self.exhaustion_watch_max_24h:
