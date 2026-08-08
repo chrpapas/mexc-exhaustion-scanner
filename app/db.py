@@ -8,7 +8,7 @@ from typing import Any
 
 import asyncpg
 
-from app.models import Candle, RunSignal, Ticker
+from app.models import Candle, PumpEpisode, RunSignal, Ticker
 
 
 class Database:
@@ -46,10 +46,6 @@ class Database:
 
     async def migrate(self) -> None:
         migration_dir = Path(__file__).resolve().parents[1] / "migrations"
-
-        # Track applied migrations so startup does not replay the entire schema
-        # on every Render restart/deploy. Existing installations can adopt this
-        # safely because the historical migrations are written to be idempotent.
         await self.pool.execute(
             """
             CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -264,7 +260,7 @@ class Database:
                 values,
             )
 
-    async def recently_alerted(self, symbol: str, cooldown_minutes: int, level: str = "candidate") -> bool:
+    async def recently_alerted(self, symbol: str, cooldown_minutes: int, level: str) -> bool:
         cutoff = datetime.now(UTC) - timedelta(minutes=cooldown_minutes)
         return bool(
             await self.pool.fetchval(
@@ -283,8 +279,10 @@ class Database:
     async def insert_signal(self, signal: RunSignal) -> bool:
         result = await self.pool.execute(
             """
-            INSERT INTO run_signals (symbol, signaled_at, level, score, features, reasons)
-            VALUES ($1,$2,$3,$4,$5::jsonb,$6::jsonb)
+            INSERT INTO run_signals (
+                symbol, signaled_at, level, score, features, reasons, episode_id
+            )
+            VALUES ($1,$2,$3,$4,$5::jsonb,$6::jsonb,$7)
             ON CONFLICT (symbol, signaled_at, level) DO NOTHING
             """,
             signal.symbol,
@@ -293,8 +291,174 @@ class Database:
             signal.score,
             json.dumps(signal.features, separators=(",", ":"), default=str),
             json.dumps(signal.reasons, separators=(",", ":")),
+            signal.episode_id,
         )
         return result == "INSERT 0 1"
+
+    async def get_active_episode(self, symbol: str) -> PumpEpisode | None:
+        row = await self.pool.fetchrow(
+            """
+            SELECT id, symbol, started_at, updated_at, state, peak_price, peak_at,
+                   broken_level, breakdown_at, breakdown_atr_15m, retest_at,
+                   confirmed_short_at, closed_at, last_run_score,
+                   last_exhaustion_score, metadata
+            FROM pump_episodes
+            WHERE symbol=$1 AND closed_at IS NULL
+            ORDER BY started_at DESC
+            LIMIT 1
+            """,
+            symbol,
+        )
+        return self._episode_from_row(row) if row else None
+
+    async def create_episode(
+        self,
+        *,
+        symbol: str,
+        started_at: datetime,
+        state: str,
+        peak_price: float,
+        peak_at: datetime,
+        run_score: int,
+        exhaustion_score: int,
+        metadata: dict[str, Any] | None = None,
+    ) -> PumpEpisode:
+        row = await self.pool.fetchrow(
+            """
+            INSERT INTO pump_episodes (
+                symbol, started_at, updated_at, state, peak_price, peak_at,
+                last_run_score, last_exhaustion_score, metadata
+            ) VALUES ($1,$2,$2,$3,$4,$5,$6,$7,$8::jsonb)
+            RETURNING id, symbol, started_at, updated_at, state, peak_price, peak_at,
+                      broken_level, breakdown_at, breakdown_atr_15m, retest_at,
+                      confirmed_short_at, closed_at, last_run_score,
+                      last_exhaustion_score, metadata
+            """,
+            symbol,
+            started_at,
+            state,
+            peak_price,
+            peak_at,
+            run_score,
+            exhaustion_score,
+            json.dumps(metadata or {}, separators=(",", ":"), default=str),
+        )
+        assert row is not None
+        return self._episode_from_row(row)
+
+    async def update_episode(
+        self,
+        episode_id: int,
+        *,
+        state: str | None = None,
+        peak_price: float | None = None,
+        peak_at: datetime | None = None,
+        broken_level: float | None = None,
+        breakdown_at: datetime | None = None,
+        breakdown_atr_15m: float | None = None,
+        retest_at: datetime | None = None,
+        confirmed_short_at: datetime | None = None,
+        run_score: int | None = None,
+        exhaustion_score: int | None = None,
+        metadata: dict[str, Any] | None = None,
+        clear_breakdown: bool = False,
+    ) -> PumpEpisode:
+        row = await self.pool.fetchrow(
+            """
+            UPDATE pump_episodes
+            SET updated_at = now(),
+                state = COALESCE($2, state),
+                peak_price = COALESCE($3, peak_price),
+                peak_at = COALESCE($4, peak_at),
+                broken_level = CASE WHEN $13 THEN NULL ELSE COALESCE($5, broken_level) END,
+                breakdown_at = CASE WHEN $13 THEN NULL ELSE COALESCE($6, breakdown_at) END,
+                breakdown_atr_15m = CASE WHEN $13 THEN NULL ELSE COALESCE($7, breakdown_atr_15m) END,
+                retest_at = CASE WHEN $13 THEN NULL ELSE COALESCE($8, retest_at) END,
+                confirmed_short_at = COALESCE($9, confirmed_short_at),
+                last_run_score = COALESCE($10, last_run_score),
+                last_exhaustion_score = COALESCE($11, last_exhaustion_score),
+                metadata = CASE
+                    WHEN $12::jsonb IS NULL THEN metadata
+                    ELSE metadata || $12::jsonb
+                END
+            WHERE id=$1
+            RETURNING id, symbol, started_at, updated_at, state, peak_price, peak_at,
+                      broken_level, breakdown_at, breakdown_atr_15m, retest_at,
+                      confirmed_short_at, closed_at, last_run_score,
+                      last_exhaustion_score, metadata
+            """,
+            episode_id,
+            state,
+            peak_price,
+            peak_at,
+            broken_level,
+            breakdown_at,
+            breakdown_atr_15m,
+            retest_at,
+            confirmed_short_at,
+            run_score,
+            exhaustion_score,
+            json.dumps(metadata, separators=(",", ":"), default=str) if metadata is not None else None,
+            clear_breakdown,
+        )
+        if row is None:
+            raise RuntimeError(f"Episode {episode_id} not found")
+        return self._episode_from_row(row)
+
+    async def close_episode(
+        self,
+        episode_id: int,
+        *,
+        closed_at: datetime,
+        reason: str,
+    ) -> None:
+        await self.pool.execute(
+            """
+            UPDATE pump_episodes
+            SET closed_at=$2,
+                updated_at=now(),
+                metadata = metadata || jsonb_build_object('closed_reason', $3)
+            WHERE id=$1 AND closed_at IS NULL
+            """,
+            episode_id,
+            closed_at,
+            reason,
+        )
+
+    @staticmethod
+    def _episode_from_row(row: asyncpg.Record) -> PumpEpisode:
+        raw_metadata = row["metadata"]
+        if isinstance(raw_metadata, str):
+            try:
+                metadata = json.loads(raw_metadata)
+            except json.JSONDecodeError:
+                metadata = {}
+        elif isinstance(raw_metadata, dict):
+            metadata = raw_metadata
+        else:
+            metadata = {}
+        return PumpEpisode(
+            id=int(row["id"]),
+            symbol=str(row["symbol"]),
+            started_at=row["started_at"],
+            updated_at=row["updated_at"],
+            state=str(row["state"]),
+            peak_price=float(row["peak_price"]),
+            peak_at=row["peak_at"],
+            broken_level=float(row["broken_level"]) if row["broken_level"] is not None else None,
+            breakdown_at=row["breakdown_at"],
+            breakdown_atr_15m=(
+                float(row["breakdown_atr_15m"])
+                if row["breakdown_atr_15m"] is not None
+                else None
+            ),
+            retest_at=row["retest_at"],
+            confirmed_short_at=row["confirmed_short_at"],
+            closed_at=row["closed_at"],
+            last_run_score=int(row["last_run_score"]),
+            last_exhaustion_score=int(row["last_exhaustion_score"]),
+            metadata=metadata,
+        )
 
     async def heartbeat(self, worker_name: str, status: dict[str, Any]) -> None:
         await self.pool.execute(

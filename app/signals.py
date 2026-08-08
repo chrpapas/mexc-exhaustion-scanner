@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
+from datetime import datetime
+
+from app.models import Candle
 
 
 @dataclass(frozen=True, slots=True)
@@ -66,6 +69,17 @@ class MarketStateThresholds:
     exhaustion_watch_min_24h: float = -0.05
     exhaustion_watch_max_24h: float = 0.08
     active_exhaustion_min_score: int = 2
+
+
+@dataclass(frozen=True, slots=True)
+class RetestResult:
+    confirmed: bool
+    expired: bool
+    invalidated: bool
+    retest_at: datetime | None = None
+    retest_high: float | None = None
+    retest_close: float | None = None
+    reason: str | None = None
 
 
 def score_run(features: RunFeatures, thresholds: RunThresholds) -> tuple[int, list[str], bool]:
@@ -147,12 +161,7 @@ def classify_market_state(
     exhaustion_score: int,
     thresholds: MarketStateThresholds,
 ) -> tuple[str | None, list[str]]:
-    """Classify a runner as advancing or fading.
-
-    The cooling-band rule catches multi-day runners whose 24h return has already
-    flattened. The active-exhaustion rule catches a pump that is still strongly
-    positive over 24h but is already showing intraday reversal evidence.
-    """
+    """Classify a runner as advancing or fading before breakdown confirmation."""
     if run_score < thresholds.min_run_score:
         return None, []
 
@@ -200,3 +209,67 @@ def classify_market_state(
         ]
 
     return None, []
+
+
+def evaluate_failed_retest(
+    candles: list[Candle],
+    *,
+    breakdown_at: datetime,
+    broken_level: float,
+    atr_15m: float,
+    tolerance_atr: float,
+    window_candles: int,
+) -> RetestResult:
+    """Evaluate completed candles after a breakdown for a failed retest.
+
+    Confirmation requires a later candle to trade back close to the broken
+    support from below, fail to close above it, and close bearish. A close back
+    above the level invalidates the breakdown. If the configured number of
+    completed candles passes without either event, the breakdown attempt expires.
+    """
+    if broken_level <= 0 or atr_15m <= 0 or tolerance_atr <= 0 or window_candles <= 0:
+        return RetestResult(False, False, False)
+
+    after_break = [candle for candle in candles if candle.open_time > breakdown_at]
+    if not after_break:
+        return RetestResult(False, False, False)
+
+    tolerance = atr_15m * tolerance_atr
+    examined = after_break[:window_candles]
+    for candle in examined:
+        if candle.close > broken_level:
+            return RetestResult(
+                confirmed=False,
+                expired=False,
+                invalidated=True,
+                retest_at=candle.open_time,
+                retest_high=candle.high,
+                retest_close=candle.close,
+                reason="15m candle closed back above broken support",
+            )
+
+        approached = candle.high >= broken_level - tolerance
+        rejected = candle.close < broken_level
+        bearish = candle.close < candle.open
+        if approached and rejected and bearish:
+            return RetestResult(
+                confirmed=True,
+                expired=False,
+                invalidated=False,
+                retest_at=candle.open_time,
+                retest_high=candle.high,
+                retest_close=candle.close,
+                reason="retest approached broken support and rejected below it",
+            )
+
+    expired = len(after_break) >= window_candles
+    return RetestResult(
+        confirmed=False,
+        expired=expired,
+        invalidated=False,
+        reason=(
+            f"no failed retest within {window_candles} completed 15m candles"
+            if expired
+            else None
+        ),
+    )

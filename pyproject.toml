@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mexc-exhaustion-scanner"
-version = "0.3.0"
-description = "Shadow-mode MEXC perpetual-futures run detector and data collector"
+version = "0.6.0"
+description = "Shadow-mode MEXC perpetual-futures episode, exhaustion, breakdown and retest-confirmation scanner"
 requires-python = ">=3.12,<3.15"
 dependencies = [
   "asyncpg>=0.30,<1",

@@ -24,8 +24,10 @@ class DiscordNotifier:
         features = signal.features
         run_score = features.get("run_score", signal.score)
         exhaustion_score = features.get("exhaustion_score")
-        if signal.level == "short_setup":
-            title = f"🚨 **{signal.symbol} — SHORT SETUP**"
+        if signal.level == "confirmed_short":
+            title = f"🚨 **{signal.symbol} — CONFIRMED SHORT**"
+        elif signal.level == "breakdown_watch":
+            title = f"🔴 **{signal.symbol} — BREAKDOWN WATCH**"
         elif signal.level == "exhaustion_watch":
             title = f"🟠 **{signal.symbol} — EXHAUSTION WATCH**"
         else:
@@ -33,6 +35,7 @@ class DiscordNotifier:
 
         lines = [
             title,
+            f"Episode: #{signal.episode_id}" if signal.episode_id is not None else "Episode: n/a",
             f"Run score: {run_score}/6",
             f"24h: {self._percent(features.get('return_24h'))}",
             f"72h: {self._percent(features.get('return_72h'))}",
@@ -42,12 +45,25 @@ class DiscordNotifier:
             f"EMA distance: {self._number(features.get('distance_above_ema20_atr_4h'))} ATR",
             f"Funding: {self._percent(features.get('funding_rate'))}",
         ]
-        if signal.level in {"exhaustion_watch", "short_setup"}:
-            lines.append(f"Exhaustion score: {exhaustion_score if exhaustion_score is not None else 'n/a'}/7")
-        if signal.level == "short_setup":
+        if signal.level in {"exhaustion_watch", "breakdown_watch", "confirmed_short"}:
             lines.append(
-                f"Structural break: {'YES' if features.get('structural_break_15m') else 'NO'}"
+                f"Exhaustion score: {exhaustion_score if exhaustion_score is not None else 'n/a'}/7"
             )
+        if features.get("episode_peak_price") is not None:
+            lines.append(f"Episode peak: {self._price(features.get('episode_peak_price'))}")
+        if signal.level in {"breakdown_watch", "confirmed_short"}:
+            lines.append(f"Broken level: {self._price(features.get('broken_level'))}")
+        if signal.level == "breakdown_watch":
+            lines.append(
+                f"Retest window: {features.get('retest_window_candles', 'n/a')} × 15m candles"
+            )
+            lines.append(
+                f"Retest tolerance: {self._number(features.get('retest_tolerance_atr'))} ATR"
+            )
+        if signal.level == "confirmed_short":
+            lines.append(f"Retest high: {self._price(features.get('retest_high'))}")
+            lines.append(f"Retest close: {self._price(features.get('retest_close'))}")
+            lines.append("Episode locked: YES — no second short alert unless a new episode re-arms")
 
         lines.extend(
             [
@@ -56,7 +72,9 @@ class DiscordNotifier:
             ]
         )
         try:
-            response = await self._client.post(self._webhook_url, json={"content": "\n".join(lines)})
+            response = await self._client.post(
+                self._webhook_url, json={"content": "\n".join(lines)}
+            )
             response.raise_for_status()
         except httpx.HTTPError:
             LOGGER.exception("Discord alert failed for %s", signal.symbol)
@@ -68,3 +86,14 @@ class DiscordNotifier:
     @staticmethod
     def _number(value: object) -> str:
         return "n/a" if value is None else f"{float(value):.2f}"
+
+    @staticmethod
+    def _price(value: object) -> str:
+        if value is None:
+            return "n/a"
+        number = float(value)
+        if abs(number) >= 1000:
+            return f"{number:,.2f}"
+        if abs(number) >= 1:
+            return f"{number:.6f}".rstrip("0").rstrip(".")
+        return f"{number:.10f}".rstrip("0").rstrip(".")

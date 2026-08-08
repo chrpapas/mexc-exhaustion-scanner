@@ -44,13 +44,17 @@ class Settings:
     active_exhaustion_min_score: int
     run_watch_alert_cooldown_minutes: int
     exhaustion_watch_alert_cooldown_minutes: int
-    short_alert_cooldown_minutes: int
     short_exhaustion_score: int
     watch_alerts_enabled: bool
     max_symbols: int
     request_rate_per_second: float
     request_concurrency: int
     excluded_symbols: frozenset[str]
+
+    retest_window_candles: int
+    retest_tolerance_atr: float
+    rearm_new_high_pct: float
+    episode_max_age_hours: int
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -89,13 +93,16 @@ class Settings:
             exhaustion_watch_alert_cooldown_minutes=int(
                 os.getenv("EXHAUSTION_WATCH_ALERT_COOLDOWN_MINUTES", "120")
             ),
-            short_alert_cooldown_minutes=int(os.getenv("SHORT_ALERT_COOLDOWN_MINUTES", "120")),
             short_exhaustion_score=int(os.getenv("SHORT_EXHAUSTION_SCORE", "3")),
             watch_alerts_enabled=_env_bool("WATCH_ALERTS_ENABLED", True),
             max_symbols=int(os.getenv("MAX_SYMBOLS", "250")),
             request_rate_per_second=float(os.getenv("REQUEST_RATE_PER_SECOND", "8")),
             request_concurrency=int(os.getenv("REQUEST_CONCURRENCY", "4")),
             excluded_symbols=_env_csv("EXCLUDED_SYMBOLS", "BTC_USDT,ETH_USDT"),
+            retest_window_candles=int(os.getenv("RETEST_WINDOW_CANDLES", "6")),
+            retest_tolerance_atr=float(os.getenv("RETEST_TOLERANCE_ATR", "0.5")),
+            rearm_new_high_pct=float(os.getenv("REARM_NEW_HIGH_PCT", "0.05")),
+            episode_max_age_hours=int(os.getenv("EPISODE_MAX_AGE_HOURS", "240")),
         )
         settings.validate()
         return settings
@@ -110,6 +117,8 @@ class Settings:
             ("SIGNAL_POLL_SECONDS", self.signal_poll_seconds),
             ("CONTRACT_REFRESH_SECONDS", self.contract_refresh_seconds),
             ("FUNDING_REFRESH_SECONDS", self.funding_refresh_seconds),
+            ("RETEST_WINDOW_CANDLES", self.retest_window_candles),
+            ("EPISODE_MAX_AGE_HOURS", self.episode_max_age_hours),
         ):
             if value <= 0:
                 raise ValueError(f"{name} must be positive")
@@ -121,3 +130,7 @@ class Settings:
             raise ValueError("EXHAUSTION_WATCH_MIN_24H must be <= EXHAUSTION_WATCH_MAX_24H")
         if self.short_exhaustion_score < 1 or self.short_exhaustion_score > 7:
             raise ValueError("SHORT_EXHAUSTION_SCORE must be between 1 and 7")
+        if self.retest_tolerance_atr <= 0:
+            raise ValueError("RETEST_TOLERANCE_ATR must be positive")
+        if self.rearm_new_high_pct <= 0:
+            raise ValueError("REARM_NEW_HIGH_PCT must be positive")

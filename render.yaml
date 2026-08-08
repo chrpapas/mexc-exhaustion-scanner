@@ -24,9 +24,39 @@ services:
       - key: LOG_LEVEL
         value: INFO
       - key: MIN_AMOUNT_24H
-        value: "10000000"
+        value: "3000000"
       - key: MAX_SPREAD_PCT
-        value: "0.25"
+        value: "0.35"
+      - key: STATE_MIN_RUN_SCORE
+        value: "3"
+      - key: RUN_WATCH_MIN_24H
+        value: "0.08"
+      - key: RUN_WATCH_MIN_72H
+        value: "0.20"
+      - key: EXHAUSTION_WATCH_MIN_72H
+        value: "0.30"
+      - key: EXHAUSTION_WATCH_MIN_24H
+        value: "-0.05"
+      - key: EXHAUSTION_WATCH_MAX_24H
+        value: "0.08"
+      - key: ACTIVE_EXHAUSTION_MIN_SCORE
+        value: "2"
+      - key: WATCH_ALERTS_ENABLED
+        value: "true"
+      - key: RUN_WATCH_ALERT_COOLDOWN_MINUTES
+        value: "120"
+      - key: EXHAUSTION_WATCH_ALERT_COOLDOWN_MINUTES
+        value: "120"
+      - key: SHORT_EXHAUSTION_SCORE
+        value: "3"
+      - key: RETEST_WINDOW_CANDLES
+        value: "6"
+      - key: RETEST_TOLERANCE_ATR
+        value: "0.5"
+      - key: REARM_NEW_HIGH_PCT
+        value: "0.05"
+      - key: EPISODE_MAX_AGE_HOURS
+        value: "240"
       - key: MAX_SYMBOLS
         value: "250"
       - key: TICKER_POLL_SECONDS

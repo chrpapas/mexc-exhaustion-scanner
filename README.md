@@ -1,76 +1,150 @@
-# MEXC Post-Run Exhaustion Scanner — Clean Online Build
+# MEXC Post-Run Exhaustion Scanner — v0.6
 
-This repository runs as a **Render background worker** and stores data in **Render PostgreSQL**. It does not need your computer after deployment.
+This repository runs as a **Render background worker** with **Render PostgreSQL**. It is shadow-mode only: it does not place orders and does not require a MEXC trading API key.
 
-This build is deliberately **shadow mode only**:
+## Signal state machine
 
-- No MEXC API key.
-- No order placement.
-- No leverage or position management.
-- It records MEXC perpetual-futures market data and alerts on abnormal runs.
+v0.6 adds persistent pump episodes and removes the old behavior where a structural break immediately produced a short alert.
 
-## What it collects
+1. **RUN WATCH** — an abnormal move is still advancing.
+2. **EXHAUSTION WATCH** — a large prior run is fading or showing intraday reversal evidence.
+3. **BREAKDOWN WATCH** — a completed 15-minute candle has broken recent support with enough exhaustion evidence. The broken level and ATR are stored persistently.
+4. **CONFIRMED SHORT** — a later completed 15-minute candle retests the stored broken level from below and rejects it.
 
-- Active MEXC USDT perpetual contracts whose base asset also has an active MEXC USDT spot market.
-- Explicit rejection of stock, index, commodity and leveraged-token contract patterns.
-- Five-minute snapshots for the most liquid contracts: last price, bid/ask spread, 24-hour amount, funding, fair/index prices and `holdVol`.
-- 15-minute and four-hour candles.
-- Recent funding-rate history.
-- Candidate/watch signals and a worker heartbeat.
+A structural break alone is **not** a confirmed short anymore.
 
-## Candidate score
+## Failed-retest confirmation
+
+Default rules after BREAKDOWN WATCH:
+
+- The broken level is the minimum low of the four completed 15m candles before the breakdown candle.
+- The scanner waits up to **6 completed 15m candles** (90 minutes).
+- A retest must trade to within **0.5 × the saved 15m ATR** of the broken level.
+- The retest candle must close below the broken level and close bearish.
+- A completed candle that closes back above the broken level invalidates that breakdown attempt.
+- If no qualifying retest occurs within the window, the breakdown attempt expires without a short signal.
+
+## Persistent pump episodes
+
+Every watched symbol is assigned a PostgreSQL `pump_episodes` record containing:
+
+- episode id and start time
+- state
+- episode peak and peak time
+- broken support level
+- breakdown time and saved 15m ATR
+- retest time
+- confirmed-short time
+- latest run/exhaustion scores
+
+Only **one CONFIRMED SHORT is allowed per episode**.
+
+Once confirmed, the episode is locked. A new episode can re-arm only after a later completed candle establishes a new high at least **5% above the prior episode peak**, while the normal run filters are active again. Episodes also expire after 240 hours by default so stale historical pumps do not remain open forever.
+
+## Run score (6 points)
 
 Liquidity and spread are mandatory. One point is awarded for each:
 
-1. 24-hour return at least 20%.
-2. 72-hour return at least 30%.
-3. 24-hour return minus BTC return at least 15%.
-4. Return at or above the 95th percentile of the eligible MEXC universe.
-5. Latest completed 15-minute volume z-score at least 2.5.
-6. Price at least 2.5 ATR above the completed four-hour EMA20.
+1. 24h return >= 12%.
+2. 72h return >= 20%.
+3. 24h return minus BTC 24h return >= 10%.
+4. Return at or above the 90th percentile of the eligible MEXC crypto universe.
+5. Latest completed 15m volume z-score >= 1.5.
+6. Price >= 1.5 ATR above the completed 4h EMA20.
 
-A score of 4 is stored as a watch. A score of 5 or 6 is stored as a candidate and can be sent to Discord. This is a **run detector**, not yet the final peak/exhaustion entry model.
+Default discovery universe:
 
-## Deploy on Render
+- MEXC USDT perpetual.
+- Backed by an active MEXC USDT spot asset.
+- 24h futures amount >= 3M USDT.
+- Bid/ask spread <= 0.35%.
+- BTC and ETH are collected as context but excluded from altcoin alerts by default.
 
-1. Create a fresh private GitHub repository.
-2. Extract this ZIP and upload the extracted files and folders to the repository root.
-3. Confirm that `render.yaml` is visible at the repository root.
-4. In Render, choose **New → Blueprint** and select the repository.
-5. Use Blueprint path `render.yaml`.
-6. Apply the Blueprint.
-7. To enable alerts later, open the worker’s **Environment** page and add `DISCORD_WEBHOOK_URL`.
-8. Keep `EXECUTION_ENABLED=false`.
+## Exhaustion score (7 points)
 
-Render creates:
+One point each for:
 
-- `mexc-exhaustion-scanner` — Python background worker in Frankfurt.
-- `mexc-exhaustion-db` — PostgreSQL in Frankfurt.
+1. 15m upper wick >= 35% of candle range.
+2. 15m close in the bottom 45% of candle range.
+3. 1h momentum decelerating versus the prior hour.
+4. 15m close below EMA9.
+5. Lower high plus lower close.
+6. 15m structural support break.
+7. 15m volume z-score >= 1.25.
 
-This clean build uses Render's native Python runtime, so there is **no Dockerfile, Makefile, Redis or local Docker setup to confuse the deployment**.
+BREAKDOWN WATCH requires EXHAUSTION WATCH, a structural break, and exhaustion score >= 3/7.
+
+## Expected Discord alerts
+
+```text
+🟡 XYZ_USDT — RUN WATCH
+Episode: #123
+...
+
+🟠 XYZ_USDT — EXHAUSTION WATCH
+Episode: #123
+...
+
+🔴 XYZ_USDT — BREAKDOWN WATCH
+Episode: #123
+Broken level: ...
+Retest window: 6 × 15m candles
+Retest tolerance: 0.50 ATR
+...
+
+🚨 XYZ_USDT — CONFIRMED SHORT
+Episode: #123
+Broken level: ...
+Retest high: ...
+Retest close: ...
+Episode locked: YES — no second short alert unless a new episode re-arms
+...
+```
+
+All alerts state that shadow mode is active and no order is placed.
 
 ## Expected logs
 
 ```text
 Database connected and migrations applied
 Refreshed contracts: total=... active_usdt=... crypto=... excluded_non_crypto=...
-Ticker refresh: received=... stored=...
+Ticker refresh: received=... crypto=... stored=...
 Candle sync complete: symbols=... failures=...
 Funding sync complete: symbols=... failures=...
-Signal evaluation: evaluated=... candidates=...
+Signal evaluation: evaluated=... run_watches=... exhaustion_watches=... breakdown_watches=... breakdown_waiting=... confirmed_shorts=... rearmed=...
 ```
 
-The first candle backfill can take several minutes because it requests two timeframes for many symbols while respecting MEXC rate limits.
+## Updating an existing Render deployment
 
-## Verify repository contents
+Replace the changed files in GitHub and add:
 
-Run this in GitHub Codespaces or any Python 3.12 environment:
-
-```bash
-python scripts/verify_project.py
+```text
+migrations/004_pump_episodes.sql
 ```
 
-The script detects the exact filename/content mix-up that happened in the previous repository.
+Commit to `main`. Render redeploys automatically and applies migration 004 once through the `schema_migrations` table.
+
+Migration 004 preserves existing `run_signals`, creates `pump_episodes`, links future signals to an `episode_id`, and extends allowed signal levels with `breakdown_watch` and `confirmed_short`.
+
+## Important environment variables
+
+| Variable | Default |
+|---|---:|
+| `MIN_AMOUNT_24H` | `3000000` |
+| `MAX_SPREAD_PCT` | `0.35` |
+| `STATE_MIN_RUN_SCORE` | `3` |
+| `RUN_WATCH_MIN_24H` | `0.08` |
+| `RUN_WATCH_MIN_72H` | `0.20` |
+| `EXHAUSTION_WATCH_MIN_72H` | `0.30` |
+| `EXHAUSTION_WATCH_MIN_24H` | `-0.05` |
+| `EXHAUSTION_WATCH_MAX_24H` | `0.08` |
+| `ACTIVE_EXHAUSTION_MIN_SCORE` | `2` |
+| `SHORT_EXHAUSTION_SCORE` | `3` |
+| `RETEST_WINDOW_CANDLES` | `6` |
+| `RETEST_TOLERANCE_ATR` | `0.5` |
+| `REARM_NEW_HIGH_PCT` | `0.05` |
+| `EPISODE_MAX_AGE_HOURS` | `240` |
+| `SIGNAL_POLL_SECONDS` | `300` |
 
 ## Tests
 
@@ -79,31 +153,4 @@ pip install -e '.[dev]'
 pytest
 ```
 
-## Important environment variables
-
-| Variable | Default | Meaning |
-|---|---:|---|
-| `MIN_AMOUNT_24H` | `10000000` | Minimum MEXC 24-hour transaction amount in USDT |
-| `MAX_SPREAD_PCT` | `0.25` | Maximum bid/ask spread percentage |
-| `MAX_SYMBOLS` | `250` | Maximum liquid contracts stored and evaluated |
-| `REQUIRE_MEXC_SPOT_PAIR` | `true` | Admit only futures backed by an active MEXC USDT spot market |
-| `MEXC_SPOT_BASE_URL` | `https://api.mexc.com` | MEXC spot API used for crypto-universe validation |
-| `TICKER_STORE_SECONDS` | `300` | Ticker/OI snapshot interval |
-| `MIN_RUN_SCORE` | `5` | Discord candidate threshold |
-| `WATCH_RUN_SCORE` | `4` | Database watch threshold |
-| `EXCLUDED_SYMBOLS` | `BTC_USDT,ETH_USDT` | Symbols not alerted as altcoin candidates |
-
-## Database checks
-
-From Render's PostgreSQL console:
-
-```sql
-SELECT * FROM worker_heartbeat;
-SELECT count(*) FROM contracts;
-SELECT count(*) FROM ticker_snapshots;
-SELECT interval, count(*) FROM candles GROUP BY interval;
-SELECT symbol, signaled_at, level, score, reasons
-FROM run_signals
-ORDER BY signaled_at DESC
-LIMIT 20;
-```
+v0.6 passes the existing HEI/CYS/BICO state-classification regression tests plus new tests for successful failed-retest confirmation, breakdown invalidation, and retest-window expiry.

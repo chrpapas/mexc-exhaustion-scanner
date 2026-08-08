@@ -170,3 +170,96 @@ def test_short_gate_requires_exhaustion_state_and_structural_break() -> None:
     assert level == "exhaustion_watch"
     assert exhaustion.structural_break_15m
     assert score >= 3
+
+
+def _candle(minute: int, *, open_: float, high: float, low: float, close: float):
+    from datetime import UTC, datetime
+    from app.models import Candle
+
+    return Candle(
+        symbol="TEST_USDT",
+        interval="Min15",
+        open_time=datetime(2026, 8, 8, 10, minute, tzinfo=UTC),
+        open=open_,
+        high=high,
+        low=low,
+        close=close,
+        volume=1_000,
+        amount=10_000,
+    )
+
+
+def test_failed_retest_confirms_only_on_later_candle() -> None:
+    from datetime import UTC, datetime
+    from app.signals import evaluate_failed_retest
+
+    breakdown_at = datetime(2026, 8, 8, 10, 0, tzinfo=UTC)
+    candles = [
+        _candle(0, open_=99, high=100, low=96, close=97),
+        _candle(15, open_=97, high=99.6, low=96.5, close=96.8),
+    ]
+    result = evaluate_failed_retest(
+        candles,
+        breakdown_at=breakdown_at,
+        broken_level=100,
+        atr_15m=2,
+        tolerance_atr=0.5,
+        window_candles=6,
+    )
+    assert result.confirmed
+    assert not result.invalidated
+    assert result.retest_at == candles[1].open_time
+
+
+def test_retest_close_above_broken_level_invalidates_breakdown() -> None:
+    from datetime import UTC, datetime
+    from app.signals import evaluate_failed_retest
+
+    breakdown_at = datetime(2026, 8, 8, 10, 0, tzinfo=UTC)
+    candles = [
+        _candle(15, open_=98, high=101.5, low=97.5, close=100.5),
+    ]
+    result = evaluate_failed_retest(
+        candles,
+        breakdown_at=breakdown_at,
+        broken_level=100,
+        atr_15m=2,
+        tolerance_atr=0.5,
+        window_candles=6,
+    )
+    assert result.invalidated
+    assert not result.confirmed
+
+
+def test_retest_window_expires_without_confirmation() -> None:
+    from datetime import UTC, datetime, timedelta
+    from app.models import Candle
+    from app.signals import evaluate_failed_retest
+
+    breakdown_at = datetime(2026, 8, 8, 10, 0, tzinfo=UTC)
+    candles = []
+    for index in range(1, 7):
+        candles.append(
+            Candle(
+                symbol="TEST_USDT",
+                interval="Min15",
+                open_time=breakdown_at + timedelta(minutes=15 * index),
+                open=95,
+                high=96,
+                low=93,
+                close=94,
+                volume=1_000,
+                amount=10_000,
+            )
+        )
+    result = evaluate_failed_retest(
+        candles,
+        breakdown_at=breakdown_at,
+        broken_level=100,
+        atr_15m=2,
+        tolerance_atr=0.5,
+        window_candles=6,
+    )
+    assert result.expired
+    assert not result.confirmed
+    assert not result.invalidated

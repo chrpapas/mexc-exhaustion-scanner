@@ -53,3 +53,24 @@ class RunSignal:
     score: int
     features: dict[str, Any]
     reasons: list[str]
+    episode_id: int | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class PumpEpisode:
+    id: int
+    symbol: str
+    started_at: datetime
+    updated_at: datetime
+    state: str
+    peak_price: float
+    peak_at: datetime
+    broken_level: float | None
+    breakdown_at: datetime | None
+    breakdown_atr_15m: float | None
+    retest_at: datetime | None
+    confirmed_short_at: datetime | None
+    closed_at: datetime | None
+    last_run_score: int
+    last_exhaustion_score: int
+    metadata: dict[str, Any]
