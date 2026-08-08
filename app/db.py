@@ -460,6 +460,171 @@ class Database:
             metadata=metadata,
         )
 
+
+    async def create_shadow_trade(
+        self,
+        *,
+        episode_id: int,
+        symbol: str,
+        confirmed_at: datetime,
+        entry_price: float,
+    ) -> bool:
+        result = await self.pool.execute(
+            """
+            INSERT INTO shadow_trades (episode_id, symbol, confirmed_at, entry_price)
+            VALUES ($1,$2,$3,$4)
+            ON CONFLICT (episode_id) DO NOTHING
+            """,
+            episode_id,
+            symbol,
+            confirmed_at,
+            entry_price,
+        )
+        return result == "INSERT 0 1"
+
+    async def fetch_shadow_trades(self) -> list[dict[str, Any]]:
+        rows = await self.pool.fetch(
+            """
+            SELECT episode_id, symbol, confirmed_at, entry_price, current_price,
+                   current_return_pct, last_observed_at, mfe_pct, mae_pct,
+                   return_1h_pct, return_4h_pct, return_12h_pct, return_24h_pct,
+                   matured_at
+            FROM shadow_trades
+            ORDER BY confirmed_at ASC
+            """
+        )
+        return [dict(row) for row in rows]
+
+    async def candle_excursions(
+        self,
+        symbol: str,
+        start_at: datetime,
+        end_at: datetime,
+    ) -> tuple[float | None, float | None]:
+        row = await self.pool.fetchrow(
+            """
+            SELECT min(low) AS min_low, max(high) AS max_high
+            FROM candles
+            WHERE symbol=$1
+              AND interval='Min15'
+              AND open_time >= $2 - interval '15 minutes'
+              AND open_time < $3
+            """,
+            symbol,
+            start_at,
+            end_at,
+        )
+        if row is None:
+            return None, None
+        return (
+            float(row["min_low"]) if row["min_low"] is not None else None,
+            float(row["max_high"]) if row["max_high"] is not None else None,
+        )
+
+    async def candle_close_for_horizon(
+        self,
+        symbol: str,
+        target_at: datetime,
+    ) -> tuple[datetime, float] | None:
+        row = await self.pool.fetchrow(
+            """
+            SELECT open_time + interval '15 minutes' AS close_time, close
+            FROM candles
+            WHERE symbol=$1
+              AND interval='Min15'
+              AND open_time + interval '15 minutes' >= $2
+              AND open_time + interval '15 minutes' <= $2 + interval '30 minutes'
+            ORDER BY open_time ASC
+            LIMIT 1
+            """,
+            symbol,
+            target_at,
+        )
+        if row is None:
+            return None
+        return row["close_time"], float(row["close"])
+
+    async def update_shadow_trade(
+        self,
+        episode_id: int,
+        *,
+        current_price: float | None = None,
+        current_return_pct: float | None = None,
+        observed_at: datetime | None = None,
+        mfe_pct: float | None = None,
+        mae_pct: float | None = None,
+        return_1h_pct: float | None = None,
+        return_4h_pct: float | None = None,
+        return_12h_pct: float | None = None,
+        return_24h_pct: float | None = None,
+        matured_at: datetime | None = None,
+    ) -> None:
+        await self.pool.execute(
+            """
+            UPDATE shadow_trades
+            SET current_price = COALESCE($2, current_price),
+                current_return_pct = COALESCE($3, current_return_pct),
+                last_observed_at = COALESCE($4, last_observed_at),
+                mfe_pct = CASE WHEN $5::double precision IS NULL THEN mfe_pct ELSE GREATEST(mfe_pct, $5) END,
+                mae_pct = CASE WHEN $6::double precision IS NULL THEN mae_pct ELSE LEAST(mae_pct, $6) END,
+                return_1h_pct = COALESCE(return_1h_pct, $7),
+                return_4h_pct = COALESCE(return_4h_pct, $8),
+                return_12h_pct = COALESCE(return_12h_pct, $9),
+                return_24h_pct = COALESCE(return_24h_pct, $10),
+                matured_at = COALESCE(matured_at, $11),
+                updated_at = now()
+            WHERE episode_id=$1
+            """,
+            episode_id,
+            current_price,
+            current_return_pct,
+            observed_at,
+            mfe_pct,
+            mae_pct,
+            return_1h_pct,
+            return_4h_pct,
+            return_12h_pct,
+            return_24h_pct,
+            matured_at,
+        )
+
+    async def last_performance_report_date(self):
+        return await self.pool.fetchval("SELECT max(report_date) FROM performance_reports")
+
+    async def performance_rows(self) -> list[dict[str, Any]]:
+        rows = await self.pool.fetch(
+            """
+            SELECT episode_id, symbol, confirmed_at, entry_price,
+                   current_return_pct, mfe_pct, mae_pct,
+                   return_1h_pct, return_4h_pct, return_12h_pct, return_24h_pct,
+                   matured_at
+            FROM shadow_trades
+            ORDER BY confirmed_at ASC
+            """
+        )
+        return [dict(row) for row in rows]
+
+    async def record_performance_report(
+        self,
+        *,
+        report_date,
+        sent_at: datetime,
+        timezone_name: str,
+        payload: dict[str, Any],
+    ) -> bool:
+        result = await self.pool.execute(
+            """
+            INSERT INTO performance_reports (report_date, sent_at, timezone, payload)
+            VALUES ($1,$2,$3,$4::jsonb)
+            ON CONFLICT (report_date) DO NOTHING
+            """,
+            report_date,
+            sent_at,
+            timezone_name,
+            json.dumps(payload, separators=(",", ":"), default=str),
+        )
+        return result == "INSERT 0 1"
+
     async def heartbeat(self, worker_name: str, status: dict[str, Any]) -> None:
         await self.pool.execute(
             """

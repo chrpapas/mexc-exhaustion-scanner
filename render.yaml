@@ -57,6 +57,12 @@ services:
         value: "0.05"
       - key: EPISODE_MAX_AGE_HOURS
         value: "240"
+      - key: PERFORMANCE_POLL_SECONDS
+        value: "300"
+      - key: PERFORMANCE_REPORT_HOUR
+        value: "18"
+      - key: PERFORMANCE_REPORT_TIMEZONE
+        value: Europe/Zurich
       - key: MAX_SYMBOLS
         value: "250"
       - key: TICKER_POLL_SECONDS

@@ -56,6 +56,10 @@ class Settings:
     rearm_new_high_pct: float
     episode_max_age_hours: int
 
+    performance_poll_seconds: int
+    performance_report_hour: int
+    performance_report_timezone: str
+
     @classmethod
     def from_env(cls) -> "Settings":
         database_url = os.getenv("DATABASE_URL", "").strip()
@@ -103,6 +107,9 @@ class Settings:
             retest_tolerance_atr=float(os.getenv("RETEST_TOLERANCE_ATR", "0.5")),
             rearm_new_high_pct=float(os.getenv("REARM_NEW_HIGH_PCT", "0.05")),
             episode_max_age_hours=int(os.getenv("EPISODE_MAX_AGE_HOURS", "240")),
+            performance_poll_seconds=int(os.getenv("PERFORMANCE_POLL_SECONDS", "300")),
+            performance_report_hour=int(os.getenv("PERFORMANCE_REPORT_HOUR", "18")),
+            performance_report_timezone=os.getenv("PERFORMANCE_REPORT_TIMEZONE", "Europe/Zurich"),
         )
         settings.validate()
         return settings
@@ -119,6 +126,7 @@ class Settings:
             ("FUNDING_REFRESH_SECONDS", self.funding_refresh_seconds),
             ("RETEST_WINDOW_CANDLES", self.retest_window_candles),
             ("EPISODE_MAX_AGE_HOURS", self.episode_max_age_hours),
+            ("PERFORMANCE_POLL_SECONDS", self.performance_poll_seconds),
         ):
             if value <= 0:
                 raise ValueError(f"{name} must be positive")
@@ -134,3 +142,10 @@ class Settings:
             raise ValueError("RETEST_TOLERANCE_ATR must be positive")
         if self.rearm_new_high_pct <= 0:
             raise ValueError("REARM_NEW_HIGH_PCT must be positive")
+        if not 0 <= self.performance_report_hour <= 23:
+            raise ValueError("PERFORMANCE_REPORT_HOUR must be between 0 and 23")
+        try:
+            from zoneinfo import ZoneInfo
+            ZoneInfo(self.performance_report_timezone)
+        except Exception as exc:
+            raise ValueError("PERFORMANCE_REPORT_TIMEZONE must be a valid IANA timezone") from exc

@@ -5,6 +5,7 @@ import logging
 import httpx
 
 from app.models import RunSignal
+from app.performance import PerformanceSummary
 
 LOGGER = logging.getLogger(__name__)
 
@@ -78,6 +79,55 @@ class DiscordNotifier:
             response.raise_for_status()
         except httpx.HTTPError:
             LOGGER.exception("Discord alert failed for %s", signal.symbol)
+
+    async def send_performance_report(self, report: PerformanceSummary) -> bool:
+        if not self._webhook_url:
+            return False
+
+        lines = [
+            f"📊 **DAILY SHADOW PERFORMANCE — {report.report_date.isoformat()}**",
+            f"Confirmed shorts today: {report.confirmed_today}",
+            f"Open tracked signals: {report.open_count}",
+            (
+                "Open mark-to-market: "
+                f"{self._percent(report.open_avg_return)} avg | "
+                f"{self._percent(report.open_sum_return)} summed"
+            ),
+            f"24h matured signals: {report.matured_total} all-time | {report.matured_today} today",
+            f"24h win rate: {self._percent(report.win_rate_24h)}",
+            (
+                "Average short return: "
+                f"1h {self._percent(report.avg_return_1h)} | "
+                f"4h {self._percent(report.avg_return_4h)} | "
+                f"12h {self._percent(report.avg_return_12h)} | "
+                f"24h {self._percent(report.avg_return_24h)}"
+            ),
+            f"Summed 24h signal return: {self._percent(report.sum_return_24h)}",
+            f"Average MFE: {self._percent(report.avg_mfe)} | Average MAE: {self._percent(report.avg_mae)}",
+        ]
+        if report.best_symbol is not None:
+            lines.append(
+                f"Best 24h: {report.best_symbol} {self._percent(report.best_return_24h)}"
+            )
+        if report.worst_symbol is not None:
+            lines.append(
+                f"Worst 24h: {report.worst_symbol} {self._percent(report.worst_return_24h)}"
+            )
+        lines.extend(
+            [
+                "Returns are measured from CONFIRMED SHORT retest close.",
+                "Analytics only: no fees, slippage, funding, leverage or position sizing included.",
+            ]
+        )
+        try:
+            response = await self._client.post(
+                self._webhook_url, json={"content": "\n".join(lines)}
+            )
+            response.raise_for_status()
+            return True
+        except httpx.HTTPError:
+            LOGGER.exception("Discord performance report failed")
+            return False
 
     @staticmethod
     def _percent(value: object) -> str:

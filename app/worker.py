@@ -5,6 +5,7 @@ import logging
 import signal
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
+from zoneinfo import ZoneInfo
 from typing import Awaitable, Callable
 
 from app.config import Settings
@@ -21,6 +22,7 @@ from app.indicators import (
 from app.mexc import MexcClient, is_crypto_usdt_contract
 from app.models import PumpEpisode, RunSignal, Ticker
 from app.notifier import DiscordNotifier
+from app.performance import PerformanceSummary, short_return, should_send_daily_report
 from app.signals import (
     ExhaustionFeatures,
     ExhaustionThresholds,
@@ -111,6 +113,13 @@ class ScannerWorker:
                         self.evaluate_signals,
                     )
                 )
+                group.create_task(
+                    self._periodic(
+                        "performance",
+                        self.settings.performance_poll_seconds,
+                        self.track_performance,
+                    )
+                )
                 group.create_task(self._periodic("heartbeat", 60, self.write_heartbeat))
                 await self.stop_event.wait()
                 raise StopWorker()
@@ -137,6 +146,7 @@ class ScannerWorker:
             "signals": 10,
             "funding": 15,
             "contracts": 20,
+            "performance": 25,
         }.get(name, 0)
         if stagger:
             await asyncio.sleep(stagger)
@@ -541,7 +551,15 @@ class ScannerWorker:
                             ],
                             episode_id=episode.id,
                         )
-                        if await self.db.insert_signal(signal_obj):
+                        inserted = await self.db.insert_signal(signal_obj)
+                        if retest.retest_close is not None and retest.retest_close > 0:
+                            await self.db.create_shadow_trade(
+                                episode_id=episode.id,
+                                symbol=symbol,
+                                confirmed_at=signaled_at,
+                                entry_price=retest.retest_close,
+                            )
+                        if inserted:
                             confirmed_shorts += 1
                             await self.notifier.send_signal(signal_obj)
                         continue
@@ -779,6 +797,184 @@ class ScannerWorker:
             return state
         return None
 
+    async def track_performance(self) -> None:
+        now = datetime.now(UTC)
+        trades = await self.db.fetch_shadow_trades()
+        updated = 0
+
+        for trade in trades:
+            episode_id = int(trade["episode_id"])
+            symbol = str(trade["symbol"])
+            confirmed_at = trade["confirmed_at"]
+            entry_price = float(trade["entry_price"])
+            horizon_end = confirmed_at + timedelta(hours=24)
+            observation_end = min(now, horizon_end)
+
+            current_price = None
+            current_return = None
+            ticker = self.latest_tickers.get(symbol)
+            if ticker is not None:
+                current_price = ticker.last_price
+                current_return = short_return(entry_price, current_price)
+
+            min_low, max_high = await self.db.candle_excursions(
+                symbol, confirmed_at, observation_end
+            )
+            mfe = (
+                max(0.0, short_return(entry_price, min_low))
+                if min_low is not None and min_low > 0
+                else None
+            )
+            mae = (
+                min(0.0, short_return(entry_price, max_high))
+                if max_high is not None and max_high > 0
+                else None
+            )
+
+            horizon_values: dict[int, float | None] = {1: None, 4: None, 12: None, 24: None}
+            existing = {
+                1: trade["return_1h_pct"],
+                4: trade["return_4h_pct"],
+                12: trade["return_12h_pct"],
+                24: trade["return_24h_pct"],
+            }
+            for hours in (1, 4, 12, 24):
+                if existing[hours] is not None:
+                    continue
+                target = confirmed_at + timedelta(hours=hours)
+                if now < target:
+                    continue
+                point = await self.db.candle_close_for_horizon(symbol, target)
+                if point is not None:
+                    _, price = point
+                    horizon_values[hours] = short_return(entry_price, price)
+
+            matured_at = None
+            return_24h = horizon_values[24]
+            if trade["return_24h_pct"] is not None:
+                return_24h = float(trade["return_24h_pct"])
+            if return_24h is not None and trade["matured_at"] is None:
+                matured_at = now
+
+            await self.db.update_shadow_trade(
+                episode_id,
+                current_price=current_price,
+                current_return_pct=current_return,
+                observed_at=now if current_price is not None else None,
+                mfe_pct=mfe,
+                mae_pct=mae,
+                return_1h_pct=horizon_values[1],
+                return_4h_pct=horizon_values[4],
+                return_12h_pct=horizon_values[12],
+                return_24h_pct=horizon_values[24],
+                matured_at=matured_at,
+            )
+            updated += 1
+
+        await self._maybe_send_daily_performance(now)
+        LOGGER.info("Performance tracker: tracked=%d", updated)
+
+    async def _maybe_send_daily_performance(self, now: datetime) -> None:
+        last_date = await self.db.last_performance_report_date()
+        if not should_send_daily_report(
+            now,
+            timezone_name=self.settings.performance_report_timezone,
+            report_hour=self.settings.performance_report_hour,
+            already_sent_date=last_date,
+        ):
+            return
+
+        tz = ZoneInfo(self.settings.performance_report_timezone)
+        local_now = now.astimezone(tz)
+        report_date = local_now.date()
+        local_start = datetime(
+            report_date.year, report_date.month, report_date.day, tzinfo=tz
+        )
+        next_date = report_date + timedelta(days=1)
+        local_end = datetime(
+            next_date.year, next_date.month, next_date.day, tzinfo=tz
+        )
+        start_utc = local_start.astimezone(UTC)
+        end_utc = local_end.astimezone(UTC)
+
+        rows = await self.db.performance_rows()
+        confirmed_today = sum(
+            1 for row in rows if start_utc <= row["confirmed_at"] < end_utc
+        )
+        open_rows = [row for row in rows if row["return_24h_pct"] is None]
+        open_returns = [
+            float(row["current_return_pct"])
+            for row in open_rows
+            if row["current_return_pct"] is not None
+        ]
+        matured = [row for row in rows if row["return_24h_pct"] is not None]
+        matured_today = sum(
+            1
+            for row in matured
+            if row["matured_at"] is not None
+            and start_utc <= row["matured_at"] < end_utc
+        )
+
+        def average(values: list[float]) -> float | None:
+            return sum(values) / len(values) if values else None
+
+        def values_for(key: str) -> list[float]:
+            return [
+                float(row[key])
+                for row in rows
+                if row[key] is not None
+            ]
+
+        returns_24h = [float(row["return_24h_pct"]) for row in matured]
+        wins = sum(value > 0 for value in returns_24h)
+        best = max(matured, key=lambda row: float(row["return_24h_pct"]), default=None)
+        worst = min(matured, key=lambda row: float(row["return_24h_pct"]), default=None)
+        matured_mfe = [float(row["mfe_pct"]) for row in matured]
+        matured_mae = [float(row["mae_pct"]) for row in matured]
+
+        report = PerformanceSummary(
+            report_date=report_date,
+            confirmed_today=confirmed_today,
+            open_count=len(open_rows),
+            open_avg_return=average(open_returns),
+            open_sum_return=sum(open_returns) if open_returns else None,
+            matured_total=len(matured),
+            matured_today=matured_today,
+            win_rate_24h=(wins / len(returns_24h)) if returns_24h else None,
+            avg_return_1h=average(values_for("return_1h_pct")),
+            avg_return_4h=average(values_for("return_4h_pct")),
+            avg_return_12h=average(values_for("return_12h_pct")),
+            avg_return_24h=average(returns_24h),
+            sum_return_24h=sum(returns_24h) if returns_24h else None,
+            avg_mfe=average(matured_mfe),
+            avg_mae=average(matured_mae),
+            best_symbol=str(best["symbol"]) if best is not None else None,
+            best_return_24h=(float(best["return_24h_pct"]) if best is not None else None),
+            worst_symbol=str(worst["symbol"]) if worst is not None else None,
+            worst_return_24h=(float(worst["return_24h_pct"]) if worst is not None else None),
+        )
+
+        sent = await self.notifier.send_performance_report(report)
+        if not sent:
+            LOGGER.warning("Daily performance report not sent; will retry on next performance cycle")
+            return
+        recorded = await self.db.record_performance_report(
+            report_date=report_date,
+            sent_at=now,
+            timezone_name=self.settings.performance_report_timezone,
+            payload=report.as_dict(),
+        )
+        if not recorded:
+            return
+        LOGGER.info(
+            "Daily performance report: date=%s confirmed_today=%d matured=%d win_rate_24h=%s avg_24h=%s",
+            report_date,
+            report.confirmed_today,
+            report.matured_total,
+            report.win_rate_24h,
+            report.avg_return_24h,
+        )
+
     async def write_heartbeat(self) -> None:
         await self.db.heartbeat(
             "mexc-exhaustion-scanner",
@@ -789,7 +985,7 @@ class ScannerWorker:
                     self.liquid_symbols(include_benchmark=True)
                 ),
                 "execution_enabled": self.settings.execution_enabled,
-                "strategy_version": "0.6",
+                "strategy_version": "0.7",
             },
         )
 
