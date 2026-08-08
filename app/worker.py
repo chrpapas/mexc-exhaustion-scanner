@@ -49,10 +49,14 @@ class ScannerWorker:
             request_rate_per_second=settings.request_rate_per_second,
             request_concurrency=settings.request_concurrency,
         )
-        self.notifier = DiscordNotifier(settings.discord_webhook_url)
+        self.notifier = DiscordNotifier(
+            settings.discord_webhook_url,
+            settings.discord_signal_levels,
+        )
         self.stop_event = asyncio.Event()
         self.contracts: set[str] = set()
         self.latest_tickers: dict[str, Ticker] = {}
+        self.wide_return_72h: dict[str, float] = {}
         self.last_ticker_store = 0.0
         self.thresholds = RunThresholds(
             min_amount_24h=settings.min_amount_24h,
@@ -76,6 +80,9 @@ class ScannerWorker:
 
         await self.refresh_contracts()
         await self.collect_tickers(force_store=True)
+        # Bootstrap a lightweight 4h scan across the entire crypto universe so
+        # low-liquidity runners that are already cooling are not invisible.
+        await self.collect_wide_scan()
 
         try:
             async with asyncio.TaskGroup() as group:
@@ -91,6 +98,13 @@ class ScannerWorker:
                         "tickers",
                         self.settings.ticker_poll_seconds,
                         self.collect_tickers,
+                    )
+                )
+                group.create_task(
+                    self._periodic(
+                        "wide_scan",
+                        self.settings.wide_scan_seconds,
+                        self.collect_wide_scan,
                     )
                 )
                 group.create_task(
@@ -143,6 +157,7 @@ class ScannerWorker:
         stagger = {
             "tickers": 0,
             "heartbeat": 2,
+            "wide_scan": 3,
             "candles": 5,
             "signals": 10,
             "funding": 15,
@@ -261,10 +276,9 @@ class ScannerWorker:
         """Symbols worth full candle analysis, independent of execution liquidity.
 
         Standard-liquidity contracts are always kept. Low-liquidity contracts are
-        admitted when their 24h return is already unusual, when they rank in the
-        upper part of the MEXC crypto cross-section, or while they have a live pump
-        episode. This lets tiny runners such as CASHCAT become visible without
-        downloading full histories for every dormant contract on every cycle.
+        admitted when their 24h return is unusual, when they rank in the upper
+        part of the MEXC crypto cross-section, when the hourly wide scan detects
+        a large 72h run, or while they have a live pump episode.
         """
         if not self.latest_tickers:
             return []
@@ -283,12 +297,17 @@ class ScannerWorker:
                 rank is not None
                 and rank >= self.settings.discovery_min_cross_section_percentile
             )
-            if not (is_active or is_standard or is_mover or is_relative_mover):
+            return_72h = self.wide_return_72h.get(ticker.symbol)
+            is_72h_mover = (
+                return_72h is not None
+                and return_72h >= self.settings.wide_scan_min_return_72h
+            )
+            if not (is_active or is_standard or is_mover or is_relative_mover or is_72h_mover):
                 continue
             selected.append(
                 (
-                    1 if is_active else 0,
-                    ticker.rise_fall_rate,
+                    2 if is_active else (1 if is_72h_mover else 0),
+                    max(ticker.rise_fall_rate, return_72h or -999.0),
                     ticker.amount24,
                     ticker.symbol,
                 )
@@ -296,6 +315,26 @@ class ScannerWorker:
 
         selected.sort(reverse=True)
         symbols = [item[3] for item in selected[: self.settings.max_symbols]]
+
+        for symbol in sorted(self.settings.diagnostic_symbols):
+            ticker = self.latest_tickers.get(symbol)
+            if ticker is None:
+                continue
+            rank = percentile_rank(ticker.rise_fall_rate, returns)
+            LOGGER.info(
+                "Discovery diagnostic %s: selected=%s 24h=%.2f%% 72h=%s percentile=%s standard=%s active=%s",
+                symbol,
+                symbol in symbols,
+                ticker.rise_fall_rate * 100.0,
+                (
+                    f"{self.wide_return_72h[symbol] * 100.0:.2f}%"
+                    if symbol in self.wide_return_72h
+                    else "n/a"
+                ),
+                (f"{rank * 100.0:.1f}%" if rank is not None else "n/a"),
+                symbol in standard,
+                symbol in active_episodes,
+            )
 
         # Active episodes must never disappear because of the cap.
         for symbol in sorted(active_episodes):
@@ -309,6 +348,84 @@ class ScannerWorker:
         ):
             symbols.append("BTC_USDT")
         return symbols
+
+
+    async def collect_wide_scan(self) -> None:
+        """Keep a lightweight 72h return for every crypto perpetual.
+
+        v0.8 discovered low-liquidity contracts only from the current 24h ticker
+        or an already-open episode. That misses coins whose pump happened earlier
+        and whose current 24h return has already cooled. This scan downloads only
+        recent 4h candles for the full crypto universe, once per hour by default.
+        """
+        if not self.contracts or not self.latest_tickers:
+            return
+
+        symbols = sorted(self.contracts)
+        semaphore = asyncio.Semaphore(self.settings.request_concurrency)
+        now = datetime.now(UTC)
+
+        async def scan_symbol(symbol: str) -> tuple[str, float | None]:
+            async with semaphore:
+                await self._sync_interval(
+                    symbol, "Hour4", bootstrap_days=4, overlap_hours=8
+                )
+                candles = await self.db.fetch_candles(symbol, "Hour4", 24)
+                completed = [
+                    candle
+                    for candle in candles
+                    if candle.open_time + timedelta(hours=4) <= now
+                ]
+                ticker = self.latest_tickers.get(symbol)
+                if ticker is None or len(completed) < 19:
+                    return symbol, None
+                return symbol, pct_return(completed[-19].close, ticker.last_price)
+
+        results = await asyncio.gather(
+            *(scan_symbol(symbol) for symbol in symbols), return_exceptions=True
+        )
+        failures = 0
+        returns: dict[str, float] = {}
+        for symbol, result in zip(symbols, results, strict=True):
+            if isinstance(result, Exception):
+                failures += 1
+                if symbol in self.settings.diagnostic_symbols:
+                    LOGGER.warning("Wide scan failed for %s: %s", symbol, result)
+                continue
+            _, value = result
+            if value is not None:
+                returns[symbol] = value
+
+        self.wide_return_72h = returns
+        movers = {
+            symbol: value
+            for symbol, value in returns.items()
+            if value >= self.settings.wide_scan_min_return_72h
+        }
+        LOGGER.info(
+            "Wide 72h scan complete: symbols=%d returns=%d movers=%d failures=%d",
+            len(symbols),
+            len(returns),
+            len(movers),
+            failures,
+        )
+        for symbol in sorted(self.settings.diagnostic_symbols):
+            ticker = self.latest_tickers.get(symbol)
+            if ticker is None:
+                LOGGER.info("Diagnostic %s: not present in crypto ticker universe", symbol)
+                continue
+            LOGGER.info(
+                "Diagnostic %s: 24h=%.2f%% 72h=%s amount24=$%.0f spread=%s",
+                symbol,
+                ticker.rise_fall_rate * 100.0,
+                (
+                    f"{returns[symbol] * 100.0:.2f}%"
+                    if symbol in returns
+                    else "n/a"
+                ),
+                ticker.amount24,
+                (f"{ticker.spread_pct:.3f}%" if ticker.spread_pct is not None else "n/a"),
+            )
 
     async def collect_candles(self) -> None:
         symbols = await self.discovery_symbols(include_benchmark=True)
@@ -410,6 +527,13 @@ class ScannerWorker:
                 if item.open_time + timedelta(hours=4) <= now
             ]
             if len(completed_15m) < 289 or len(completed_4h) < 25:
+                if symbol in self.settings.diagnostic_symbols:
+                    LOGGER.info(
+                        "Signal diagnostic %s: waiting_for_history 15m=%d/289 4h=%d/25",
+                        symbol,
+                        len(completed_15m),
+                        len(completed_4h),
+                    )
                 continue
 
             evaluated += 1
@@ -506,6 +630,18 @@ class ScannerWorker:
                 exhaustion_score,
                 self.state_thresholds,
             )
+            if symbol in self.settings.diagnostic_symbols:
+                LOGGER.info(
+                    "Signal diagnostic %s: run_score=%d/6 exhaustion_score=%d/7 state=%s structural_break=%s risk=%s 24h=%.2f%% 72h=%.2f%%",
+                    symbol,
+                    run_score,
+                    exhaustion_score,
+                    state or "none",
+                    exhaustion.structural_break_15m,
+                    risk.tier,
+                    (features.return_24h or 0.0) * 100.0,
+                    (features.return_72h or 0.0) * 100.0,
+                )
 
             signaled_at = self._time_bucket(
                 now, self.settings.signal_poll_seconds
@@ -1079,8 +1215,13 @@ class ScannerWorker:
                     self.execution_quality_symbols(include_benchmark=True)
                 ),
                 "discovery_symbols": len(discovery),
+                "wide_scan_returns": len(self.wide_return_72h),
+                "wide_scan_72h_movers": sum(
+                    value >= self.settings.wide_scan_min_return_72h
+                    for value in self.wide_return_72h.values()
+                ),
                 "execution_enabled": self.settings.execution_enabled,
-                "strategy_version": "0.8",
+                "strategy_version": "0.8.1",
             },
         )
 

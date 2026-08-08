@@ -16,10 +16,16 @@ def _env_csv(name: str, default: str) -> frozenset[str]:
     return frozenset(part.strip().upper() for part in raw.split(",") if part.strip())
 
 
+def _env_csv_lower(name: str, default: str) -> frozenset[str]:
+    raw = os.getenv(name, default)
+    return frozenset(part.strip().lower() for part in raw.split(",") if part.strip())
+
+
 @dataclass(frozen=True, slots=True)
 class Settings:
     database_url: str
     discord_webhook_url: str | None
+    discord_signal_levels: frozenset[str]
     mexc_base_url: str
     mexc_spot_base_url: str
     require_mexc_spot_pair: bool
@@ -39,6 +45,9 @@ class Settings:
     high_risk_max_spread_pct: float
     discovery_min_return_24h: float
     discovery_min_cross_section_percentile: float
+    wide_scan_seconds: int
+    wide_scan_min_return_72h: float
+    diagnostic_symbols: frozenset[str]
     state_min_run_score: int
     run_watch_min_24h: float
     run_watch_min_72h: float
@@ -75,6 +84,10 @@ class Settings:
         settings = cls(
             database_url=database_url,
             discord_webhook_url=os.getenv("DISCORD_WEBHOOK_URL") or None,
+            discord_signal_levels=_env_csv_lower(
+                "DISCORD_SIGNAL_LEVELS",
+                "exhaustion_watch,confirmed_short",
+            ),
             mexc_base_url=os.getenv("MEXC_BASE_URL", "https://contract.mexc.com"),
             mexc_spot_base_url=os.getenv("MEXC_SPOT_BASE_URL", "https://api.mexc.com"),
             require_mexc_spot_pair=_env_bool("REQUIRE_MEXC_SPOT_PAIR", True),
@@ -92,11 +105,14 @@ class Settings:
             high_risk_max_spread_pct=float(os.getenv("HIGH_RISK_MAX_SPREAD_PCT", "1.0")),
             discovery_min_return_24h=float(os.getenv("DISCOVERY_MIN_RETURN_24H", "0.05")),
             discovery_min_cross_section_percentile=float(os.getenv("DISCOVERY_MIN_CROSS_SECTION_PERCENTILE", "0.70")),
+            wide_scan_seconds=int(os.getenv("WIDE_SCAN_SECONDS", "3600")),
+            wide_scan_min_return_72h=float(os.getenv("WIDE_SCAN_MIN_RETURN_72H", "0.20")),
+            diagnostic_symbols=_env_csv("DIAGNOSTIC_SYMBOLS", "CASHCAT_USDT"),
             state_min_run_score=int(os.getenv("STATE_MIN_RUN_SCORE", "3")),
             run_watch_min_24h=float(os.getenv("RUN_WATCH_MIN_24H", "0.08")),
             run_watch_min_72h=float(os.getenv("RUN_WATCH_MIN_72H", "0.20")),
             exhaustion_watch_min_72h=float(os.getenv("EXHAUSTION_WATCH_MIN_72H", "0.30")),
-            exhaustion_watch_min_24h=float(os.getenv("EXHAUSTION_WATCH_MIN_24H", "-0.05")),
+            exhaustion_watch_min_24h=float(os.getenv("EXHAUSTION_WATCH_MIN_24H", "-0.25")),
             exhaustion_watch_max_24h=float(os.getenv("EXHAUSTION_WATCH_MAX_24H", "0.08")),
             active_exhaustion_min_score=int(os.getenv("ACTIVE_EXHAUSTION_MIN_SCORE", "2")),
             run_watch_alert_cooldown_minutes=int(
@@ -125,6 +141,18 @@ class Settings:
     def validate(self) -> None:
         if self.execution_enabled:
             raise RuntimeError("This build is shadow-mode only. Set EXECUTION_ENABLED=false.")
+        allowed_signal_levels = {
+            "run_watch",
+            "exhaustion_watch",
+            "breakdown_watch",
+            "confirmed_short",
+        }
+        unknown_signal_levels = self.discord_signal_levels - allowed_signal_levels
+        if unknown_signal_levels:
+            raise ValueError(
+                "DISCORD_SIGNAL_LEVELS contains unsupported levels: "
+                + ",".join(sorted(unknown_signal_levels))
+            )
         for name, value in (
             ("TICKER_POLL_SECONDS", self.ticker_poll_seconds),
             ("TICKER_STORE_SECONDS", self.ticker_store_seconds),
@@ -132,6 +160,7 @@ class Settings:
             ("SIGNAL_POLL_SECONDS", self.signal_poll_seconds),
             ("CONTRACT_REFRESH_SECONDS", self.contract_refresh_seconds),
             ("FUNDING_REFRESH_SECONDS", self.funding_refresh_seconds),
+            ("WIDE_SCAN_SECONDS", self.wide_scan_seconds),
             ("RETEST_WINDOW_CANDLES", self.retest_window_candles),
             ("EPISODE_MAX_AGE_HOURS", self.episode_max_age_hours),
             ("PERFORMANCE_POLL_SECONDS", self.performance_poll_seconds),
@@ -148,6 +177,8 @@ class Settings:
             raise ValueError("HIGH_RISK_MIN_AMOUNT_24H must be <= MIN_AMOUNT_24H")
         if self.high_risk_max_spread_pct < self.max_spread_pct:
             raise ValueError("HIGH_RISK_MAX_SPREAD_PCT must be >= MAX_SPREAD_PCT")
+        if self.wide_scan_min_return_72h <= 0:
+            raise ValueError("WIDE_SCAN_MIN_RETURN_72H must be positive")
         if not 0 <= self.discovery_min_cross_section_percentile <= 1:
             raise ValueError("DISCOVERY_MIN_CROSS_SECTION_PERCENTILE must be between 0 and 1")
         if self.state_min_run_score < 1 or self.state_min_run_score > 6:

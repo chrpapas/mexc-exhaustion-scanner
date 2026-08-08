@@ -11,15 +11,25 @@ LOGGER = logging.getLogger(__name__)
 
 
 class DiscordNotifier:
-    def __init__(self, webhook_url: str | None) -> None:
+    def __init__(
+        self,
+        webhook_url: str | None,
+        signal_levels: frozenset[str] | set[str] | None = None,
+    ) -> None:
         self._webhook_url = webhook_url
+        self._signal_levels = frozenset(
+            signal_levels or {"exhaustion_watch", "confirmed_short"}
+        )
         self._client = httpx.AsyncClient(timeout=15.0)
+
+    def should_send_signal(self, level: str) -> bool:
+        return level in self._signal_levels
 
     async def close(self) -> None:
         await self._client.aclose()
 
     async def send_signal(self, signal: RunSignal) -> None:
-        if not self._webhook_url:
+        if not self._webhook_url or not self.should_send_signal(signal.level):
             return
 
         features = signal.features

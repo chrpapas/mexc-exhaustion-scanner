@@ -66,7 +66,7 @@ class MarketStateThresholds:
     run_watch_min_24h: float = 0.08
     run_watch_min_72h: float = 0.20
     exhaustion_watch_min_72h: float = 0.30
-    exhaustion_watch_min_24h: float = -0.05
+    exhaustion_watch_min_24h: float = -0.25
     exhaustion_watch_max_24h: float = 0.08
     active_exhaustion_min_score: int = 2
 
@@ -227,15 +227,19 @@ def classify_market_state(
     thresholds: MarketStateThresholds,
 ) -> tuple[str | None, list[str]]:
     """Classify a runner as advancing or fading before breakdown confirmation."""
-    if run_score < thresholds.min_run_score:
-        return None, []
-
     r24 = run_features.return_24h
     r72 = run_features.return_72h
     if r24 is None or r72 is None:
         return None, []
 
     prior_run = r72 >= thresholds.exhaustion_watch_min_72h
+    # A coin discovered late can have lost its current 24h momentum score while
+    # still being in a valid post-pump exhaustion phase. Allow strong exhaustion
+    # evidence to keep such a prior runner visible instead of requiring 3/6 run
+    # points at the exact moment we first start observing it.
+    late_prior_runner = prior_run and exhaustion_score >= 2
+    if run_score < thresholds.min_run_score and not late_prior_runner:
+        return None, []
     in_cooling_band = (
         thresholds.exhaustion_watch_min_24h
         <= r24

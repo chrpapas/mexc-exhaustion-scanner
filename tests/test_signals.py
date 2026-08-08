@@ -293,3 +293,21 @@ def test_retest_window_expires_without_confirmation() -> None:
     assert result.expired
     assert not result.confirmed
     assert not result.invalidated
+
+
+def test_late_discovered_prior_runner_can_be_exhaustion_watch_below_minus_5pct() -> None:
+    from app.signals import MarketStateThresholds, classify_market_state
+
+    exhaustion = neutral_exhaustion(
+        momentum_decelerating=True,
+        below_ema9_15m=True,
+    )
+    level, reasons = classify_market_state(
+        state_features(-0.12, 0.85),
+        run_score=2,
+        exhaustion_features=exhaustion,
+        exhaustion_score=2,
+        thresholds=MarketStateThresholds(),
+    )
+    assert level == "exhaustion_watch"
+    assert any("cooled" in reason for reason in reasons)
