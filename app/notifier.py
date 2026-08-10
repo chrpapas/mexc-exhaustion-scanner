@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from datetime import datetime
 
 import httpx
 
@@ -116,12 +117,27 @@ class DiscordNotifier:
         except httpx.HTTPError:
             LOGGER.exception("Discord alert failed for %s", signal.symbol)
 
-    async def send_performance_report(self, report: PerformanceSummary) -> bool:
+    async def send_performance_report(
+        self,
+        report: PerformanceSummary,
+        *,
+        label: str = "DAILY SHADOW PERFORMANCE",
+        as_of: datetime | None = None,
+        timezone_name: str | None = None,
+    ) -> bool:
         if not self._webhook_url:
             return False
 
         lines = [
-            f"📊 **DAILY SHADOW PERFORMANCE — {report.report_date.isoformat()}**",
+            f"📊 **{label} — {report.report_date.isoformat()}**",
+        ]
+        if as_of is not None:
+            display = as_of
+            if timezone_name:
+                from zoneinfo import ZoneInfo
+                display = as_of.astimezone(ZoneInfo(timezone_name))
+            lines.append(f"As of: {display.strftime('%Y-%m-%d %H:%M:%S %Z')}")
+        lines.extend([
             f"Confirmed shorts today: {report.confirmed_today}",
             f"Open tracked signals: {report.open_count}",
             (
@@ -147,7 +163,7 @@ class DiscordNotifier:
             ),
             f"Summed 24h signal return: {self._percent(report.sum_return_24h)}",
             f"Average MFE: {self._percent(report.avg_mfe)} | Average MAE: {self._percent(report.avg_mae)}",
-        ]
+        ])
         if report.best_symbol is not None:
             lines.append(
                 f"Best 24h: {report.best_symbol} {self._percent(report.best_return_24h)}"

@@ -22,7 +22,7 @@ from app.indicators import (
 from app.mexc import MexcClient, is_crypto_usdt_contract
 from app.models import PumpEpisode, RunSignal, Ticker
 from app.notifier import DiscordNotifier
-from app.performance import PerformanceSummary, short_return, should_send_daily_report
+from app.performance import build_performance_summary, short_return, should_send_daily_report
 from app.signals import (
     ExhaustionFeatures,
     ExhaustionThresholds,
@@ -1147,86 +1147,13 @@ class ScannerWorker:
             last_date,
         )
 
-        report_date = local_now.date()
-        local_start = datetime(
-            report_date.year, report_date.month, report_date.day, tzinfo=tz
-        )
-        next_date = report_date + timedelta(days=1)
-        local_end = datetime(
-            next_date.year, next_date.month, next_date.day, tzinfo=tz
-        )
-        start_utc = local_start.astimezone(UTC)
-        end_utc = local_end.astimezone(UTC)
-
         rows = await self.db.performance_rows()
-        confirmed_today = sum(
-            1 for row in rows if start_utc <= row["confirmed_at"] < end_utc
+        report = build_performance_summary(
+            rows,
+            now_utc=now,
+            timezone_name=self.settings.performance_report_timezone,
         )
-        open_rows = [row for row in rows if row["return_24h_pct"] is None]
-        open_returns = [
-            float(row["current_return_pct"])
-            for row in open_rows
-            if row["current_return_pct"] is not None
-        ]
-        matured = [row for row in rows if row["return_24h_pct"] is not None]
-        matured_today = sum(
-            1
-            for row in matured
-            if row["matured_at"] is not None
-            and start_utc <= row["matured_at"] < end_utc
-        )
-
-        def average(values: list[float]) -> float | None:
-            return sum(values) / len(values) if values else None
-
-        def values_for(key: str) -> list[float]:
-            return [
-                float(row[key])
-                for row in rows
-                if row[key] is not None
-            ]
-
-        returns_24h = [float(row["return_24h_pct"]) for row in matured]
-        wins = sum(value > 0 for value in returns_24h)
-        standard_matured = [row for row in matured if row.get("risk_tier") == "standard"]
-        high_risk_matured = [row for row in matured if row.get("risk_tier") != "standard"]
-
-        def win_rate(group: list[dict[str, object]]) -> float | None:
-            values = [float(row["return_24h_pct"]) for row in group]
-            if not values:
-                return None
-            return sum(value > 0 for value in values) / len(values)
-
-        best = max(matured, key=lambda row: float(row["return_24h_pct"]), default=None)
-        worst = min(matured, key=lambda row: float(row["return_24h_pct"]), default=None)
-        matured_mfe = [float(row["mfe_pct"]) for row in matured]
-        matured_mae = [float(row["mae_pct"]) for row in matured]
-
-        report = PerformanceSummary(
-            report_date=report_date,
-            confirmed_today=confirmed_today,
-            open_count=len(open_rows),
-            open_avg_return=average(open_returns),
-            open_sum_return=sum(open_returns) if open_returns else None,
-            matured_total=len(matured),
-            matured_today=matured_today,
-            win_rate_24h=(wins / len(returns_24h)) if returns_24h else None,
-            standard_matured_total=len(standard_matured),
-            standard_win_rate_24h=win_rate(standard_matured),
-            high_risk_matured_total=len(high_risk_matured),
-            high_risk_win_rate_24h=win_rate(high_risk_matured),
-            avg_return_1h=average(values_for("return_1h_pct")),
-            avg_return_4h=average(values_for("return_4h_pct")),
-            avg_return_12h=average(values_for("return_12h_pct")),
-            avg_return_24h=average(returns_24h),
-            sum_return_24h=sum(returns_24h) if returns_24h else None,
-            avg_mfe=average(matured_mfe),
-            avg_mae=average(matured_mae),
-            best_symbol=str(best["symbol"]) if best is not None else None,
-            best_return_24h=(float(best["return_24h_pct"]) if best is not None else None),
-            worst_symbol=str(worst["symbol"]) if worst is not None else None,
-            worst_return_24h=(float(worst["return_24h_pct"]) if worst is not None else None),
-        )
+        report_date = report.report_date
 
         sent = await self.notifier.send_performance_report(report)
         if not sent:
