@@ -135,6 +135,13 @@ class ScannerWorker:
                         self.track_performance,
                     )
                 )
+                group.create_task(
+                    self._periodic(
+                        "performance_report",
+                        self.settings.performance_report_check_seconds,
+                        self.check_daily_performance_report,
+                    )
+                )
                 group.create_task(self._periodic("heartbeat", 60, self.write_heartbeat))
                 await self.stop_event.wait()
                 raise StopWorker()
@@ -163,6 +170,7 @@ class ScannerWorker:
             "funding": 15,
             "contracts": 20,
             "performance": 25,
+            "performance_report": 35,
         }.get(name, 0)
         if stagger:
             await asyncio.sleep(stagger)
@@ -1017,91 +1025,128 @@ class ScannerWorker:
         now = datetime.now(UTC)
         trades = await self.db.fetch_shadow_trades()
         updated = 0
+        failed = 0
 
         for trade in trades:
-            episode_id = int(trade["episode_id"])
-            symbol = str(trade["symbol"])
-            confirmed_at = trade["confirmed_at"]
-            entry_price = float(trade["entry_price"])
-            horizon_end = confirmed_at + timedelta(hours=24)
-            observation_end = min(now, horizon_end)
+            try:
+                episode_id = int(trade["episode_id"])
+                symbol = str(trade["symbol"])
+                confirmed_at = trade["confirmed_at"]
+                entry_price = float(trade["entry_price"])
+                horizon_end = confirmed_at + timedelta(hours=24)
+                observation_end = min(now, horizon_end)
 
-            current_price = None
-            current_return = None
-            ticker = self.latest_tickers.get(symbol)
-            if ticker is not None:
-                current_price = ticker.last_price
-                current_return = short_return(entry_price, current_price)
+                current_price = None
+                current_return = None
+                ticker = self.latest_tickers.get(symbol)
+                if ticker is not None:
+                    current_price = ticker.last_price
+                    current_return = short_return(entry_price, current_price)
 
-            min_low, max_high = await self.db.candle_excursions(
-                symbol, confirmed_at, observation_end
-            )
-            mfe = (
-                max(0.0, short_return(entry_price, min_low))
-                if min_low is not None and min_low > 0
-                else None
-            )
-            mae = (
-                min(0.0, short_return(entry_price, max_high))
-                if max_high is not None and max_high > 0
-                else None
-            )
+                min_low, max_high = await self.db.candle_excursions(
+                    symbol, confirmed_at, observation_end
+                )
+                mfe = (
+                    max(0.0, short_return(entry_price, min_low))
+                    if min_low is not None and min_low > 0
+                    else None
+                )
+                mae = (
+                    min(0.0, short_return(entry_price, max_high))
+                    if max_high is not None and max_high > 0
+                    else None
+                )
 
-            horizon_values: dict[int, float | None] = {1: None, 4: None, 12: None, 24: None}
-            existing = {
-                1: trade["return_1h_pct"],
-                4: trade["return_4h_pct"],
-                12: trade["return_12h_pct"],
-                24: trade["return_24h_pct"],
-            }
-            for hours in (1, 4, 12, 24):
-                if existing[hours] is not None:
-                    continue
-                target = confirmed_at + timedelta(hours=hours)
-                if now < target:
-                    continue
-                point = await self.db.candle_close_for_horizon(symbol, target)
-                if point is not None:
-                    _, price = point
-                    horizon_values[hours] = short_return(entry_price, price)
+                horizon_values: dict[int, float | None] = {
+                    1: None, 4: None, 12: None, 24: None
+                }
+                existing = {
+                    1: trade["return_1h_pct"],
+                    4: trade["return_4h_pct"],
+                    12: trade["return_12h_pct"],
+                    24: trade["return_24h_pct"],
+                }
+                for hours in (1, 4, 12, 24):
+                    if existing[hours] is not None:
+                        continue
+                    target = confirmed_at + timedelta(hours=hours)
+                    if now < target:
+                        continue
+                    point = await self.db.candle_close_for_horizon(symbol, target)
+                    if point is not None:
+                        _, price = point
+                        horizon_values[hours] = short_return(entry_price, price)
 
-            matured_at = None
-            return_24h = horizon_values[24]
-            if trade["return_24h_pct"] is not None:
-                return_24h = float(trade["return_24h_pct"])
-            if return_24h is not None and trade["matured_at"] is None:
-                matured_at = now
+                matured_at = None
+                return_24h = horizon_values[24]
+                if trade["return_24h_pct"] is not None:
+                    return_24h = float(trade["return_24h_pct"])
+                if return_24h is not None and trade["matured_at"] is None:
+                    matured_at = now
 
-            await self.db.update_shadow_trade(
-                episode_id,
-                current_price=current_price,
-                current_return_pct=current_return,
-                observed_at=now if current_price is not None else None,
-                mfe_pct=mfe,
-                mae_pct=mae,
-                return_1h_pct=horizon_values[1],
-                return_4h_pct=horizon_values[4],
-                return_12h_pct=horizon_values[12],
-                return_24h_pct=horizon_values[24],
-                matured_at=matured_at,
-            )
-            updated += 1
+                await self.db.update_shadow_trade(
+                    episode_id,
+                    current_price=current_price,
+                    current_return_pct=current_return,
+                    observed_at=now if current_price is not None else None,
+                    mfe_pct=mfe,
+                    mae_pct=mae,
+                    return_1h_pct=horizon_values[1],
+                    return_4h_pct=horizon_values[4],
+                    return_12h_pct=horizon_values[12],
+                    return_24h_pct=horizon_values[24],
+                    matured_at=matured_at,
+                )
+                updated += 1
+            except Exception:
+                failed += 1
+                LOGGER.exception(
+                    "Performance tracking failed for episode=%s symbol=%s",
+                    trade.get("episode_id"),
+                    trade.get("symbol"),
+                )
 
-        await self._maybe_send_daily_performance(now)
-        LOGGER.info("Performance tracker: tracked=%d", updated)
+        LOGGER.info(
+            "Performance tracker: tracked=%d failed=%d total=%d",
+            updated,
+            failed,
+            len(trades),
+        )
+
+    async def check_daily_performance_report(self) -> None:
+        """Check/report independently from trade tracking.
+
+        A malformed trade or temporary candle-data problem must never prevent the
+        daily Discord report from being evaluated.
+        """
+        now = datetime.now(UTC)
+        try:
+            await self._maybe_send_daily_performance(now)
+        except Exception:
+            LOGGER.exception("Daily performance report check failed")
 
     async def _maybe_send_daily_performance(self, now: datetime) -> None:
         last_date = await self.db.last_performance_report_date()
-        if not should_send_daily_report(
+        due = should_send_daily_report(
             now,
             timezone_name=self.settings.performance_report_timezone,
             report_hour=self.settings.performance_report_hour,
             already_sent_date=last_date,
-        ):
-            return
-
+        )
         tz = ZoneInfo(self.settings.performance_report_timezone)
         local_now = now.astimezone(tz)
+        if not due:
+            # Keep normal logs quiet; heartbeat still proves the worker is alive.
+            return
+
+        LOGGER.info(
+            "Daily performance report due: local_now=%s timezone=%s report_hour=%02d last_report_date=%s",
+            local_now.isoformat(),
+            self.settings.performance_report_timezone,
+            self.settings.performance_report_hour,
+            last_date,
+        )
+
         report_date = local_now.date()
         local_start = datetime(
             report_date.year, report_date.month, report_date.day, tzinfo=tz

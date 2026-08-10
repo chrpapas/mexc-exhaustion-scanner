@@ -425,9 +425,9 @@ class Database:
         await self.pool.execute(
             """
             UPDATE pump_episodes
-            SET closed_at=$2,
+            SET closed_at=$2::timestamptz,
                 updated_at=now(),
-                metadata = metadata || jsonb_build_object('closed_reason', $3)
+                metadata = metadata || jsonb_build_object('closed_reason', $3::text)
             WHERE id=$1 AND closed_at IS NULL
             """,
             episode_id,
@@ -519,8 +519,8 @@ class Database:
             FROM candles
             WHERE symbol=$1
               AND interval='Min15'
-              AND open_time >= $2 - interval '15 minutes'
-              AND open_time < $3
+              AND open_time >= $2::timestamptz - interval '15 minutes'
+              AND open_time < $3::timestamptz
             """,
             symbol,
             start_at,
@@ -544,8 +544,8 @@ class Database:
             FROM candles
             WHERE symbol=$1
               AND interval='Min15'
-              AND open_time + interval '15 minutes' >= $2
-              AND open_time + interval '15 minutes' <= $2 + interval '30 minutes'
+              AND open_time + interval '15 minutes' >= $2::timestamptz
+              AND open_time + interval '15 minutes' <= $2::timestamptz + interval '30 minutes'
             ORDER BY open_time ASC
             LIMIT 1
             """,
