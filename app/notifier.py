@@ -199,3 +199,39 @@ class DiscordNotifier:
         except httpx.HTTPError:
             LOGGER.exception("Discord performance report failed")
             return False
+    @staticmethod
+    def _percent(value: object) -> str:
+        return "n/a" if value is None else f"{float(value):.2%}"
+
+    @staticmethod
+    def _number(value: object) -> str:
+        return "n/a" if value is None else f"{float(value):.2f}"
+
+    @staticmethod
+    def _money(value: object) -> str:
+        if value is None:
+            return "n/a"
+        number = float(value)
+        if number >= 1_000_000_000:
+            return f"${number / 1_000_000_000:.2f}B"
+        if number >= 1_000_000:
+            return f"${number / 1_000_000:.2f}M"
+        if number >= 1_000:
+            return f"${number / 1_000:.1f}K"
+        return f"${number:,.0f}"
+
+    @staticmethod
+    def _spread(value: object) -> str:
+        return "n/a" if value is None else f"{float(value):.3f}%"
+
+    @staticmethod
+    def _price(value: object) -> str:
+        if value is None:
+            return "n/a"
+        number = float(value)
+        if abs(number) >= 1000:
+            return f"{number:,.2f}"
+        if abs(number) >= 1:
+            return f"{number:.6f}".rstrip("0").rstrip(".")
+        return f"{number:.10f}".rstrip("0").rstrip(".")
+
