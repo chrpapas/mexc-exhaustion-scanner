@@ -1,5 +1,10 @@
 .gitignore
+.pytest_cache/.gitignore
+.pytest_cache/CACHEDIR.TAG
+.pytest_cache/README.md
+.pytest_cache/v/cache/nodeids
 .python-version
+MANIFEST.txt
 README.md
 UPLOAD-INSTRUCTIONS.txt
 app/__init__.py
@@ -10,6 +15,7 @@ app/mexc.py
 app/models.py
 app/notifier.py
 app/performance.py
+app/report_now.py
 app/signals.py
 app/worker.py
 migrations/001_init.sql
@@ -18,10 +24,13 @@ migrations/003_market_states.sql
 migrations/004_pump_episodes.sql
 migrations/005_performance_tracking.sql
 migrations/006_risk_tiers.sql
+migrations/007_extended_performance_horizons.sql
 pyproject.toml
 render.yaml
 scripts/verify_project.py
 tests/test_indicators.py
 tests/test_mexc_parsers.py
+tests/test_notifier.py
 tests/test_performance.py
+tests/test_report_now.py
 tests/test_signals.py

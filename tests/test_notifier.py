@@ -45,8 +45,12 @@ def _horizon(hours: int, value: float) -> HorizonSummary:
         win_rate=0.5,
         standard_total=1,
         standard_win_rate=1.0,
+        standard_avg_return=value * 1.5,
+        standard_sum_return=value * 1.5,
         high_risk_total=1,
         high_risk_win_rate=0.0,
+        high_risk_avg_return=value * 0.5,
+        high_risk_sum_return=value * 0.5,
         avg_return=value,
         sum_return=value * 2,
     )
@@ -91,4 +95,6 @@ def test_performance_report_renders_with_formatting_helpers():
     assert "24h: 2 matured" in content
     assert "48h: 2 matured" in content
     assert "72h: 2 matured" in content
+    assert "24h STANDARD — n=1 | win 100.00% | avg 15.00% | sum 15.00%" in content
+    assert "24h HIGH+EXTREME — n=1 | win 0.00% | avg 5.00% | sum 5.00%" in content
     assert "Best 72h: BEST_USDT 50.00%" in content

@@ -153,11 +153,19 @@ class DiscordNotifier:
                 f"avg {self._percent(horizon.avg_return)} | sum {self._percent(horizon.sum_return)}"
             )
 
-        lines.append("Win rate by execution risk:")
+        lines.append("Performance by execution risk:")
         for horizon in (report.horizon_24h, report.horizon_48h, report.horizon_72h):
             lines.append(
-                f"{horizon.hours}h STD {horizon.standard_total}/{self._percent(horizon.standard_win_rate)} | "
-                f"HIGH+EXTREME {horizon.high_risk_total}/{self._percent(horizon.high_risk_win_rate)}"
+                f"{horizon.hours}h STANDARD — n={horizon.standard_total} | "
+                f"win {self._percent(horizon.standard_win_rate)} | "
+                f"avg {self._percent(horizon.standard_avg_return)} | "
+                f"sum {self._percent(horizon.standard_sum_return)}"
+            )
+            lines.append(
+                f"{horizon.hours}h HIGH+EXTREME — n={horizon.high_risk_total} | "
+                f"win {self._percent(horizon.high_risk_win_rate)} | "
+                f"avg {self._percent(horizon.high_risk_avg_return)} | "
+                f"sum {self._percent(horizon.high_risk_sum_return)}"
             )
 
         lines.extend([

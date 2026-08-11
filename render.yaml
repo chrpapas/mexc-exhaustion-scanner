@@ -23,6 +23,8 @@ services:
         value: "true"
       - key: LOG_LEVEL
         value: INFO
+      - key: DISCORD_SIGNAL_LEVELS
+        value: exhaustion_watch,confirmed_short
       - key: MIN_AMOUNT_24H
         value: "3000000"
       - key: MAX_SPREAD_PCT
@@ -35,6 +37,12 @@ services:
         value: "0.05"
       - key: DISCOVERY_MIN_CROSS_SECTION_PERCENTILE
         value: "0.70"
+      - key: WIDE_SCAN_SECONDS
+        value: "3600"
+      - key: WIDE_SCAN_MIN_RETURN_72H
+        value: "0.20"
+      - key: DIAGNOSTIC_SYMBOLS
+        value: CASHCAT_USDT
       - key: STATE_MIN_RUN_SCORE
         value: "3"
       - key: RUN_WATCH_MIN_24H
@@ -44,7 +52,7 @@ services:
       - key: EXHAUSTION_WATCH_MIN_72H
         value: "0.30"
       - key: EXHAUSTION_WATCH_MIN_24H
-        value: "-0.05"
+        value: "-0.25"
       - key: EXHAUSTION_WATCH_MAX_24H
         value: "0.08"
       - key: ACTIVE_EXHAUSTION_MIN_SCORE
@@ -67,6 +75,8 @@ services:
         value: "240"
       - key: PERFORMANCE_POLL_SECONDS
         value: "300"
+      - key: PERFORMANCE_REPORT_CHECK_SECONDS
+        value: "60"
       - key: PERFORMANCE_REPORT_HOUR
         value: "18"
       - key: PERFORMANCE_REPORT_TIMEZONE

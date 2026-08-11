@@ -33,8 +33,12 @@ class HorizonSummary:
     win_rate: float | None
     standard_total: int
     standard_win_rate: float | None
+    standard_avg_return: float | None
+    standard_sum_return: float | None
     high_risk_total: int
     high_risk_win_rate: float | None
+    high_risk_avg_return: float | None
+    high_risk_sum_return: float | None
     avg_return: float | None
     sum_return: float | None
 
@@ -46,8 +50,12 @@ class HorizonSummary:
             "win_rate": self.win_rate,
             "standard_total": self.standard_total,
             "standard_win_rate": self.standard_win_rate,
+            "standard_avg_return": self.standard_avg_return,
+            "standard_sum_return": self.standard_sum_return,
             "high_risk_total": self.high_risk_total,
             "high_risk_win_rate": self.high_risk_win_rate,
+            "high_risk_avg_return": self.high_risk_avg_return,
+            "high_risk_sum_return": self.high_risk_sum_return,
             "avg_return": self.avg_return,
             "sum_return": self.sum_return,
         }
@@ -201,6 +209,9 @@ def build_performance_summary(
                 return None
             return sum(value > 0 for value in group_values) / len(group_values)
 
+        standard_values = [float(row[return_key]) for row in standard]
+        high_risk_values = [float(row[return_key]) for row in high_risk]
+
         return HorizonSummary(
             hours=hours,
             matured_total=len(matured),
@@ -208,8 +219,12 @@ def build_performance_summary(
             win_rate=(sum(value > 0 for value in values) / len(values)) if values else None,
             standard_total=len(standard),
             standard_win_rate=win_rate(standard),
+            standard_avg_return=average(standard_values),
+            standard_sum_return=sum(standard_values) if standard_values else None,
             high_risk_total=len(high_risk),
             high_risk_win_rate=win_rate(high_risk),
+            high_risk_avg_return=average(high_risk_values),
+            high_risk_sum_return=sum(high_risk_values) if high_risk_values else None,
             avg_return=average(values),
             sum_return=sum(values) if values else None,
         )
