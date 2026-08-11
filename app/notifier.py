@@ -128,98 +128,74 @@ class DiscordNotifier:
         if not self._webhook_url:
             return False
 
-        lines = [
-            f"📊 **{label} — {report.report_date.isoformat()}**",
-        ]
+        lines = [f"📊 **{label} — {report.report_date.isoformat()}**"]
         if as_of is not None:
             display = as_of
             if timezone_name:
                 from zoneinfo import ZoneInfo
                 display = as_of.astimezone(ZoneInfo(timezone_name))
             lines.append(f"As of: {display.strftime('%Y-%m-%d %H:%M:%S %Z')}")
+
         lines.extend([
             f"Confirmed shorts today: {report.confirmed_today}",
-            f"Open tracked signals: {report.open_count}",
+            f"Open tracked signals (until 72h): {report.open_count}",
             (
                 "Open mark-to-market: "
                 f"{self._percent(report.open_avg_return)} avg | "
                 f"{self._percent(report.open_sum_return)} summed"
             ),
-            f"24h matured signals: {report.matured_total} all-time | {report.matured_today} today",
-            f"24h win rate: {self._percent(report.win_rate_24h)}",
+        ])
+
+        for horizon in (report.horizon_24h, report.horizon_48h, report.horizon_72h):
+            lines.append(
+                f"{horizon.hours}h: {horizon.matured_total} matured "
+                f"({horizon.matured_today} today) | win {self._percent(horizon.win_rate)} | "
+                f"avg {self._percent(horizon.avg_return)} | sum {self._percent(horizon.sum_return)}"
+            )
+
+        lines.append("Win rate by execution risk:")
+        for horizon in (report.horizon_24h, report.horizon_48h, report.horizon_72h):
+            lines.append(
+                f"{horizon.hours}h STD {horizon.standard_total}/{self._percent(horizon.standard_win_rate)} | "
+                f"HIGH+EXTREME {horizon.high_risk_total}/{self._percent(horizon.high_risk_win_rate)}"
+            )
+
+        lines.extend([
             (
-                "24h by risk: "
-                f"STANDARD {report.standard_matured_total} signals / "
-                f"{self._percent(report.standard_win_rate_24h)} win | "
-                f"HIGH+EXTREME {report.high_risk_matured_total} signals / "
-                f"{self._percent(report.high_risk_win_rate_24h)} win"
-            ),
-            (
-                "Average short return: "
+                "Average short-return path: "
                 f"1h {self._percent(report.avg_return_1h)} | "
                 f"4h {self._percent(report.avg_return_4h)} | "
                 f"12h {self._percent(report.avg_return_12h)} | "
-                f"24h {self._percent(report.avg_return_24h)}"
+                f"24h {self._percent(report.avg_return_24h)} | "
+                f"48h {self._percent(report.avg_return_48h)} | "
+                f"72h {self._percent(report.avg_return_72h)}"
             ),
-            f"Summed 24h signal return: {self._percent(report.sum_return_24h)}",
-            f"Average MFE: {self._percent(report.avg_mfe)} | Average MAE: {self._percent(report.avg_mae)}",
+            (
+                "72h excursion (fully matured only): "
+                f"MFE {self._percent(report.avg_mfe_72h)} | "
+                f"MAE {self._percent(report.avg_mae_72h)}"
+            ),
         ])
-        if report.best_symbol is not None:
+        if report.best_symbol_72h is not None:
             lines.append(
-                f"Best 24h: {report.best_symbol} {self._percent(report.best_return_24h)}"
+                f"Best 72h: {report.best_symbol_72h} {self._percent(report.best_return_72h)}"
             )
-        if report.worst_symbol is not None:
+        if report.worst_symbol_72h is not None:
             lines.append(
-                f"Worst 24h: {report.worst_symbol} {self._percent(report.worst_return_24h)}"
+                f"Worst 72h: {report.worst_symbol_72h} {self._percent(report.worst_return_72h)}"
             )
-        lines.extend(
-            [
-                "Returns are measured from CONFIRMED SHORT retest close.",
-                "Analytics only: no fees, slippage, funding, leverage or position sizing included.",
-            ]
-        )
+        lines.extend([
+            "Returns are measured from CONFIRMED SHORT retest close.",
+            "Analytics only: no fees, slippage, funding, leverage or position sizing included.",
+        ])
+
+        content = "\n".join(lines)
+        if len(content) > 1950:
+            LOGGER.warning("Performance report content is long (%d chars)", len(content))
         try:
-            response = await self._client.post(
-                self._webhook_url, json={"content": "\n".join(lines)}
-            )
+            response = await self._client.post(self._webhook_url, json={"content": content})
             response.raise_for_status()
             return True
         except httpx.HTTPError:
             LOGGER.exception("Discord performance report failed")
             return False
-
-    @staticmethod
-    def _percent(value: object) -> str:
-        return "n/a" if value is None else f"{float(value):.2%}"
-
-    @staticmethod
-    def _number(value: object) -> str:
-        return "n/a" if value is None else f"{float(value):.2f}"
-
-    @staticmethod
-    def _money(value: object) -> str:
-        if value is None:
-            return "n/a"
-        number = float(value)
-        if number >= 1_000_000_000:
-            return f"${number / 1_000_000_000:.2f}B"
-        if number >= 1_000_000:
-            return f"${number / 1_000_000:.2f}M"
-        if number >= 1_000:
-            return f"${number / 1_000:.1f}K"
-        return f"${number:,.0f}"
-
-    @staticmethod
-    def _spread(value: object) -> str:
-        return "n/a" if value is None else f"{float(value):.3f}%"
-
-    @staticmethod
-    def _price(value: object) -> str:
-        if value is None:
-            return "n/a"
-        number = float(value)
-        if abs(number) >= 1000:
-            return f"{number:,.2f}"
-        if abs(number) >= 1:
-            return f"{number:.6f}".rstrip("0").rstrip(".")
-        return f"{number:.10f}".rstrip("0").rstrip(".")

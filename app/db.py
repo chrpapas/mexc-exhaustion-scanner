@@ -500,7 +500,7 @@ class Database:
             SELECT episode_id, symbol, confirmed_at, entry_price, risk_tier, current_price,
                    current_return_pct, last_observed_at, mfe_pct, mae_pct,
                    return_1h_pct, return_4h_pct, return_12h_pct, return_24h_pct,
-                   matured_at
+                   return_48h_pct, return_72h_pct, matured_at, matured_48h_at, matured_72h_at
             FROM shadow_trades
             ORDER BY confirmed_at ASC
             """
@@ -569,7 +569,11 @@ class Database:
         return_4h_pct: float | None = None,
         return_12h_pct: float | None = None,
         return_24h_pct: float | None = None,
+        return_48h_pct: float | None = None,
+        return_72h_pct: float | None = None,
         matured_at: datetime | None = None,
+        matured_48h_at: datetime | None = None,
+        matured_72h_at: datetime | None = None,
     ) -> None:
         await self.pool.execute(
             """
@@ -583,7 +587,11 @@ class Database:
                 return_4h_pct = COALESCE(return_4h_pct, $8),
                 return_12h_pct = COALESCE(return_12h_pct, $9),
                 return_24h_pct = COALESCE(return_24h_pct, $10),
-                matured_at = COALESCE(matured_at, $11),
+                return_48h_pct = COALESCE(return_48h_pct, $11),
+                return_72h_pct = COALESCE(return_72h_pct, $12),
+                matured_at = COALESCE(matured_at, $13),
+                matured_48h_at = COALESCE(matured_48h_at, $14),
+                matured_72h_at = COALESCE(matured_72h_at, $15),
                 updated_at = now()
             WHERE episode_id=$1
             """,
@@ -597,7 +605,11 @@ class Database:
             return_4h_pct,
             return_12h_pct,
             return_24h_pct,
+            return_48h_pct,
+            return_72h_pct,
             matured_at,
+            matured_48h_at,
+            matured_72h_at,
         )
 
     async def last_performance_report_date(self):
@@ -609,7 +621,7 @@ class Database:
             SELECT episode_id, symbol, confirmed_at, entry_price, risk_tier,
                    current_return_pct, mfe_pct, mae_pct,
                    return_1h_pct, return_4h_pct, return_12h_pct, return_24h_pct,
-                   matured_at
+                   return_48h_pct, return_72h_pct, matured_at, matured_48h_at, matured_72h_at
             FROM shadow_trades
             ORDER BY confirmed_at ASC
             """

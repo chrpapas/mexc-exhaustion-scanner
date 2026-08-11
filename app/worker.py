@@ -1025,15 +1025,22 @@ class ScannerWorker:
         now = datetime.now(UTC)
         trades = await self.db.fetch_shadow_trades()
         updated = 0
+        completed = 0
         failed = 0
 
         for trade in trades:
             try:
+                # Once the 72h horizon has been captured, the trade is final for
+                # this tracker and no longer needs repeated candle queries.
+                if trade.get("return_72h_pct") is not None:
+                    completed += 1
+                    continue
+
                 episode_id = int(trade["episode_id"])
                 symbol = str(trade["symbol"])
                 confirmed_at = trade["confirmed_at"]
                 entry_price = float(trade["entry_price"])
-                horizon_end = confirmed_at + timedelta(hours=24)
+                horizon_end = confirmed_at + timedelta(hours=72)
                 observation_end = min(now, horizon_end)
 
                 current_price = None
@@ -1043,6 +1050,8 @@ class ScannerWorker:
                     current_price = ticker.last_price
                     current_return = short_return(entry_price, current_price)
 
+                # MFE/MAE now cover the full 72h tracking window rather than
+                # stopping after 24h. This captures late collapses after squeezes.
                 min_low, max_high = await self.db.candle_excursions(
                     symbol, confirmed_at, observation_end
                 )
@@ -1057,16 +1066,18 @@ class ScannerWorker:
                     else None
                 )
 
-                horizon_values: dict[int, float | None] = {
-                    1: None, 4: None, 12: None, 24: None
-                }
+                horizons = (1, 4, 12, 24, 48, 72)
+                horizon_values: dict[int, float | None] = {h: None for h in horizons}
+                horizon_times: dict[int, datetime | None] = {h: None for h in horizons}
                 existing = {
                     1: trade["return_1h_pct"],
                     4: trade["return_4h_pct"],
                     12: trade["return_12h_pct"],
                     24: trade["return_24h_pct"],
+                    48: trade.get("return_48h_pct"),
+                    72: trade.get("return_72h_pct"),
                 }
-                for hours in (1, 4, 12, 24):
+                for hours in horizons:
                     if existing[hours] is not None:
                         continue
                     target = confirmed_at + timedelta(hours=hours)
@@ -1074,15 +1085,9 @@ class ScannerWorker:
                         continue
                     point = await self.db.candle_close_for_horizon(symbol, target)
                     if point is not None:
-                        _, price = point
+                        close_time, price = point
+                        horizon_times[hours] = close_time
                         horizon_values[hours] = short_return(entry_price, price)
-
-                matured_at = None
-                return_24h = horizon_values[24]
-                if trade["return_24h_pct"] is not None:
-                    return_24h = float(trade["return_24h_pct"])
-                if return_24h is not None and trade["matured_at"] is None:
-                    matured_at = now
 
                 await self.db.update_shadow_trade(
                     episode_id,
@@ -1095,7 +1100,26 @@ class ScannerWorker:
                     return_4h_pct=horizon_values[4],
                     return_12h_pct=horizon_values[12],
                     return_24h_pct=horizon_values[24],
-                    matured_at=matured_at,
+                    return_48h_pct=horizon_values[48],
+                    return_72h_pct=horizon_values[72],
+                    matured_at=(
+                        horizon_times[24]
+                        if trade.get("matured_at") is None
+                        and horizon_values[24] is not None
+                        else None
+                    ),
+                    matured_48h_at=(
+                        horizon_times[48]
+                        if trade.get("matured_48h_at") is None
+                        and horizon_values[48] is not None
+                        else None
+                    ),
+                    matured_72h_at=(
+                        horizon_times[72]
+                        if trade.get("matured_72h_at") is None
+                        and horizon_values[72] is not None
+                        else None
+                    ),
                 )
                 updated += 1
             except Exception:
@@ -1107,8 +1131,9 @@ class ScannerWorker:
                 )
 
         LOGGER.info(
-            "Performance tracker: tracked=%d failed=%d total=%d",
+            "Performance tracker: tracked=%d complete_72h=%d failed=%d total=%d",
             updated,
+            completed,
             failed,
             len(trades),
         )
@@ -1168,12 +1193,15 @@ class ScannerWorker:
         if not recorded:
             return
         LOGGER.info(
-            "Daily performance report: date=%s confirmed_today=%d matured=%d win_rate_24h=%s avg_24h=%s",
+            "Daily performance report: date=%s confirmed_today=%d matured24=%d matured48=%d matured72=%d win24=%s win48=%s win72=%s",
             report_date,
             report.confirmed_today,
-            report.matured_total,
-            report.win_rate_24h,
-            report.avg_return_24h,
+            report.horizon_24h.matured_total,
+            report.horizon_48h.matured_total,
+            report.horizon_72h.matured_total,
+            report.horizon_24h.win_rate,
+            report.horizon_48h.win_rate,
+            report.horizon_72h.win_rate,
         )
 
     async def write_heartbeat(self) -> None:
@@ -1193,7 +1221,7 @@ class ScannerWorker:
                     for value in self.wide_return_72h.values()
                 ),
                 "execution_enabled": self.settings.execution_enabled,
-                "strategy_version": "0.8.1",
+                "strategy_version": "0.8.6",
             },
         )
 

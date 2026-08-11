@@ -38,13 +38,13 @@ async def main() -> None:
         rows = await db.performance_rows()
 
         # Refresh open mark-to-market from the live MEXC ticker before building
-        # the report. Fixed 1h/4h/12h/24h metrics still come from the persisted
+        # the report. Fixed 1h/4h/12h/24h/48h/72h metrics still come from the persisted
         # shadow-trade tracker, so this command never interferes with the worker.
         try:
             tickers = await mexc.get_tickers()
             current_prices = {ticker.symbol: ticker.last_price for ticker in tickers}
             for row in rows:
-                if row["return_24h_pct"] is not None:
+                if row.get("return_72h_pct") is not None:
                     continue
                 price = current_prices.get(str(row["symbol"]))
                 if price is None:
@@ -77,7 +77,10 @@ async def main() -> None:
         print(
             "On-demand performance report sent to Discord: "
             f"date={report.report_date} open={report.open_count} "
-            f"matured={report.matured_total} win_rate_24h={report.win_rate_24h}"
+            f"matured24={report.horizon_24h.matured_total} "
+            f"matured48={report.horizon_48h.matured_total} "
+            f"matured72={report.horizon_72h.matured_total} "
+            f"win_rate_72h={report.horizon_72h.win_rate}"
         )
     finally:
         await mexc.close()
