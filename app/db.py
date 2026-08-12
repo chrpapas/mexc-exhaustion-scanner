@@ -500,7 +500,9 @@ class Database:
             SELECT episode_id, symbol, confirmed_at, entry_price, risk_tier, current_price,
                    current_return_pct, last_observed_at, mfe_pct, mae_pct,
                    return_1h_pct, return_4h_pct, return_12h_pct, return_24h_pct,
-                   return_48h_pct, return_72h_pct, matured_at, matured_48h_at, matured_72h_at
+                   return_48h_pct, return_72h_pct, return_168h_pct,
+                   matured_at, matured_48h_at, matured_72h_at, matured_168h_at,
+                   first_profit_at, target_20_at, isolated_100_breach_at, cross_400_breach_at
             FROM shadow_trades
             ORDER BY confirmed_at ASC
             """
@@ -532,6 +534,51 @@ class Database:
             float(row["min_low"]) if row["min_low"] is not None else None,
             float(row["max_high"]) if row["max_high"] is not None else None,
         )
+
+    async def trade_path_events(
+        self,
+        symbol: str,
+        start_at: datetime,
+        end_at: datetime,
+        entry_price: float,
+    ) -> dict[str, datetime | None]:
+        """First observed 15m close-time for key path events.
+
+        These are intentionally theoretical research thresholds, not exchange
+        liquidation prices. 100% adverse means price >= 2x entry; 400% adverse
+        means price >= 5x entry.
+        """
+        row = await self.pool.fetchrow(
+            """
+            SELECT
+                min(open_time + interval '15 minutes') FILTER (WHERE low < $4::double precision) AS first_profit_at,
+                min(open_time + interval '15 minutes') FILTER (WHERE low <= $4::double precision * 0.80) AS target_20_at,
+                min(open_time + interval '15 minutes') FILTER (WHERE high >= $4::double precision * 2.0) AS isolated_100_breach_at,
+                min(open_time + interval '15 minutes') FILTER (WHERE high >= $4::double precision * 5.0) AS cross_400_breach_at
+            FROM candles
+            WHERE symbol=$1
+              AND interval='Min15'
+              AND open_time >= $2::timestamptz - interval '15 minutes'
+              AND open_time < $3::timestamptz
+            """,
+            symbol,
+            start_at,
+            end_at,
+            entry_price,
+        )
+        if row is None:
+            return {
+                "first_profit_at": None,
+                "target_20_at": None,
+                "isolated_100_breach_at": None,
+                "cross_400_breach_at": None,
+            }
+        return {key: row[key] for key in (
+            "first_profit_at",
+            "target_20_at",
+            "isolated_100_breach_at",
+            "cross_400_breach_at",
+        )}
 
     async def candle_close_for_horizon(
         self,
@@ -571,9 +618,15 @@ class Database:
         return_24h_pct: float | None = None,
         return_48h_pct: float | None = None,
         return_72h_pct: float | None = None,
+        return_168h_pct: float | None = None,
         matured_at: datetime | None = None,
         matured_48h_at: datetime | None = None,
         matured_72h_at: datetime | None = None,
+        matured_168h_at: datetime | None = None,
+        first_profit_at: datetime | None = None,
+        target_20_at: datetime | None = None,
+        isolated_100_breach_at: datetime | None = None,
+        cross_400_breach_at: datetime | None = None,
     ) -> None:
         await self.pool.execute(
             """
@@ -589,9 +642,15 @@ class Database:
                 return_24h_pct = COALESCE(return_24h_pct, $10),
                 return_48h_pct = COALESCE(return_48h_pct, $11),
                 return_72h_pct = COALESCE(return_72h_pct, $12),
-                matured_at = COALESCE(matured_at, $13),
-                matured_48h_at = COALESCE(matured_48h_at, $14),
-                matured_72h_at = COALESCE(matured_72h_at, $15),
+                return_168h_pct = COALESCE(return_168h_pct, $13),
+                matured_at = COALESCE(matured_at, $14),
+                matured_48h_at = COALESCE(matured_48h_at, $15),
+                matured_72h_at = COALESCE(matured_72h_at, $16),
+                matured_168h_at = COALESCE(matured_168h_at, $17),
+                first_profit_at = COALESCE(first_profit_at, $18),
+                target_20_at = COALESCE(target_20_at, $19),
+                isolated_100_breach_at = COALESCE(isolated_100_breach_at, $20),
+                cross_400_breach_at = COALESCE(cross_400_breach_at, $21),
                 updated_at = now()
             WHERE episode_id=$1
             """,
@@ -607,9 +666,15 @@ class Database:
             return_24h_pct,
             return_48h_pct,
             return_72h_pct,
+            return_168h_pct,
             matured_at,
             matured_48h_at,
             matured_72h_at,
+            matured_168h_at,
+            first_profit_at,
+            target_20_at,
+            isolated_100_breach_at,
+            cross_400_breach_at,
         )
 
     async def last_performance_report_date(self):
@@ -621,7 +686,9 @@ class Database:
             SELECT episode_id, symbol, confirmed_at, entry_price, risk_tier,
                    current_return_pct, mfe_pct, mae_pct,
                    return_1h_pct, return_4h_pct, return_12h_pct, return_24h_pct,
-                   return_48h_pct, return_72h_pct, matured_at, matured_48h_at, matured_72h_at
+                   return_48h_pct, return_72h_pct, return_168h_pct,
+                   matured_at, matured_48h_at, matured_72h_at, matured_168h_at,
+                   first_profit_at, target_20_at, isolated_100_breach_at, cross_400_breach_at
             FROM shadow_trades
             ORDER BY confirmed_at ASC
             """

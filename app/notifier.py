@@ -128,85 +128,106 @@ class DiscordNotifier:
         if not self._webhook_url:
             return False
 
-        lines = [f"📊 **{label} — {report.report_date.isoformat()}**"]
+        title = f"📊 **{label} — {report.report_date.isoformat()}**"
         if as_of is not None:
             display = as_of
             if timezone_name:
                 from zoneinfo import ZoneInfo
                 display = as_of.astimezone(ZoneInfo(timezone_name))
-            lines.append(f"As of: {display.strftime('%Y-%m-%d %H:%M:%S %Z')}")
+            title += f"\nAs of: {display.strftime('%Y-%m-%d %H:%M:%S %Z')}"
 
-        lines.extend([
+        main = [
+            title,
             f"Confirmed shorts today: {report.confirmed_today}",
-            f"Open tracked signals (until 72h): {report.open_count}",
-            (
-                "Open mark-to-market: "
-                f"{self._percent(report.open_avg_return)} avg | "
-                f"{self._percent(report.open_sum_return)} summed"
-            ),
+            f"Open tracked signals (until 7d): {report.open_count}",
+            f"Open mark-to-market: {self._percent(report.open_avg_return)} avg | {self._percent(report.open_sum_return)} summed",
+        ]
+        for horizon in (report.horizon_24h, report.horizon_48h, report.horizon_72h, report.horizon_168h):
+            label_h = "7d" if horizon.hours == 168 else f"{horizon.hours}h"
+            main.append(
+                f"{label_h}: {horizon.matured_total} matured ({horizon.matured_today} today) | "
+                f"win {self._percent(horizon.win_rate)} | avg {self._percent(horizon.avg_return)} | "
+                f"sum {self._percent(horizon.sum_return)}"
+            )
+
+        main.append("Performance by execution risk:")
+        for horizon in (report.horizon_24h, report.horizon_48h, report.horizon_72h, report.horizon_168h):
+            label_h = "7d" if horizon.hours == 168 else f"{horizon.hours}h"
+            main.append(
+                f"{label_h} STANDARD — n={horizon.standard_total} | win {self._percent(horizon.standard_win_rate)} | "
+                f"avg {self._percent(horizon.standard_avg_return)} | sum {self._percent(horizon.standard_sum_return)}"
+            )
+            main.append(
+                f"{label_h} HIGH+EXTREME — n={horizon.high_risk_total} | win {self._percent(horizon.high_risk_win_rate)} | "
+                f"avg {self._percent(horizon.high_risk_avg_return)} | sum {self._percent(horizon.high_risk_sum_return)}"
+            )
+
+        main.extend([
+            f"Average short-return path: 1h {self._percent(report.avg_return_1h)} | 4h {self._percent(report.avg_return_4h)} | "
+            f"12h {self._percent(report.avg_return_12h)} | 24h {self._percent(report.avg_return_24h)} | "
+            f"48h {self._percent(report.avg_return_48h)} | 72h {self._percent(report.avg_return_72h)} | "
+            f"7d {self._percent(report.avg_return_168h)}",
+            f"7d excursion (fully matured only): MFE {self._percent(report.avg_mfe_7d)} | MAE {self._percent(report.avg_mae_7d)}",
+        ])
+        if report.best_symbol_7d:
+            main.append(f"Best 7d: {report.best_symbol_7d} {self._percent(report.best_return_7d)}")
+        if report.worst_symbol_7d:
+            main.append(f"Worst 7d: {report.worst_symbol_7d} {self._percent(report.worst_return_7d)}")
+
+        def weekly_line(summary) -> list[str]:
+            return [
+                f"**{summary.risk_label} — 7d path survival (n={summary.matured_7d})**",
+                f"Ever profitable within 7d: {self._percent(summary.ever_profitable_rate)}",
+                f"Reached +20% short return within 7d: {self._percent(summary.hit_20_rate)}",
+                f"Hit +100% adverse move: {self._percent(summary.isolated_100_breach_rate)}  ← 1x isolated-loss proxy",
+                f"Hit +400% adverse move: {self._percent(summary.cross_400_breach_rate)}  ← configured 5× cross-buffer breach",
+                f"+100% adverse before first profit: {self._percent(summary.isolated_breach_before_profit_rate)}",
+                f"+400% adverse before first profit: {self._percent(summary.cross_breach_before_profit_rate)}",
+                f"+400% adverse before +20% target: {self._percent(summary.cross_breach_before_20_rate)}",
+            ]
+
+        survival = ["🧪 **THEORETICAL CAPITAL-BUFFER SIMULATION**"]
+        survival.extend(weekly_line(report.standard_weekly))
+        survival.extend(weekly_line(report.risky_weekly))
+        survival.append("Returns among trades that had NOT breached the +400% adverse threshold by each horizon:")
+        for std, risky in zip(report.standard_survivors, report.risky_survivors):
+            label_h = "7d" if std.hours == 168 else f"{std.hours}h"
+            survival.append(
+                f"{label_h} STANDARD — survive {std.survived_cross_buffer}/{std.matured_total} "
+                f"({self._percent(std.survival_rate)}) | win {self._percent(std.win_rate)} | "
+                f"avg {self._percent(std.avg_return)} | sum {self._percent(std.sum_return)} | "
+                f"20%-sized acct equiv {self._percent(std.account_equivalent_sum_return)}"
+            )
+            survival.append(
+                f"{label_h} HIGH+EXTREME — survive {risky.survived_cross_buffer}/{risky.matured_total} "
+                f"({self._percent(risky.survival_rate)}) | win {self._percent(risky.win_rate)} | "
+                f"avg {self._percent(risky.avg_return)} | sum {self._percent(risky.sum_return)} | "
+                f"20%-sized acct equiv {self._percent(risky.account_equivalent_sum_return)}"
+            )
+        survival.extend([
+            "Thresholds are research proxies, not MEXC liquidation prices. Actual liquidation occurs earlier/later depending on maintenance margin, fees, other cross positions and account equity.",
+            "20%-sized account equivalent = 0.20 × summed position returns; it is NOT a compounding/overlap-aware portfolio backtest.",
         ])
 
-        for horizon in (report.horizon_24h, report.horizon_48h, report.horizon_72h):
-            lines.append(
-                f"{horizon.hours}h: {horizon.matured_total} matured "
-                f"({horizon.matured_today} today) | win {self._percent(horizon.win_rate)} | "
-                f"avg {self._percent(horizon.avg_return)} | sum {self._percent(horizon.sum_return)}"
-            )
-
-        lines.append("Performance by execution risk:")
-        for horizon in (report.horizon_24h, report.horizon_48h, report.horizon_72h):
-            lines.append(
-                f"{horizon.hours}h STANDARD — n={horizon.standard_total} | "
-                f"win {self._percent(horizon.standard_win_rate)} | "
-                f"avg {self._percent(horizon.standard_avg_return)} | "
-                f"sum {self._percent(horizon.standard_sum_return)}"
-            )
-            lines.append(
-                f"{horizon.hours}h HIGH+EXTREME — n={horizon.high_risk_total} | "
-                f"win {self._percent(horizon.high_risk_win_rate)} | "
-                f"avg {self._percent(horizon.high_risk_avg_return)} | "
-                f"sum {self._percent(horizon.high_risk_sum_return)}"
-            )
-
-        lines.extend([
-            (
-                "Average short-return path: "
-                f"1h {self._percent(report.avg_return_1h)} | "
-                f"4h {self._percent(report.avg_return_4h)} | "
-                f"12h {self._percent(report.avg_return_12h)} | "
-                f"24h {self._percent(report.avg_return_24h)} | "
-                f"48h {self._percent(report.avg_return_48h)} | "
-                f"72h {self._percent(report.avg_return_72h)}"
-            ),
-            (
-                "72h excursion (fully matured only): "
-                f"MFE {self._percent(report.avg_mfe_72h)} | "
-                f"MAE {self._percent(report.avg_mae_72h)}"
-            ),
-        ])
-        if report.best_symbol_72h is not None:
-            lines.append(
-                f"Best 72h: {report.best_symbol_72h} {self._percent(report.best_return_72h)}"
-            )
-        if report.worst_symbol_72h is not None:
-            lines.append(
-                f"Worst 72h: {report.worst_symbol_72h} {self._percent(report.worst_return_72h)}"
-            )
-        lines.extend([
-            "Returns are measured from CONFIRMED SHORT retest close.",
-            "Analytics only: no fees, slippage, funding, leverage or position sizing included.",
-        ])
-
-        content = "\n".join(lines)
-        if len(content) > 1950:
-            LOGGER.warning("Performance report content is long (%d chars)", len(content))
         try:
-            response = await self._client.post(self._webhook_url, json={"content": content})
-            response.raise_for_status()
+            for lines in (main, survival):
+                content = "\n".join(lines)
+                # Discord webhook content limit is 2000 chars. Split cleanly if needed.
+                while len(content) > 1900:
+                    cut = content.rfind("\n", 0, 1900)
+                    if cut <= 0:
+                        cut = 1900
+                    part, content = content[:cut], content[cut:].lstrip("\n")
+                    response = await self._client.post(self._webhook_url, json={"content": part})
+                    response.raise_for_status()
+                if content:
+                    response = await self._client.post(self._webhook_url, json={"content": content})
+                    response.raise_for_status()
             return True
         except httpx.HTTPError:
             LOGGER.exception("Discord performance report failed")
             return False
+
     @staticmethod
     def _percent(value: object) -> str:
         return "n/a" if value is None else f"{float(value):.2%}"

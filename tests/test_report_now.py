@@ -1,118 +1,93 @@
 from datetime import UTC, datetime
 
+import pytest
+
 from app.performance import build_performance_summary
 
 
-def test_build_performance_summary_current_day_and_extended_horizons():
-    now = datetime(2026, 8, 11, 10, 0, tzinfo=UTC)
+def _row(
+    episode_id: int,
+    symbol: str,
+    risk_tier: str,
+    confirmed_at: datetime,
+    *,
+    r24: float,
+    r48: float,
+    r72: float,
+    r168: float,
+    first_profit_at=None,
+    target_20_at=None,
+    iso=None,
+    cross=None,
+):
+    return {
+        "episode_id": episode_id,
+        "symbol": symbol,
+        "confirmed_at": confirmed_at,
+        "entry_price": 1.0,
+        "risk_tier": risk_tier,
+        "current_return_pct": r168,
+        "mfe_pct": max(0.0, r168),
+        "mae_pct": -0.30,
+        "return_1h_pct": -0.01,
+        "return_4h_pct": 0.0,
+        "return_12h_pct": 0.02,
+        "return_24h_pct": r24,
+        "return_48h_pct": r48,
+        "return_72h_pct": r72,
+        "return_168h_pct": r168,
+        "matured_at": confirmed_at.replace(day=confirmed_at.day + 1),
+        "matured_48h_at": confirmed_at.replace(day=confirmed_at.day + 2),
+        "matured_72h_at": confirmed_at.replace(day=confirmed_at.day + 3),
+        "matured_168h_at": confirmed_at.replace(day=confirmed_at.day + 7),
+        "first_profit_at": first_profit_at,
+        "target_20_at": target_20_at,
+        "isolated_100_breach_at": iso,
+        "cross_400_breach_at": cross,
+    }
+
+
+def test_weekly_buffer_metrics_separate_standard_and_risky():
+    now = datetime(2026, 8, 12, 12, 0, tzinfo=UTC)
+    confirmed = datetime(2026, 8, 5, 10, 0, tzinfo=UTC)
     rows = [
-        {
-            "episode_id": 1,
-            "symbol": "AAA_USDT",
-            "confirmed_at": datetime(2026, 8, 11, 7, 0, tzinfo=UTC),
-            "entry_price": 10.0,
-            "risk_tier": "standard",
-            "current_return_pct": 0.05,
-            "mfe_pct": 0.10,
-            "mae_pct": -0.02,
-            "return_1h_pct": 0.02,
-            "return_4h_pct": None,
-            "return_12h_pct": None,
-            "return_24h_pct": None,
-            "return_48h_pct": None,
-            "return_72h_pct": None,
-            "matured_at": None,
-            "matured_48h_at": None,
-            "matured_72h_at": None,
-        },
-        {
-            "episode_id": 2,
-            "symbol": "BBB_USDT",
-            "confirmed_at": datetime(2026, 8, 8, 7, 0, tzinfo=UTC),
-            "entry_price": 20.0,
-            "risk_tier": "high_risk",
-            "current_return_pct": 0.12,
-            "mfe_pct": 0.30,
-            "mae_pct": -0.15,
-            "return_1h_pct": 0.01,
-            "return_4h_pct": -0.04,
-            "return_12h_pct": -0.06,
-            "return_24h_pct": -0.08,
-            "return_48h_pct": 0.03,
-            "return_72h_pct": 0.12,
-            "matured_at": datetime(2026, 8, 9, 7, 0, tzinfo=UTC),
-            "matured_48h_at": datetime(2026, 8, 10, 7, 0, tzinfo=UTC),
-            "matured_72h_at": datetime(2026, 8, 11, 7, 0, tzinfo=UTC),
-        },
-        {
-            "episode_id": 3,
-            "symbol": "CCC_USDT",
-            "confirmed_at": datetime(2026, 8, 9, 8, 0, tzinfo=UTC),
-            "entry_price": 5.0,
-            "risk_tier": "standard",
-            "current_return_pct": 0.09,
-            "mfe_pct": 0.18,
-            "mae_pct": -0.05,
-            "return_1h_pct": -0.02,
-            "return_4h_pct": 0.01,
-            "return_12h_pct": 0.03,
-            "return_24h_pct": 0.04,
-            "return_48h_pct": 0.09,
-            "return_72h_pct": None,
-            "matured_at": datetime(2026, 8, 10, 8, 0, tzinfo=UTC),
-            "matured_48h_at": datetime(2026, 8, 11, 8, 0, tzinfo=UTC),
-            "matured_72h_at": None,
-        },
+        _row(
+            1, "STD_USDT", "standard", confirmed,
+            r24=0.10, r48=0.20, r72=0.30, r168=0.40,
+            first_profit_at=datetime(2026, 8, 5, 12, 0, tzinfo=UTC),
+            target_20_at=datetime(2026, 8, 7, 10, 0, tzinfo=UTC),
+        ),
+        _row(
+            2, "RISK_USDT", "high_risk", confirmed,
+            r24=-0.20, r48=-0.10, r72=0.10, r168=0.30,
+            first_profit_at=datetime(2026, 8, 8, 10, 0, tzinfo=UTC),
+            target_20_at=datetime(2026, 8, 10, 10, 0, tzinfo=UTC),
+            iso=datetime(2026, 8, 6, 10, 0, tzinfo=UTC),
+        ),
     ]
+    report = build_performance_summary(rows, now_utc=now, timezone_name="Europe/Zurich")
+    assert report.horizon_168h.matured_total == 2
+    assert report.standard_weekly.ever_profitable_rate == 1.0
+    assert report.standard_weekly.hit_20_rate == 1.0
+    assert report.standard_weekly.isolated_100_breach_rate == 0.0
+    assert report.risky_weekly.isolated_100_breach_rate == 1.0
+    assert report.risky_weekly.isolated_breach_before_profit_rate == 1.0
+    assert report.risky_weekly.cross_400_breach_rate == 0.0
 
-    report = build_performance_summary(
-        rows, now_utc=now, timezone_name="Europe/Zurich"
+
+def test_cross_breach_filters_survivor_returns_by_horizon():
+    now = datetime(2026, 8, 12, 12, 0, tzinfo=UTC)
+    confirmed = datetime(2026, 8, 5, 10, 0, tzinfo=UTC)
+    row = _row(
+        3, "X_USDT", "standard", confirmed,
+        r24=-0.10, r48=0.05, r72=0.15, r168=0.25,
+        first_profit_at=datetime(2026, 8, 7, 10, 0, tzinfo=UTC),
+        cross=datetime(2026, 8, 7, 22, 0, tzinfo=UTC),  # 60h after confirmation
     )
-    assert report.report_date.isoformat() == "2026-08-11"
-    assert report.confirmed_today == 1
-    # AAA is new and CCC has not yet reached 72h.
-    assert report.open_count == 2
-    assert report.horizon_24h.matured_total == 2
-    assert report.horizon_48h.matured_total == 2
-    assert report.horizon_72h.matured_total == 1
-    assert report.horizon_72h.matured_today == 1
-    assert report.horizon_72h.win_rate == 1.0
-    assert report.horizon_72h.high_risk_total == 1
-    assert report.avg_return_72h == 0.12
-    assert report.avg_mfe_72h == 0.30
-    assert report.avg_mae_72h == -0.15
-    assert report.best_symbol_72h == "BBB_USDT"
-
-
-def test_risky_signal_can_recover_only_after_48h_and_72h():
-    now = datetime(2026, 8, 11, 12, 0, tzinfo=UTC)
-    rows = [
-        {
-            "episode_id": 10,
-            "symbol": "RISKY_USDT",
-            "confirmed_at": datetime(2026, 8, 8, 10, 0, tzinfo=UTC),
-            "entry_price": 1.0,
-            "risk_tier": "extreme_risk",
-            "current_return_pct": 0.40,
-            "mfe_pct": 0.55,
-            "mae_pct": -0.35,
-            "return_1h_pct": -0.10,
-            "return_4h_pct": -0.20,
-            "return_12h_pct": -0.15,
-            "return_24h_pct": -0.08,
-            "return_48h_pct": 0.12,
-            "return_72h_pct": 0.40,
-            "matured_at": datetime(2026, 8, 9, 10, 0, tzinfo=UTC),
-            "matured_48h_at": datetime(2026, 8, 10, 10, 0, tzinfo=UTC),
-            "matured_72h_at": datetime(2026, 8, 11, 10, 0, tzinfo=UTC),
-        }
-    ]
-    report = build_performance_summary(
-        rows, now_utc=now, timezone_name="Europe/Zurich"
-    )
-    assert report.horizon_24h.win_rate == 0.0
-    assert report.horizon_48h.win_rate == 1.0
-    assert report.horizon_72h.win_rate == 1.0
-    assert report.avg_return_24h == -0.08
-    assert report.avg_return_48h == 0.12
-    assert report.avg_return_72h == 0.40
+    report = build_performance_summary([row], now_utc=now, timezone_name="Europe/Zurich")
+    h24, h48, h72, h168 = report.standard_survivors
+    assert h24.survived_cross_buffer == 1
+    assert h48.survived_cross_buffer == 1
+    assert h72.survived_cross_buffer == 0
+    assert h168.survived_cross_buffer == 0
+    assert h48.account_equivalent_sum_return == pytest.approx(0.01)
