@@ -68,7 +68,6 @@ def test_weekly_buffer_metrics_separate_standard_and_risky():
     report = build_performance_summary(rows, now_utc=now, timezone_name="Europe/Zurich")
     assert report.horizon_168h.matured_total == 2
     assert report.standard_weekly.ever_profitable_rate == 1.0
-    assert report.standard_weekly.hit_20_rate == 1.0
     assert report.standard_weekly.isolated_100_breach_rate == 0.0
     assert report.risky_weekly.isolated_100_breach_rate == 1.0
     assert report.risky_weekly.isolated_breach_before_profit_rate == 1.0
@@ -85,9 +84,9 @@ def test_cross_breach_filters_survivor_returns_by_horizon():
         cross=datetime(2026, 8, 7, 22, 0, tzinfo=UTC),  # 60h after confirmation
     )
     report = build_performance_summary([row], now_utc=now, timezone_name="Europe/Zurich")
-    h24, h48, h72, h168 = report.standard_survivors
-    assert h24.survived_cross_buffer == 1
-    assert h48.survived_cross_buffer == 1
-    assert h72.survived_cross_buffer == 0
-    assert h168.survived_cross_buffer == 0
-    assert h48.account_equivalent_sum_return == pytest.approx(0.01)
+    h24, h48, h72, h168 = report.standard_survival
+    assert h24.cross_buffer.survived == 1
+    assert h48.cross_buffer.survived == 1
+    assert h72.cross_buffer.survived == 0
+    assert h168.cross_buffer.survived == 0
+    assert h48.cross_buffer.avg_return == pytest.approx(0.05)

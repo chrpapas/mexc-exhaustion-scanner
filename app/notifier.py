@@ -19,12 +19,15 @@ class DiscordNotifier:
     ) -> None:
         self._webhook_url = webhook_url
         self._signal_levels = frozenset(
-            signal_levels or {"exhaustion_watch", "confirmed_short"}
+            signal_levels or {"confirmed_short"}
         )
         self._client = httpx.AsyncClient(timeout=15.0)
 
     def should_send_signal(self, level: str) -> bool:
-        return level in self._signal_levels
+        # Discord is intentionally short-only. Intermediate strategy states
+        # (run/exhaustion/breakdown) remain internal even if an older Render
+        # environment still lists them in DISCORD_SIGNAL_LEVELS.
+        return level == "confirmed_short" and level in self._signal_levels
 
     async def close(self) -> None:
         await self._client.aclose()
@@ -143,7 +146,7 @@ class DiscordNotifier:
             f"Open mark-to-market: {self._percent(report.open_avg_return)} avg | {self._percent(report.open_sum_return)} summed",
         ]
         for horizon in (report.horizon_24h, report.horizon_48h, report.horizon_72h, report.horizon_168h):
-            label_h = "7d" if horizon.hours == 168 else f"{horizon.hours}h"
+            label_h = "7d" if horizon.hours == 168 else f"{horizon.hours // 24}d"
             main.append(
                 f"{label_h}: {horizon.matured_total} matured ({horizon.matured_today} today) | "
                 f"win {self._percent(horizon.win_rate)} | avg {self._percent(horizon.avg_return)} | "
@@ -152,7 +155,7 @@ class DiscordNotifier:
 
         main.append("Performance by execution risk:")
         for horizon in (report.horizon_24h, report.horizon_48h, report.horizon_72h, report.horizon_168h):
-            label_h = "7d" if horizon.hours == 168 else f"{horizon.hours}h"
+            label_h = "7d" if horizon.hours == 168 else f"{horizon.hours // 24}d"
             main.append(
                 f"{label_h} STANDARD — n={horizon.standard_total} | win {self._percent(horizon.standard_win_rate)} | "
                 f"avg {self._percent(horizon.standard_avg_return)} | sum {self._percent(horizon.standard_sum_return)}"
@@ -164,8 +167,8 @@ class DiscordNotifier:
 
         main.extend([
             f"Average short-return path: 1h {self._percent(report.avg_return_1h)} | 4h {self._percent(report.avg_return_4h)} | "
-            f"12h {self._percent(report.avg_return_12h)} | 24h {self._percent(report.avg_return_24h)} | "
-            f"48h {self._percent(report.avg_return_48h)} | 72h {self._percent(report.avg_return_72h)} | "
+            f"12h {self._percent(report.avg_return_12h)} | 1d {self._percent(report.avg_return_24h)} | "
+            f"2d {self._percent(report.avg_return_48h)} | 3d {self._percent(report.avg_return_72h)} | "
             f"7d {self._percent(report.avg_return_168h)}",
             f"7d excursion (fully matured only): MFE {self._percent(report.avg_mfe_7d)} | MAE {self._percent(report.avg_mae_7d)}",
         ])
@@ -176,37 +179,38 @@ class DiscordNotifier:
 
         def weekly_line(summary) -> list[str]:
             return [
-                f"**{summary.risk_label} — 7d path survival (n={summary.matured_7d})**",
+                f"**{summary.risk_label} — full 7d path (n={summary.matured_7d})**",
                 f"Ever profitable within 7d: {self._percent(summary.ever_profitable_rate)}",
-                f"Reached +20% short return within 7d: {self._percent(summary.hit_20_rate)}",
-                f"Hit +100% adverse move: {self._percent(summary.isolated_100_breach_rate)}  ← 1x isolated-loss proxy",
-                f"Hit +400% adverse move: {self._percent(summary.cross_400_breach_rate)}  ← configured 5× cross-buffer breach",
-                f"+100% adverse before first profit: {self._percent(summary.isolated_breach_before_profit_rate)}",
-                f"+400% adverse before first profit: {self._percent(summary.cross_breach_before_profit_rate)}",
-                f"+400% adverse before +20% target: {self._percent(summary.cross_breach_before_20_rate)}",
+                f"Hit +100% adverse move within 7d: {self._percent(summary.isolated_100_breach_rate)}  ← 1x isolated proxy breach",
+                f"Hit +400% adverse move within 7d: {self._percent(summary.cross_400_breach_rate)}  ← 5× cross-buffer proxy breach",
+                f"+100% adverse before first profitability: {self._percent(summary.isolated_breach_before_profit_rate)}",
+                f"+400% adverse before first profitability: {self._percent(summary.cross_breach_before_profit_rate)}",
             ]
 
-        survival = ["🧪 **THEORETICAL CAPITAL-BUFFER SIMULATION**"]
+        survival = ["🧪 **LIQUIDATION-SURVIVAL OVERLAY — GENERIC SIGNAL ANALYTICS**"]
+        survival.append(
+            "Raw returns above do not assume any profit target or exit rule. The overlays below only ask whether the signal path would have breached each research threshold before the stated horizon."
+        )
         survival.extend(weekly_line(report.standard_weekly))
         survival.extend(weekly_line(report.risky_weekly))
-        survival.append("Returns among trades that had NOT breached the +400% adverse threshold by each horizon:")
-        for std, risky in zip(report.standard_survivors, report.risky_survivors):
-            label_h = "7d" if std.hours == 168 else f"{std.hours}h"
-            survival.append(
-                f"{label_h} STANDARD — survive {std.survived_cross_buffer}/{std.matured_total} "
-                f"({self._percent(std.survival_rate)}) | win {self._percent(std.win_rate)} | "
-                f"avg {self._percent(std.avg_return)} | sum {self._percent(std.sum_return)} | "
-                f"20%-sized acct equiv {self._percent(std.account_equivalent_sum_return)}"
-            )
-            survival.append(
-                f"{label_h} HIGH+EXTREME — survive {risky.survived_cross_buffer}/{risky.matured_total} "
-                f"({self._percent(risky.survival_rate)}) | win {self._percent(risky.win_rate)} | "
-                f"avg {self._percent(risky.avg_return)} | sum {self._percent(risky.sum_return)} | "
-                f"20%-sized acct equiv {self._percent(risky.account_equivalent_sum_return)}"
-            )
+        survival.append("Survival and returns by horizon:")
+        for std, risky in zip(report.standard_survival, report.risky_survival):
+            label_h = "7d" if std.hours == 168 else (f"{std.hours // 24}d" if std.hours % 24 == 0 else f"{std.hours}h")
+            for item in (std, risky):
+                survival.append(f"**{label_h} {item.risk_label} — n={item.matured_total}**")
+                survival.append(
+                    f"1x isolated proxy: survive {item.isolated.survived}/{item.matured_total} "
+                    f"({self._percent(item.isolated.survival_rate)}) | win {self._percent(item.isolated.win_rate)} | "
+                    f"avg {self._percent(item.isolated.avg_return)} | sum {self._percent(item.isolated.sum_return)}"
+                )
+                survival.append(
+                    f"5× cross-buffer proxy: survive {item.cross_buffer.survived}/{item.matured_total} "
+                    f"({self._percent(item.cross_buffer.survival_rate)}) | win {self._percent(item.cross_buffer.win_rate)} | "
+                    f"avg {self._percent(item.cross_buffer.avg_return)} | sum {self._percent(item.cross_buffer.sum_return)}"
+                )
         survival.extend([
-            "Thresholds are research proxies, not MEXC liquidation prices. Actual liquidation occurs earlier/later depending on maintenance margin, fees, other cross positions and account equity.",
-            "20%-sized account equivalent = 0.20 × summed position returns; it is NOT a compounding/overlap-aware portfolio backtest.",
+            "+100% adverse = price reaches 2× entry; +400% adverse = price reaches 5× entry. These are research thresholds, not exact MEXC liquidation prices.",
+            "Actual liquidation depends on maintenance margin, fees, contract tier, account equity and margin configuration. This report assumes no profit-taking and does not model overlapping positions.",
         ])
 
         try:

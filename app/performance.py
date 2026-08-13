@@ -5,9 +5,6 @@ from datetime import date, datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
-POSITION_FRACTION_OF_EQUITY = 0.20
-
-
 def short_return(entry_price: float, exit_price: float) -> float:
     if entry_price <= 0 or exit_price <= 0:
         raise ValueError("prices must be positive")
@@ -51,19 +48,33 @@ class HorizonSummary:
 
 
 @dataclass(frozen=True, slots=True)
-class SurvivingHorizonSummary:
-    hours: int
-    risk_label: str
-    matured_total: int
-    survived_cross_buffer: int
+class SurvivalModelSummary:
+    survived: int
     survival_rate: float | None
     win_rate: float | None
     avg_return: float | None
     sum_return: float | None
-    account_equivalent_sum_return: float | None
 
     def as_dict(self) -> dict[str, Any]:
         return {name: getattr(self, name) for name in self.__dataclass_fields__}
+
+
+@dataclass(frozen=True, slots=True)
+class HorizonSurvivalSummary:
+    hours: int
+    risk_label: str
+    matured_total: int
+    isolated: SurvivalModelSummary
+    cross_buffer: SurvivalModelSummary
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "hours": self.hours,
+            "risk_label": self.risk_label,
+            "matured_total": self.matured_total,
+            "isolated": self.isolated.as_dict(),
+            "cross_buffer": self.cross_buffer.as_dict(),
+        }
 
 
 @dataclass(frozen=True, slots=True)
@@ -71,12 +82,10 @@ class WeeklyRiskSummary:
     risk_label: str
     matured_7d: int
     ever_profitable_rate: float | None
-    hit_20_rate: float | None
     isolated_100_breach_rate: float | None
     cross_400_breach_rate: float | None
     isolated_breach_before_profit_rate: float | None
     cross_breach_before_profit_rate: float | None
-    cross_breach_before_20_rate: float | None
 
     def as_dict(self) -> dict[str, Any]:
         return {name: getattr(self, name) for name in self.__dataclass_fields__}
@@ -93,8 +102,8 @@ class PerformanceSummary:
     horizon_48h: HorizonSummary
     horizon_72h: HorizonSummary
     horizon_168h: HorizonSummary
-    standard_survivors: tuple[SurvivingHorizonSummary, ...]
-    risky_survivors: tuple[SurvivingHorizonSummary, ...]
+    standard_survival: tuple[HorizonSurvivalSummary, ...]
+    risky_survival: tuple[HorizonSurvivalSummary, ...]
     standard_weekly: WeeklyRiskSummary
     risky_weekly: WeeklyRiskSummary
     avg_return_1h: float | None
@@ -170,8 +179,8 @@ class PerformanceSummary:
             "horizon_48h": self.horizon_48h.as_dict(),
             "horizon_72h": self.horizon_72h.as_dict(),
             "horizon_168h": self.horizon_168h.as_dict(),
-            "standard_survivors": [x.as_dict() for x in self.standard_survivors],
-            "risky_survivors": [x.as_dict() for x in self.risky_survivors],
+            "standard_survival": [x.as_dict() for x in self.standard_survival],
+            "risky_survival": [x.as_dict() for x in self.risky_survival],
             "standard_weekly": self.standard_weekly.as_dict(),
             "risky_weekly": self.risky_weekly.as_dict(),
             "avg_return_1h": self.avg_return_1h,
@@ -250,30 +259,36 @@ def build_performance_summary(
             sum_return=sum(values) if values else None,
         )
 
-    def surviving_horizon(hours: int, *, standard: bool) -> SurvivingHorizonSummary:
+    def horizon_survival(hours: int, *, standard: bool) -> HorizonSurvivalSummary:
         key = f"return_{hours}h_pct"
         group = [
             row for row in rows
             if row.get(key) is not None
             and ((row.get("risk_tier") == "standard") == standard)
         ]
-        survivors: list[dict[str, Any]] = []
-        for row in group:
-            deadline = row["confirmed_at"] + timedelta(hours=hours)
-            breach = row.get("cross_400_breach_at")
-            if breach is None or breach > deadline:
-                survivors.append(row)
-        vals = [float(row[key]) for row in survivors]
-        return SurvivingHorizonSummary(
+
+        def model(event_key: str) -> SurvivalModelSummary:
+            survivors: list[dict[str, Any]] = []
+            for row in group:
+                deadline = row["confirmed_at"] + timedelta(hours=hours)
+                breach = row.get(event_key)
+                if breach is None or breach > deadline:
+                    survivors.append(row)
+            vals = [float(row[key]) for row in survivors]
+            return SurvivalModelSummary(
+                survived=len(survivors),
+                survival_rate=(len(survivors) / len(group)) if group else None,
+                win_rate=rate([v > 0 for v in vals]),
+                avg_return=average(vals),
+                sum_return=sum(vals) if vals else None,
+            )
+
+        return HorizonSurvivalSummary(
             hours=hours,
             risk_label="STANDARD" if standard else "HIGH+EXTREME",
             matured_total=len(group),
-            survived_cross_buffer=len(survivors),
-            survival_rate=(len(survivors) / len(group)) if group else None,
-            win_rate=rate([v > 0 for v in vals]),
-            avg_return=average(vals),
-            sum_return=sum(vals) if vals else None,
-            account_equivalent_sum_return=(POSITION_FRACTION_OF_EQUITY * sum(vals)) if vals else None,
+            isolated=model("isolated_100_breach_at"),
+            cross_buffer=model("cross_400_breach_at"),
         )
 
     def weekly_risk(*, standard: bool) -> WeeklyRiskSummary:
@@ -287,12 +302,10 @@ def build_performance_summary(
                 risk_label="STANDARD" if standard else "HIGH+EXTREME",
                 matured_7d=0,
                 ever_profitable_rate=None,
-                hit_20_rate=None,
                 isolated_100_breach_rate=None,
                 cross_400_breach_rate=None,
                 isolated_breach_before_profit_rate=None,
                 cross_breach_before_profit_rate=None,
-                cross_breach_before_20_rate=None,
             )
 
         def within_week(row: dict[str, Any], key: str) -> datetime | None:
@@ -302,7 +315,6 @@ def build_performance_summary(
             return value if value <= row["confirmed_at"] + timedelta(hours=168) else None
 
         first_profit = [within_week(row, "first_profit_at") for row in group]
-        target20 = [within_week(row, "target_20_at") for row in group]
         iso = [within_week(row, "isolated_100_breach_at") for row in group]
         cross = [within_week(row, "cross_400_breach_at") for row in group]
 
@@ -310,7 +322,6 @@ def build_performance_summary(
             risk_label="STANDARD" if standard else "HIGH+EXTREME",
             matured_7d=len(group),
             ever_profitable_rate=rate([x is not None for x in first_profit]),
-            hit_20_rate=rate([x is not None for x in target20]),
             isolated_100_breach_rate=rate([x is not None for x in iso]),
             cross_400_breach_rate=rate([x is not None for x in cross]),
             isolated_breach_before_profit_rate=rate([
@@ -318,9 +329,6 @@ def build_performance_summary(
             ]),
             cross_breach_before_profit_rate=rate([
                 c is not None and (p is None or c < p) for c, p in zip(cross, first_profit)
-            ]),
-            cross_breach_before_20_rate=rate([
-                c is not None and (t is None or c < t) for c, t in zip(cross, target20)
             ]),
         )
 
@@ -345,8 +353,8 @@ def build_performance_summary(
         horizon_48h=h48,
         horizon_72h=h72,
         horizon_168h=h168,
-        standard_survivors=tuple(surviving_horizon(h, standard=True) for h in (24, 48, 72, 168)),
-        risky_survivors=tuple(surviving_horizon(h, standard=False) for h in (24, 48, 72, 168)),
+        standard_survival=tuple(horizon_survival(h, standard=True) for h in (24, 48, 72, 168)),
+        risky_survival=tuple(horizon_survival(h, standard=False) for h in (24, 48, 72, 168)),
         standard_weekly=weekly_risk(standard=True),
         risky_weekly=weekly_risk(standard=False),
         avg_return_1h=average(values_for("return_1h_pct")),

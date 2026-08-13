@@ -87,7 +87,7 @@ class Settings:
             discord_webhook_url=os.getenv("DISCORD_WEBHOOK_URL") or None,
             discord_signal_levels=_env_csv_lower(
                 "DISCORD_SIGNAL_LEVELS",
-                "exhaustion_watch,confirmed_short",
+                "confirmed_short",
             ),
             mexc_base_url=os.getenv("MEXC_BASE_URL", "https://contract.mexc.com"),
             mexc_spot_base_url=os.getenv("MEXC_SPOT_BASE_URL", "https://api.mexc.com"),

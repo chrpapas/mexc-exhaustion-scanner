@@ -1239,7 +1239,7 @@ class ScannerWorker:
                     for value in self.wide_return_72h.values()
                 ),
                 "execution_enabled": self.settings.execution_enabled,
-                "strategy_version": "0.9.0",
+                "strategy_version": "0.9.2",
             },
         )
 
