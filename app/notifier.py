@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime
+from zoneinfo import ZoneInfo
 
 import httpx
 
 from app.models import RunSignal
-from app.performance import PerformanceSummary
+from app.performance import HorizonSummary, HorizonSurvivalSummary, PerformanceSummary, WeeklyRiskSummary
 
 LOGGER = logging.getLogger(__name__)
 
@@ -16,11 +17,14 @@ class DiscordNotifier:
         self,
         webhook_url: str | None,
         signal_levels: frozenset[str] | set[str] | None = None,
+        *,
+        performance_webhook_url: str | None = None,
     ) -> None:
         self._webhook_url = webhook_url
-        self._signal_levels = frozenset(
-            signal_levels or {"confirmed_short"}
-        )
+        # Backward-compatible fallback: if the dedicated stats webhook is not
+        # configured, reports continue to go to the existing Discord webhook.
+        self._performance_webhook_url = performance_webhook_url or webhook_url
+        self._signal_levels = frozenset(signal_levels or {"confirmed_short"})
         self._client = httpx.AsyncClient(timeout=15.0)
 
     def should_send_signal(self, level: str) -> bool:
@@ -41,14 +45,7 @@ class DiscordNotifier:
         exhaustion_score = features.get("exhaustion_score")
         risk_tier = str(features.get("risk_tier") or "standard")
         risk_warning = features.get("execution_risk_warning")
-        if signal.level == "confirmed_short":
-            title = f"🚨 **{signal.symbol} — CONFIRMED SHORT**"
-        elif signal.level == "breakdown_watch":
-            title = f"🔴 **{signal.symbol} — BREAKDOWN WATCH**"
-        elif signal.level == "exhaustion_watch":
-            title = f"🟠 **{signal.symbol} — EXHAUSTION WATCH**"
-        else:
-            title = f"🟡 **{signal.symbol} — RUN WATCH**"
+        title = f"🚨 **{signal.symbol} — CONFIRMED SHORT**"
 
         lines = [title]
         if risk_tier == "high_risk":
@@ -69,38 +66,32 @@ class DiscordNotifier:
             lines.append("🟢 Execution quality: STANDARD")
         if risk_warning and risk_tier != "standard":
             lines.append(str(risk_warning))
-        lines.extend([
-            f"24h futures turnover: {self._money(features.get('amount_24h'))}",
-            f"Bid/ask spread: {self._spread(features.get('spread_pct'))}",
-            f"Episode: #{signal.episode_id}" if signal.episode_id is not None else "Episode: n/a",
-            f"Run score: {run_score}/6",
-            f"24h: {self._percent(features.get('return_24h'))}",
-            f"72h: {self._percent(features.get('return_72h'))}",
-            f"BTC residual: {self._percent(features.get('residual_return_24h'))}",
-            f"1h momentum: {self._percent(features.get('momentum_1h'))}",
-            f"Volume z-score: {self._number(features.get('volume_zscore_15m'))}",
-            f"EMA distance: {self._number(features.get('distance_above_ema20_atr_4h'))} ATR",
-            f"Funding: {self._percent(features.get('funding_rate'))}",
-        ])
-        if signal.level in {"exhaustion_watch", "breakdown_watch", "confirmed_short"}:
-            lines.append(
-                f"Exhaustion score: {exhaustion_score if exhaustion_score is not None else 'n/a'}/7"
-            )
+        lines.extend(
+            [
+                f"24h futures turnover: {self._money(features.get('amount_24h'))}",
+                f"Bid/ask spread: {self._spread(features.get('spread_pct'))}",
+                f"Episode: #{signal.episode_id}" if signal.episode_id is not None else "Episode: n/a",
+                f"Run score: {run_score}/6",
+                f"24h: {self._percent(features.get('return_24h'))}",
+                f"72h: {self._percent(features.get('return_72h'))}",
+                f"BTC residual: {self._percent(features.get('residual_return_24h'))}",
+                f"1h momentum: {self._percent(features.get('momentum_1h'))}",
+                f"Volume z-score: {self._number(features.get('volume_zscore_15m'))}",
+                f"EMA distance: {self._number(features.get('distance_above_ema20_atr_4h'))} ATR",
+                f"Funding: {self._percent(features.get('funding_rate'))}",
+                f"Exhaustion score: {exhaustion_score if exhaustion_score is not None else 'n/a'}/7",
+            ]
+        )
         if features.get("episode_peak_price") is not None:
             lines.append(f"Episode peak: {self._price(features.get('episode_peak_price'))}")
-        if signal.level in {"breakdown_watch", "confirmed_short"}:
-            lines.append(f"Broken level: {self._price(features.get('broken_level'))}")
-        if signal.level == "breakdown_watch":
-            lines.append(
-                f"Retest window: {features.get('retest_window_candles', 'n/a')} × 15m candles"
-            )
-            lines.append(
-                f"Retest tolerance: {self._number(features.get('retest_tolerance_atr'))} ATR"
-            )
-        if signal.level == "confirmed_short":
-            lines.append(f"Retest high: {self._price(features.get('retest_high'))}")
-            lines.append(f"Retest close: {self._price(features.get('retest_close'))}")
-            lines.append("Episode locked: YES — no second short alert unless a new episode re-arms")
+        lines.extend(
+            [
+                f"Broken level: {self._price(features.get('broken_level'))}",
+                f"Retest high: {self._price(features.get('retest_high'))}",
+                f"Retest close: {self._price(features.get('retest_close'))}",
+                "Episode locked: YES — no second short alert unless a new episode re-arms",
+            ]
+        )
 
         risk_reasons = features.get("execution_risk_reasons")
         if risk_reasons and risk_tier != "standard":
@@ -114,7 +105,8 @@ class DiscordNotifier:
         )
         try:
             response = await self._client.post(
-                self._webhook_url, json={"content": "\n".join(lines)}
+                self._webhook_url,
+                json={"content": "\n".join(lines), "allowed_mentions": {"parse": []}},
             )
             response.raise_for_status()
         except httpx.HTTPError:
@@ -128,113 +120,260 @@ class DiscordNotifier:
         as_of: datetime | None = None,
         timezone_name: str | None = None,
     ) -> bool:
-        if not self._webhook_url:
+        if not self._performance_webhook_url:
             return False
 
-        title = f"📊 **{label} — {report.report_date.isoformat()}**"
-        if as_of is not None:
-            display = as_of
-            if timezone_name:
-                from zoneinfo import ZoneInfo
-                display = as_of.astimezone(ZoneInfo(timezone_name))
-            title += f"\nAs of: {display.strftime('%Y-%m-%d %H:%M:%S %Z')}"
-
-        main = [
-            title,
-            f"Confirmed shorts today: {report.confirmed_today}",
-            f"Open tracked signals (until 7d): {report.open_count}",
-            f"Open mark-to-market: {self._percent(report.open_avg_return)} avg | {self._percent(report.open_sum_return)} summed",
-        ]
-        for horizon in (report.horizon_24h, report.horizon_48h, report.horizon_72h, report.horizon_168h):
-            label_h = "7d" if horizon.hours == 168 else f"{horizon.hours // 24}d"
-            main.append(
-                f"{label_h}: {horizon.matured_total} matured ({horizon.matured_today} today) | "
-                f"win {self._percent(horizon.win_rate)} | avg {self._percent(horizon.avg_return)} | "
-                f"sum {self._percent(horizon.sum_return)}"
-            )
-
-        main.append("Performance by execution risk:")
-        for horizon in (report.horizon_24h, report.horizon_48h, report.horizon_72h, report.horizon_168h):
-            label_h = "7d" if horizon.hours == 168 else f"{horizon.hours // 24}d"
-            main.append(
-                f"{label_h} STANDARD — n={horizon.standard_total} | win {self._percent(horizon.standard_win_rate)} | "
-                f"avg {self._percent(horizon.standard_avg_return)} | sum {self._percent(horizon.standard_sum_return)}"
-            )
-            main.append(
-                f"{label_h} HIGH+EXTREME — n={horizon.high_risk_total} | win {self._percent(horizon.high_risk_win_rate)} | "
-                f"avg {self._percent(horizon.high_risk_avg_return)} | sum {self._percent(horizon.high_risk_sum_return)}"
-            )
-
-        main.extend([
-            f"Average short-return path: 1h {self._percent(report.avg_return_1h)} | 4h {self._percent(report.avg_return_4h)} | "
-            f"12h {self._percent(report.avg_return_12h)} | 1d {self._percent(report.avg_return_24h)} | "
-            f"2d {self._percent(report.avg_return_48h)} | 3d {self._percent(report.avg_return_72h)} | "
-            f"7d {self._percent(report.avg_return_168h)}",
-            f"7d excursion (fully matured only): MFE {self._percent(report.avg_mfe_7d)} | MAE {self._percent(report.avg_mae_7d)}",
-        ])
-        if report.best_symbol_7d:
-            main.append(f"Best 7d: {report.best_symbol_7d} {self._percent(report.best_return_7d)}")
-        if report.worst_symbol_7d:
-            main.append(f"Worst 7d: {report.worst_symbol_7d} {self._percent(report.worst_return_7d)}")
-
-        def weekly_line(summary) -> list[str]:
-            return [
-                f"**{summary.risk_label} — full 7d path (n={summary.matured_7d})**",
-                f"Ever profitable within 7d: {self._percent(summary.ever_profitable_rate)}",
-                f"Hit +100% adverse move within 7d: {self._percent(summary.isolated_100_breach_rate)}  ← 1x isolated proxy breach",
-                f"Hit +400% adverse move within 7d: {self._percent(summary.cross_400_breach_rate)}  ← 5× cross-buffer proxy breach",
-                f"+100% adverse before first profitability: {self._percent(summary.isolated_breach_before_profit_rate)}",
-                f"+400% adverse before first profitability: {self._percent(summary.cross_breach_before_profit_rate)}",
-            ]
-
-        survival = ["🧪 **LIQUIDATION-SURVIVAL OVERLAY — GENERIC SIGNAL ANALYTICS**"]
-        survival.append(
-            "Raw returns above do not assume any profit target or exit rule. The overlays below only ask whether the signal path would have breached each research threshold before the stated horizon."
+        display_time = as_of
+        if display_time is not None and timezone_name:
+            display_time = display_time.astimezone(ZoneInfo(timezone_name))
+        as_of_text = (
+            display_time.strftime("%d %b %Y • %H:%M %Z")
+            if display_time is not None
+            else report.report_date.strftime("%d %b %Y")
         )
-        survival.extend(weekly_line(report.standard_weekly))
-        survival.extend(weekly_line(report.risky_weekly))
-        survival.append("Survival and returns by horizon:")
-        for std, risky in zip(report.standard_survival, report.risky_survival):
-            label_h = "7d" if std.hours == 168 else (f"{std.hours // 24}d" if std.hours % 24 == 0 else f"{std.hours}h")
-            for item in (std, risky):
-                survival.append(f"**{label_h} {item.risk_label} — n={item.matured_total}**")
-                survival.append(
-                    f"1x isolated proxy: survive {item.isolated.survived}/{item.matured_total} "
-                    f"({self._percent(item.isolated.survival_rate)}) | win {self._percent(item.isolated.win_rate)} | "
-                    f"avg {self._percent(item.isolated.avg_return)} | sum {self._percent(item.isolated.sum_return)}"
-                )
-                survival.append(
-                    f"5× cross-buffer proxy: survive {item.cross_buffer.survived}/{item.matured_total} "
-                    f"({self._percent(item.cross_buffer.survival_rate)}) | win {self._percent(item.cross_buffer.win_rate)} | "
-                    f"avg {self._percent(item.cross_buffer.avg_return)} | sum {self._percent(item.cross_buffer.sum_return)}"
-                )
-        survival.extend([
-            "+100% adverse = price reaches 2× entry; +400% adverse = price reaches 5× entry. These are research thresholds, not exact MEXC liquidation prices.",
-            "Actual liquidation depends on maintenance margin, fees, contract tier, account equity and margin configuration. This report assumes no profit-taking and does not model overlapping positions.",
-        ])
 
+        overview = {
+            "title": "📊 Exhaustion Scanner • Performance Board",
+            "description": (
+                f"**{self._pretty_label(label)}**\n"
+                f"Updated **{as_of_text}**\n\n"
+                "Confirmed-short signals only • Shadow analytics • Positive return = profitable short"
+            ),
+            "color": 0x5865F2,
+            "fields": [
+                {
+                    "name": "⚡ Activity",
+                    "value": (
+                        f"**{report.confirmed_today}** confirmed today\n"
+                        f"**{report.open_count}** still tracking to 7d"
+                    ),
+                    "inline": True,
+                },
+                {
+                    "name": "📈 Open Signals",
+                    "value": (
+                        f"Avg MTM **{self._signed_percent(report.open_avg_return)}**\n"
+                        f"Combined **{self._signed_percent(report.open_sum_return)}**"
+                    ),
+                    "inline": True,
+                },
+                {
+                    "name": "🎯 Raw Results — All Signals",
+                    "value": "\n".join(
+                        self._raw_horizon_line(h)
+                        for h in self._horizons(report)
+                    ),
+                    "inline": False,
+                },
+                {
+                    "name": "⏱️ Average Return Path",
+                    "value": (
+                        f"1h **{self._signed_percent(report.avg_return_1h)}**  •  "
+                        f"4h **{self._signed_percent(report.avg_return_4h)}**  •  "
+                        f"12h **{self._signed_percent(report.avg_return_12h)}**\n"
+                        f"1d **{self._signed_percent(report.avg_return_24h)}**  •  "
+                        f"2d **{self._signed_percent(report.avg_return_48h)}**  •  "
+                        f"3d **{self._signed_percent(report.avg_return_72h)}**  •  "
+                        f"7d **{self._signed_percent(report.avg_return_168h)}**"
+                    ),
+                    "inline": False,
+                },
+            ],
+            "footer": {
+                "text": "Raw signal analytics — no take-profit, stop-loss, leverage or position-sizing rule assumed."
+            },
+        }
+
+        if report.avg_mfe_7d is not None or report.avg_mae_7d is not None:
+            overview["fields"].append(
+                {
+                    "name": "🌊 7-Day Excursion • Fully Matured Only",
+                    "value": (
+                        f"Avg favorable move (MFE) **{self._signed_percent(report.avg_mfe_7d)}**  •  "
+                        f"Avg adverse move (MAE) **{self._signed_percent(report.avg_mae_7d)}**"
+                    ),
+                    "inline": False,
+                }
+            )
+        if report.best_symbol_7d or report.worst_symbol_7d:
+            overview["fields"].append(
+                {
+                    "name": "🏆 7-Day Extremes",
+                    "value": (
+                        f"Best: **{report.best_symbol_7d or 'n/a'}** {self._signed_percent(report.best_return_7d)}\n"
+                        f"Worst: **{report.worst_symbol_7d or 'n/a'}** {self._signed_percent(report.worst_return_7d)}"
+                    ),
+                    "inline": False,
+                }
+            )
+
+        standard = self._risk_embed(
+            title="🟢 STANDARD Execution Risk",
+            color=0x57F287,
+            report=report,
+            standard=True,
+        )
+        risky = self._risk_embed(
+            title="🟠 HIGH + EXTREME Execution Risk",
+            color=0xFEE75C,
+            report=report,
+            standard=False,
+        )
+        methodology = {
+            "title": "🛡️ Survival Overlay — How to Read It",
+            "description": (
+                "The survival layer does **not** assume an exit rule. It only checks whether each signal's path "
+                "crossed a research threshold before the stated horizon."
+            ),
+            "color": 0x99AAB5,
+            "fields": [
+                {
+                    "name": "1× Isolated Proxy",
+                    "value": "Breach = **+100% adverse move** against the short (price reaches 2× entry).",
+                    "inline": True,
+                },
+                {
+                    "name": "5× Cross-Buffer Proxy",
+                    "value": "Breach = **+400% adverse move** against the short (price reaches 5× entry).",
+                    "inline": True,
+                },
+                {
+                    "name": "Important",
+                    "value": (
+                        "These are **research thresholds, not exact exchange liquidation prices**. Actual liquidation "
+                        "depends on maintenance margin, fees, contract tier, equity and margin configuration."
+                    ),
+                    "inline": False,
+                },
+            ],
+            "footer": {"text": "No fees, slippage, funding, leverage or overlapping-position portfolio effects included."},
+        }
+
+        payload = {
+            "username": "Exhaustion Scanner • Stats",
+            "embeds": [overview, standard, risky, methodology],
+            "allowed_mentions": {"parse": []},
+        }
         try:
-            for lines in (main, survival):
-                content = "\n".join(lines)
-                # Discord webhook content limit is 2000 chars. Split cleanly if needed.
-                while len(content) > 1900:
-                    cut = content.rfind("\n", 0, 1900)
-                    if cut <= 0:
-                        cut = 1900
-                    part, content = content[:cut], content[cut:].lstrip("\n")
-                    response = await self._client.post(self._webhook_url, json={"content": part})
-                    response.raise_for_status()
-                if content:
-                    response = await self._client.post(self._webhook_url, json={"content": content})
-                    response.raise_for_status()
+            response = await self._client.post(self._performance_webhook_url, json=payload)
+            response.raise_for_status()
             return True
         except httpx.HTTPError:
             LOGGER.exception("Discord performance report failed")
             return False
 
+    def _risk_embed(
+        self,
+        *,
+        title: str,
+        color: int,
+        report: PerformanceSummary,
+        standard: bool,
+    ) -> dict:
+        weekly = report.standard_weekly if standard else report.risky_weekly
+        survival = report.standard_survival if standard else report.risky_survival
+        horizons = self._horizons(report)
+        fields: list[dict] = []
+
+        for horizon, overlay in zip(horizons, survival):
+            if standard:
+                n = horizon.standard_total
+                win = horizon.standard_win_rate
+                avg = horizon.standard_avg_return
+                summed = horizon.standard_sum_return
+            else:
+                n = horizon.high_risk_total
+                win = horizon.high_risk_win_rate
+                avg = horizon.high_risk_avg_return
+                summed = horizon.high_risk_sum_return
+            fields.append(
+                {
+                    "name": f"{self._horizon_label(horizon.hours)} • n={n}",
+                    "value": (
+                        f"**Raw:** {self._win_icon(win)} WR **{self._percent(win)}** • "
+                        f"Avg **{self._signed_percent(avg)}** • Σ **{self._signed_percent(summed)}**\n"
+                        f"**1× isolated:** {overlay.isolated.survived}/{overlay.matured_total} survived "
+                        f"(**{self._percent(overlay.isolated.survival_rate)}**) • "
+                        f"survivor WR {self._percent(overlay.isolated.win_rate)} • "
+                        f"avg {self._signed_percent(overlay.isolated.avg_return)}\n"
+                        f"**5× cross buffer:** {overlay.cross_buffer.survived}/{overlay.matured_total} survived "
+                        f"(**{self._percent(overlay.cross_buffer.survival_rate)}**) • "
+                        f"survivor WR {self._percent(overlay.cross_buffer.win_rate)} • "
+                        f"avg {self._signed_percent(overlay.cross_buffer.avg_return)}"
+                    ),
+                    "inline": False,
+                }
+            )
+
+        fields.append(
+            {
+                "name": "📅 Full 7-Day Path",
+                "value": self._weekly_summary(weekly),
+                "inline": False,
+            }
+        )
+        return {
+            "title": title,
+            "description": "Raw horizon performance plus liquidation-survival research overlays.",
+            "color": color,
+            "fields": fields,
+        }
+
+    def _weekly_summary(self, summary: WeeklyRiskSummary) -> str:
+        if summary.matured_7d == 0:
+            return "⏳ No signals have completed the full 7-day observation window yet."
+        return (
+            f"**{summary.matured_7d}** fully matured signals\n"
+            f"Ever profitable: **{self._percent(summary.ever_profitable_rate)}**\n"
+            f"+100% adverse breach: **{self._percent(summary.isolated_100_breach_rate)}** • "
+            f"before first profit: **{self._percent(summary.isolated_breach_before_profit_rate)}**\n"
+            f"+400% adverse breach: **{self._percent(summary.cross_400_breach_rate)}** • "
+            f"before first profit: **{self._percent(summary.cross_breach_before_profit_rate)}**"
+        )
+
+    def _raw_horizon_line(self, horizon: HorizonSummary) -> str:
+        return (
+            f"**{self._horizon_label(horizon.hours)}**  {self._win_icon(horizon.win_rate)} "
+            f"WR **{self._percent(horizon.win_rate)}**  •  Avg **{self._signed_percent(horizon.avg_return)}**  •  "
+            f"Σ **{self._signed_percent(horizon.sum_return)}**  •  n={horizon.matured_total}"
+        )
+
+    @staticmethod
+    def _horizons(report: PerformanceSummary) -> tuple[HorizonSummary, ...]:
+        return (
+            report.horizon_24h,
+            report.horizon_48h,
+            report.horizon_72h,
+            report.horizon_168h,
+        )
+
+    @staticmethod
+    def _horizon_label(hours: int) -> str:
+        return "7D" if hours == 168 else f"{hours // 24}D"
+
+    @staticmethod
+    def _pretty_label(label: str) -> str:
+        return label.replace("SHADOW PERFORMANCE", "PERFORMANCE").title()
+
+    @staticmethod
+    def _win_icon(value: float | None) -> str:
+        if value is None:
+            return "⚪"
+        if value >= 0.70:
+            return "🟢"
+        if value >= 0.50:
+            return "🟡"
+        return "🔴"
+
     @staticmethod
     def _percent(value: object) -> str:
         return "n/a" if value is None else f"{float(value):.2%}"
+
+    @staticmethod
+    def _signed_percent(value: object) -> str:
+        if value is None:
+            return "n/a"
+        return f"{float(value):+.2%}"
 
     @staticmethod
     def _number(value: object) -> str:
@@ -267,4 +406,3 @@ class DiscordNotifier:
         if abs(number) >= 1:
             return f"{number:.6f}".rstrip("0").rstrip(".")
         return f"{number:.10f}".rstrip("0").rstrip(".")
-

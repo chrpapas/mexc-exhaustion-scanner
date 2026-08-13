@@ -24,7 +24,9 @@ services:
       - key: LOG_LEVEL
         value: INFO
       - key: DISCORD_SIGNAL_LEVELS
-        value: exhaustion_watch,confirmed_short
+        value: confirmed_short
+      - key: DISCORD_PERFORMANCE_WEBHOOK_URL
+        sync: false
       - key: MIN_AMOUNT_24H
         value: "3000000"
       - key: MAX_SPREAD_PCT

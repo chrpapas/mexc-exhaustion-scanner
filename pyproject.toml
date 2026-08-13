@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mexc-exhaustion-scanner"
-version = "0.8.8"
+version = "0.9.3"
 description = "Shadow-mode MEXC exhaustion scanner with quiet Discord alerts, retest-confirmed shorts and daily and on-demand performance tracking"
 requires-python = ">=3.12,<3.15"
 dependencies = [

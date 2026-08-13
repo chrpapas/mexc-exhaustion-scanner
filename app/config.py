@@ -25,6 +25,7 @@ def _env_csv_lower(name: str, default: str) -> frozenset[str]:
 class Settings:
     database_url: str
     discord_webhook_url: str | None
+    discord_performance_webhook_url: str | None
     discord_signal_levels: frozenset[str]
     mexc_base_url: str
     mexc_spot_base_url: str
@@ -85,6 +86,7 @@ class Settings:
         settings = cls(
             database_url=database_url,
             discord_webhook_url=os.getenv("DISCORD_WEBHOOK_URL") or None,
+            discord_performance_webhook_url=os.getenv("DISCORD_PERFORMANCE_WEBHOOK_URL") or None,
             discord_signal_levels=_env_csv_lower(
                 "DISCORD_SIGNAL_LEVELS",
                 "confirmed_short",

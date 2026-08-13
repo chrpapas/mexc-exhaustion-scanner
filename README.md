@@ -1,4 +1,4 @@
-# MEXC Exhaustion Scanner v0.8.7
+# MEXC Exhaustion Scanner v0.9.3
 
 Hotfix: restores Discord formatting helpers used by signal and performance reports. Fixes `AttributeError: DiscordNotifier has no attribute _percent` in both scheduled and on-demand reports.
 
@@ -91,12 +91,9 @@ python scripts/verify_project.py
 
 ## Discord alert policy
 
-By default Discord receives only:
+Discord receives only `CONFIRMED SHORT` strategy alerts. `RUN WATCH`, `EXHAUSTION WATCH`, and `BREAKDOWN WATCH` continue to be stored and processed internally because they are required by the state machine, but none of them are posted to Discord. Performance reports are unchanged.
 
-- `EXHAUSTION WATCH` — the prior run is showing exhaustion.
-- `CONFIRMED SHORT` — a breakdown was followed by a failed retest.
-
-`RUN WATCH` and `BREAKDOWN WATCH` continue to be stored and processed internally, but they are not posted to Discord. The daily performance report is unchanged. Configure this with `DISCORD_SIGNAL_LEVELS` if you ever want different alert levels.
+The notifier hard-gates strategy alerts to `confirmed_short`, so an older Render environment variable that still lists `exhaustion_watch` cannot re-enable exhaustion alerts.
 
 ## On-demand performance report (v0.8.5)
 
@@ -128,3 +125,50 @@ After deployment, the on-demand command remains:
 ```bash
 python -m app.report_now
 ```
+
+
+## v0.9.0 — seven-day capital-buffer simulation
+
+Performance tracking now continues for 168 hours after every CONFIRMED SHORT.
+The Discord report separates STANDARD and HIGH+EXTREME signals and adds:
+
+- 1d / 2d / 3d / 7d fixed-horizon returns.
+- Percentage ever profitable within seven days.
+- Percentage reaching +20% short return within seven days.
+- Percentage experiencing a +100% adverse price move (research proxy for exhausting a 1x isolated position).
+- Percentage experiencing a +400% adverse price move (configured conservative 5x equity-to-position cross-buffer breach).
+- Whether either adverse threshold occurred before first profitability / before the +20% target.
+- Average and summed returns among trades that had not breached the +400% threshold by each horizon.
+- A 20%-sized account-equivalent summed return (0.20 x summed position returns). This is intentionally not a compounding or overlapping-position portfolio backtest.
+
+These thresholds are research proxies, not MEXC liquidation prices. Actual liquidation depends on maintenance margin, fees, funding, other cross positions, and account equity.
+
+
+## v0.9.1 — generic liquidation-survival analytics
+
+- Keeps raw confirmed-short performance generic; no assumed take-profit or position-closing rule.
+- Reports 1d / 2d / 3d / 7d raw returns and win rates by STANDARD vs HIGH+EXTREME.
+- Adds a 1x isolated research overlay: +100% adverse move (price reaches 2x entry).
+- Adds a 5x cross-buffer research overlay: +400% adverse move (price reaches 5x entry).
+- For each horizon and risk group, reports survival rate, survivor win rate, average return and summed return for each overlay.
+- Full 7d path also reports ever-profitable rate and whether each adverse threshold occurred before first profitability.
+- Removes the old +20% target/account-equivalent presentation.
+- Thresholds remain research proxies rather than exact MEXC liquidation prices.
+
+
+## v0.9.3 — dedicated subscriber performance board
+
+- Confirmed-short alerts continue to use `DISCORD_WEBHOOK_URL`.
+- Performance reports can now use a separate Discord server/channel via `DISCORD_PERFORMANCE_WEBHOOK_URL`.
+- If the dedicated stats webhook is not configured, performance reports fall back to `DISCORD_WEBHOOK_URL` for backward compatibility.
+- Performance output is now a four-card Discord embed board: overview, STANDARD, HIGH+EXTREME, and survival-methodology.
+- Raw signal analytics remain generic: no take-profit, stop-loss, leverage, or position-sizing rule is assumed.
+- 1d/2d/3d/7d isolated (+100% adverse) and 5× cross-buffer (+400% adverse) research overlays remain visible in the risk cards.
+- No database migration is required; keep migrations 001–008.
+
+## v0.9.2 — short-only Discord alerts
+
+- Discord strategy notifications are hard-gated to `CONFIRMED SHORT` only.
+- `EXHAUSTION WATCH`, `RUN WATCH`, and `BREAKDOWN WATCH` remain internal strategy states.
+- Existing Render environments that still contain `exhaustion_watch` in `DISCORD_SIGNAL_LEVELS` cannot cause exhaustion alerts to be posted.
+- Performance reporting is unchanged.

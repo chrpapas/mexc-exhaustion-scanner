@@ -52,6 +52,7 @@ class ScannerWorker:
         self.notifier = DiscordNotifier(
             settings.discord_webhook_url,
             settings.discord_signal_levels,
+            performance_webhook_url=settings.discord_performance_webhook_url,
         )
         self.stop_event = asyncio.Event()
         self.contracts: set[str] = set()
@@ -1239,7 +1240,7 @@ class ScannerWorker:
                     for value in self.wide_return_72h.values()
                 ),
                 "execution_enabled": self.settings.execution_enabled,
-                "strategy_version": "0.9.2",
+                "strategy_version": "0.9.3",
             },
         )
 

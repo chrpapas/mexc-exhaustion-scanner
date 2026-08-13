@@ -24,6 +24,7 @@ async def main() -> None:
     notifier = DiscordNotifier(
         settings.discord_webhook_url,
         settings.discord_signal_levels,
+        performance_webhook_url=settings.discord_performance_webhook_url,
     )
     mexc = MexcClient(
         settings.mexc_base_url,
@@ -69,7 +70,7 @@ async def main() -> None:
         )
         if not sent:
             raise RuntimeError(
-                "Performance report was not sent. Check DISCORD_WEBHOOK_URL in Render."
+                "Performance report was not sent. Check DISCORD_PERFORMANCE_WEBHOOK_URL (or DISCORD_WEBHOOK_URL fallback) in Render."
             )
 
         # Intentionally do not insert into performance_reports. The scheduled
