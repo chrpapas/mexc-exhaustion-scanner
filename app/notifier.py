@@ -238,6 +238,23 @@ class DiscordNotifier:
                     "inline": True,
                 },
                 {
+                    "name": "🎯 +20% Target Stat",
+                    "value": (
+                        "Counts a +20% short move only when it is observed **before** the relevant breach proxy and "
+                        "before the stated horizon. Average time is measured from CONFIRMED SHORT to first +20%. "
+                        "Same-15m-candle target/breach ordering is treated conservatively as not proven target-first."
+                    ),
+                    "inline": False,
+                },
+                {
+                    "name": "🤖 Trader Strategy",
+                    "value": (
+                        "The trader can use **+20% target**, **1D**, **2D**, **3D** or **7D** position maturity. "
+                        "Raw scanner returns above remain exit-rule agnostic."
+                    ),
+                    "inline": False,
+                },
+                {
                     "name": "Important",
                     "value": (
                         "These are **research thresholds, not exact exchange liquidation prices**. Actual liquidation "
@@ -296,10 +313,16 @@ class DiscordNotifier:
                         f"(**{self._percent(overlay.isolated.survival_rate)}**) • "
                         f"survivor WR {self._percent(overlay.isolated.win_rate)} • "
                         f"avg {self._signed_percent(overlay.isolated.avg_return)}\n"
+                        f"↳ +20% before breach: **{self._percent(overlay.isolated.target_20_hit_rate)}** "
+                        f"({overlay.isolated.target_20_hits}/{overlay.matured_total}) • "
+                        f"avg time **{self._hours(overlay.isolated.avg_time_to_target_20_hours)}**\n"
                         f"**5× cross buffer:** {overlay.cross_buffer.survived}/{overlay.matured_total} survived "
                         f"(**{self._percent(overlay.cross_buffer.survival_rate)}**) • "
                         f"survivor WR {self._percent(overlay.cross_buffer.win_rate)} • "
-                        f"avg {self._signed_percent(overlay.cross_buffer.avg_return)}"
+                        f"avg {self._signed_percent(overlay.cross_buffer.avg_return)}\n"
+                        f"↳ +20% before breach: **{self._percent(overlay.cross_buffer.target_20_hit_rate)}** "
+                        f"({overlay.cross_buffer.target_20_hits}/{overlay.matured_total}) • "
+                        f"avg time **{self._hours(overlay.cross_buffer.avg_time_to_target_20_hours)}**"
                     ),
                     "inline": False,
                 }
@@ -374,6 +397,15 @@ class DiscordNotifier:
         if value is None:
             return "n/a"
         return f"{float(value):+.2%}"
+
+    @staticmethod
+    def _hours(value: object) -> str:
+        if value is None:
+            return "n/a"
+        hours = float(value)
+        if hours < 24:
+            return f"{hours:.1f}h"
+        return f"{hours / 24.0:.2f}d"
 
     @staticmethod
     def _number(value: object) -> str:

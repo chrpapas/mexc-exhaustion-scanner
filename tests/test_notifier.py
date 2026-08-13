@@ -54,8 +54,8 @@ def _horizon(hours: int, value: float) -> HorizonSummary:
 
 
 def _survive(hours: int, label: str) -> HorizonSurvivalSummary:
-    isolated = SurvivalModelSummary(1, 0.5, 1.0, 0.12, 0.12)
-    cross = SurvivalModelSummary(2, 1.0, 0.5, 0.10, 0.20)
+    isolated = SurvivalModelSummary(1, 0.5, 1.0, 0.12, 0.12, 1, 0.5, 18.0)
+    cross = SurvivalModelSummary(2, 1.0, 0.5, 0.10, 0.20, 2, 1.0, 24.0)
     return HorizonSurvivalSummary(hours, label, 2, isolated, cross)
 
 
@@ -125,7 +125,9 @@ def test_performance_report_uses_dedicated_stats_webhook_and_embeds():
     assert "1× isolated" in all_text
     assert "5× cross buffer" in all_text
     assert "20%-sized acct equiv" not in all_text
-    assert "Reached +20% short return" not in all_text
+    assert "+20% before breach" in all_text
+    assert "avg time" in all_text
+    assert "Trader Strategy" in all_text
 
 
 def test_performance_webhook_falls_back_to_signal_webhook_for_backward_compatibility():

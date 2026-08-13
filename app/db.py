@@ -46,32 +46,38 @@ class Database:
 
     async def migrate(self) -> None:
         migration_dir = Path(__file__).resolve().parents[1] / "migrations"
-        await self.pool.execute(
-            """
-            CREATE TABLE IF NOT EXISTS schema_migrations (
-                filename text PRIMARY KEY,
-                applied_at timestamptz NOT NULL DEFAULT now()
-            )
-            """
-        )
+        async with self.pool.acquire() as conn:
+            # The scanner and trader are separate Render workers sharing one DB.
+            # Serialize schema migrations so simultaneous deploys cannot race.
+            await conn.execute("SELECT pg_advisory_lock(hashtext('mexc_exhaustion_schema_migrations'))")
+            try:
+                await conn.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS schema_migrations (
+                        filename text PRIMARY KEY,
+                        applied_at timestamptz NOT NULL DEFAULT now()
+                    )
+                    """
+                )
 
-        for path in sorted(migration_dir.glob("*.sql")):
-            filename = path.name
-            already_applied = await self.pool.fetchval(
-                "SELECT 1 FROM schema_migrations WHERE filename=$1",
-                filename,
-            )
-            if already_applied:
-                continue
-
-            sql = path.read_text(encoding="utf-8")
-            async with self.pool.acquire() as conn:
-                async with conn.transaction():
-                    await conn.execute(sql)
-                    await conn.execute(
-                        "INSERT INTO schema_migrations(filename) VALUES ($1)",
+                for path in sorted(migration_dir.glob("*.sql")):
+                    filename = path.name
+                    already_applied = await conn.fetchval(
+                        "SELECT 1 FROM schema_migrations WHERE filename=$1",
                         filename,
                     )
+                    if already_applied:
+                        continue
+
+                    sql = path.read_text(encoding="utf-8")
+                    async with conn.transaction():
+                        await conn.execute(sql)
+                        await conn.execute(
+                            "INSERT INTO schema_migrations(filename) VALUES ($1)",
+                            filename,
+                        )
+            finally:
+                await conn.execute("SELECT pg_advisory_unlock(hashtext('mexc_exhaustion_schema_migrations'))")
 
     async def upsert_contracts(self, rows: list[dict[str, Any]]) -> None:
         now = datetime.now(UTC)

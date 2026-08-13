@@ -89,3 +89,40 @@ def test_horizon_survival_separates_isolated_and_cross_thresholds():
     assert h.cross_buffer.survived == 2
     assert h.cross_buffer.survival_rate == pytest.approx(1.0)
     assert h.cross_buffer.avg_return == pytest.approx(0.15)
+
+def test_target_20_hit_rate_requires_target_before_breach_and_horizon():
+    confirmed = datetime(2026, 8, 1, 0, 0, tzinfo=UTC)
+    rows = [
+        {**_row(risk_tier="standard", ret24=0.25),
+         "target_20_at": confirmed.replace(hour=6),
+         "isolated_100_breach_at": confirmed.replace(hour=12)},
+        {**_row(risk_tier="standard", ret24=-0.40),
+         "target_20_at": confirmed.replace(hour=18),
+         "isolated_100_breach_at": confirmed.replace(hour=10)},
+        {**_row(risk_tier="standard", ret24=0.30),
+         "target_20_at": confirmed.replace(day=2, hour=4),
+         "isolated_100_breach_at": None},
+    ]
+    report = build_performance_summary(
+        rows, now_utc=datetime(2026, 8, 12, 12, 0, tzinfo=UTC), timezone_name="Europe/Zurich"
+    )
+    h = report.standard_survival[0]
+    assert h.isolated.target_20_hits == 1
+    assert h.isolated.target_20_hit_rate == pytest.approx(1 / 3)
+    assert h.isolated.avg_time_to_target_20_hours == pytest.approx(6.0)
+    assert h.cross_buffer.target_20_hits == 2
+    assert h.cross_buffer.target_20_hit_rate == pytest.approx(2 / 3)
+    assert h.cross_buffer.avg_time_to_target_20_hours == pytest.approx(12.0)
+
+
+def test_same_candle_target_and_breach_is_not_counted_as_target_first():
+    confirmed = datetime(2026, 8, 1, 0, 0, tzinfo=UTC)
+    same = confirmed.replace(hour=8)
+    row = {**_row(risk_tier="standard", ret24=0.20),
+           "target_20_at": same,
+           "isolated_100_breach_at": same}
+    report = build_performance_summary(
+        [row], now_utc=datetime(2026, 8, 12, 12, 0, tzinfo=UTC), timezone_name="Europe/Zurich"
+    )
+    assert report.standard_survival[0].isolated.target_20_hit_rate == 0.0
+

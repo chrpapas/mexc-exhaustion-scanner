@@ -54,6 +54,9 @@ class SurvivalModelSummary:
     win_rate: float | None
     avg_return: float | None
     sum_return: float | None
+    target_20_hits: int = 0
+    target_20_hit_rate: float | None = None
+    avg_time_to_target_20_hours: float | None = None
 
     def as_dict(self) -> dict[str, Any]:
         return {name: getattr(self, name) for name in self.__dataclass_fields__}
@@ -269,11 +272,26 @@ def build_performance_summary(
 
         def model(event_key: str) -> SurvivalModelSummary:
             survivors: list[dict[str, Any]] = []
+            target_times: list[float] = []
             for row in group:
                 deadline = row["confirmed_at"] + timedelta(hours=hours)
                 breach = row.get(event_key)
                 if breach is None or breach > deadline:
                     survivors.append(row)
+
+                target = row.get("target_20_at")
+                # Conservatively require the +20% target to be observed strictly
+                # before a liquidation-proxy breach. If both thresholds occur in
+                # the same 15m candle, candle data cannot establish event order.
+                if (
+                    target is not None
+                    and target <= deadline
+                    and (breach is None or target < breach)
+                ):
+                    target_times.append(
+                        (target - row["confirmed_at"]).total_seconds() / 3600.0
+                    )
+
             vals = [float(row[key]) for row in survivors]
             return SurvivalModelSummary(
                 survived=len(survivors),
@@ -281,6 +299,9 @@ def build_performance_summary(
                 win_rate=rate([v > 0 for v in vals]),
                 avg_return=average(vals),
                 sum_return=sum(vals) if vals else None,
+                target_20_hits=len(target_times),
+                target_20_hit_rate=(len(target_times) / len(group)) if group else None,
+                avg_time_to_target_20_hours=average(target_times),
             )
 
         return HorizonSurvivalSummary(
