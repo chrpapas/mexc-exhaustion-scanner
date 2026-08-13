@@ -311,6 +311,18 @@ class Database:
         )
         return {str(row["symbol"]) for row in rows}
 
+    async def unresolved_profit_target_symbols(self) -> set[str]:
+        """Symbols whose +20%-vs-cross-breach race is still unresolved."""
+        rows = await self.pool.fetch(
+            """
+            SELECT DISTINCT symbol
+            FROM shadow_trades
+            WHERE target_20_at IS NULL
+              AND cross_400_breach_at IS NULL
+            """
+        )
+        return {str(row["symbol"]) for row in rows}
+
     async def get_active_episode(self, symbol: str) -> PumpEpisode | None:
         row = await self.pool.fetchrow(
             """

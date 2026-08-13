@@ -293,6 +293,7 @@ class ScannerWorker:
             return []
 
         active_episodes = await self.db.active_episode_symbols()
+        target_tracking = await self.db.unresolved_profit_target_symbols()
         returns = [ticker.rise_fall_rate for ticker in self.latest_tickers.values()]
         standard = set(self.execution_quality_symbols(include_benchmark=False))
 
@@ -300,6 +301,7 @@ class ScannerWorker:
         for ticker in self.latest_tickers.values():
             rank = percentile_rank(ticker.rise_fall_rate, returns)
             is_active = ticker.symbol in active_episodes
+            is_target_tracking = ticker.symbol in target_tracking
             is_standard = ticker.symbol in standard
             is_mover = ticker.rise_fall_rate >= self.settings.discovery_min_return_24h
             is_relative_mover = (
@@ -311,11 +313,11 @@ class ScannerWorker:
                 return_72h is not None
                 and return_72h >= self.settings.wide_scan_min_return_72h
             )
-            if not (is_active or is_standard or is_mover or is_relative_mover or is_72h_mover):
+            if not (is_active or is_target_tracking or is_standard or is_mover or is_relative_mover or is_72h_mover):
                 continue
             selected.append(
                 (
-                    2 if is_active else (1 if is_72h_mover else 0),
+                    3 if is_target_tracking else (2 if is_active else (1 if is_72h_mover else 0)),
                     max(ticker.rise_fall_rate, return_72h or -999.0),
                     ticker.amount24,
                     ticker.symbol,
@@ -345,8 +347,9 @@ class ScannerWorker:
                 symbol in active_episodes,
             )
 
-        # Active episodes must never disappear because of the cap.
-        for symbol in sorted(active_episodes):
+        # Active episodes and unresolved +20%-vs-liquidation races must never
+        # disappear because of the discovery cap.
+        for symbol in sorted(active_episodes | target_tracking):
             if symbol in self.latest_tickers and symbol not in symbols:
                 symbols.append(symbol)
 
@@ -1031,9 +1034,15 @@ class ScannerWorker:
 
         for trade in trades:
             try:
-                # Once the 7-day horizon has been captured, the trade is final for
-                # this tracker and no longer needs repeated candle queries.
-                if trade.get("return_168h_pct") is not None:
+                fixed_complete = trade.get("return_168h_pct") is not None
+                target_race_complete = (
+                    trade.get("target_20_at") is not None
+                    or trade.get("cross_400_breach_at") is not None
+                )
+                # Fixed-horizon analytics end at 7d, but the +20%-vs-liquidation
+                # race is horizon-independent. Keep unresolved races alive until
+                # +20% is observed or the +400% cross-buffer proxy is breached.
+                if fixed_complete and target_race_complete:
                     completed += 1
                     continue
 
@@ -1042,7 +1051,7 @@ class ScannerWorker:
                 confirmed_at = trade["confirmed_at"]
                 entry_price = float(trade["entry_price"])
                 horizon_end = confirmed_at + timedelta(hours=168)
-                observation_end = min(now, horizon_end)
+                fixed_observation_end = min(now, horizon_end)
 
                 current_price = None
                 current_return = None
@@ -1051,21 +1060,24 @@ class ScannerWorker:
                     current_price = ticker.last_price
                     current_return = short_return(entry_price, current_price)
 
-                # MFE/MAE cover the full seven-day tracking window. This captures
-                # both delayed collapses and large squeezes before the dump.
-                min_low, max_high = await self.db.candle_excursions(
-                    symbol, confirmed_at, observation_end
-                )
-                mfe = (
-                    max(0.0, short_return(entry_price, min_low))
-                    if min_low is not None and min_low > 0
-                    else None
-                )
-                mae = (
-                    min(0.0, short_return(entry_price, max_high))
-                    if max_high is not None and max_high > 0
-                    else None
-                )
+                mfe = None
+                mae = None
+                if not fixed_complete:
+                    # MFE/MAE remain strictly 7-day statistics. The independent
+                    # +20% target race may continue beyond this observation window.
+                    min_low, max_high = await self.db.candle_excursions(
+                        symbol, confirmed_at, fixed_observation_end
+                    )
+                    mfe = (
+                        max(0.0, short_return(entry_price, min_low))
+                        if min_low is not None and min_low > 0
+                        else None
+                    )
+                    mae = (
+                        min(0.0, short_return(entry_price, max_high))
+                        if max_high is not None and max_high > 0
+                        else None
+                    )
 
                 horizons = (1, 4, 12, 24, 48, 72, 168)
                 horizon_values: dict[int, float | None] = {h: None for h in horizons}
@@ -1079,27 +1091,40 @@ class ScannerWorker:
                     72: trade.get("return_72h_pct"),
                     168: trade.get("return_168h_pct"),
                 }
-                for hours in horizons:
-                    if existing[hours] is not None:
-                        continue
-                    target = confirmed_at + timedelta(hours=hours)
-                    if now < target:
-                        continue
-                    point = await self.db.candle_close_for_horizon(symbol, target)
-                    if point is not None:
-                        close_time, price = point
-                        horizon_times[hours] = close_time
-                        horizon_values[hours] = short_return(entry_price, price)
+                if not fixed_complete:
+                    for hours in horizons:
+                        if existing[hours] is not None:
+                            continue
+                        target = confirmed_at + timedelta(hours=hours)
+                        if now < target:
+                            continue
+                        point = await self.db.candle_close_for_horizon(symbol, target)
+                        if point is not None:
+                            close_time, price = point
+                            horizon_times[hours] = close_time
+                            horizon_values[hours] = short_return(entry_price, price)
 
-                path_events = await self.db.trade_path_events(
-                    symbol, confirmed_at, observation_end, entry_price
-                )
+                path_events = {
+                    "first_profit_at": None,
+                    "target_20_at": None,
+                    "isolated_100_breach_at": None,
+                    "cross_400_breach_at": None,
+                }
+                if not target_race_complete:
+                    # Query only the unseen tail after the initial observation.
+                    # COALESCE in update_shadow_trade preserves any earlier event.
+                    path_start = trade.get("last_observed_at") or confirmed_at
+                    if path_start < confirmed_at:
+                        path_start = confirmed_at
+                    path_events = await self.db.trade_path_events(
+                        symbol, path_start, now, entry_price
+                    )
 
                 await self.db.update_shadow_trade(
                     episode_id,
                     current_price=current_price,
                     current_return_pct=current_return,
-                    observed_at=now if current_price is not None else None,
+                    observed_at=now,
                     mfe_pct=mfe,
                     mae_pct=mae,
                     return_1h_pct=horizon_values[1],
@@ -1148,7 +1173,7 @@ class ScannerWorker:
                 )
 
         LOGGER.info(
-            "Performance tracker: tracked=%d complete_7d=%d failed=%d total=%d",
+            "Performance tracker: tracked=%d complete_fixed_and_target=%d failed=%d total=%d",
             updated,
             completed,
             failed,
@@ -1240,7 +1265,7 @@ class ScannerWorker:
                     for value in self.wide_return_72h.values()
                 ),
                 "execution_enabled": self.settings.execution_enabled,
-                "strategy_version": "0.9.3",
+                "strategy_version": "1.1.1",
             },
         )
 

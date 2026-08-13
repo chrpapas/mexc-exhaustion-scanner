@@ -90,32 +90,43 @@ def test_horizon_survival_separates_isolated_and_cross_thresholds():
     assert h.cross_buffer.survival_rate == pytest.approx(1.0)
     assert h.cross_buffer.avg_return == pytest.approx(0.15)
 
-def test_target_20_hit_rate_requires_target_before_breach_and_horizon():
+def test_profit_target_race_is_independent_of_fixed_horizons_and_excludes_pending():
     confirmed = datetime(2026, 8, 1, 0, 0, tzinfo=UTC)
     rows = [
         {**_row(risk_tier="standard", ret24=0.25),
          "target_20_at": confirmed.replace(hour=6),
          "isolated_100_breach_at": confirmed.replace(hour=12)},
         {**_row(risk_tier="standard", ret24=-0.40),
-         "target_20_at": confirmed.replace(hour=18),
+         "target_20_at": confirmed.replace(day=3, hour=18),
          "isolated_100_breach_at": confirmed.replace(hour=10)},
-        {**_row(risk_tier="standard", ret24=0.30),
-         "target_20_at": confirmed.replace(day=2, hour=4),
+        {**_row(risk_tier="standard", ret24=0.00),
+         "return_24h_pct": None,
+         "matured_at": None,
+         "target_20_at": None,
          "isolated_100_breach_at": None},
     ]
     report = build_performance_summary(
         rows, now_utc=datetime(2026, 8, 12, 12, 0, tzinfo=UTC), timezone_name="Europe/Zurich"
     )
-    h = report.standard_survival[0]
-    assert h.isolated.target_20_hits == 1
-    assert h.isolated.target_20_hit_rate == pytest.approx(1 / 3)
-    assert h.isolated.avg_time_to_target_20_hours == pytest.approx(6.0)
-    assert h.cross_buffer.target_20_hits == 2
-    assert h.cross_buffer.target_20_hit_rate == pytest.approx(2 / 3)
-    assert h.cross_buffer.avg_time_to_target_20_hours == pytest.approx(12.0)
+    target = report.standard_profit_target
+    assert target.isolated.total_signals == 3
+    assert target.isolated.resolved == 2
+    assert target.isolated.wins == 1
+    assert target.isolated.breaches_before_target == 1
+    assert target.isolated.pending == 1
+    assert target.isolated.win_rate == pytest.approx(0.5)
+    assert target.isolated.avg_time_to_target_hours == pytest.approx(6.0)
+
+    # No +400% breach occurred, so both observed +20% targets win the cross race
+    # even though the second target arrived well after the 1-day horizon.
+    assert target.cross_buffer.resolved == 2
+    assert target.cross_buffer.wins == 2
+    assert target.cross_buffer.pending == 1
+    assert target.cross_buffer.win_rate == pytest.approx(1.0)
+    assert target.cross_buffer.avg_time_to_target_hours == pytest.approx((6 + 66) / 2)
 
 
-def test_same_candle_target_and_breach_is_not_counted_as_target_first():
+def test_same_candle_target_and_breach_is_conservatively_breach_first():
     confirmed = datetime(2026, 8, 1, 0, 0, tzinfo=UTC)
     same = confirmed.replace(hour=8)
     row = {**_row(risk_tier="standard", ret24=0.20),
@@ -124,5 +135,8 @@ def test_same_candle_target_and_breach_is_not_counted_as_target_first():
     report = build_performance_summary(
         [row], now_utc=datetime(2026, 8, 12, 12, 0, tzinfo=UTC), timezone_name="Europe/Zurich"
     )
-    assert report.standard_survival[0].isolated.target_20_hit_rate == 0.0
+    assert report.standard_profit_target.isolated.win_rate == 0.0
+    assert report.standard_profit_target.isolated.breaches_before_target == 1
+    # Cross has no +400% breach, so its target race is still a win.
+    assert report.standard_profit_target.cross_buffer.win_rate == 1.0
 

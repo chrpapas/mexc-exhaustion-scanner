@@ -44,7 +44,7 @@ class MexcTradeClient:
         self.client = httpx.AsyncClient(
             base_url=base_url.rstrip("/"),
             timeout=httpx.Timeout(20.0),
-            headers={"User-Agent": "mexc-standard-short-trader/1.1.0"},
+            headers={"User-Agent": "mexc-standard-short-trader/1.1.1"},
         )
 
     async def close(self) -> None:

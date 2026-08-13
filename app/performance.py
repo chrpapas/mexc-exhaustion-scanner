@@ -54,12 +54,37 @@ class SurvivalModelSummary:
     win_rate: float | None
     avg_return: float | None
     sum_return: float | None
-    target_20_hits: int = 0
-    target_20_hit_rate: float | None = None
-    avg_time_to_target_20_hours: float | None = None
 
     def as_dict(self) -> dict[str, Any]:
         return {name: getattr(self, name) for name in self.__dataclass_fields__}
+
+
+@dataclass(frozen=True, slots=True)
+class ProfitTargetModelSummary:
+    total_signals: int
+    resolved: int
+    wins: int
+    breaches_before_target: int
+    pending: int
+    win_rate: float | None
+    avg_time_to_target_hours: float | None
+
+    def as_dict(self) -> dict[str, Any]:
+        return {name: getattr(self, name) for name in self.__dataclass_fields__}
+
+
+@dataclass(frozen=True, slots=True)
+class ProfitTargetSummary:
+    risk_label: str
+    isolated: ProfitTargetModelSummary
+    cross_buffer: ProfitTargetModelSummary
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "risk_label": self.risk_label,
+            "isolated": self.isolated.as_dict(),
+            "cross_buffer": self.cross_buffer.as_dict(),
+        }
 
 
 @dataclass(frozen=True, slots=True)
@@ -109,6 +134,8 @@ class PerformanceSummary:
     risky_survival: tuple[HorizonSurvivalSummary, ...]
     standard_weekly: WeeklyRiskSummary
     risky_weekly: WeeklyRiskSummary
+    standard_profit_target: ProfitTargetSummary
+    risky_profit_target: ProfitTargetSummary
     avg_return_1h: float | None
     avg_return_4h: float | None
     avg_return_12h: float | None
@@ -186,6 +213,8 @@ class PerformanceSummary:
             "risky_survival": [x.as_dict() for x in self.risky_survival],
             "standard_weekly": self.standard_weekly.as_dict(),
             "risky_weekly": self.risky_weekly.as_dict(),
+            "standard_profit_target": self.standard_profit_target.as_dict(),
+            "risky_profit_target": self.risky_profit_target.as_dict(),
             "avg_return_1h": self.avg_return_1h,
             "avg_return_4h": self.avg_return_4h,
             "avg_return_12h": self.avg_return_12h,
@@ -272,25 +301,11 @@ def build_performance_summary(
 
         def model(event_key: str) -> SurvivalModelSummary:
             survivors: list[dict[str, Any]] = []
-            target_times: list[float] = []
             for row in group:
                 deadline = row["confirmed_at"] + timedelta(hours=hours)
                 breach = row.get(event_key)
                 if breach is None or breach > deadline:
                     survivors.append(row)
-
-                target = row.get("target_20_at")
-                # Conservatively require the +20% target to be observed strictly
-                # before a liquidation-proxy breach. If both thresholds occur in
-                # the same 15m candle, candle data cannot establish event order.
-                if (
-                    target is not None
-                    and target <= deadline
-                    and (breach is None or target < breach)
-                ):
-                    target_times.append(
-                        (target - row["confirmed_at"]).total_seconds() / 3600.0
-                    )
 
             vals = [float(row[key]) for row in survivors]
             return SurvivalModelSummary(
@@ -299,15 +314,57 @@ def build_performance_summary(
                 win_rate=rate([v > 0 for v in vals]),
                 avg_return=average(vals),
                 sum_return=sum(vals) if vals else None,
-                target_20_hits=len(target_times),
-                target_20_hit_rate=(len(target_times) / len(group)) if group else None,
-                avg_time_to_target_20_hours=average(target_times),
             )
 
         return HorizonSurvivalSummary(
             hours=hours,
             risk_label="STANDARD" if standard else "HIGH+EXTREME",
             matured_total=len(group),
+            isolated=model("isolated_100_breach_at"),
+            cross_buffer=model("cross_400_breach_at"),
+        )
+
+    def profit_target_summary(*, standard: bool) -> ProfitTargetSummary:
+        group = [
+            row for row in rows
+            if ((row.get("risk_tier") == "standard") == standard)
+        ]
+
+        def model(event_key: str) -> ProfitTargetModelSummary:
+            wins = 0
+            breaches = 0
+            target_times: list[float] = []
+            for row in group:
+                target = row.get("target_20_at")
+                breach = row.get(event_key)
+
+                # The +20% race is deliberately independent of the 1d/2d/3d/7d
+                # return horizons. A target-first signal is a win; a breach-first
+                # signal is a loss for that liquidation proxy; unresolved signals
+                # remain pending and are excluded from the resolved win-rate
+                # denominator. Same-candle target/breach is conservatively breach-first.
+                if target is not None and (breach is None or target < breach):
+                    wins += 1
+                    target_times.append(
+                        (target - row["confirmed_at"]).total_seconds() / 3600.0
+                    )
+                elif breach is not None and (target is None or breach <= target):
+                    breaches += 1
+
+            resolved = wins + breaches
+            pending = len(group) - resolved
+            return ProfitTargetModelSummary(
+                total_signals=len(group),
+                resolved=resolved,
+                wins=wins,
+                breaches_before_target=breaches,
+                pending=pending,
+                win_rate=(wins / resolved) if resolved else None,
+                avg_time_to_target_hours=average(target_times),
+            )
+
+        return ProfitTargetSummary(
+            risk_label="STANDARD" if standard else "HIGH+EXTREME",
             isolated=model("isolated_100_breach_at"),
             cross_buffer=model("cross_400_breach_at"),
         )
@@ -378,6 +435,8 @@ def build_performance_summary(
         risky_survival=tuple(horizon_survival(h, standard=False) for h in (24, 48, 72, 168)),
         standard_weekly=weekly_risk(standard=True),
         risky_weekly=weekly_risk(standard=False),
+        standard_profit_target=profit_target_summary(standard=True),
+        risky_profit_target=profit_target_summary(standard=False),
         avg_return_1h=average(values_for("return_1h_pct")),
         avg_return_4h=average(values_for("return_4h_pct")),
         avg_return_12h=average(values_for("return_12h_pct")),

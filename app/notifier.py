@@ -7,7 +7,13 @@ from zoneinfo import ZoneInfo
 import httpx
 
 from app.models import RunSignal
-from app.performance import HorizonSummary, HorizonSurvivalSummary, PerformanceSummary, WeeklyRiskSummary
+from app.performance import (
+    HorizonSummary,
+    HorizonSurvivalSummary,
+    PerformanceSummary,
+    ProfitTargetSummary,
+    WeeklyRiskSummary,
+)
 
 LOGGER = logging.getLogger(__name__)
 
@@ -229,20 +235,21 @@ class DiscordNotifier:
             "fields": [
                 {
                     "name": "1× Isolated Proxy",
-                    "value": "Breach = **+100% adverse move** against the short (price reaches 2× entry).",
+                    "value": "Proxy loss = **-100% short return** (equivalent to price reaching 2× entry).",
                     "inline": True,
                 },
                 {
                     "name": "5× Cross-Buffer Proxy",
-                    "value": "Breach = **+400% adverse move** against the short (price reaches 5× entry).",
+                    "value": "Proxy loss = **-400% short return** (equivalent to price reaching 5× entry).",
                     "inline": True,
                 },
                 {
-                    "name": "🎯 +20% Target Stat",
+                    "name": "🎯 +20% Target Race",
                     "value": (
-                        "Counts a +20% short move only when it is observed **before** the relevant breach proxy and "
-                        "before the stated horizon. Average time is measured from CONFIRMED SHORT to first +20%. "
-                        "Same-15m-candle target/breach ordering is treated conservatively as not proven target-first."
+                        "This is **independent of 1D/2D/3D/7D holding horizons**. Each signal stays pending until "
+                        "+20% profit wins the race or the selected liquidation-proxy threshold is breached first. "
+                        "Win rate uses resolved outcomes only; pending signals are shown separately. Same-15m-candle "
+                        "target/breach ordering is conservatively counted as breach-first."
                     ),
                     "inline": False,
                 },
@@ -289,8 +296,15 @@ class DiscordNotifier:
     ) -> dict:
         weekly = report.standard_weekly if standard else report.risky_weekly
         survival = report.standard_survival if standard else report.risky_survival
+        target = report.standard_profit_target if standard else report.risky_profit_target
         horizons = self._horizons(report)
-        fields: list[dict] = []
+        fields: list[dict] = [
+            {
+                "name": "🎯 +20% Profit Target • Horizon Independent",
+                "value": self._profit_target_summary(target),
+                "inline": False,
+            }
+        ]
 
         for horizon, overlay in zip(horizons, survival):
             if standard:
@@ -313,16 +327,10 @@ class DiscordNotifier:
                         f"(**{self._percent(overlay.isolated.survival_rate)}**) • "
                         f"survivor WR {self._percent(overlay.isolated.win_rate)} • "
                         f"avg {self._signed_percent(overlay.isolated.avg_return)}\n"
-                        f"↳ +20% before breach: **{self._percent(overlay.isolated.target_20_hit_rate)}** "
-                        f"({overlay.isolated.target_20_hits}/{overlay.matured_total}) • "
-                        f"avg time **{self._hours(overlay.isolated.avg_time_to_target_20_hours)}**\n"
                         f"**5× cross buffer:** {overlay.cross_buffer.survived}/{overlay.matured_total} survived "
                         f"(**{self._percent(overlay.cross_buffer.survival_rate)}**) • "
                         f"survivor WR {self._percent(overlay.cross_buffer.win_rate)} • "
-                        f"avg {self._signed_percent(overlay.cross_buffer.avg_return)}\n"
-                        f"↳ +20% before breach: **{self._percent(overlay.cross_buffer.target_20_hit_rate)}** "
-                        f"({overlay.cross_buffer.target_20_hits}/{overlay.matured_total}) • "
-                        f"avg time **{self._hours(overlay.cross_buffer.avg_time_to_target_20_hours)}**"
+                        f"avg {self._signed_percent(overlay.cross_buffer.avg_return)}"
                     ),
                     "inline": False,
                 }
@@ -341,6 +349,22 @@ class DiscordNotifier:
             "color": color,
             "fields": fields,
         }
+
+    def _profit_target_summary(self, summary: ProfitTargetSummary) -> str:
+        iso = summary.isolated
+        cross = summary.cross_buffer
+        return (
+            f"**+20% before -100% short loss (1× isolated proxy)**\n"
+            f"Win rate **{self._percent(iso.win_rate)}** • "
+            f"wins {iso.wins}/{iso.resolved} resolved • "
+            f"breaches {iso.breaches_before_target} • pending {iso.pending}\n"
+            f"Avg time to +20% **{self._hours(iso.avg_time_to_target_hours)}**\n\n"
+            f"**+20% before -400% short loss (5× cross-buffer proxy)**\n"
+            f"Win rate **{self._percent(cross.win_rate)}** • "
+            f"wins {cross.wins}/{cross.resolved} resolved • "
+            f"breaches {cross.breaches_before_target} • pending {cross.pending}\n"
+            f"Avg time to +20% **{self._hours(cross.avg_time_to_target_hours)}**"
+        )
 
     def _weekly_summary(self, summary: WeeklyRiskSummary) -> str:
         if summary.matured_7d == 0:

@@ -6,6 +6,8 @@ from app.performance import (
     HorizonSummary,
     HorizonSurvivalSummary,
     PerformanceSummary,
+    ProfitTargetModelSummary,
+    ProfitTargetSummary,
     SurvivalModelSummary,
     WeeklyRiskSummary,
 )
@@ -54,13 +56,21 @@ def _horizon(hours: int, value: float) -> HorizonSummary:
 
 
 def _survive(hours: int, label: str) -> HorizonSurvivalSummary:
-    isolated = SurvivalModelSummary(1, 0.5, 1.0, 0.12, 0.12, 1, 0.5, 18.0)
-    cross = SurvivalModelSummary(2, 1.0, 0.5, 0.10, 0.20, 2, 1.0, 24.0)
+    isolated = SurvivalModelSummary(1, 0.5, 1.0, 0.12, 0.12)
+    cross = SurvivalModelSummary(2, 1.0, 0.5, 0.10, 0.20)
     return HorizonSurvivalSummary(hours, label, 2, isolated, cross)
 
 
 def _weekly(label: str) -> WeeklyRiskSummary:
     return WeeklyRiskSummary(label, 2, 1.0, 0.5, 0.0, 0.5, 0.0)
+
+
+def _target(label: str) -> ProfitTargetSummary:
+    return ProfitTargetSummary(
+        label,
+        ProfitTargetModelSummary(10, 8, 7, 1, 2, 0.875, 30.0),
+        ProfitTargetModelSummary(10, 7, 7, 0, 3, 1.0, 34.0),
+    )
 
 
 def _report() -> PerformanceSummary:
@@ -78,6 +88,8 @@ def _report() -> PerformanceSummary:
         risky_survival=tuple(_survive(h, "HIGH+EXTREME") for h in (24, 48, 72, 168)),
         standard_weekly=_weekly("STANDARD"),
         risky_weekly=_weekly("HIGH+EXTREME"),
+        standard_profit_target=_target("STANDARD"),
+        risky_profit_target=_target("HIGH+EXTREME"),
         avg_return_1h=-0.01,
         avg_return_4h=0.02,
         avg_return_12h=0.03,
@@ -125,8 +137,11 @@ def test_performance_report_uses_dedicated_stats_webhook_and_embeds():
     assert "1× isolated" in all_text
     assert "5× cross buffer" in all_text
     assert "20%-sized acct equiv" not in all_text
-    assert "+20% before breach" in all_text
-    assert "avg time" in all_text
+    assert "+20% before breach" not in all_text
+    assert "+20% Profit Target • Horizon Independent" in all_text
+    assert "+20% before -100% short loss" in all_text
+    assert "+20% before -400% short loss" in all_text
+    assert "Avg time to +20%" in all_text
     assert "Trader Strategy" in all_text
 
 
