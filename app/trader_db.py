@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from app.db import Database
+from app.json_utils import json_object
 from app.trader_models import TradeSignal, TraderPosition
 
 
@@ -78,7 +79,7 @@ class TraderRepository:
         )
         result: list[TradeSignal] = []
         for row in rows:
-            features = dict(row["features"] or {})
+            features = json_object(row["features"])
             risk = str(features.get("risk_tier") or "").upper()
             entry_hint = features.get("retest_close")
             try:
@@ -278,7 +279,7 @@ class TraderRepository:
 
     @staticmethod
     def _position(row: Any) -> TraderPosition:
-        metadata = dict(row["metadata"] or {})
+        metadata = json_object(row["metadata"])
         return TraderPosition(
             id=int(row["id"]),
             signal_id=int(row["signal_id"]),
