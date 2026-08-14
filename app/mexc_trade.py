@@ -1,15 +1,22 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import hmac
 import json
 import math
 import time
+import logging
 from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urlencode
 
 import httpx
+
+from app.mexc_price_stream import MexcTickerStream
+
+
+LOGGER = logging.getLogger(__name__)
 
 
 class MexcTradeError(RuntimeError):
@@ -41,13 +48,15 @@ class MexcTradeClient:
     def __init__(self, base_url: str, api_key: str | None = None, api_secret: str | None = None) -> None:
         self.api_key = api_key
         self.api_secret = api_secret
+        self.ticker_stream = MexcTickerStream()
         self.client = httpx.AsyncClient(
             base_url=base_url.rstrip("/"),
             timeout=httpx.Timeout(20.0),
-            headers={"User-Agent": "mexc-standard-short-trader/1.1.1"},
+            headers={"User-Agent": "mexc-standard-short-trader/1.1.3"},
         )
 
     async def close(self) -> None:
+        await self.ticker_stream.close()
         await self.client.aclose()
 
     async def _public_get(self, path: str, params: dict[str, Any] | None = None) -> Any:
@@ -106,12 +115,37 @@ class MexcTradeClient:
         return payload.get("data")
 
     async def last_price(self, symbol: str) -> float:
-        data = await self._public_get("/api/v1/contract/ticker", {"symbol": symbol})
-        if isinstance(data, list):
-            data = next((row for row in data if str(row.get("symbol")) == symbol), None)
-        if not isinstance(data, dict) or not data.get("lastPrice"):
-            raise MexcTradeError(f"No ticker for {symbol}")
-        return float(data["lastPrice"])
+        # MEXC recommends WebSocket for market trends. The trader keeps only one
+        # position open, so one single-symbol stream replaces repetitive REST polls.
+        try:
+            return await self.ticker_stream.last_price(symbol)
+        except Exception as exc:
+            LOGGER.warning("Ticker WebSocket unavailable for %s (%s); using REST fallback", symbol, exc)
+            return await self._rest_last_price(symbol)
+
+    async def _rest_last_price(self, symbol: str) -> float:
+        delay = 1.0
+        last_error: Exception | None = None
+        for attempt in range(3):
+            try:
+                data = await self._public_get("/api/v1/contract/ticker", {"symbol": symbol})
+                if isinstance(data, list):
+                    data = next((row for row in data if str(row.get("symbol")) == symbol), None)
+                if not isinstance(data, dict) or not data.get("lastPrice"):
+                    raise MexcTradeError(f"No ticker for {symbol}")
+                return float(data["lastPrice"])
+            except MexcTradeError as exc:
+                last_error = exc
+                if "error 510" not in str(exc).lower() or attempt == 2:
+                    raise
+                LOGGER.warning(
+                    "MEXC REST ticker rate-limited for %s; backing off %.0fs",
+                    symbol,
+                    delay,
+                )
+                await asyncio.sleep(delay)
+                delay *= 2.0
+        raise MexcTradeError(f"No ticker for {symbol}: {last_error}")
 
     async def contract_spec(self, symbol: str) -> ContractSpec:
         data = await self._public_get("/api/v1/contract/detail", {"symbol": symbol})

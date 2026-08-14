@@ -28,3 +28,15 @@ def test_contract_volume_rejects_below_minimum():
     )
     with pytest.raises(MexcTradeError):
         spec.contracts_for_notional(10, 2.0)
+
+from app.mexc_price_stream import ticker_price_from_message
+
+
+def test_ticker_websocket_parser():
+    message = '{"channel":"push.ticker","data":{"lastPrice":0.1234,"symbol":"VELVET_USDT"},"symbol":"VELVET_USDT"}'
+    assert ticker_price_from_message(message, "VELVET_USDT") == pytest.approx(0.1234)
+
+
+def test_ticker_websocket_parser_ignores_other_symbol():
+    message = '{"channel":"push.ticker","data":{"lastPrice":0.1234,"symbol":"VELVET_USDT"},"symbol":"VELVET_USDT"}'
+    assert ticker_price_from_message(message, "BTC_USDT") is None

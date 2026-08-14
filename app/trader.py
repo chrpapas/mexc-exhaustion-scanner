@@ -77,7 +77,7 @@ class StandardShortTrader:
                 "position_maturity": self.settings.position_maturity,
                 "paper_equity_usdt": runtime["paper_equity_usdt"],
                 "open_position": position.symbol if position else None,
-                "version": "1.1.1",
+                "version": "1.1.3",
             },
         )
 
