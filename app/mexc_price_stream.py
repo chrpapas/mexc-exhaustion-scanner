@@ -6,8 +6,6 @@ import logging
 import time
 from typing import Any
 
-from websockets.asyncio.client import connect
-
 LOGGER = logging.getLogger(__name__)
 
 
@@ -106,6 +104,10 @@ class MexcTickerStream:
         backoff = 1.0
         while self._symbol == symbol:
             try:
+                try:
+                    from websockets.asyncio.client import connect
+                except ModuleNotFoundError as exc:
+                    raise RuntimeError("Python package 'websockets' is not installed") from exc
                 async with connect(
                     self.url,
                     open_timeout=10,
