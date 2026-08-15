@@ -170,6 +170,8 @@ def test_performance_report_uses_dedicated_stats_webhook_and_embeds():
     assert "+20% Profit Target • Horizon Independent" in all_text
     assert "+20% Profit Target • Horizon Independent" in all_text
     assert "1D profitable" in all_text
+    assert "not profitable at 1D" in all_text
+    assert "breached" in all_text
     assert "avg t" in all_text
     assert "Strategy Matrix" in all_text
 

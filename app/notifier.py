@@ -256,7 +256,8 @@ class DiscordNotifier:
                     "name": "⏱️ 1D / 2D / 3D / 7D profitable",
                     "value": (
                         "A win means the short return is **positive at that exact horizon** and the selected adverse "
-                        "threshold was never crossed beforehand. Only signals matured to that horizon are included."
+                        "threshold was never crossed beforehand. Losses are split into **breached before maturity** "
+                        "versus **not profitable at maturity**; these categories are mutually exclusive."
                     ),
                     "inline": False,
                 },
@@ -417,9 +418,11 @@ class DiscordNotifier:
                 base += f" • avg t **{self._hours(cell.avg_time_to_target_hours)}**"
             return base
 
+        horizon = row.label.replace(" profitable", "")
         base = (
             f"{icon} **{threshold} max loss:** WR **{self._percent(cell.win_rate)}** • "
-            f"{cell.wins}/{cell.total} profitable & unbreached"
+            f"{cell.wins} wins • {cell.maturity_failures} not profitable at {horizon} • "
+            f"{cell.breach_failures} breached"
         )
         if cell.win_rate is not None and abs(cell.win_rate - 1.0) < 1e-12:
             base += (

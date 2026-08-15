@@ -99,6 +99,8 @@ class StrategyThresholdSummary:
     avg_profit: float | None
     sum_profit: float | None
     avg_time_to_target_hours: float | None = None
+    breach_failures: int = 0
+    maturity_failures: int = 0
 
     def as_dict(self) -> dict[str, Any]:
         return {name: getattr(self, name) for name in self.__dataclass_fields__}
@@ -483,14 +485,25 @@ def build_performance_summary(
             for adverse_limit, event_key in threshold_events:
                 successful_returns: list[float] = []
                 wins = 0
+                breach_failures = 0
+                maturity_failures = 0
                 for row in matured:
                     deadline = row["confirmed_at"] + deadline_delta
                     breach = row.get(event_key)
                     ret = float(row[return_key])
-                    if ret > 0 and (breach is None or breach > deadline):
+                    # Failure reasons are intentionally mutually exclusive. A
+                    # threshold breach takes precedence because that strategy
+                    # would no longer have a live position at maturity. Only
+                    # unbreached trades can then fail for being non-profitable
+                    # at the exact horizon.
+                    if breach is not None and breach <= deadline:
+                        breach_failures += 1
+                    elif ret > 0:
                         wins += 1
                         successful_returns.append(ret)
-                failures = len(matured) - wins
+                    else:
+                        maturity_failures += 1
+                failures = breach_failures + maturity_failures
                 wr = (wins / len(matured)) if matured else None
                 avg_profit, sum_profit = perfect_profit_stats(successful_returns, wr)
                 cells.append(StrategyThresholdSummary(
@@ -503,6 +516,8 @@ def build_performance_summary(
                     win_rate=wr,
                     avg_profit=avg_profit,
                     sum_profit=sum_profit,
+                    breach_failures=breach_failures,
+                    maturity_failures=maturity_failures,
                 ))
             strategy_rows.append(StrategyRowSummary(
                 strategy=f"{hours}h",

@@ -172,5 +172,29 @@ def test_strategy_matrix_compares_all_thresholds_and_only_exposes_profit_on_perf
     one_day = matrix.rows[1]
     assert one_day.thresholds[0].win_rate == pytest.approx(0.5)
     assert one_day.thresholds[1].win_rate == pytest.approx(1.0)
+    assert one_day.thresholds[0].breach_failures == 1
+    assert one_day.thresholds[0].maturity_failures == 0
+    assert one_day.thresholds[1].breach_failures == 0
+    assert one_day.thresholds[1].maturity_failures == 0
     assert one_day.thresholds[1].avg_profit == pytest.approx(0.125)
     assert one_day.thresholds[1].sum_profit == pytest.approx(0.25)
+
+
+def test_fixed_horizon_matrix_splits_breach_and_maturity_losses_without_double_counting():
+    confirmed = datetime(2026, 8, 1, 0, 0, tzinfo=UTC)
+    winner = {**_row(risk_tier="standard", ret24=0.10)}
+    negative = {**_row(risk_tier="standard", ret24=-0.15)}
+    breached_and_negative = {**_row(risk_tier="standard", ret24=-0.40),
+                             "isolated_100_breach_at": confirmed.replace(hour=8)}
+    report = build_performance_summary(
+        [winner, negative, breached_and_negative],
+        now_utc=datetime(2026, 8, 12, 12, 0, tzinfo=UTC),
+        timezone_name="Europe/Zurich",
+    )
+    one_day = report.standard_strategy_matrix.rows[1]
+    iso = one_day.thresholds[0]
+    buffered = one_day.thresholds[1]
+    assert (iso.wins, iso.maturity_failures, iso.breach_failures) == (1, 1, 1)
+    assert iso.wins + iso.maturity_failures + iso.breach_failures == iso.total == 3
+    assert (buffered.wins, buffered.maturity_failures, buffered.breach_failures) == (1, 2, 0)
+    assert buffered.wins + buffered.maturity_failures + buffered.breach_failures == buffered.total == 3
