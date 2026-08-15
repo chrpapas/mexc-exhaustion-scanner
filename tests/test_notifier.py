@@ -8,6 +8,9 @@ from app.performance import (
     PerformanceSummary,
     ProfitTargetModelSummary,
     ProfitTargetSummary,
+    StrategyMatrixSummary,
+    StrategyRowSummary,
+    StrategyThresholdSummary,
     SurvivalModelSummary,
     WeeklyRiskSummary,
 )
@@ -73,6 +76,25 @@ def _target(label: str) -> ProfitTargetSummary:
     )
 
 
+
+
+def _matrix(label: str) -> StrategyMatrixSummary:
+    thresholds = tuple(
+        StrategyThresholdSummary(
+            adverse_limit_pct=limit, total=10, resolved=10, wins=10, failures=0, pending=0,
+            win_rate=1.0, avg_profit=0.20, sum_profit=2.0, avg_time_to_target_hours=30.0
+        )
+        for limit in (100, 200, 300, 400)
+    )
+    rows = (
+        StrategyRowSummary("profit_20", "+20% target", None, thresholds),
+        StrategyRowSummary("24h", "1D profitable", 24, thresholds),
+        StrategyRowSummary("48h", "2D profitable", 48, thresholds),
+        StrategyRowSummary("72h", "3D profitable", 72, thresholds),
+        StrategyRowSummary("168h", "7D profitable", 168, thresholds),
+    )
+    return StrategyMatrixSummary(label, 10, rows)
+
 def _report() -> PerformanceSummary:
     return PerformanceSummary(
         report_date=date(2026, 8, 12),
@@ -90,6 +112,8 @@ def _report() -> PerformanceSummary:
         risky_weekly=_weekly("HIGH+EXTREME"),
         standard_profit_target=_target("STANDARD"),
         risky_profit_target=_target("HIGH+EXTREME"),
+        standard_strategy_matrix=_matrix("STANDARD"),
+        risky_strategy_matrix=_matrix("HIGH+EXTREME"),
         avg_return_1h=-0.01,
         avg_return_4h=0.02,
         avg_return_12h=0.03,
@@ -134,15 +158,17 @@ def test_performance_report_uses_dedicated_stats_webhook_and_embeds():
     assert "Performance Board" in all_text
     assert "STANDARD Execution Risk" in all_text
     assert "HIGH + EXTREME Execution Risk" in all_text
-    assert "1× isolated" in all_text
-    assert "5× cross buffer" in all_text
+    assert "-100% max loss" in all_text
+    assert "-200% max loss" in all_text
+    assert "-300% max loss" in all_text
+    assert "-400% max loss" in all_text
     assert "20%-sized acct equiv" not in all_text
     assert "+20% before breach" not in all_text
     assert "+20% Profit Target • Horizon Independent" in all_text
-    assert "+20% before -100% short loss" in all_text
-    assert "+20% before -400% short loss" in all_text
-    assert "Avg time to +20%" in all_text
-    assert "Trader Strategy" in all_text
+    assert "+20% Profit Target • Horizon Independent" in all_text
+    assert "1D profitable" in all_text
+    assert "avg t" in all_text
+    assert "Strategy Matrix" in all_text
 
 
 def test_performance_webhook_falls_back_to_signal_webhook_for_backward_compatibility():

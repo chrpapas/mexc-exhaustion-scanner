@@ -12,6 +12,9 @@ from app.performance import (
     HorizonSurvivalSummary,
     PerformanceSummary,
     ProfitTargetSummary,
+    StrategyMatrixSummary,
+    StrategyRowSummary,
+    StrategyThresholdSummary,
     WeeklyRiskSummary,
 )
 
@@ -226,38 +229,42 @@ class DiscordNotifier:
             standard=False,
         )
         methodology = {
-            "title": "🛡️ Survival Overlay — How to Read It",
+            "title": "🧭 Strategy Matrix — How to Read It",
             "description": (
-                "The survival layer does **not** assume an exit rule. It only checks whether each signal's path "
-                "crossed a research threshold before the stated horizon."
+                "Choose a target row, then a maximum adverse-loss threshold. The displayed WR is the percentage "
+                "that achieved that target without first crossing the selected threshold."
             ),
             "color": 0x99AAB5,
             "fields": [
                 {
-                    "name": "1× Isolated Proxy",
-                    "value": "Proxy loss = **-100% short return** (equivalent to price reaching 2× entry).",
-                    "inline": True,
-                },
-                {
-                    "name": "5× Cross-Buffer Proxy",
-                    "value": "Proxy loss = **-400% short return** (equivalent to price reaching 5× entry).",
-                    "inline": True,
-                },
-                {
-                    "name": "🎯 +20% Target Race",
+                    "name": "Loss thresholds",
                     "value": (
-                        "This is **independent of 1D/2D/3D/7D holding horizons**. Each signal stays pending until "
-                        "+20% profit wins the race or the selected liquidation-proxy threshold is breached first. "
-                        "Win rate uses resolved outcomes only; pending signals are shown separately. Same-15m-candle "
-                        "target/breach ordering is conservatively counted as breach-first."
+                        "**-100%** = price reaches 2× entry • **-200%** = 3× • "
+                        "**-300%** = 4× • **-400%** = 5×."
                     ),
                     "inline": False,
                 },
                 {
-                    "name": "🤖 Trader Strategy",
+                    "name": "🎯 +20% target",
                     "value": (
-                        "The trader can use **+20% target**, **1D**, **2D**, **3D** or **7D** position maturity. "
-                        "Raw scanner returns above remain exit-rule agnostic."
+                        "Horizon-independent race. Pending signals remain pending. WR uses resolved target-vs-breach "
+                        "outcomes; same-15m-candle target/breach is conservatively breach-first."
+                    ),
+                    "inline": False,
+                },
+                {
+                    "name": "⏱️ 1D / 2D / 3D / 7D profitable",
+                    "value": (
+                        "A win means the short return is **positive at that exact horizon** and the selected adverse "
+                        "threshold was never crossed beforehand. Only signals matured to that horizon are included."
+                    ),
+                    "inline": False,
+                },
+                {
+                    "name": "💯 100% strategy rows",
+                    "value": (
+                        "When a cell has **100% WR**, the board also shows average and summed profit for that exact "
+                        "strategy/threshold combination. For +20% target, profit is modeled at the +20% exit target."
                     ),
                     "inline": False,
                 },
@@ -294,77 +301,74 @@ class DiscordNotifier:
         report: PerformanceSummary,
         standard: bool,
     ) -> dict:
+        matrix = report.standard_strategy_matrix if standard else report.risky_strategy_matrix
         weekly = report.standard_weekly if standard else report.risky_weekly
-        survival = report.standard_survival if standard else report.risky_survival
-        target = report.standard_profit_target if standard else report.risky_profit_target
-        horizons = self._horizons(report)
-        fields: list[dict] = [
-            {
-                "name": "🎯 +20% Profit Target • Horizon Independent",
-                "value": self._profit_target_summary(target),
-                "inline": False,
-            }
-        ]
+        fields: list[dict] = []
 
-        for horizon, overlay in zip(horizons, survival):
-            if standard:
-                n = horizon.standard_total
-                win = horizon.standard_win_rate
-                avg = horizon.standard_avg_return
-                summed = horizon.standard_sum_return
-            else:
-                n = horizon.high_risk_total
-                win = horizon.high_risk_win_rate
-                avg = horizon.high_risk_avg_return
-                summed = horizon.high_risk_sum_return
-            fields.append(
-                {
-                    "name": f"{self._horizon_label(horizon.hours)} • n={n}",
-                    "value": (
-                        f"**Raw:** {self._win_icon(win)} WR **{self._percent(win)}** • "
-                        f"Avg **{self._signed_percent(avg)}** • Σ **{self._signed_percent(summed)}**\n"
-                        f"**1× isolated:** {overlay.isolated.survived}/{overlay.matured_total} survived "
-                        f"(**{self._percent(overlay.isolated.survival_rate)}**) • "
-                        f"survivor WR {self._percent(overlay.isolated.win_rate)} • "
-                        f"avg {self._signed_percent(overlay.isolated.avg_return)}\n"
-                        f"**5× cross buffer:** {overlay.cross_buffer.survived}/{overlay.matured_total} survived "
-                        f"(**{self._percent(overlay.cross_buffer.survival_rate)}**) • "
-                        f"survivor WR {self._percent(overlay.cross_buffer.win_rate)} • "
-                        f"avg {self._signed_percent(overlay.cross_buffer.avg_return)}"
-                    ),
-                    "inline": False,
-                }
-            )
-
-        fields.append(
-            {
-                "name": "📅 Full 7-Day Path",
-                "value": self._weekly_summary(weekly),
+        for row in matrix.rows:
+            fields.append({
+                "name": self._strategy_row_title(row),
+                "value": self._strategy_row_value(row),
                 "inline": False,
-            }
-        )
+            })
+
+        fields.append({
+            "name": "📅 Full 7-Day Path",
+            "value": self._weekly_summary(weekly),
+            "inline": False,
+        })
         return {
             "title": title,
-            "description": "Raw horizon performance plus liquidation-survival research overlays.",
+            "description": (
+                f"**{matrix.total_signals}** traced signals • Strategy viability by maximum tolerated adverse move.\n"
+                "A win means the strategy target was achieved **without first crossing** the selected loss threshold."
+            ),
             "color": color,
             "fields": fields,
         }
 
-    def _profit_target_summary(self, summary: ProfitTargetSummary) -> str:
-        iso = summary.isolated
-        cross = summary.cross_buffer
-        return (
-            f"**+20% before -100% short loss (1× isolated proxy)**\n"
-            f"Win rate **{self._percent(iso.win_rate)}** • "
-            f"wins {iso.wins}/{iso.resolved} resolved • "
-            f"breaches {iso.breaches_before_target} • pending {iso.pending}\n"
-            f"Avg time to +20% **{self._hours(iso.avg_time_to_target_hours)}**\n\n"
-            f"**+20% before -400% short loss (5× cross-buffer proxy)**\n"
-            f"Win rate **{self._percent(cross.win_rate)}** • "
-            f"wins {cross.wins}/{cross.resolved} resolved • "
-            f"breaches {cross.breaches_before_target} • pending {cross.pending}\n"
-            f"Avg time to +20% **{self._hours(cross.avg_time_to_target_hours)}**"
+    def _strategy_row_title(self, row: StrategyRowSummary) -> str:
+        if row.strategy == "profit_20":
+            return "🎯 +20% Profit Target • Horizon Independent"
+        return f"⏱️ {row.label}"
+
+    def _strategy_row_value(self, row: StrategyRowSummary) -> str:
+        return "\n".join(self._strategy_threshold_line(row, cell) for cell in row.thresholds)
+
+    def _strategy_threshold_line(
+        self,
+        row: StrategyRowSummary,
+        cell: StrategyThresholdSummary,
+    ) -> str:
+        threshold = f"-{cell.adverse_limit_pct}%"
+        icon = "✅" if cell.win_rate is not None and abs(cell.win_rate - 1.0) < 1e-12 else self._win_icon(cell.win_rate)
+
+        if row.strategy == "profit_20":
+            base = (
+                f"{icon} **{threshold} max loss:** WR **{self._percent(cell.win_rate)}** • "
+                f"wins {cell.wins}/{cell.resolved} resolved"
+            )
+            if cell.pending:
+                base += f" • pending {cell.pending}"
+            if cell.win_rate is not None and abs(cell.win_rate - 1.0) < 1e-12:
+                base += (
+                    f" • Avg **{self._signed_percent(cell.avg_profit)}** • "
+                    f"Σ **{self._signed_percent(cell.sum_profit)}**"
+                )
+            if cell.avg_time_to_target_hours is not None:
+                base += f" • avg t **{self._hours(cell.avg_time_to_target_hours)}**"
+            return base
+
+        base = (
+            f"{icon} **{threshold} max loss:** WR **{self._percent(cell.win_rate)}** • "
+            f"{cell.wins}/{cell.total} profitable & unbreached"
         )
+        if cell.win_rate is not None and abs(cell.win_rate - 1.0) < 1e-12:
+            base += (
+                f" • Avg **{self._signed_percent(cell.avg_profit)}** • "
+                f"Σ **{self._signed_percent(cell.sum_profit)}**"
+            )
+        return base
 
     def _weekly_summary(self, summary: WeeklyRiskSummary) -> str:
         if summary.matured_7d == 0:

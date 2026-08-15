@@ -68,6 +68,8 @@ def _row(*, risk_tier: str, ret24: float, iso_breach=None, cross_breach=None):
         "first_profit_at": None,
         "target_20_at": None,
         "isolated_100_breach_at": iso_breach,
+        "adverse_200_breach_at": None,
+        "adverse_300_breach_at": None,
         "cross_400_breach_at": cross_breach,
     }
 
@@ -140,3 +142,35 @@ def test_same_candle_target_and_breach_is_conservatively_breach_first():
     # Cross has no +400% breach, so its target race is still a win.
     assert report.standard_profit_target.cross_buffer.win_rate == 1.0
 
+
+
+def test_strategy_matrix_compares_all_thresholds_and_only_exposes_profit_on_perfect_cells():
+    confirmed = datetime(2026, 8, 1, 0, 0, tzinfo=UTC)
+    winner = {**_row(risk_tier="standard", ret24=0.10),
+              "target_20_at": confirmed.replace(hour=8),
+              "return_48h_pct": 0.25,
+              "matured_48h_at": confirmed.replace(day=3)}
+    breached_100 = {**_row(risk_tier="standard", ret24=0.15),
+                    "target_20_at": confirmed.replace(day=2, hour=12),
+                    "isolated_100_breach_at": confirmed.replace(hour=10),
+                    "return_48h_pct": 0.30,
+                    "matured_48h_at": confirmed.replace(day=3)}
+    report = build_performance_summary(
+        [winner, breached_100],
+        now_utc=datetime(2026, 8, 12, 12, 0, tzinfo=UTC),
+        timezone_name="Europe/Zurich",
+    )
+    matrix = report.standard_strategy_matrix
+    target = matrix.rows[0]
+    assert [x.adverse_limit_pct for x in target.thresholds] == [100, 200, 300, 400]
+    assert target.thresholds[0].win_rate == pytest.approx(0.5)
+    assert target.thresholds[0].avg_profit is None
+    assert target.thresholds[1].win_rate == pytest.approx(1.0)
+    assert target.thresholds[1].avg_profit == pytest.approx(0.20)
+    assert target.thresholds[1].sum_profit == pytest.approx(0.40)
+
+    one_day = matrix.rows[1]
+    assert one_day.thresholds[0].win_rate == pytest.approx(0.5)
+    assert one_day.thresholds[1].win_rate == pytest.approx(1.0)
+    assert one_day.thresholds[1].avg_profit == pytest.approx(0.125)
+    assert one_day.thresholds[1].sum_profit == pytest.approx(0.25)

@@ -520,7 +520,8 @@ class Database:
                    return_1h_pct, return_4h_pct, return_12h_pct, return_24h_pct,
                    return_48h_pct, return_72h_pct, return_168h_pct,
                    matured_at, matured_48h_at, matured_72h_at, matured_168h_at,
-                   first_profit_at, target_20_at, isolated_100_breach_at, cross_400_breach_at
+                   first_profit_at, target_20_at, isolated_100_breach_at,
+                   adverse_200_breach_at, adverse_300_breach_at, cross_400_breach_at
             FROM shadow_trades
             ORDER BY confirmed_at ASC
             """
@@ -563,8 +564,8 @@ class Database:
         """First observed 15m close-time for key path events.
 
         These are intentionally theoretical research thresholds, not exchange
-        liquidation prices. 100% adverse means price >= 2x entry; 400% adverse
-        means price >= 5x entry.
+        liquidation prices. Adverse thresholds map short loss to price multiples:
+        -100% => 2x entry, -200% => 3x, -300% => 4x, -400% => 5x.
         """
         row = await self.pool.fetchrow(
             """
@@ -572,6 +573,8 @@ class Database:
                 min(open_time + interval '15 minutes') FILTER (WHERE low < $4::double precision) AS first_profit_at,
                 min(open_time + interval '15 minutes') FILTER (WHERE low <= $4::double precision * 0.80) AS target_20_at,
                 min(open_time + interval '15 minutes') FILTER (WHERE high >= $4::double precision * 2.0) AS isolated_100_breach_at,
+                min(open_time + interval '15 minutes') FILTER (WHERE high >= $4::double precision * 3.0) AS adverse_200_breach_at,
+                min(open_time + interval '15 minutes') FILTER (WHERE high >= $4::double precision * 4.0) AS adverse_300_breach_at,
                 min(open_time + interval '15 minutes') FILTER (WHERE high >= $4::double precision * 5.0) AS cross_400_breach_at
             FROM candles
             WHERE symbol=$1
@@ -589,12 +592,16 @@ class Database:
                 "first_profit_at": None,
                 "target_20_at": None,
                 "isolated_100_breach_at": None,
+                "adverse_200_breach_at": None,
+                "adverse_300_breach_at": None,
                 "cross_400_breach_at": None,
             }
         return {key: row[key] for key in (
             "first_profit_at",
             "target_20_at",
             "isolated_100_breach_at",
+            "adverse_200_breach_at",
+            "adverse_300_breach_at",
             "cross_400_breach_at",
         )}
 
@@ -644,6 +651,8 @@ class Database:
         first_profit_at: datetime | None = None,
         target_20_at: datetime | None = None,
         isolated_100_breach_at: datetime | None = None,
+        adverse_200_breach_at: datetime | None = None,
+        adverse_300_breach_at: datetime | None = None,
         cross_400_breach_at: datetime | None = None,
     ) -> None:
         await self.pool.execute(
@@ -668,7 +677,9 @@ class Database:
                 first_profit_at = COALESCE(first_profit_at, $18),
                 target_20_at = COALESCE(target_20_at, $19),
                 isolated_100_breach_at = COALESCE(isolated_100_breach_at, $20),
-                cross_400_breach_at = COALESCE(cross_400_breach_at, $21),
+                adverse_200_breach_at = COALESCE(adverse_200_breach_at, $21),
+                adverse_300_breach_at = COALESCE(adverse_300_breach_at, $22),
+                cross_400_breach_at = COALESCE(cross_400_breach_at, $23),
                 updated_at = now()
             WHERE episode_id=$1
             """,
@@ -692,6 +703,8 @@ class Database:
             first_profit_at,
             target_20_at,
             isolated_100_breach_at,
+            adverse_200_breach_at,
+            adverse_300_breach_at,
             cross_400_breach_at,
         )
 
@@ -706,7 +719,8 @@ class Database:
                    return_1h_pct, return_4h_pct, return_12h_pct, return_24h_pct,
                    return_48h_pct, return_72h_pct, return_168h_pct,
                    matured_at, matured_48h_at, matured_72h_at, matured_168h_at,
-                   first_profit_at, target_20_at, isolated_100_breach_at, cross_400_breach_at
+                   first_profit_at, target_20_at, isolated_100_breach_at,
+                   adverse_200_breach_at, adverse_300_breach_at, cross_400_breach_at
             FROM shadow_trades
             ORDER BY confirmed_at ASC
             """

@@ -1108,11 +1108,14 @@ class ScannerWorker:
                     "first_profit_at": None,
                     "target_20_at": None,
                     "isolated_100_breach_at": None,
+                    "adverse_200_breach_at": None,
+                    "adverse_300_breach_at": None,
                     "cross_400_breach_at": None,
                 }
-                if not target_race_complete:
-                    # Query only the unseen tail after the initial observation.
-                    # COALESCE in update_shadow_trade preserves any earlier event.
+                if not fixed_complete or not target_race_complete:
+                    # Fixed-horizon strategy analytics need the full adverse path through
+                    # 7d even after +20% has already been touched. The target race may
+                    # continue beyond 7d until +20% or the -400% proxy resolves it.
                     path_start = trade.get("last_observed_at") or confirmed_at
                     if path_start < confirmed_at:
                         path_start = confirmed_at
@@ -1161,6 +1164,8 @@ class ScannerWorker:
                     first_profit_at=path_events["first_profit_at"],
                     target_20_at=path_events["target_20_at"],
                     isolated_100_breach_at=path_events["isolated_100_breach_at"],
+                    adverse_200_breach_at=path_events["adverse_200_breach_at"],
+                    adverse_300_breach_at=path_events["adverse_300_breach_at"],
                     cross_400_breach_at=path_events["cross_400_breach_at"],
                 )
                 updated += 1

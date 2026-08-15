@@ -88,6 +88,53 @@ class ProfitTargetSummary:
 
 
 @dataclass(frozen=True, slots=True)
+class StrategyThresholdSummary:
+    adverse_limit_pct: int
+    total: int
+    resolved: int
+    wins: int
+    failures: int
+    pending: int
+    win_rate: float | None
+    avg_profit: float | None
+    sum_profit: float | None
+    avg_time_to_target_hours: float | None = None
+
+    def as_dict(self) -> dict[str, Any]:
+        return {name: getattr(self, name) for name in self.__dataclass_fields__}
+
+
+@dataclass(frozen=True, slots=True)
+class StrategyRowSummary:
+    strategy: str
+    label: str
+    horizon_hours: int | None
+    thresholds: tuple[StrategyThresholdSummary, ...]
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "strategy": self.strategy,
+            "label": self.label,
+            "horizon_hours": self.horizon_hours,
+            "thresholds": [item.as_dict() for item in self.thresholds],
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class StrategyMatrixSummary:
+    risk_label: str
+    total_signals: int
+    rows: tuple[StrategyRowSummary, ...]
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "risk_label": self.risk_label,
+            "total_signals": self.total_signals,
+            "rows": [item.as_dict() for item in self.rows],
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class HorizonSurvivalSummary:
     hours: int
     risk_label: str
@@ -136,6 +183,8 @@ class PerformanceSummary:
     risky_weekly: WeeklyRiskSummary
     standard_profit_target: ProfitTargetSummary
     risky_profit_target: ProfitTargetSummary
+    standard_strategy_matrix: StrategyMatrixSummary
+    risky_strategy_matrix: StrategyMatrixSummary
     avg_return_1h: float | None
     avg_return_4h: float | None
     avg_return_12h: float | None
@@ -215,6 +264,8 @@ class PerformanceSummary:
             "risky_weekly": self.risky_weekly.as_dict(),
             "standard_profit_target": self.standard_profit_target.as_dict(),
             "risky_profit_target": self.risky_profit_target.as_dict(),
+            "standard_strategy_matrix": self.standard_strategy_matrix.as_dict(),
+            "risky_strategy_matrix": self.risky_strategy_matrix.as_dict(),
             "avg_return_1h": self.avg_return_1h,
             "avg_return_4h": self.avg_return_4h,
             "avg_return_12h": self.avg_return_12h,
@@ -369,6 +420,103 @@ def build_performance_summary(
             cross_buffer=model("cross_400_breach_at"),
         )
 
+    def strategy_matrix(*, standard: bool) -> StrategyMatrixSummary:
+        group = [
+            row for row in rows
+            if ((row.get("risk_tier") == "standard") == standard)
+        ]
+        threshold_events = (
+            (100, "isolated_100_breach_at"),
+            (200, "adverse_200_breach_at"),
+            (300, "adverse_300_breach_at"),
+            (400, "cross_400_breach_at"),
+        )
+
+        def perfect_profit_stats(values: list[float], win_rate: float | None) -> tuple[float | None, float | None]:
+            if win_rate is None or abs(win_rate - 1.0) > 1e-12 or not values:
+                return None, None
+            return average(values), sum(values)
+
+        target_cells: list[StrategyThresholdSummary] = []
+        for adverse_limit, event_key in threshold_events:
+            wins = 0
+            failures = 0
+            target_times: list[float] = []
+            for row in group:
+                target = row.get("target_20_at")
+                breach = row.get(event_key)
+                if target is not None and (breach is None or target < breach):
+                    wins += 1
+                    target_times.append((target - row["confirmed_at"]).total_seconds() / 3600.0)
+                elif breach is not None and (target is None or breach <= target):
+                    failures += 1
+            resolved = wins + failures
+            pending = len(group) - resolved
+            wr = (wins / resolved) if resolved else None
+            profit_values = [0.20] * wins
+            avg_profit, sum_profit = perfect_profit_stats(profit_values, wr)
+            target_cells.append(StrategyThresholdSummary(
+                adverse_limit_pct=adverse_limit,
+                total=len(group),
+                resolved=resolved,
+                wins=wins,
+                failures=failures,
+                pending=pending,
+                win_rate=wr,
+                avg_profit=avg_profit,
+                sum_profit=sum_profit,
+                avg_time_to_target_hours=average(target_times),
+            ))
+
+        strategy_rows: list[StrategyRowSummary] = [StrategyRowSummary(
+            strategy="profit_20",
+            label="+20% target",
+            horizon_hours=None,
+            thresholds=tuple(target_cells),
+        )]
+
+        for hours, label in ((24, "1D profitable"), (48, "2D profitable"), (72, "3D profitable"), (168, "7D profitable")):
+            return_key = f"return_{hours}h_pct"
+            matured = [row for row in group if row.get(return_key) is not None]
+            deadline_delta = timedelta(hours=hours)
+            cells: list[StrategyThresholdSummary] = []
+            for adverse_limit, event_key in threshold_events:
+                successful_returns: list[float] = []
+                wins = 0
+                for row in matured:
+                    deadline = row["confirmed_at"] + deadline_delta
+                    breach = row.get(event_key)
+                    ret = float(row[return_key])
+                    if ret > 0 and (breach is None or breach > deadline):
+                        wins += 1
+                        successful_returns.append(ret)
+                failures = len(matured) - wins
+                wr = (wins / len(matured)) if matured else None
+                avg_profit, sum_profit = perfect_profit_stats(successful_returns, wr)
+                cells.append(StrategyThresholdSummary(
+                    adverse_limit_pct=adverse_limit,
+                    total=len(matured),
+                    resolved=len(matured),
+                    wins=wins,
+                    failures=failures,
+                    pending=0,
+                    win_rate=wr,
+                    avg_profit=avg_profit,
+                    sum_profit=sum_profit,
+                ))
+            strategy_rows.append(StrategyRowSummary(
+                strategy=f"{hours}h",
+                label=label,
+                horizon_hours=hours,
+                thresholds=tuple(cells),
+            ))
+
+        return StrategyMatrixSummary(
+            risk_label="STANDARD" if standard else "HIGH+EXTREME",
+            total_signals=len(group),
+            rows=tuple(strategy_rows),
+        )
+
     def weekly_risk(*, standard: bool) -> WeeklyRiskSummary:
         group = [
             row for row in rows
@@ -437,6 +585,8 @@ def build_performance_summary(
         risky_weekly=weekly_risk(standard=False),
         standard_profit_target=profit_target_summary(standard=True),
         risky_profit_target=profit_target_summary(standard=False),
+        standard_strategy_matrix=strategy_matrix(standard=True),
+        risky_strategy_matrix=strategy_matrix(standard=False),
         avg_return_1h=average(values_for("return_1h_pct")),
         avg_return_4h=average(values_for("return_4h_pct")),
         avg_return_12h=average(values_for("return_12h_pct")),
