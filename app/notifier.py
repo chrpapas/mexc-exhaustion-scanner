@@ -280,18 +280,76 @@ class DiscordNotifier:
             "footer": {"text": "No fees, slippage, funding, leverage or overlapping-position portfolio effects included."},
         }
 
-        payload = {
-            "username": "Exhaustion Scanner • Stats",
-            "embeds": [overview, standard, risky, methodology],
-            "allowed_mentions": {"parse": []},
-        }
+        # Discord limits the combined textual content across all embeds in one
+        # message to 6,000 characters. The strategy matrices can legitimately
+        # exceed that when combined with the overview and methodology, so send
+        # each visual card as its own webhook message. This keeps the same
+        # subscriber-facing board while giving every card its own embed budget.
+        embeds = (overview, standard, risky, methodology)
         try:
-            response = await self._client.post(self._performance_webhook_url, json=payload)
-            response.raise_for_status()
+            for index, embed in enumerate(embeds, start=1):
+                self._validate_discord_embed(embed)
+                payload = {
+                    "username": "Exhaustion Scanner • Stats",
+                    "embeds": [embed],
+                    "allowed_mentions": {"parse": []},
+                }
+                response = await self._client.post(self._performance_webhook_url, json=payload)
+                if response.status_code >= 400:
+                    LOGGER.error(
+                        "Discord performance card %d/%d rejected status=%s body=%s",
+                        index,
+                        len(embeds),
+                        response.status_code,
+                        response.text[:2000],
+                    )
+                response.raise_for_status()
             return True
-        except httpx.HTTPError:
+        except (httpx.HTTPError, ValueError):
             LOGGER.exception("Discord performance report failed")
             return False
+
+
+    @staticmethod
+    def _discord_embed_char_count(embed: dict) -> int:
+        total = len(str(embed.get("title") or ""))
+        total += len(str(embed.get("description") or ""))
+        author = embed.get("author") or {}
+        total += len(str(author.get("name") or ""))
+        footer = embed.get("footer") or {}
+        total += len(str(footer.get("text") or ""))
+        for field in embed.get("fields") or []:
+            total += len(str(field.get("name") or ""))
+            total += len(str(field.get("value") or ""))
+        return total
+
+    @classmethod
+    def _validate_discord_embed(cls, embed: dict) -> None:
+        title = str(embed.get("title") or "")
+        description = str(embed.get("description") or "")
+        footer = str((embed.get("footer") or {}).get("text") or "")
+        author = str((embed.get("author") or {}).get("name") or "")
+        fields = embed.get("fields") or []
+        if len(title) > 256:
+            raise ValueError(f"Discord embed title too long: {len(title)}")
+        if len(description) > 4096:
+            raise ValueError(f"Discord embed description too long: {len(description)}")
+        if len(fields) > 25:
+            raise ValueError(f"Discord embed has too many fields: {len(fields)}")
+        if len(footer) > 2048:
+            raise ValueError(f"Discord embed footer too long: {len(footer)}")
+        if len(author) > 256:
+            raise ValueError(f"Discord embed author too long: {len(author)}")
+        for field in fields:
+            name = str(field.get("name") or "")
+            value = str(field.get("value") or "")
+            if len(name) > 256:
+                raise ValueError(f"Discord embed field name too long: {len(name)}")
+            if len(value) > 1024:
+                raise ValueError(f"Discord embed field value too long: {len(value)}")
+        total = cls._discord_embed_char_count(embed)
+        if total > 6000:
+            raise ValueError(f"Discord embed exceeds 6000-character budget: {total}")
 
     def _risk_embed(
         self,

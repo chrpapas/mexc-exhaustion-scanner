@@ -33,6 +33,9 @@ def test_discord_signal_levels_are_hard_gated_to_confirmed_short():
 
 
 class _FakeResponse:
+    status_code = 204
+    text = ""
+
     def raise_for_status(self) -> None:
         return None
 
@@ -144,16 +147,16 @@ def test_performance_report_uses_dedicated_stats_webhook_and_embeds():
     )
 
     assert sent
-    assert len(fake.posts) == 1
-    url, payload = fake.posts[0]
-    assert url == "https://discord.invalid/stats"
-    assert payload["username"] == "Exhaustion Scanner • Stats"
-    assert len(payload["embeds"]) == 4
+    assert len(fake.posts) == 4
+    assert all(url == "https://discord.invalid/stats" for url, _ in fake.posts)
+    assert all(payload["username"] == "Exhaustion Scanner • Stats" for _, payload in fake.posts)
+    assert all(len(payload["embeds"]) == 1 for _, payload in fake.posts)
 
+    embeds = [payload["embeds"][0] for _, payload in fake.posts]
     all_text = "\n".join(
         [embed.get("title", "") + "\n" + embed.get("description", "")
          + "\n" + "\n".join(field["name"] + " " + field["value"] for field in embed.get("fields", []))
-         for embed in payload["embeds"]]
+         for embed in embeds]
     )
     assert "Performance Board" in all_text
     assert "STANDARD Execution Risk" in all_text
@@ -178,3 +181,25 @@ def test_performance_webhook_falls_back_to_signal_webhook_for_backward_compatibi
     sent = asyncio.run(notifier.send_performance_report(_report()))
     assert sent
     assert fake.posts[0][0] == "https://discord.invalid/signals"
+
+
+def test_performance_cards_respect_discord_embed_limits():
+    notifier = DiscordNotifier(
+        "https://discord.invalid/signals",
+        performance_webhook_url="https://discord.invalid/stats",
+    )
+    fake = _FakeClient()
+    notifier._client = fake
+
+    sent = asyncio.run(notifier.send_performance_report(_report()))
+
+    assert sent
+    assert len(fake.posts) == 4
+    for _, payload in fake.posts:
+        assert len(payload["embeds"]) == 1
+        embed = payload["embeds"][0]
+        assert notifier._discord_embed_char_count(embed) <= 6000
+        assert len(embed.get("fields", [])) <= 25
+        for field in embed.get("fields", []):
+            assert len(field.get("name", "")) <= 256
+            assert len(field.get("value", "")) <= 1024
