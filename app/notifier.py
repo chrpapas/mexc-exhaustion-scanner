@@ -9,6 +9,7 @@ import httpx
 
 from app.models import RunSignal
 from app.signal_ledger import SignalLedger, SignalLedgerItem
+from app.signal_ledger_table import LedgerTableImage
 from app.performance import (
     HorizonSummary,
     HorizonSurvivalSummary,
@@ -324,14 +325,14 @@ class DiscordNotifier:
         ledger: SignalLedger,
         *,
         csv_bytes: bytes | None = None,
+        table_images: tuple[LedgerTableImage, ...] | None = None,
         as_of: datetime | None = None,
         timezone_name: str = "Europe/Zurich",
     ) -> bool:
-        """Send a subscriber-facing per-signal outcome ledger.
+        """Send the compact subscriber-facing signal outcome ledger.
 
-        The ledger is intentionally separate from the aggregate performance board.
-        It uses the same performance webhook and sends a compact summary followed
-        by paginated risk-tier cards. A CSV attachment contains the full raw table.
+        The detailed raw data is attached as CSV. Discord itself receives a compact
+        summary card followed by PNG table pages, split by execution-risk tier.
         """
         if not self._performance_webhook_url:
             return False
@@ -351,17 +352,17 @@ class DiscordNotifier:
         pending_target_race = ledger.total - target_before_100 - breach_before_target
 
         summary = {
-            "title": "📒 Exhaustion Scanner • Signal Outcome Ledger",
+            "title": "📒 Exhaustion Scanner • Signal Outcome Table",
             "description": (
                 f"Updated **{display_time.strftime('%d %b %Y • %H:%M %Z')}**\n"
-                "Every confirmed-short signal shown individually • newest first"
+                "Compact visual tables below • newest signals first • full raw ledger attached as CSV"
             ),
             "color": 0x5865F2,
             "fields": [
                 {
                     "name": "📦 Signals",
                     "value": (
-                        f"**{ledger.total}** total\n"
+                        f"**{ledger.total}** total • "
                         f"🟢 STANDARD **{risk_counts['standard']}** • "
                         f"🟡 HIGH **{risk_counts['high_risk']}** • "
                         f"🔴 EXTREME **{risk_counts['extreme_risk']}**"
@@ -369,78 +370,86 @@ class DiscordNotifier:
                     "inline": False,
                 },
                 {
-                    "name": "🎯 +20% vs -100% Path",
+                    "name": "🎯 +20% vs -100%",
                     "value": (
-                        f"🟢 Target first **{target_before_100}** • "
-                        f"🔴 -100% breach first **{breach_before_target}** • "
-                        f"🔵 unresolved **{pending_target_race}**"
+                        f"Target first **{target_before_100}** • "
+                        f"breach first **{breach_before_target}** • "
+                        f"pending **{pending_target_race}**"
                     ),
                     "inline": False,
                 },
                 {
-                    "name": "💥 Observed Adverse Breaches",
+                    "name": "💥 Observed adverse breaches",
                     "value": (
-                        f"🔴 -100% **{ledger.count_breach(100)}** • "
-                        f"🟥 -200% **{ledger.count_breach(200)}** • "
-                        f"🟣 -300% **{ledger.count_breach(300)}** • "
-                        f"⚫ -400% **{ledger.count_breach(400)}**"
+                        f"-100% **{ledger.count_breach(100)}** • "
+                        f"-200% **{ledger.count_breach(200)}** • "
+                        f"-300% **{ledger.count_breach(300)}** • "
+                        f"-400% **{ledger.count_breach(400)}**"
                     ),
                     "inline": False,
                 },
                 {
-                    "name": "Legend",
+                    "name": "Table colors",
                     "value": (
-                        "🟢 target/profitable • 🟡 profitable but <20% • "
-                        "⚪ negative but no -100% breach • 🔴/🟥/🟣/⚫ breach severity • 🔵 pending"
+                        "🟢 profitable/target • 🟠 negative but no -100% breach • "
+                        "🔴 liquidation-type breach • 🔵 pending"
                     ),
                     "inline": False,
                 },
             ],
-            "footer": {"text": "Horizon prices are reconstructed from the stored short returns and signal entry price."},
         }
 
-        cards: list[dict] = [summary]
-        for risk_tier, title, color in (
-            ("standard", "🟢 STANDARD • Signal Ledger", 0x57F287),
-            ("high_risk", "🟡 HIGH RISK • Signal Ledger", 0xFEE75C),
-            ("extreme_risk", "🔴 EXTREME RISK • Signal Ledger", 0xED4245),
-        ):
-            group = list(ledger.by_risk(risk_tier))
-            if not group:
-                continue
-            page_size = 7
-            total_pages = (len(group) + page_size - 1) // page_size
-            for page_index in range(total_pages):
-                page = group[page_index * page_size:(page_index + 1) * page_size]
-                cards.append({
-                    "title": title,
-                    "description": f"Page **{page_index + 1}/{total_pages}** • {len(group)} traced signals",
-                    "color": color,
-                    "fields": [self._ledger_signal_field(item, tz) for item in page],
-                })
-
         try:
-            for index, embed in enumerate(cards):
+            self._validate_discord_embed(summary)
+            summary_payload = {
+                "username": "Exhaustion Scanner • Ledger",
+                "embeds": [summary],
+                "allowed_mentions": {"parse": []},
+            }
+            if csv_bytes is not None:
+                filename = f"signal-outcome-ledger-{display_time.strftime('%Y-%m-%d')}.csv"
+                response = await self._client.post(
+                    self._performance_webhook_url,
+                    data={"payload_json": json.dumps(summary_payload)},
+                    files={"files[0]": (filename, csv_bytes, "text/csv")},
+                )
+            else:
+                response = await self._client.post(self._performance_webhook_url, json=summary_payload)
+            if response.status_code >= 400:
+                LOGGER.error(
+                    "Discord signal-ledger summary rejected status=%s body=%s",
+                    response.status_code,
+                    response.text[:2000],
+                )
+            response.raise_for_status()
+
+            for index, table in enumerate(table_images or (), start=1):
+                embed = {
+                    "title": f"{table.risk_label} • Signal Outcomes",
+                    "description": f"Page **{table.page}/{table.total_pages}** • exact values available in CSV",
+                    "color": {
+                        "standard": 0x57F287,
+                        "high_risk": 0xFEE75C,
+                        "extreme_risk": 0xED4245,
+                    }.get(table.risk_tier, 0x5865F2),
+                    "image": {"url": f"attachment://{table.filename}"},
+                }
                 self._validate_discord_embed(embed)
                 payload = {
                     "username": "Exhaustion Scanner • Ledger",
                     "embeds": [embed],
                     "allowed_mentions": {"parse": []},
                 }
-                if index == 0 and csv_bytes is not None:
-                    filename = f"signal-outcome-ledger-{display_time.strftime('%Y-%m-%d')}.csv"
-                    response = await self._client.post(
-                        self._performance_webhook_url,
-                        data={"payload_json": json.dumps(payload)},
-                        files={"files[0]": (filename, csv_bytes, "text/csv")},
-                    )
-                else:
-                    response = await self._client.post(self._performance_webhook_url, json=payload)
+                response = await self._client.post(
+                    self._performance_webhook_url,
+                    data={"payload_json": json.dumps(payload)},
+                    files={"files[0]": (table.filename, table.png_bytes, "image/png")},
+                )
                 if response.status_code >= 400:
                     LOGGER.error(
-                        "Discord signal-ledger card %d/%d rejected status=%s body=%s",
-                        index + 1,
-                        len(cards),
+                        "Discord signal-ledger table %d/%d rejected status=%s body=%s",
+                        index,
+                        len(table_images or ()),
                         response.status_code,
                         response.text[:2000],
                     )

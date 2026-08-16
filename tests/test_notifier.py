@@ -215,8 +215,9 @@ def test_performance_cards_respect_discord_embed_limits():
 
 
 
-def test_signal_ledger_report_is_paginated_and_attaches_csv():
+def test_signal_ledger_report_sends_compact_table_images_and_attaches_csv():
     from app.signal_ledger import build_signal_ledger, signal_ledger_csv
+    from app.signal_ledger_table import render_signal_ledger_tables
     from datetime import timedelta
 
     confirmed = datetime(2026, 8, 10, 12, 0, tzinfo=UTC)
@@ -242,6 +243,7 @@ def test_signal_ledger_report_is_paginated_and_attaches_csv():
             "return_168h_pct": None,
         })
     ledger = build_signal_ledger(rows, generated_at=confirmed + timedelta(days=5))
+    table_images = render_signal_ledger_tables(ledger, timezone_name="Europe/Zurich")
 
     notifier = DiscordNotifier(
         "https://discord.invalid/signals",
@@ -252,17 +254,19 @@ def test_signal_ledger_report_is_paginated_and_attaches_csv():
     sent = asyncio.run(notifier.send_signal_ledger(
         ledger,
         csv_bytes=signal_ledger_csv(ledger),
+        table_images=table_images,
         as_of=confirmed + timedelta(days=5),
         timezone_name="Europe/Zurich",
     ))
 
     assert sent
-    # summary + 2 STANDARD pages + 1 HIGH + 1 EXTREME
-    assert len(fake.posts) == 5
+    assert len(fake.posts) == 1 + len(table_images)
     assert fake.posts[0][1]["files"] is not None
     assert "signal-outcome-ledger" in fake.posts[0][1]["files"]["files[0]"][0]
     for _, payload in fake.posts[1:]:
-        embed = payload["embeds"][0]
-        assert notifier._discord_embed_char_count(embed) <= 6000
-        assert len(embed.get("fields", [])) <= 25
-        assert all(len(field["value"]) <= 1024 for field in embed.get("fields", []))
+        assert payload["files"] is not None
+        name, data, mime = payload["files"]["files[0]"]
+        assert name.endswith(".png")
+        assert data.startswith(b"\x89PNG\r\n\x1a\n")
+        assert mime == "image/png"
+        assert "attachment://" in payload["data"]["payload_json"]

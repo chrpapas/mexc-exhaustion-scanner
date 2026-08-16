@@ -1,6 +1,7 @@
 from datetime import UTC, datetime, timedelta
 
 from app.signal_ledger import build_signal_ledger, signal_ledger_csv
+from app.signal_ledger_table import render_signal_ledger_tables
 
 
 def _row(**overrides):
@@ -72,3 +73,22 @@ def test_csv_contains_all_requested_horizons_and_breach_columns():
     assert "breach_200_at_utc" in text
     assert "breach_300_at_utc" in text
     assert "breach_400_at_utc" in text
+
+
+def test_visual_table_renderer_produces_png_with_risk_pages():
+    confirmed = datetime(2026, 8, 10, 12, 0, tzinfo=UTC)
+    rows = [
+        _row(symbol="SAFE_USDT", risk_tier="standard", target_20_at=confirmed + timedelta(hours=20)),
+        _row(symbol="HIGH_USDT", risk_tier="high_risk", return_24h_pct=-0.10),
+        _row(
+            symbol="BOOM_USDT",
+            risk_tier="extreme_risk",
+            isolated_100_breach_at=confirmed + timedelta(hours=10),
+            return_24h_pct=-1.20,
+        ),
+    ]
+    ledger = build_signal_ledger(rows, generated_at=confirmed + timedelta(days=2))
+    images = render_signal_ledger_tables(ledger, timezone_name="Europe/Zurich", rows_per_page=16)
+    assert [item.risk_tier for item in images] == ["standard", "high_risk", "extreme_risk"]
+    assert all(item.png_bytes.startswith(b"\x89PNG\r\n\x1a\n") for item in images)
+    assert all(len(item.png_bytes) > 1000 for item in images)

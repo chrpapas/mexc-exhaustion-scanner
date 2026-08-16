@@ -10,6 +10,7 @@ from app.mexc import MexcClient
 from app.notifier import DiscordNotifier
 from app.performance import short_return
 from app.signal_ledger import build_signal_ledger, signal_ledger_csv
+from app.signal_ledger_table import render_signal_ledger_tables
 
 LOGGER = logging.getLogger(__name__)
 
@@ -56,9 +57,13 @@ async def main() -> None:
         now = datetime.now(UTC)
         ledger = build_signal_ledger(rows, generated_at=now)
         csv_bytes = signal_ledger_csv(ledger)
+        table_images = render_signal_ledger_tables(
+            ledger, timezone_name=settings.performance_report_timezone
+        )
         sent = await notifier.send_signal_ledger(
             ledger,
             csv_bytes=csv_bytes,
+            table_images=table_images,
             as_of=now,
             timezone_name=settings.performance_report_timezone,
         )

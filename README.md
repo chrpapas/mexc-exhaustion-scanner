@@ -326,3 +326,15 @@ The report posts to `DISCORD_PERFORMANCE_WEBHOOK_URL` (falling back to the signa
 - a CSV attachment containing the complete raw ledger for filtering and offline analysis.
 
 The ledger is on-demand only by default and does not alter the existing scheduled performance board. No database migration is required.
+
+## v1.1.10 — compact visual signal ledger
+
+The on-demand signal outcome ledger keeps the CSV export but replaces the verbose per-token Discord embed fields with compact PNG table pages, split by STANDARD, HIGH RISK and EXTREME RISK.
+
+Run:
+
+```bash
+python -m app.signal_ledger_now
+```
+
+Each table row shows signal time/price, +20% target timing, 1D/2D/3D/7D price + short return, and first -100/-200/-300/-400 adverse-breach times. Color semantics: green = profitable/target, amber = negative but not liquidated at -100%, red = liquidation-type breach already occurred, blue = pending. The full exact ledger remains attached as CSV.
