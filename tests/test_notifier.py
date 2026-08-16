@@ -113,10 +113,14 @@ def _report() -> PerformanceSummary:
         risky_survival=tuple(_survive(h, "HIGH+EXTREME") for h in (24, 48, 72, 168)),
         standard_weekly=_weekly("STANDARD"),
         risky_weekly=_weekly("HIGH+EXTREME"),
+        high_weekly=_weekly("HIGH RISK"),
+        extreme_weekly=_weekly("EXTREME RISK"),
         standard_profit_target=_target("STANDARD"),
         risky_profit_target=_target("HIGH+EXTREME"),
         standard_strategy_matrix=_matrix("STANDARD"),
         risky_strategy_matrix=_matrix("HIGH+EXTREME"),
+        high_strategy_matrix=_matrix("HIGH RISK"),
+        extreme_strategy_matrix=_matrix("EXTREME RISK"),
         avg_return_1h=-0.01,
         avg_return_4h=0.02,
         avg_return_12h=0.03,
@@ -147,7 +151,7 @@ def test_performance_report_uses_dedicated_stats_webhook_and_embeds():
     )
 
     assert sent
-    assert len(fake.posts) == 4
+    assert len(fake.posts) == 5
     assert all(url == "https://discord.invalid/stats" for url, _ in fake.posts)
     assert all(payload["username"] == "Exhaustion Scanner • Stats" for _, payload in fake.posts)
     assert all(len(payload["embeds"]) == 1 for _, payload in fake.posts)
@@ -160,7 +164,9 @@ def test_performance_report_uses_dedicated_stats_webhook_and_embeds():
     )
     assert "Performance Board" in all_text
     assert "STANDARD Execution Risk" in all_text
-    assert "HIGH + EXTREME Execution Risk" in all_text
+    assert "HIGH RISK Execution Risk" in all_text
+    assert "EXTREME RISK Execution Risk" in all_text
+    assert "HIGH + EXTREME Execution Risk" not in all_text
     assert "-100% max loss" in all_text
     assert "-200% max loss" in all_text
     assert "-300% max loss" in all_text
@@ -196,7 +202,7 @@ def test_performance_cards_respect_discord_embed_limits():
     sent = asyncio.run(notifier.send_performance_report(_report()))
 
     assert sent
-    assert len(fake.posts) == 4
+    assert len(fake.posts) == 5
     for _, payload in fake.posts:
         assert len(payload["embeds"]) == 1
         embed = payload["embeds"][0]

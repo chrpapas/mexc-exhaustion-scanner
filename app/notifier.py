@@ -219,14 +219,20 @@ class DiscordNotifier:
         standard = self._risk_embed(
             title="🟢 STANDARD Execution Risk",
             color=0x57F287,
-            report=report,
-            standard=True,
+            matrix=report.standard_strategy_matrix,
+            weekly=report.standard_weekly,
         )
-        risky = self._risk_embed(
-            title="🟠 HIGH + EXTREME Execution Risk",
+        high = self._risk_embed(
+            title="🟡 HIGH RISK Execution Risk",
             color=0xFEE75C,
-            report=report,
-            standard=False,
+            matrix=report.high_strategy_matrix,
+            weekly=report.high_weekly,
+        )
+        extreme = self._risk_embed(
+            title="🔴 EXTREME RISK Execution Risk",
+            color=0xED4245,
+            matrix=report.extreme_strategy_matrix,
+            weekly=report.extreme_weekly,
         )
         methodology = {
             "title": "🧭 Strategy Matrix — How to Read It",
@@ -286,7 +292,7 @@ class DiscordNotifier:
         # exceed that when combined with the overview and methodology, so send
         # each visual card as its own webhook message. This keeps the same
         # subscriber-facing board while giving every card its own embed budget.
-        embeds = (overview, standard, risky, methodology)
+        embeds = (overview, standard, high, extreme, methodology)
         try:
             for index, embed in enumerate(embeds, start=1):
                 self._validate_discord_embed(embed)
@@ -357,11 +363,9 @@ class DiscordNotifier:
         *,
         title: str,
         color: int,
-        report: PerformanceSummary,
-        standard: bool,
+        matrix: StrategyMatrixSummary,
+        weekly: WeeklyRiskSummary,
     ) -> dict:
-        matrix = report.standard_strategy_matrix if standard else report.risky_strategy_matrix
-        weekly = report.standard_weekly if standard else report.risky_weekly
         fields: list[dict] = []
 
         for row in matrix.rows:

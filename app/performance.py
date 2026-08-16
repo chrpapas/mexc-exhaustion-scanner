@@ -183,10 +183,14 @@ class PerformanceSummary:
     risky_survival: tuple[HorizonSurvivalSummary, ...]
     standard_weekly: WeeklyRiskSummary
     risky_weekly: WeeklyRiskSummary
+    high_weekly: WeeklyRiskSummary
+    extreme_weekly: WeeklyRiskSummary
     standard_profit_target: ProfitTargetSummary
     risky_profit_target: ProfitTargetSummary
     standard_strategy_matrix: StrategyMatrixSummary
     risky_strategy_matrix: StrategyMatrixSummary
+    high_strategy_matrix: StrategyMatrixSummary
+    extreme_strategy_matrix: StrategyMatrixSummary
     avg_return_1h: float | None
     avg_return_4h: float | None
     avg_return_12h: float | None
@@ -264,10 +268,14 @@ class PerformanceSummary:
             "risky_survival": [x.as_dict() for x in self.risky_survival],
             "standard_weekly": self.standard_weekly.as_dict(),
             "risky_weekly": self.risky_weekly.as_dict(),
+            "high_weekly": self.high_weekly.as_dict(),
+            "extreme_weekly": self.extreme_weekly.as_dict(),
             "standard_profit_target": self.standard_profit_target.as_dict(),
             "risky_profit_target": self.risky_profit_target.as_dict(),
             "standard_strategy_matrix": self.standard_strategy_matrix.as_dict(),
             "risky_strategy_matrix": self.risky_strategy_matrix.as_dict(),
+            "high_strategy_matrix": self.high_strategy_matrix.as_dict(),
+            "extreme_strategy_matrix": self.extreme_strategy_matrix.as_dict(),
             "avg_return_1h": self.avg_return_1h,
             "avg_return_4h": self.avg_return_4h,
             "avg_return_12h": self.avg_return_12h,
@@ -422,11 +430,8 @@ def build_performance_summary(
             cross_buffer=model("cross_400_breach_at"),
         )
 
-    def strategy_matrix(*, standard: bool) -> StrategyMatrixSummary:
-        group = [
-            row for row in rows
-            if ((row.get("risk_tier") == "standard") == standard)
-        ]
+    def strategy_matrix_for(*, risk_label: str, risk_tiers: set[str]) -> StrategyMatrixSummary:
+        group = [row for row in rows if str(row.get("risk_tier") or "") in risk_tiers]
         threshold_events = (
             (100, "isolated_100_breach_at"),
             (200, "adverse_200_breach_at"),
@@ -527,20 +532,26 @@ def build_performance_summary(
             ))
 
         return StrategyMatrixSummary(
-            risk_label="STANDARD" if standard else "HIGH+EXTREME",
+            risk_label=risk_label,
             total_signals=len(group),
             rows=tuple(strategy_rows),
         )
 
-    def weekly_risk(*, standard: bool) -> WeeklyRiskSummary:
+    def strategy_matrix(*, standard: bool) -> StrategyMatrixSummary:
+        return strategy_matrix_for(
+            risk_label="STANDARD" if standard else "HIGH+EXTREME",
+            risk_tiers={"standard"} if standard else {"high_risk", "extreme_risk"},
+        )
+
+    def weekly_risk_for(*, risk_label: str, risk_tiers: set[str]) -> WeeklyRiskSummary:
         group = [
             row for row in rows
             if row.get("return_168h_pct") is not None
-            and ((row.get("risk_tier") == "standard") == standard)
+            and str(row.get("risk_tier") or "") in risk_tiers
         ]
         if not group:
             return WeeklyRiskSummary(
-                risk_label="STANDARD" if standard else "HIGH+EXTREME",
+                risk_label=risk_label,
                 matured_7d=0,
                 ever_profitable_rate=None,
                 isolated_100_breach_rate=None,
@@ -560,7 +571,7 @@ def build_performance_summary(
         cross = [within_week(row, "cross_400_breach_at") for row in group]
 
         return WeeklyRiskSummary(
-            risk_label="STANDARD" if standard else "HIGH+EXTREME",
+            risk_label=risk_label,
             matured_7d=len(group),
             ever_profitable_rate=rate([x is not None for x in first_profit]),
             isolated_100_breach_rate=rate([x is not None for x in iso]),
@@ -571,6 +582,12 @@ def build_performance_summary(
             cross_breach_before_profit_rate=rate([
                 c is not None and (p is None or c < p) for c, p in zip(cross, first_profit)
             ]),
+        )
+
+    def weekly_risk(*, standard: bool) -> WeeklyRiskSummary:
+        return weekly_risk_for(
+            risk_label="STANDARD" if standard else "HIGH+EXTREME",
+            risk_tiers={"standard"} if standard else {"high_risk", "extreme_risk"},
         )
 
     h24 = horizon_summary(24)
@@ -598,10 +615,14 @@ def build_performance_summary(
         risky_survival=tuple(horizon_survival(h, standard=False) for h in (24, 48, 72, 168)),
         standard_weekly=weekly_risk(standard=True),
         risky_weekly=weekly_risk(standard=False),
+        high_weekly=weekly_risk_for(risk_label="HIGH RISK", risk_tiers={"high_risk"}),
+        extreme_weekly=weekly_risk_for(risk_label="EXTREME RISK", risk_tiers={"extreme_risk"}),
         standard_profit_target=profit_target_summary(standard=True),
         risky_profit_target=profit_target_summary(standard=False),
         standard_strategy_matrix=strategy_matrix(standard=True),
         risky_strategy_matrix=strategy_matrix(standard=False),
+        high_strategy_matrix=strategy_matrix_for(risk_label="HIGH RISK", risk_tiers={"high_risk"}),
+        extreme_strategy_matrix=strategy_matrix_for(risk_label="EXTREME RISK", risk_tiers={"extreme_risk"}),
         avg_return_1h=average(values_for("return_1h_pct")),
         avg_return_4h=average(values_for("return_4h_pct")),
         avg_return_12h=average(values_for("return_12h_pct")),

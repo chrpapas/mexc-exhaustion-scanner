@@ -4,12 +4,13 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mexc-exhaustion-scanner"
-version = "0.9.3"
-description = "Shadow-mode MEXC exhaustion scanner with quiet Discord alerts, retest-confirmed shorts and daily and on-demand performance tracking"
+version = "1.1.8"
+description = "MEXC exhaustion scanner plus one-position STANDARD short trader with configurable paper/live, margin and maturity modes"
 requires-python = ">=3.12,<3.15"
 dependencies = [
   "asyncpg>=0.30,<1",
   "httpx>=0.28,<1",
+  "websockets>=15,<17",
 ]
 
 [project.optional-dependencies]

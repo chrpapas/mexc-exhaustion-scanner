@@ -1,4 +1,4 @@
-# MEXC Exhaustion Scanner v0.9.3
+# MEXC Exhaustion Scanner + STANDARD Short Trader v1.0.0
 
 Hotfix: restores Discord formatting helpers used by signal and performance reports. Fixes `AttributeError: DiscordNotifier has no attribute _percent` in both scheduled and on-demand reports.
 
@@ -172,3 +172,137 @@ These thresholds are research proxies, not MEXC liquidation prices. Actual liqui
 - `EXHAUSTION WATCH`, `RUN WATCH`, and `BREAKDOWN WATCH` remain internal strategy states.
 - Existing Render environments that still contain `exhaustion_watch` in `DISCORD_SIGNAL_LEVELS` cannot cause exhaustion alerts to be posted.
 - Performance reporting is unchanged.
+
+## v1.0.0 — STANDARD short trader (paper first)
+
+This repository now contains a second Render worker, `mexc-standard-short-trader`, which consumes the scanner's persisted `confirmed_short` signals from the same PostgreSQL database.
+
+### Trading rules
+
+- Only `STANDARD` execution-risk `confirmed_short` signals are eligible.
+- Exactly one trader position may be open at a time. Any later confirmed signal is permanently recorded as `ignored_busy` while that position is open.
+- The default start mode is `TRADING_MODE=paper`; no MEXC API key is needed for paper mode.
+- Paper entry uses the current MEXC futures last price when the trader processes the new signal, not the historical scanner retest close.
+- Exposure is always modeled at 1x.
+- `TRADER_CAPITAL_STRATEGY=isolated_full`: notional = 100% of current account equity, with a configurable +100% adverse-move liquidation research proxy.
+- `TRADER_CAPITAL_STRATEGY=cross_20`: notional = 20% of current account equity, with a configurable +400% adverse-move cross-buffer research proxy.
+- Paper account P&L compounds after each closed/liquidated paper position.
+
+### Position maturity (current behavior)
+
+The v1.0 ratchet/trailing experiment has been superseded by a simpler maturity setting. The trader now has three independent configuration axes: trading mode, capital/margin model, and position maturity.
+
+```text
+TRADING_MODE=paper                         # paper | live
+TRADER_CAPITAL_STRATEGY=cross_20          # cross_20 | isolated_full
+TRADER_POSITION_MATURITY=profit_20         # profit_20 | 1d | 2d | 3d | 7d
+TRADER_PROFIT_TARGET_PCT=20
+PAPER_STARTING_EQUITY_USDT=2000
+TRADER_POLL_SECONDS=5
+TRADER_PROCESS_EXISTING_SIGNALS=false
+TRADER_MAX_SIGNAL_AGE_SECONDS=900
+TRADER_ISOLATED_ADVERSE_LIMIT_PCT=100
+TRADER_CROSS_ADVERSE_LIMIT_PCT=400
+DISCORD_TRADER_WEBHOOK_URL=                 # optional paper/live trade-event channel
+```
+
+- `profit_20`: close at the first observed +20% short return (or configured `TRADER_PROFIT_TARGET_PCT`).
+- `1d`, `2d`, `3d`, `7d`: hold until that elapsed maturity and close at market at the horizon.
+- In paper mode, the selected liquidation research proxy closes the position earlier if breached.
+- Exactly one position can be open. New signals while busy are recorded as ignored and are not replayed.
+
+`TRADER_PROCESS_EXISTING_SIGNALS=false` is intentional: on the first trader start, the cursor is initialized to the newest already-stored confirmed-short signal, so an old signal cannot accidentally open a new position.
+
+### Live mode safety gate
+
+The live adapter contains MEXC Contract API authentication, USDT-equity queries, contract sizing, open-position queries, market short submission and market close submission. However, MEXC's current public Contract API documentation labels the order mutation endpoints as under maintenance. For that reason live mode is fail-closed.
+
+To arm live mode in a future environment where your MEXC account has verified futures order API access, all of these are required:
+
+```text
+TRADING_MODE=live
+MEXC_API_KEY=...
+MEXC_API_SECRET=...
+MEXC_LIVE_ORDER_API_ENABLED=true
+LIVE_TRADING_CONFIRM=I_UNDERSTAND_LIVE_TRADING
+```
+
+Do not set these flags merely to test the worker. Use `paper` until live futures order access is independently verified on the account.
+
+### Database
+
+Migration `009_trader_bot.sql` adds:
+
+- `trader_runtime`
+- `trader_positions`
+- `trader_signal_decisions`
+- `trader_position_events`
+
+A partial unique index guarantees one open trader position at database level. Schema migrations are also protected by a PostgreSQL advisory lock because the scanner and trader workers can deploy simultaneously.
+
+### Render Shell status
+
+```bash
+python -m app.trader_status
+```
+
+This prints paper equity, the signal cursor and the active position's entry/current return/peak/adverse excursion/profit floor.
+
+## v1.1.0 — +20% target analytics and configurable position maturity
+
+Performance embeds keep the same four-card layout. The STANDARD and HIGH+EXTREME horizon rows now show, for both the 1x-isolated (+100% adverse) and 5x-cross-buffer (+400% adverse) research proxies:
+
+- percentage of matured signals that reached +20% short return before the proxy breach and before the horizon;
+- average elapsed time from CONFIRMED SHORT to the first +20% observation among those hits.
+
+The trader now exposes three independent strategy dimensions:
+
+```text
+TRADING_MODE=paper|live
+TRADER_CAPITAL_STRATEGY=isolated_full|cross_20
+TRADER_POSITION_MATURITY=profit_20|1d|2d|3d|7d
+```
+
+`profit_20` exits at the first observed `TRADER_PROFIT_TARGET_PCT` (20% by default). Fixed-day maturity modes hold until the configured horizon and then close at market unless the selected paper liquidation proxy is breached first. Exactly one position may be open at a time; new signals while busy remain ignored.
+
+
+## v1.1.1 — horizon-independent +20% target race
+
+The subscriber performance board now keeps fixed-horizon analytics (1d/2d/3d/7d) separate from the trader-style +20% target race. For STANDARD and HIGH+EXTREME signals it reports +20% win rate before the -100% isolated proxy and before the -400% cross-buffer proxy, pending/resolved counts, and average time to +20%. Pending races continue to be tracked beyond the 7-day fixed-return window until +20% wins or the +400% cross proxy is breached.
+
+## v1.1.2 trader JSON hotfix
+
+- Safely decodes `run_signals.features` whether asyncpg returns JSONB as a mapping or JSON text.
+- Applies the same defensive decoding to trader position `metadata`.
+- No schema migration is required.
+
+## v1.1.3 trader market-data hotfix
+
+The one-position trader now monitors the active MEXC futures symbol via the official public futures WebSocket ticker (`wss://contract.mexc.com/edge`, `sub.ticker`) instead of polling the REST ticker every few seconds. REST ticker access remains a retrying fallback only. This avoids intermittent MEXC code 510 rate-limit errors while preserving paper/live execution semantics.
+
+
+## v1.1.4
+- Explicit `websockets>=15,<17` runtime dependency for the trader ticker stream.
+- WebSocket import is now lazy, so a missing package cannot crash the trader at module import; REST fallback remains available.
+
+
+## v1.1.5 — strategy viability matrix
+
+- Subscriber stats now compare STANDARD vs HIGH+EXTREME across +20% target, 1D, 2D, 3D and 7D profitability strategies.
+- Each strategy is evaluated against -100%, -200%, -300% and -400% adverse-move research thresholds.
+- A horizon strategy wins only when its exact-horizon return is positive and the selected threshold was not breached beforehand.
+- +20% target remains horizon-independent and reports pending outcomes separately.
+- Average and summed profit are highlighted only for strategy/threshold cells with 100% observed win rate.
+- Migration 011 adds/backfills -200% and -300% breach timestamps and refreshes 7-day first-breach data for older signals.
+
+## v1.1.6 — Discord strategy-board payload hotfix
+
+Discord caps the combined textual content across all embeds in one message at 6,000 characters. The expanded strategy matrices can exceed that budget when overview, STANDARD, HIGH+EXTREME and methodology are sent together. v1.1.6 sends the same four visual cards as four consecutive webhook messages and validates Discord embed limits before sending. No database migration is required.
+
+## v1.1.7 — fixed-horizon loss breakdown
+Fixed-horizon strategy-matrix cells now split failures into mutually exclusive reasons: threshold breach before maturity versus not profitable at the exact maturity. Win-rate semantics and trader behavior are unchanged.
+
+
+## v1.1.8 — HIGH vs EXTREME stats split
+
+Performance Discord now renders STANDARD, HIGH RISK, and EXTREME RISK as separate strategy-matrix cards. The previous combined HIGH+EXTREME calculations remain available internally for compatibility, but subscriber-facing stats no longer average the two risk tiers together. No database migration is required.

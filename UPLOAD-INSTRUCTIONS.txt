@@ -1,16 +1,15 @@
-MEXC Exhaustion Scanner v0.9.3
+MEXC Exhaustion Scanner + STANDARD Short Trader v1.1.5
 
-Discord routing:
-- DISCORD_WEBHOOK_URL = existing confirmed-short alerts webhook
-- DISCORD_PERFORMANCE_WEBHOOK_URL = NEW webhook for the performance/stats Discord server or channel
-
-Render steps:
-1. Deploy these files.
-2. In the worker's Environment settings, add DISCORD_PERFORMANCE_WEBHOOK_URL with the webhook URL created in the stats Discord channel.
-3. Keep DISCORD_WEBHOOK_URL unchanged for confirmed-short alerts.
-4. Redeploy/restart the worker.
-5. Test the new stats board from Render Shell:
-   python -m app.report_now
-
-No migration is required. Keep migrations 001 through 008 unchanged.
-If DISCORD_PERFORMANCE_WEBHOOK_URL is omitted, reports fall back to DISCORD_WEBHOOK_URL for backward compatibility.
+Full deployment:
+- Upload/deploy the entire repository.
+- Render defines two workers sharing the same PostgreSQL database:
+  1) mexc-exhaustion-scanner
+  2) mexc-standard-short-trader
+- Migration 011_strategy_threshold_matrix.sql is automatic.
+- Performance board now includes a strategy viability matrix for STANDARD vs HIGH+EXTREME.
+- Strategy rows: +20% target, 1D profitable, 2D profitable, 3D profitable, 7D profitable.
+- Adverse thresholds: -100%, -200%, -300%, -400%.
+- Average/summed profit is highlighted only for cells with 100% observed win rate.
+- Trader execution behavior is unchanged from v1.1.4.
+- Use `python -m app.report_now` in the scanner shell to trigger stats.
+- Use `python -m app.trader_status` in the trader shell to inspect trader state.
