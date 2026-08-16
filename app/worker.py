@@ -22,6 +22,8 @@ from app.indicators import (
 from app.mexc import MexcClient, is_crypto_usdt_contract
 from app.models import PumpEpisode, RunSignal, Ticker
 from app.notifier import DiscordNotifier
+from app.trader_db import TraderRepository
+from app.trader_notifier import TraderNotifier
 from app.performance import build_performance_summary, short_return, should_send_daily_report
 from app.signals import (
     ExhaustionFeatures,
@@ -54,6 +56,9 @@ class ScannerWorker:
             settings.discord_signal_levels,
             performance_webhook_url=settings.discord_performance_webhook_url,
         )
+        self.trader_watchdog_notifier = TraderNotifier(settings.discord_trader_events_webhook_url)
+        self.trader_repo = TraderRepository(self.db)
+        self._trader_watchdog_alerted = False
         self.stop_event = asyncio.Event()
         self.contracts: set[str] = set()
         self.latest_tickers: dict[str, Ticker] = {}
@@ -144,6 +149,7 @@ class ScannerWorker:
                     )
                 )
                 group.create_task(self._periodic("heartbeat", 60, self.write_heartbeat))
+                group.create_task(self._periodic("trader_watchdog", 60, self.check_trader_watchdog))
                 await self.stop_event.wait()
                 raise StopWorker()
         except* StopWorker:
@@ -153,6 +159,7 @@ class ScannerWorker:
 
     async def close(self) -> None:
         await self.notifier.close()
+        await self.trader_watchdog_notifier.close()
         await self.mexc.close()
         await self.db.close()
 
@@ -172,6 +179,7 @@ class ScannerWorker:
             "contracts": 20,
             "performance": 25,
             "performance_report": 35,
+            "trader_watchdog": 45,
         }.get(name, 0)
         if stagger:
             await asyncio.sleep(stagger)
@@ -1253,6 +1261,49 @@ class ScannerWorker:
             report.horizon_168h.win_rate,
         )
 
+    async def check_trader_watchdog(self) -> None:
+        if not self.settings.discord_trader_events_webhook_url:
+            return
+        heartbeat = await self.db.worker_heartbeat("portfolio_short_trader")
+        if not heartbeat:
+            # Do not alert before this version of the trader has ever registered itself.
+            return
+        last_seen = heartbeat["last_seen_at"]
+        now = datetime.now(UTC)
+        if last_seen.tzinfo is None:
+            last_seen = last_seen.replace(tzinfo=UTC)
+        age = max(0.0, (now - last_seen).total_seconds())
+        stale = age > self.settings.trader_watchdog_stale_seconds
+        if stale and not self._trader_watchdog_alerted:
+            self._trader_watchdog_alerted = True
+            positions = await self.trader_repo.active_positions()
+            runtime = await self.trader_repo.runtime()
+            stats = await self.trader_repo.portfolio_stats()
+            open_text = "\n".join(
+                f"`#{p.slot_no or '-'} {p.symbol}` {p.risk_tier} last **{p.current_return_pct:+.1f}%** • peak {p.peak_profit_pct:+.1f}%"
+                for p in positions[:10]
+            ) or "No open positions in the trader database."
+            await self.trader_watchdog_notifier.send(
+                "🚨 TRADER HEARTBEAT LOST",
+                "The scanner is healthy, but the trader process stopped updating its database heartbeat. "
+                "This catches hard crashes that the trader process cannot report after it is already dead.",
+                [
+                    {"name": "Last trader heartbeat", "value": f"{last_seen.isoformat()} • **{age:.0f}s ago**", "inline": False},
+                    {"name": "Last trader status", "value": str(heartbeat.get("status") or {})[:1024], "inline": False},
+                    {"name": "Last known portfolio", "value": f"Paper realized **${float(runtime['paper_equity_usdt']):,.2f}** • closed {int(stats.get('closed_count') or 0)} • liquidations {int(stats.get('liquidation_count') or 0)}", "inline": False},
+                    {"name": "Open positions (last DB state)", "value": open_text[:1024], "inline": False},
+                ],
+                color=0xE74C3C,
+            )
+        elif not stale and self._trader_watchdog_alerted:
+            self._trader_watchdog_alerted = False
+            await self.trader_watchdog_notifier.send(
+                "🟢 TRADER HEARTBEAT RECOVERED",
+                "The scanner can see fresh trader heartbeats again.",
+                [{"name": "Heartbeat age", "value": f"{age:.0f}s", "inline": True}],
+                color=0x2ECC71,
+            )
+
     async def write_heartbeat(self) -> None:
         discovery = await self.discovery_symbols(include_benchmark=True)
         await self.db.heartbeat(
@@ -1270,7 +1321,7 @@ class ScannerWorker:
                     for value in self.wide_return_72h.values()
                 ),
                 "execution_enabled": self.settings.execution_enabled,
-                "strategy_version": "1.1.9",
+                "strategy_version": "1.2.0",
             },
         )
 

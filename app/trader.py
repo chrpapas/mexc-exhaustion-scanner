@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from datetime import UTC, datetime
 from typing import Any
 
@@ -9,14 +10,26 @@ from app.db import Database
 from app.mexc_trade import MexcTradeClient, MexcTradeError
 from app.trader_config import TraderSettings
 from app.trader_db import TraderRepository
-from app.trader_logic import maturity_exit_reason, short_return_pct
+from app.trader_logic import (
+    newly_breached_thresholds,
+    protected_profit_floor_pct,
+    short_price_for_return,
+    short_return_pct,
+)
 from app.trader_models import TradeSignal, TraderPosition
 from app.trader_notifier import TraderNotifier
 
 LOGGER = logging.getLogger(__name__)
 
+GREEN = 0x2ECC71
+YELLOW = 0xF1C40F
+RED = 0xE74C3C
+BLUE = 0x3498DB
+PURPLE = 0x9B59B6
+ORANGE = 0xE67E22
 
-class StandardShortTrader:
+
+class PortfolioShortTrader:
     def __init__(self, settings: TraderSettings) -> None:
         self.settings = settings
         self.db = Database(settings.database_url)
@@ -25,8 +38,15 @@ class StandardShortTrader:
             settings.mexc_base_url,
             api_key=settings.mexc_api_key,
             api_secret=settings.mexc_api_secret,
+            ws_url=settings.mexc_ws_url,
         )
-        self.notifier = TraderNotifier(settings.trader_discord_webhook_url)
+        self.notifier = TraderNotifier(settings.trader_events_webhook_url)
+        self._last_discord_heartbeat = 0.0
+        self._last_error_alert: dict[str, float] = {}
+        self._had_tick_error = False
+        self._live_execution_halted = False
+        self._last_snapshot_fields: list[dict[str, Any]] = []
+        self._last_protection_check: dict[int, float] = {}
 
     async def start(self) -> None:
         await self.db.connect()
@@ -35,51 +55,128 @@ class StandardShortTrader:
             starting_equity=self.settings.paper_starting_equity_usdt,
             process_existing=self.settings.process_existing_signals,
         )
+        if self.settings.trading_mode == "live":
+            await self._live_preflight()
         LOGGER.info(
-            "Trader started mode=%s capital=%s maturity=%s only_risk=STANDARD",
+            "Trader started mode=%s risks=%s slots=%s slot_pct=%.4f max_exposure=%.2f%%",
             self.settings.trading_mode,
-            self.settings.capital_strategy,
-            self.settings.position_maturity,
+            ",".join(self.settings.allowed_risk_tiers),
+            self.settings.max_open_positions,
+            self.settings.slot_allocation_pct,
+            self.settings.max_total_exposure_pct,
         )
+        await self._notify(
+            "🟢 TRADER ONLINE",
+            "Portfolio trader started successfully. Event reporting is active.",
+            [
+                {"name": "Strategy", "value": self._strategy_label(), "inline": False},
+                {"name": "Mode", "value": self.settings.trading_mode.upper(), "inline": True},
+            ],
+            color=GREEN,
+        )
+        self._last_discord_heartbeat = time.monotonic()
+        await self._write_db_heartbeat()
 
     async def close(self) -> None:
         await asyncio.gather(
-            self.mexc.close(),
-            self.notifier.close(),
-            self.db.close(),
-            return_exceptions=True,
+            self.mexc.close(), self.notifier.close(), self.db.close(), return_exceptions=True
         )
 
     async def run(self) -> None:
-        await self.start()
+        started = False
         try:
+            try:
+                await self.start()
+                started = True
+            except Exception as exc:
+                LOGGER.exception("Trader startup failed")
+                await self.notifier.send(
+                    "🚨 TRADER STARTUP FAILED",
+                    "The trader could not complete startup/preflight and will not trade until this is fixed.",
+                    [
+                        {"name": "Mode", "value": self.settings.trading_mode.upper(), "inline": True},
+                        {"name": "Strategy", "value": self._strategy_label(), "inline": False},
+                        {"name": "Error", "value": f"`{type(exc).__name__}: {str(exc)[:800]}`", "inline": False},
+                    ],
+                    color=RED,
+                )
+                raise
+
             while True:
                 try:
                     await self.tick()
-                except Exception:
+                    if self._had_tick_error:
+                        self._had_tick_error = False
+                        await self._notify(
+                            "🟢 TRADER RECOVERED",
+                            "A successful trading cycle completed after the previous server/API error.",
+                            color=GREEN,
+                        )
+                except Exception as exc:
                     LOGGER.exception("Trader tick failed")
+                    self._had_tick_error = True
+                    await self._alert_error("tick", exc)
                 await asyncio.sleep(self.settings.poll_seconds)
         finally:
+            if started:
+                try:
+                    await self._notify(
+                        "🟠 TRADER STOPPING",
+                        "The trader process is shutting down. The scanner watchdog will alert if it does not return promptly.",
+                        color=ORANGE,
+                    )
+                except Exception:
+                    LOGGER.warning("Could not send trader shutdown notification", exc_info=True)
             await self.close()
 
     async def tick(self) -> None:
-        position = await self.repo.active_position()
-        if position is not None:
-            await self._monitor_position(position)
+        positions = await self.repo.active_positions()
+        live_rows: list[dict[str, Any]] | None = None
+        if self.settings.trading_mode == "live":
+            live_rows = await self.mexc.open_positions()
+            await self._reconcile_live_positions(positions, live_rows)
+            positions = await self.repo.active_positions()
+
+        # Fetch prices concurrently, then process state transitions serially to stay well within order mutation limits.
+        if positions:
+            results = await asyncio.gather(
+                *(self.mexc.last_price(p.symbol) for p in positions), return_exceptions=True
+            )
+            for position, result in zip(positions, results, strict=True):
+                if isinstance(result, Exception):
+                    await self._alert_error(f"price:{position.symbol}", result)
+                    continue
+                try:
+                    await self._monitor_position(position, float(result))
+                except Exception as exc:
+                    LOGGER.exception("Position monitor failed id=%s symbol=%s", position.id, position.symbol)
+                    await self._alert_error(f"monitor:{position.symbol}", exc)
+
         await self._consume_new_signals()
-        runtime = await self.repo.runtime()
-        position = await self.repo.active_position()
-        await self.db.heartbeat(
-            "standard_short_trader",
-            {
-                "mode": self.settings.trading_mode,
-                "capital_strategy": self.settings.capital_strategy,
-                "position_maturity": self.settings.position_maturity,
-                "paper_equity_usdt": runtime["paper_equity_usdt"],
-                "open_position": position.symbol if position else None,
-                "version": "1.1.3",
-            },
-        )
+        await self._maybe_heartbeat()
+        await self._write_db_heartbeat()
+
+    async def _live_preflight(self) -> None:
+        await self.mexc.ping()
+        asset = await self.mexc.usdt_asset()
+        if float(asset.get("equity") or 0.0) <= 0:
+            raise RuntimeError("MEXC live preflight: USDT futures equity is zero")
+        mode = await self.mexc.position_mode()
+        if mode is not None and mode != 1:
+            raise RuntimeError(
+                f"MEXC live preflight: hedge position mode (1) is required; account reports {mode}"
+            )
+        # Warm/cache contract metadata once to avoid the contract-detail endpoint rate limit during clustered signals.
+        await self.mexc.refresh_contract_specs()
+        exchange = await self.mexc.open_positions()
+        managed = await self.repo.active_positions()
+        managed_ids = {p.mexc_position_id for p in managed if p.mode == "live" and p.mexc_position_id}
+        extras = [r for r in exchange if int(r.get("positionId") or 0) not in managed_ids]
+        if extras:
+            raise RuntimeError(
+                "MEXC live preflight found open futures positions not managed by this bot; "
+                "refusing live startup"
+            )
 
     async def _consume_new_signals(self) -> None:
         runtime = await self.repo.runtime()
@@ -91,173 +188,241 @@ class StandardShortTrader:
             except Exception as exc:
                 LOGGER.exception("Could not process signal id=%s symbol=%s", signal.id, signal.symbol)
                 await self.repo.decision(signal.id, "error", str(exc))
+                await self._alert_error(f"signal:{signal.symbol}", exc)
             finally:
                 await self.repo.set_cursor(signal.id)
 
     async def _handle_signal(self, signal: TradeSignal) -> None:
-        if signal.risk_tier != "STANDARD":
-            await self.repo.decision(
-                signal.id,
-                "ignored_risk",
-                f"risk tier {signal.risk_tier or 'UNKNOWN'} is not STANDARD",
-            )
+        if signal.risk_tier not in self.settings.allowed_risk_tiers:
+            await self.repo.decision(signal.id, "ignored_risk", f"risk tier {signal.risk_tier} not enabled")
             return
-
         age = (datetime.now(UTC) - signal.signaled_at).total_seconds()
         if age > self.settings.max_signal_age_seconds:
             await self.repo.decision(
-                signal.id,
-                "ignored_stale",
-                f"signal age {age:.0f}s exceeds {self.settings.max_signal_age_seconds}s",
+                signal.id, "ignored_stale", f"signal age {age:.0f}s exceeds {self.settings.max_signal_age_seconds}s"
             )
             return
-
-        active = await self.repo.active_position()
-        if active is not None:
-            await self.repo.decision(
-                signal.id,
-                "ignored_busy",
-                f"single-position rule: {active.symbol} position #{active.id} is open",
-            )
-            LOGGER.info("Ignored %s because %s is already open", signal.symbol, active.symbol)
+        if self._live_execution_halted:
+            await self.repo.decision(signal.id, "ignored_invalid", "live execution halted by reconciliation safety check")
             return
 
-        if self.settings.trading_mode == "paper":
-            position = await self._open_paper(signal)
-        else:
-            position = await self._open_live(signal)
-        LOGGER.info(
-            "Opened %s short %s at %.10g notional=%.2f equity=%.2f",
-            position.mode,
-            position.symbol,
-            position.entry_price,
-            position.notional_usdt,
-            position.entry_equity_usdt,
+        active = await self.repo.active_positions()
+        if len(active) >= self.settings.max_open_positions:
+            await self.repo.decision(signal.id, "ignored_capacity", "all configured slots are occupied")
+            return
+        if not self.settings.allow_same_symbol_parallel and any(p.symbol == signal.symbol for p in active):
+            await self.repo.decision(signal.id, "ignored_duplicate_symbol", f"{signal.symbol} already open")
+            return
+        if signal.risk_tier == "HIGH_RISK":
+            high_count = sum(p.risk_tier == "HIGH_RISK" for p in active)
+            if high_count >= self.settings.max_high_risk_positions:
+                await self.repo.decision(
+                    signal.id, "ignored_capacity", "HIGH_RISK capacity reached; preserving STANDARD capacity"
+                )
+                return
+
+        equity = await self._account_equity(active)
+        if equity <= 0:
+            raise RuntimeError("account equity is not positive")
+        total_notional = sum(p.notional_usdt for p in active)
+        desired = equity * self.settings.slot_fraction
+        remaining = equity * self.settings.max_total_exposure_fraction - total_notional
+        if remaining <= 0 or remaining < desired * 0.5:
+            await self.repo.decision(signal.id, "ignored_exposure", "20% aggregate exposure cap reached")
+            return
+        notional = min(desired, remaining)
+        slot_no = next(i for i in range(1, self.settings.max_open_positions + 1) if all(p.slot_no != i for p in active))
+
+        position = (
+            await self._open_paper(signal, slot_no, equity, notional)
+            if self.settings.trading_mode == "paper"
+            else await self._open_live(signal, slot_no, equity, notional)
         )
-        await self.notifier.send(
+        await self._notify(
             "🧾 PAPER SHORT OPENED" if position.mode == "paper" else "🔴 LIVE SHORT OPENED",
-            f"**{position.symbol}** • STANDARD signal",
+            f"**{position.symbol}** • {position.risk_tier} • slot {position.slot_no}",
             [
                 {"name": "Entry", "value": f"{position.entry_price:.10g}", "inline": True},
                 {"name": "Notional", "value": f"${position.notional_usdt:,.2f}", "inline": True},
-                {"name": "Margin", "value": position.capital_strategy, "inline": True},
-                {"name": "Maturity", "value": position.position_maturity, "inline": True},
-                {"name": "+20% target", "value": f"+{self.settings.profit_target_pct:.0f}%", "inline": True},
+                {"name": "Target", "value": f"+{self.settings.profit_target_pct:.0f}% then run", "inline": True},
+                {"name": "Protection", "value": f"arm +{self.settings.protection_arm_pct:.0f}% • floor +{self.settings.profit_target_pct:.0f}% • {self.settings.trail_callback_pct:.0f}% price trail", "inline": False},
             ],
+            color=BLUE,
         )
 
-    async def _open_paper(self, signal: TradeSignal) -> TraderPosition:
+    async def _open_paper(self, signal: TradeSignal, slot_no: int, equity: float, notional: float) -> TraderPosition:
         price = await self.mexc.last_price(signal.symbol)
-        runtime = await self.repo.runtime()
-        equity = float(runtime["paper_equity_usdt"])
-        if equity <= 0:
-            raise RuntimeError("paper account equity is zero")
-        notional = equity * self.settings.position_fraction
         quantity = notional / price
+        entry_fee = notional * self.settings.paper_taker_fee_rate
+        runtime = await self.repo.runtime()
+        await self.repo.set_paper_equity(max(0.0, float(runtime["paper_equity_usdt"]) - entry_fee))
         return await self.repo.create_position(
             signal=signal,
+            slot_no=slot_no,
             mode="paper",
-            capital_strategy=self.settings.capital_strategy,
-            exit_strategy="ratchet_5",  # legacy DB field; v1.1 execution is maturity-driven
-            position_maturity=self.settings.position_maturity,
+            capital_strategy=self.settings.capital_strategy_label,
+            exit_strategy="trailing_15_floor_20",
+            position_maturity="profit_20",
             entry_price=price,
             entry_equity_usdt=equity,
             notional_usdt=notional,
             quantity_base=quantity,
-            liquidation_proxy_pct=self.settings.liquidation_proxy_pct,
+            liquidation_proxy_pct=400.0,
+            entry_fee_usdt=entry_fee,
             metadata={
                 "signal_entry_hint": signal.entry_hint,
-                "position_fraction": self.settings.position_fraction,
-                "leverage": 1,
+                "position_fraction": notional / equity,
+                "leverage": self.settings.leverage,
                 "risk_tier": signal.risk_tier,
+                "paper_taker_fee_rate": self.settings.paper_taker_fee_rate,
             },
         )
 
-    async def _open_live(self, signal: TradeSignal) -> TraderPosition:
-        existing = await self.mexc.open_positions()
-        if existing:
-            raise RuntimeError("MEXC already has an open futures position; refusing a new live trade")
+    async def _open_live(self, signal: TradeSignal, slot_no: int, equity: float, notional: float) -> TraderPosition:
         price = await self.mexc.last_price(signal.symbol)
         spec = await self.mexc.contract_spec(signal.symbol)
         if not spec.api_allowed:
-            raise MexcTradeError(f"{signal.symbol} reports apiAllowed=false")
-        required_open_type = self.settings.open_type
-        if spec.position_open_type not in {required_open_type, 3}:
-            raise MexcTradeError(
-                f"{signal.symbol} does not support requested margin mode {required_open_type}"
-            )
-        equity = await self.mexc.usdt_equity()
-        notional = equity * self.settings.position_fraction
+            raise MexcTradeError(f"{signal.symbol} reports apiAllowed=false; MEXC API cannot trade it")
+        if spec.position_open_type not in {self.settings.open_type, 3}:
+            raise MexcTradeError(f"{signal.symbol} does not support requested margin mode")
         contracts = spec.contracts_for_notional(notional, price)
         order_id = await self.mexc.submit_market_short(
             symbol=signal.symbol,
             contracts=contracts,
-            open_type=required_open_type,
+            open_type=self.settings.open_type,
             reference_price=price,
-            external_oid=f"std-short-{signal.id}",
+            external_oid=f"exh-open-{signal.id}",
+            leverage=self.settings.leverage,
         )
         live_position: dict[str, Any] | None = None
-        for _ in range(10):
+        for _ in range(16):
             await asyncio.sleep(0.5)
             rows = await self.mexc.open_positions(signal.symbol)
-            live_position = next(
-                (row for row in rows if int(row.get("positionType") or 0) == 2),
-                None,
-            )
+            live_position = next((r for r in rows if int(r.get("positionType") or 0) == 2), None)
             if live_position:
                 break
         if not live_position:
-            raise MexcTradeError(
-                f"MEXC order {order_id} submitted but short position could not be confirmed"
-            )
-        entry_price = float(live_position.get("openAvgPrice") or live_position.get("holdAvgPrice") or price)
+            raise MexcTradeError(f"MEXC order {order_id} submitted but short position could not be confirmed")
+        order = await self.mexc.order(order_id)
+        entry_price = float(
+            live_position.get("openAvgPriceFullyScale")
+            or live_position.get("openAvgPrice")
+            or order.get("dealAvgPrice")
+            or price
+        )
         hold_contracts = float(live_position.get("holdVol") or contracts)
+        entry_fee = float(order.get("takerFee") or order.get("makerFee") or 0.0)
         return await self.repo.create_position(
             signal=signal,
+            slot_no=slot_no,
             mode="live",
-            capital_strategy=self.settings.capital_strategy,
-            exit_strategy="ratchet_5",  # legacy DB field; v1.1 execution is maturity-driven
-            position_maturity=self.settings.position_maturity,
+            capital_strategy=self.settings.capital_strategy_label,
+            exit_strategy="trailing_15_floor_20",
+            position_maturity="profit_20",
             entry_price=entry_price,
             entry_equity_usdt=equity,
             notional_usdt=hold_contracts * spec.contract_size * entry_price,
             quantity_base=hold_contracts * spec.contract_size,
-            liquidation_proxy_pct=self.settings.liquidation_proxy_pct,
+            liquidation_proxy_pct=400.0,
+            entry_fee_usdt=entry_fee,
             mexc_position_id=int(live_position["positionId"]),
             mexc_open_order_id=order_id,
             metadata={
                 "contracts": hold_contracts,
                 "contract_size": spec.contract_size,
-                "position_fraction": self.settings.position_fraction,
-                "leverage": 1,
+                "position_fraction": notional / equity,
+                "leverage": self.settings.leverage,
                 "risk_tier": signal.risk_tier,
                 "mexc_liquidate_price": live_position.get("liquidatePrice"),
             },
         )
 
-    async def _monitor_position(self, position: TraderPosition) -> None:
-        price = await self.mexc.last_price(position.symbol)
+    async def _monitor_position(self, position: TraderPosition, price: float) -> None:
         current_return = short_return_pct(position.entry_price, price)
         peak = max(position.peak_profit_pct, current_return)
         adverse = max(position.max_adverse_pct, max(0.0, -current_return))
 
-        # Paper liquidation proxy always has priority. In live mode the exchange
-        # itself determines liquidation; the local research threshold is not used
-        # as an order trigger.
-        if position.mode == "paper" and adverse >= position.liquidation_proxy_pct:
-            await self._close(position, price, "liquidation_proxy", liquidated=True)
-            return
+        if position.mode == "live" and position.protection_armed_at is not None:
+            await self._ensure_live_protection_exists(position)
 
-        age_seconds = (datetime.now(UTC) - position.opened_at).total_seconds()
-        exit_reason = maturity_exit_reason(
-            position_maturity=position.position_maturity,
-            current_return_pct=current_return,
-            age_seconds=age_seconds,
-            profit_target_pct=self.settings.profit_target_pct,
+        already = {
+            t for t, at in ((100, position.breach_100_at), (200, position.breach_200_at), (300, position.breach_300_at), (400, position.breach_400_at)) if at is not None
+        }
+        for threshold in newly_breached_thresholds(max_adverse_pct=adverse, already_breached=already):
+            if await self.repo.mark_breach(position.id, threshold, price=price, return_pct=current_return):
+                position = (await self.repo.position(position.id)) or position
+                await self._notify(
+                    f"{'🔴' if threshold == 100 else '🟥' if threshold == 200 else '🟣' if threshold == 300 else '⚫'} -{threshold}% ADVERSE LEVEL BREACHED",
+                    f"**{position.symbol}** • {position.risk_tier} • slot {position.slot_no}\nThe position remains tracked; this event is not erased if it later reverses into profit.",
+                    [
+                        {"name": "Current short P/L", "value": f"{current_return:+.2f}%", "inline": True},
+                        {"name": "Max adverse", "value": f"-{adverse:.2f}%", "inline": True},
+                    ],
+                    color=RED,
+                )
+
+        if position.target_20_at is None and peak >= self.settings.profit_target_pct:
+            if await self.repo.mark_target_hit(position.id, price=price, return_pct=current_return):
+                position = (await self.repo.position(position.id)) or position
+                await self._notify(
+                    "🎯 +20% TARGET REACHED — RUNNER ACTIVE",
+                    f"**{position.symbol}** reached the strategy target. The bot will keep the short open and prepare profit protection.",
+                    [
+                        {"name": "Current", "value": f"{current_return:+.2f}%", "inline": True},
+                        {"name": "Peak", "value": f"{peak:+.2f}%", "inline": True},
+                    ],
+                    color=GREEN,
+                )
+
+        floor = protected_profit_floor_pct(
+            peak_profit_pct=peak,
+            hard_floor_pct=self.settings.profit_target_pct,
+            arm_pct=self.settings.protection_arm_pct,
+            trail_callback_pct=self.settings.trail_callback_pct,
         )
-        if exit_reason is not None:
-            await self._close(position, price, exit_reason)
-            return
+        existing_floor = position.profit_floor_pct
+        if floor is not None:
+            if position.protection_armed_at is None:
+                order_id = None
+                if position.mode == "live":
+                    order_id = await self._place_live_protection(position, floor)
+                if await self.repo.mark_protection_armed(
+                    position.id, order_id=order_id, floor_pct=floor, price=price, return_pct=current_return
+                ):
+                    position = (await self.repo.position(position.id)) or position
+                    existing_floor = floor
+                    await self._notify(
+                        "🛡️ PROFIT PROTECTION ARMED",
+                        f"**{position.symbol}** can continue running, with the current protected floor at approximately **+{floor:.2f}%** before slippage/fees.",
+                        [
+                            {"name": "Peak profit", "value": f"+{peak:.2f}%", "inline": True},
+                            {"name": "Protected floor", "value": f"+{floor:.2f}%", "inline": True},
+                        ],
+                        color=GREEN,
+                    )
+            elif existing_floor is None or floor >= existing_floor + self.settings.protection_update_step_pct:
+                if position.mode == "live":
+                    await self._update_live_protection(position, floor)
+                await self.repo.set_protection(position.id, order_id=position.mexc_protection_order_id, floor_pct=floor)
+                if self._should_notify_floor(position, floor):
+                    await self.repo.patch_metadata(position.id, {"last_protection_notified_floor": floor})
+                    await self._notify(
+                        "📈 PROTECTED PROFIT RAISED",
+                        f"**{position.symbol}** runner continues. The protected profit level moved higher.",
+                        [
+                            {"name": "Peak profit", "value": f"+{peak:.2f}%", "inline": True},
+                            {"name": "Protected floor", "value": f"+{floor:.2f}%", "inline": True},
+                        ],
+                        color=GREEN,
+                    )
+                existing_floor = floor
+
+        # Paper mode emulates the exchange-side stop. Live mode relies on MEXC's position stop and reconciliation.
+        effective_floor = floor if floor is not None else existing_floor
+        if position.mode == "paper" and position.protection_armed_at is not None and effective_floor is not None:
+            if current_return <= effective_floor:
+                await self._close(position, price, "protected_runner_exit")
+                return
 
         await self.repo.update_market(
             position.id,
@@ -265,70 +430,356 @@ class StandardShortTrader:
             return_pct=current_return,
             peak_profit_pct=peak,
             max_adverse_pct=adverse,
-            profit_floor_pct=None,
+            profit_floor_pct=effective_floor,
         )
 
-    async def _close(
-        self,
-        position: TraderPosition,
-        price: float,
-        reason: str,
-        *,
-        liquidated: bool = False,
-    ) -> None:
+    async def _ensure_live_protection_exists(self, position: TraderPosition) -> None:
+        now = time.monotonic()
+        if now - self._last_protection_check.get(position.id, 0.0) < 30.0:
+            return
+        self._last_protection_check[position.id] = now
+        if position.profit_floor_pct is None or position.mexc_position_id is None:
+            return
+        rows = await self.mexc.open_stop_orders(position.symbol)
+        expected = int(position.mexc_protection_order_id or 0)
+        found = next(
+            (
+                row for row in rows
+                if int(row.get("positionId") or 0) == position.mexc_position_id
+                and (expected == 0 or int(row.get("id") or 0) == expected)
+                and int(row.get("state") or 1) == 1
+            ),
+            None,
+        )
+        if found:
+            actual_id = int(found.get("id") or expected)
+            if actual_id and actual_id != expected:
+                await self.repo.set_protection(
+                    position.id, order_id=actual_id, floor_pct=position.profit_floor_pct
+                )
+            return
+        order_id = await self._place_live_protection(position, position.profit_floor_pct)
+        await self.repo.set_protection(position.id, order_id=order_id, floor_pct=position.profit_floor_pct)
+        await self._notify(
+            "🛡️ LIVE PROTECTION RESTORED",
+            f"**{position.symbol}** had no active MEXC protection order. A replacement exchange-side stop was placed immediately.",
+            [
+                {"name": "Protected floor", "value": f"+{position.profit_floor_pct:.2f}%", "inline": True},
+                {"name": "New stop order", "value": str(order_id), "inline": True},
+            ],
+            color=ORANGE,
+        )
+
+    async def _place_live_protection(self, position: TraderPosition, floor_pct: float) -> int:
+        if position.mexc_position_id is None:
+            raise RuntimeError("cannot place live protection without MEXC position id")
+        spec = await self.mexc.contract_spec(position.symbol)
+        contracts = float(position.metadata.get("contracts") or position.quantity_base / spec.contract_size)
+        stop_price = short_price_for_return(position.entry_price, floor_pct)
+        return await self.mexc.place_position_stop(
+            position_id=position.mexc_position_id, contracts=contracts, stop_price=stop_price
+        )
+
+    async def _update_live_protection(self, position: TraderPosition, floor_pct: float) -> None:
+        if position.mexc_protection_order_id is None:
+            order_id = await self._place_live_protection(position, floor_pct)
+            await self.repo.set_protection(position.id, order_id=order_id, floor_pct=floor_pct)
+            return
+        await self.mexc.modify_position_stop(
+            stop_order_id=position.mexc_protection_order_id,
+            stop_price=short_price_for_return(position.entry_price, floor_pct),
+        )
+
+    def _should_notify_floor(self, position: TraderPosition, floor: float) -> bool:
+        last = float(position.metadata.get("last_protection_notified_floor") or self.settings.profit_target_pct)
+        return floor >= last + self.settings.protection_notify_step_pct
+
+    async def _close(self, position: TraderPosition, price: float, reason: str) -> None:
         close_order_id: int | None = None
+        exit_fee = 0.0
         if position.mode == "live":
             spec = await self.mexc.contract_spec(position.symbol)
-            contracts = float(position.metadata.get("contracts") or (position.quantity_base / spec.contract_size))
+            contracts = float(position.metadata.get("contracts") or position.quantity_base / spec.contract_size)
             close_order_id = await self.mexc.close_market_short(
                 symbol=position.symbol,
                 contracts=contracts,
-                open_type=1 if position.capital_strategy == "isolated_full" else 2,
+                open_type=2 if "cross" in position.capital_strategy else 1,
                 reference_price=price,
                 position_id=position.mexc_position_id,
-                external_oid=f"std-close-{position.id}-{int(datetime.now(UTC).timestamp())}",
+                external_oid=f"exh-close-{position.id}-{int(datetime.now(UTC).timestamp())}",
+                leverage=self.settings.leverage,
             )
-            await asyncio.sleep(0.5)
-            try:
-                order = await self.mexc.order(close_order_id)
-                price = float(order.get("dealAvgPrice") or price)
-            except Exception:
-                LOGGER.exception("Could not fetch close fill; using reference price")
+            await asyncio.sleep(0.6)
+            order = await self.mexc.order(close_order_id)
+            price = float(order.get("dealAvgPrice") or price)
+            exit_fee = float(order.get("takerFee") or order.get("makerFee") or 0.0)
+            if position.mexc_protection_order_id:
+                try:
+                    await self.mexc.cancel_position_stop(position.mexc_protection_order_id)
+                except Exception:
+                    LOGGER.warning("Could not cancel protection order after explicit close", exc_info=True)
+        else:
+            exit_notional = position.quantity_base * price
+            exit_fee = exit_notional * self.settings.paper_taker_fee_rate
 
-        status = "liquidated" if liquidated else "closed"
-        closed = await self.repo.close_position(
+        await self.repo.close_position(
             position,
             exit_price=price,
-            status=status,
+            status="closed",
             reason=reason,
+            exit_fee_usdt=exit_fee,
             mexc_close_order_id=close_order_id,
         )
         if position.mode == "paper":
             runtime = await self.repo.runtime()
             pnl = position.quantity_base * (position.entry_price - price)
-            new_equity = max(0.0, float(runtime["paper_equity_usdt"]) + pnl)
-            await self.repo.set_paper_equity(new_equity)
-        else:
-            new_equity = await self.mexc.usdt_equity()
-
+            await self.repo.set_paper_equity(max(0.0, float(runtime["paper_equity_usdt"]) + pnl - exit_fee))
+        await self.mexc.ticker_stream.remove(position.symbol)
         realized = short_return_pct(position.entry_price, price)
-        LOGGER.info(
-            "Closed %s %s reason=%s return=%+.2f%% equity=%.2f",
-            position.mode,
-            position.symbol,
-            reason,
-            realized,
-            new_equity,
-        )
-        await self.notifier.send(
-            "💰 SHORT CLOSED" if not liquidated else "💥 POSITION LIQUIDATED (PAPER PROXY)",
+        gross_pnl = position.quantity_base * (position.entry_price - price)
+        net_pnl = gross_pnl - position.entry_fee_usdt - exit_fee
+        await self._notify(
+            "💰 POSITION CLOSED",
             f"**{position.symbol}** • {reason}",
             [
-                {"name": "Return", "value": f"{realized:+.2f}%", "inline": True},
-                {"name": "Exit", "value": f"{price:.10g}", "inline": True},
-                {"name": "Equity", "value": f"${new_equity:,.2f}", "inline": True},
+                {"name": "Gross return", "value": f"{realized:+.2f}%", "inline": True},
+                {"name": "Peak", "value": f"{max(position.peak_profit_pct, realized):+.2f}%", "inline": True},
+                {"name": "Price P/L after fees", "value": f"${net_pnl:+,.4f}", "inline": True},
+                {"name": "Fees", "value": f"${position.entry_fee_usdt + exit_fee:,.4f}", "inline": True},
+                {"name": "Exit price", "value": f"{price:.10g}", "inline": True},
             ],
+            color=GREEN if realized > 0 else RED,
         )
+
+    async def _reconcile_live_positions(
+        self, managed: list[TraderPosition], exchange_rows: list[dict[str, Any]]
+    ) -> None:
+        exchange_by_id = {int(r.get("positionId") or 0): r for r in exchange_rows}
+        managed_ids = {p.mexc_position_id for p in managed if p.mode == "live" and p.mexc_position_id}
+        extras = [r for r in exchange_rows if int(r.get("positionId") or 0) not in managed_ids]
+        if extras and not self._live_execution_halted:
+            self._live_execution_halted = True
+            await self._notify(
+                "🚨 LIVE EXECUTION HALTED — UNMANAGED MEXC POSITION",
+                "MEXC reports an open futures position that is not in the bot database. New entries are halted; the bot will not touch the unmanaged position.",
+                [{"name": "Unmanaged", "value": ", ".join(str(r.get("symbol")) for r in extras)[:1024], "inline": False}],
+                color=RED,
+            )
+        for position in managed:
+            if position.mode != "live" or position.mexc_position_id is None:
+                continue
+            if position.mexc_position_id in exchange_by_id:
+                continue
+            await self._reconcile_exchange_closed(position)
+
+    async def _reconcile_exchange_closed(self, position: TraderPosition) -> None:
+        price = await self.mexc.last_price(position.symbol)
+        reason = "exchange_position_closed"
+        close_order_id = None
+        exit_fee = 0.0
+        try:
+            rows = await self.mexc.stop_orders(symbol=position.symbol, finished=True)
+            match = next((r for r in rows if int(r.get("id") or 0) == int(position.mexc_protection_order_id or 0) and int(r.get("state") or 0) == 3), None)
+            if match:
+                reason = "exchange_protection_stop"
+                place_order_id = int(match.get("placeOrderId") or 0)
+                if place_order_id:
+                    order = await self.mexc.order(place_order_id)
+                    price = float(order.get("dealAvgPrice") or price)
+                    exit_fee = float(order.get("takerFee") or order.get("makerFee") or 0.0)
+                    close_order_id = place_order_id
+        except Exception:
+            LOGGER.warning("Could not resolve exchange-side close details for %s", position.symbol, exc_info=True)
+        await self.repo.close_position(
+            position, exit_price=price, status="closed", reason=reason,
+            exit_fee_usdt=exit_fee, mexc_close_order_id=close_order_id,
+        )
+        await self.mexc.ticker_stream.remove(position.symbol)
+        await self._notify(
+            "🛡️ EXCHANGE-SIDE EXIT CONFIRMED" if reason == "exchange_protection_stop" else "🚨 MEXC POSITION CLOSED OUTSIDE BOT FLOW",
+            f"**{position.symbol}** • {reason}",
+            [
+                {"name": "Exit", "value": f"{price:.10g}", "inline": True},
+                {"name": "Return", "value": f"{short_return_pct(position.entry_price, price):+.2f}%", "inline": True},
+            ],
+            color=GREEN if reason == "exchange_protection_stop" else RED,
+        )
+
+    async def _account_equity(self, positions: list[TraderPosition] | None = None) -> float:
+        if self.settings.trading_mode == "live":
+            return await self.mexc.usdt_equity()
+        runtime = await self.repo.runtime()
+        realized_equity = float(runtime["paper_equity_usdt"])
+        positions = positions if positions is not None else await self.repo.active_positions()
+        unrealized = sum(p.notional_usdt * p.current_return_pct / 100.0 for p in positions if p.mode == "paper")
+        return realized_equity + unrealized
+
+    async def _snapshot_fields(self) -> list[dict[str, Any]]:
+        positions = await self.repo.active_positions()
+        equity = await self._account_equity(positions)
+        fields = await self._build_snapshot_fields(positions, equity=equity, equity_is_live=True)
+        self._last_snapshot_fields = fields
+        return fields
+
+    async def _db_snapshot_fields(self, snapshot_error: Exception | None = None) -> list[dict[str, Any]]:
+        """Build a status snapshot without requiring MEXC network access.
+
+        This is intentionally usable during an exchange/API outage so error alerts still contain
+        the last database-observed positions and P/L instead of becoming context-free messages.
+        """
+        positions = await self.repo.active_positions()
+        runtime = await self.repo.runtime()
+        if self.settings.trading_mode == "paper":
+            realized = float(runtime["paper_equity_usdt"])
+            equity = realized + sum(
+                p.notional_usdt * p.current_return_pct / 100.0 for p in positions if p.mode == "paper"
+            )
+            live_equity = True
+        else:
+            equity = None
+            live_equity = False
+        fields = await self._build_snapshot_fields(positions, equity=equity, equity_is_live=live_equity)
+        if snapshot_error is not None:
+            fields.insert(
+                0,
+                {
+                    "name": "⚠️ Snapshot source",
+                    "value": (
+                        "MEXC live equity was unavailable; showing the last database-observed portfolio state. "
+                        f"`{type(snapshot_error).__name__}: {str(snapshot_error)[:300]}`"
+                    )[:1024],
+                    "inline": False,
+                },
+            )
+        self._last_snapshot_fields = fields
+        return fields
+
+    async def _build_snapshot_fields(
+        self,
+        positions: list[TraderPosition],
+        *,
+        equity: float | None,
+        equity_is_live: bool,
+    ) -> list[dict[str, Any]]:
+        runtime = await self.repo.runtime()
+        stats = await self.repo.portfolio_stats()
+        total_notional = sum(p.notional_usdt for p in positions)
+        exposure = total_notional / equity * 100.0 if equity is not None and equity > 0 else None
+        closed = int(stats.get("closed_count") or 0)
+        wins = int(stats.get("win_count") or 0)
+        win_rate = wins / closed * 100.0 if closed else 0.0
+        if equity is None:
+            account_value = "Live equity **unavailable** • DB position P/L shown below"
+        else:
+            account_value = f"Equity/MTM **${equity:,.2f}**"
+        if self.settings.trading_mode == "paper":
+            account_value += f"\nRealized cash **${float(runtime['paper_equity_usdt']):,.2f}**"
+        elif not equity_is_live:
+            account_value += "\nMEXC account endpoint unavailable"
+        account_value += (
+            f"\nClosed {closed} • wins {wins} ({win_rate:.1f}%) • "
+            f"liquidations {int(stats.get('liquidation_count') or 0)} • fees ${float(stats.get('fees') or 0):,.4f}"
+        )
+        exposure_text = f"{exposure:.2f}%" if exposure is not None else "n/a"
+        capacity = (
+            f"Slots **{len(positions)}/{self.settings.max_open_positions}** • HIGH "
+            f"**{sum(p.risk_tier == 'HIGH_RISK' for p in positions)}/{self.settings.max_high_risk_positions}**\n"
+            f"Open notional **${total_notional:,.2f}** • exposure **{exposure_text} / "
+            f"{self.settings.max_total_exposure_pct:.2f}%**"
+        )
+        if positions:
+            lines = []
+            for p in positions[:10]:
+                floor = f" • floor +{p.profit_floor_pct:.1f}%" if p.profit_floor_pct is not None else ""
+                tier = "STD" if p.risk_tier == "STANDARD" else "HIGH" if p.risk_tier == "HIGH_RISK" else "EXT"
+                breach = (
+                    " • ⚫400" if p.breach_400_at else " • 🟣300" if p.breach_300_at
+                    else " • 🟥200" if p.breach_200_at else " • 🔴100" if p.breach_100_at else ""
+                )
+                lines.append(
+                    f"`#{p.slot_no or '-'} {p.symbol}` {tier} **{p.current_return_pct:+.1f}%** • "
+                    f"peak {p.peak_profit_pct:+.1f}% • adv {p.max_adverse_pct:.1f}%{floor}{breach}"
+                )
+            open_text = "\n".join(lines)[:1024]
+        else:
+            open_text = "No open positions."
+        return [
+            {"name": "📊 Account", "value": account_value[:1024], "inline": True},
+            {"name": "🎛️ Capacity", "value": capacity[:1024], "inline": True},
+            {"name": "📂 Open positions", "value": open_text, "inline": False},
+        ]
+
+    async def _notify(
+        self, title: str, description: str, event_fields: list[dict[str, Any]] | None = None,
+        *, color: int | None = None,
+    ) -> None:
+        try:
+            snapshot = await self._snapshot_fields()
+        except Exception as exc:
+            LOGGER.warning("Could not build live trader notification snapshot: %s", exc)
+            try:
+                snapshot = await self._db_snapshot_fields(exc)
+            except Exception:
+                LOGGER.warning("Could not build DB fallback trader snapshot", exc_info=True)
+                snapshot = self._last_snapshot_fields or [
+                    {
+                        "name": "⚠️ Portfolio status",
+                        "value": "Current portfolio snapshot unavailable. The scanner watchdog remains independent.",
+                        "inline": False,
+                    }
+                ]
+        fields = list(event_fields or []) + snapshot
+        await self.notifier.send(title, description, fields, color=color)
+
+    async def _alert_error(self, key: str, exc: Exception) -> None:
+        now = time.monotonic()
+        if now - self._last_error_alert.get(key, 0.0) < self.settings.error_alert_cooldown_seconds:
+            return
+        self._last_error_alert[key] = now
+        await self._notify(
+            "🚨 TRADER / SERVER ERROR",
+            f"**{key}** failed. The trader continues running and will retry automatically.\n`{type(exc).__name__}: {str(exc)[:700]}`",
+            color=RED,
+        )
+
+    async def _maybe_heartbeat(self) -> None:
+        now = time.monotonic()
+        if now - self._last_discord_heartbeat < self.settings.heartbeat_seconds:
+            return
+        self._last_discord_heartbeat = now
+        await self._notify(
+            "💓 TRADER HEARTBEAT",
+            "Trader loop is healthy. This periodic status means you do not need to inspect Render logs or MEXC manually.",
+            [{"name": "Strategy", "value": self._strategy_label(), "inline": False}],
+            color=BLUE,
+        )
+
+    async def _write_db_heartbeat(self) -> None:
+        positions = await self.repo.active_positions()
+        await self.db.heartbeat(
+            "portfolio_short_trader",
+            {
+                "mode": self.settings.trading_mode,
+                "allowed_risks": list(self.settings.allowed_risk_tiers),
+                "slots": self.settings.max_open_positions,
+                "open_count": len(positions),
+                "slot_allocation_pct": self.settings.slot_allocation_pct,
+                "max_total_exposure_pct": self.settings.max_total_exposure_pct,
+                "version": "1.2.0",
+            },
+        )
+
+    def _strategy_label(self) -> str:
+        return (
+            f"{'+'.join(self.settings.allowed_risk_tiers)} • {self.settings.max_open_positions} slots × "
+            f"{self.settings.slot_allocation_pct:.2f}% • max {self.settings.max_total_exposure_pct:.1f}% exposure • "
+            f"+{self.settings.profit_target_pct:.0f}% milestone → +{self.settings.protection_arm_pct:.0f}% arm → "
+            f"{self.settings.trail_callback_pct:.0f}% price trail"
+        )
+
+
+# Backward-compatible import name used by older tests/deploy scripts.
+StandardShortTrader = PortfolioShortTrader
 
 
 async def main() -> None:
@@ -337,7 +788,7 @@ async def main() -> None:
         level=getattr(logging, settings.log_level, logging.INFO),
         format="%(asctime)s %(levelname)s %(name)s — %(message)s",
     )
-    trader = StandardShortTrader(settings)
+    trader = PortfolioShortTrader(settings)
     await trader.run()
 
 

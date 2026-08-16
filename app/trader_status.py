@@ -18,20 +18,25 @@ async def main() -> None:
     try:
         repo = TraderRepository(db)
         runtime = await repo.runtime()
-        position = await repo.active_position()
-        print(f"Paper equity: ${float(runtime['paper_equity_usdt']):,.2f}")
+        positions = await repo.active_positions()
+        stats = await repo.portfolio_stats()
+        unrealized = sum(p.notional_usdt * p.current_return_pct / 100.0 for p in positions if p.mode == "paper")
+        paper_cash = float(runtime["paper_equity_usdt"])
+        print(f"Paper realized cash: ${paper_cash:,.2f}")
+        print(f"Paper MTM equity: ${paper_cash + unrealized:,.2f}")
         print(f"Signal cursor: {int(runtime['last_signal_id'])}")
-        if position is None:
-            print("Open position: none")
-        else:
-            print(f"Open position: #{position.id} {position.symbol} ({position.mode}/{position.capital_strategy})")
-            print(f"Maturity: {position.position_maturity}")
-            print(f"Entry: {position.entry_price:.10g}")
-            print(f"Current: {position.current_price:.10g}")
-            print(f"Return: {position.current_return_pct:+.2f}%")
-            print(f"Peak profit: {position.peak_profit_pct:+.2f}%")
-            print(f"Max adverse: {position.max_adverse_pct:.2f}%")
-            print(f"Liquidation proxy: +{position.liquidation_proxy_pct:.2f}% adverse")
+        print(f"Open positions: {len(positions)}")
+        print(
+            f"Closed: {int(stats.get('closed_count') or 0)} | Wins: {int(stats.get('win_count') or 0)} | "
+            f"Liquidations: {int(stats.get('liquidation_count') or 0)} | Fees: ${float(stats.get('fees') or 0):,.4f}"
+        )
+        for p in positions:
+            print(
+                f"  slot {p.slot_no}: {p.symbol} {p.risk_tier} {p.mode} | entry {p.entry_price:.10g} | "
+                f"current {p.current_price:.10g} | return {p.current_return_pct:+.2f}% | "
+                f"peak {p.peak_profit_pct:+.2f}% | adverse {p.max_adverse_pct:.2f}% | "
+                f"floor {p.profit_floor_pct if p.profit_floor_pct is not None else 'n/a'}"
+            )
     finally:
         await db.close()
 

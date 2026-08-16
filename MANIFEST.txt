@@ -1,6 +1,5 @@
 .gitignore
 .python-version
-MANIFEST.txt
 README.md
 README_v0.8.8.md
 TRADER-DEPLOY.md
@@ -19,6 +18,7 @@ app/performance.py
 app/report_now.py
 app/signal_ledger.py
 app/signal_ledger_now.py
+app/signal_ledger_table.py
 app/signals.py
 app/trader.py
 app/trader_config.py
@@ -26,6 +26,8 @@ app/trader_db.py
 app/trader_logic.py
 app/trader_models.py
 app/trader_notifier.py
+app/trader_notify_test.py
+app/trader_preflight.py
 app/trader_status.py
 app/worker.py
 migrations/001_init.sql
@@ -39,6 +41,7 @@ migrations/008_weekly_buffer_simulation.sql
 migrations/009_trader_bot.sql
 migrations/010_position_maturity.sql
 migrations/011_strategy_threshold_matrix.sql
+migrations/012_multi_slot_live_trader.sql
 pyproject.toml
 render.yaml
 scripts/verify_project.py
@@ -53,3 +56,4 @@ tests/test_signals.py
 tests/test_trader_config.py
 tests/test_trader_db.py
 tests/test_trader_logic.py
+tests/test_trader_v120.py

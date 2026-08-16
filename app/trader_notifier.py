@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 import httpx
+
+LOGGER = logging.getLogger(__name__)
 
 
 class TraderNotifier:
@@ -14,17 +17,29 @@ class TraderNotifier:
         if self.client:
             await self.client.aclose()
 
-    async def send(self, title: str, description: str, fields: list[dict[str, Any]] | None = None) -> None:
+    async def send(
+        self,
+        title: str,
+        description: str,
+        fields: list[dict[str, Any]] | None = None,
+        *,
+        color: int | None = None,
+    ) -> bool:
         if not self.webhook_url or not self.client:
-            return
-        payload = {
-            "embeds": [
-                {
-                    "title": title,
-                    "description": description,
-                    "fields": fields or [],
-                }
-            ]
+            return False
+        embed: dict[str, Any] = {
+            "title": title[:256],
+            "description": description[:4096],
+            "fields": (fields or [])[:25],
         }
-        response = await self.client.post(self.webhook_url, json=payload)
-        response.raise_for_status()
+        if color is not None:
+            embed["color"] = color
+        try:
+            response = await self.client.post(self.webhook_url, json={"embeds": [embed]})
+            if response.status_code >= 400:
+                LOGGER.error("Trader Discord webhook failed status=%s body=%s", response.status_code, response.text[:500])
+            response.raise_for_status()
+            return True
+        except Exception:
+            LOGGER.exception("Trader Discord notification failed")
+            return False

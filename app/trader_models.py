@@ -21,6 +21,8 @@ class TraderPosition:
     id: int
     signal_id: int
     symbol: str
+    risk_tier: str
+    slot_no: int | None
     mode: str
     capital_strategy: str
     exit_strategy: str
@@ -37,6 +39,15 @@ class TraderPosition:
     max_adverse_pct: float
     profit_floor_pct: float | None
     liquidation_proxy_pct: float
+    target_20_at: datetime | None
+    protection_armed_at: datetime | None
+    mexc_protection_order_id: int | None
+    breach_100_at: datetime | None
+    breach_200_at: datetime | None
+    breach_300_at: datetime | None
+    breach_400_at: datetime | None
+    entry_fee_usdt: float
+    exit_fee_usdt: float
     mexc_position_id: int | None
     mexc_open_order_id: int | None
     metadata: dict[str, Any]

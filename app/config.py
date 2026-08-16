@@ -26,6 +26,8 @@ class Settings:
     database_url: str
     discord_webhook_url: str | None
     discord_performance_webhook_url: str | None
+    discord_trader_events_webhook_url: str | None
+    trader_watchdog_stale_seconds: int
     discord_signal_levels: frozenset[str]
     mexc_base_url: str
     mexc_spot_base_url: str
@@ -87,6 +89,12 @@ class Settings:
             database_url=database_url,
             discord_webhook_url=os.getenv("DISCORD_WEBHOOK_URL") or None,
             discord_performance_webhook_url=os.getenv("DISCORD_PERFORMANCE_WEBHOOK_URL") or None,
+            discord_trader_events_webhook_url=(
+                os.getenv("DISCORD_TRADER_EVENTS_WEBHOOK_URL")
+                or os.getenv("DISCORD_TRADER_WEBHOOK_URL")
+                or None
+            ),
+            trader_watchdog_stale_seconds=int(os.getenv("TRADER_WATCHDOG_STALE_SECONDS", "180")),
             discord_signal_levels=_env_csv_lower(
                 "DISCORD_SIGNAL_LEVELS",
                 "confirmed_short",
@@ -171,6 +179,7 @@ class Settings:
             ("EPISODE_MAX_AGE_HOURS", self.episode_max_age_hours),
             ("PERFORMANCE_POLL_SECONDS", self.performance_poll_seconds),
             ("PERFORMANCE_REPORT_CHECK_SECONDS", self.performance_report_check_seconds),
+            ("TRADER_WATCHDOG_STALE_SECONDS", self.trader_watchdog_stale_seconds),
         ):
             if value <= 0:
                 raise ValueError(f"{name} must be positive")

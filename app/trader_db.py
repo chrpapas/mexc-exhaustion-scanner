@@ -58,10 +58,7 @@ class TraderRepository:
 
     async def set_paper_equity(self, equity: float) -> None:
         await self.db.pool.execute(
-            """
-            UPDATE trader_runtime SET paper_equity_usdt=$1, updated_at=now()
-            WHERE singleton=true
-            """,
+            "UPDATE trader_runtime SET paper_equity_usdt=$1, updated_at=now() WHERE singleton=true",
             equity,
         )
 
@@ -116,16 +113,40 @@ class TraderRepository:
             reason,
         )
 
-    async def active_position(self) -> TraderPosition | None:
-        row = await self.db.pool.fetchrow(
-            "SELECT * FROM trader_positions WHERE status='open' ORDER BY id DESC LIMIT 1"
+    async def active_positions(self) -> list[TraderPosition]:
+        rows = await self.db.pool.fetch(
+            "SELECT * FROM trader_positions WHERE status='open' ORDER BY slot_no NULLS LAST, opened_at, id"
         )
+        return [self._position(r) for r in rows]
+
+    async def active_position(self) -> TraderPosition | None:
+        positions = await self.active_positions()
+        return positions[0] if positions else None
+
+    async def position(self, position_id: int) -> TraderPosition | None:
+        row = await self.db.pool.fetchrow("SELECT * FROM trader_positions WHERE id=$1", position_id)
         return self._position(row) if row else None
+
+    async def portfolio_stats(self) -> dict[str, Any]:
+        row = await self.db.pool.fetchrow(
+            """
+            SELECT
+              COUNT(*) FILTER (WHERE status IN ('closed','liquidated')) AS closed_count,
+              COUNT(*) FILTER (WHERE status='liquidated') AS liquidation_count,
+              COUNT(*) FILTER (WHERE status='closed' AND COALESCE(realized_return_pct,0) > 0) AS win_count,
+              COALESCE(SUM(realized_pnl_usdt) FILTER (WHERE status IN ('closed','liquidated')),0) AS realized_pnl,
+              COALESCE(SUM(entry_fee_usdt + exit_fee_usdt),0) AS fees,
+              COUNT(*) FILTER (WHERE status='open') AS open_count
+            FROM trader_positions
+            """
+        )
+        return dict(row) if row else {}
 
     async def create_position(
         self,
         *,
         signal: TradeSignal,
+        slot_no: int,
         mode: str,
         capital_strategy: str,
         exit_strategy: str,
@@ -135,6 +156,7 @@ class TraderRepository:
         notional_usdt: float,
         quantity_base: float,
         liquidation_proxy_pct: float,
+        entry_fee_usdt: float = 0.0,
         mexc_position_id: int | None = None,
         mexc_open_order_id: int | None = None,
         metadata: dict[str, Any] | None = None,
@@ -142,19 +164,20 @@ class TraderRepository:
         row = await self.db.pool.fetchrow(
             """
             INSERT INTO trader_positions(
-                signal_id, episode_id, symbol, mode, capital_strategy, exit_strategy, position_maturity,
-                status, opened_at, entry_price, entry_equity_usdt, notional_usdt,
-                quantity_base, current_price, current_return_pct, peak_profit_pct,
-                max_adverse_pct, liquidation_proxy_pct, mexc_position_id,
-                mexc_open_order_id, metadata
+                signal_id, episode_id, symbol, risk_tier, slot_no, mode, capital_strategy,
+                exit_strategy, position_maturity, status, opened_at, entry_price,
+                entry_equity_usdt, notional_usdt, quantity_base, current_price,
+                current_return_pct, peak_profit_pct, max_adverse_pct, liquidation_proxy_pct,
+                entry_fee_usdt, mexc_position_id, mexc_open_order_id, metadata
             ) VALUES (
-                $1,$2,$3,$4,$5,$6,$7,'open',$8,$9,$10,$11,$12,$9,0,0,0,$13,$14,$15,$16::jsonb
-            )
-            RETURNING *
+                $1,$2,$3,$4,$5,$6,$7,$8,$9,'open',$10,$11,$12,$13,$14,$11,0,0,0,$15,$16,$17,$18,$19::jsonb
+            ) RETURNING *
             """,
             signal.id,
             signal.episode_id,
             signal.symbol,
+            signal.risk_tier,
+            slot_no,
             mode,
             capital_strategy,
             exit_strategy,
@@ -165,11 +188,12 @@ class TraderRepository:
             notional_usdt,
             quantity_base,
             liquidation_proxy_pct,
+            entry_fee_usdt,
             mexc_position_id,
             mexc_open_order_id,
             json.dumps(metadata or {}, separators=(",", ":"), default=str),
         )
-        await self.decision(signal.id, "accepted", "STANDARD signal accepted", int(row["id"]))
+        await self.decision(signal.id, "accepted", f"{signal.risk_tier} signal accepted", int(row["id"]))
         await self.add_event(int(row["id"]), "opened", entry_price, 0.0, metadata or {})
         return self._position(row)
 
@@ -182,20 +206,14 @@ class TraderRepository:
         peak_profit_pct: float,
         max_adverse_pct: float,
         profit_floor_pct: float | None,
-        event: str | None = None,
     ) -> TraderPosition:
         row = await self.db.pool.fetchrow(
             """
             UPDATE trader_positions
-            SET current_price=$2,
-                current_return_pct=$3,
-                peak_profit_pct=$4,
-                max_adverse_pct=$5,
-                profit_floor_pct=$6,
-                last_observed_at=now(),
-                updated_at=now()
-            WHERE id=$1 AND status='open'
-            RETURNING *
+            SET current_price=$2, current_return_pct=$3, peak_profit_pct=$4,
+                max_adverse_pct=$5, profit_floor_pct=$6,
+                last_observed_at=now(), updated_at=now()
+            WHERE id=$1 AND status='open' RETURNING *
             """,
             position_id,
             price,
@@ -206,15 +224,73 @@ class TraderRepository:
         )
         if not row:
             raise RuntimeError(f"position {position_id} is no longer open")
-        if event:
-            await self.add_event(
-                position_id,
-                event,
-                price,
-                return_pct,
-                {"profit_floor_pct": profit_floor_pct, "peak_profit_pct": peak_profit_pct},
-            )
         return self._position(row)
+
+    async def mark_target_hit(self, position_id: int, *, price: float, return_pct: float) -> bool:
+        row = await self.db.pool.fetchrow(
+            """
+            UPDATE trader_positions SET target_20_at=COALESCE(target_20_at,now()), updated_at=now()
+            WHERE id=$1 AND status='open' AND target_20_at IS NULL RETURNING id
+            """,
+            position_id,
+        )
+        if not row:
+            return False
+        await self.add_event(position_id, "target_20_hit", price, return_pct, {})
+        return True
+
+    async def mark_protection_armed(
+        self, position_id: int, *, order_id: int | None, floor_pct: float, price: float, return_pct: float
+    ) -> bool:
+        row = await self.db.pool.fetchrow(
+            """
+            UPDATE trader_positions
+            SET protection_armed_at=COALESCE(protection_armed_at,now()),
+                mexc_protection_order_id=COALESCE($2,mexc_protection_order_id),
+                profit_floor_pct=GREATEST(COALESCE(profit_floor_pct,-1e9),$3), updated_at=now()
+            WHERE id=$1 AND status='open' AND protection_armed_at IS NULL RETURNING id
+            """,
+            position_id,
+            order_id,
+            floor_pct,
+        )
+        if not row:
+            return False
+        await self.add_event(position_id, "protection_armed", price, return_pct, {"floor_pct": floor_pct, "order_id": order_id})
+        return True
+
+    async def set_protection(self, position_id: int, *, order_id: int | None, floor_pct: float) -> None:
+        await self.db.pool.execute(
+            """
+            UPDATE trader_positions
+            SET mexc_protection_order_id=COALESCE($2,mexc_protection_order_id),
+                profit_floor_pct=GREATEST(COALESCE(profit_floor_pct,-1e9),$3), updated_at=now()
+            WHERE id=$1 AND status='open'
+            """,
+            position_id,
+            order_id,
+            floor_pct,
+        )
+
+    async def mark_breach(self, position_id: int, threshold: int, *, price: float, return_pct: float) -> bool:
+        columns = {100: "breach_100_at", 200: "breach_200_at", 300: "breach_300_at", 400: "breach_400_at"}
+        column = columns[threshold]
+        row = await self.db.pool.fetchrow(
+            f"UPDATE trader_positions SET {column}=now(), updated_at=now() "
+            f"WHERE id=$1 AND status='open' AND {column} IS NULL RETURNING id",
+            position_id,
+        )
+        if not row:
+            return False
+        await self.add_event(position_id, f"breach_{threshold}", price, return_pct, {"threshold": threshold})
+        return True
+
+    async def patch_metadata(self, position_id: int, patch: dict[str, Any]) -> None:
+        await self.db.pool.execute(
+            "UPDATE trader_positions SET metadata=metadata || $2::jsonb, updated_at=now() WHERE id=$1",
+            position_id,
+            json.dumps(patch, separators=(",", ":"), default=str),
+        )
 
     async def close_position(
         self,
@@ -223,6 +299,7 @@ class TraderRepository:
         exit_price: float,
         status: str,
         reason: str,
+        exit_fee_usdt: float = 0.0,
         mexc_close_order_id: int | None = None,
     ) -> TraderPosition:
         realized_return_pct = (position.entry_price - exit_price) / position.entry_price * 100.0
@@ -233,10 +310,9 @@ class TraderRepository:
             SET status=$2, closed_at=now(), exit_price=$3,
                 current_price=$3, current_return_pct=$4,
                 realized_pnl_usdt=$5, realized_return_pct=$4,
-                exit_reason=$6, mexc_close_order_id=$7,
+                exit_reason=$6, mexc_close_order_id=$7, exit_fee_usdt=$8,
                 last_observed_at=now(), updated_at=now()
-            WHERE id=$1 AND status='open'
-            RETURNING *
+            WHERE id=$1 AND status='open' RETURNING *
             """,
             position.id,
             status,
@@ -245,24 +321,18 @@ class TraderRepository:
             realized_pnl,
             reason,
             mexc_close_order_id,
+            exit_fee_usdt,
         )
         if not row:
             raise RuntimeError(f"position {position.id} is no longer open")
         await self.add_event(
-            position.id,
-            status,
-            exit_price,
-            realized_return_pct,
-            {"reason": reason, "realized_pnl_usdt": realized_pnl},
+            position.id, status, exit_price, realized_return_pct,
+            {"reason": reason, "realized_pnl_usdt": realized_pnl, "exit_fee_usdt": exit_fee_usdt},
         )
         return self._position(row)
 
     async def add_event(
-        self,
-        position_id: int,
-        event_type: str,
-        price: float | None,
-        return_pct: float | None,
+        self, position_id: int, event_type: str, price: float | None, return_pct: float | None,
         payload: dict[str, Any] | None = None,
     ) -> None:
         await self.db.pool.execute(
@@ -284,6 +354,8 @@ class TraderRepository:
             id=int(row["id"]),
             signal_id=int(row["signal_id"]),
             symbol=str(row["symbol"]),
+            risk_tier=str(row.get("risk_tier") or metadata.get("risk_tier") or "STANDARD").upper(),
+            slot_no=int(row["slot_no"]) if row.get("slot_no") is not None else None,
             mode=str(row["mode"]),
             capital_strategy=str(row["capital_strategy"]),
             exit_strategy=str(row["exit_strategy"]),
@@ -298,15 +370,18 @@ class TraderRepository:
             current_return_pct=float(row["current_return_pct"]),
             peak_profit_pct=float(row["peak_profit_pct"]),
             max_adverse_pct=float(row["max_adverse_pct"]),
-            profit_floor_pct=(
-                float(row["profit_floor_pct"]) if row["profit_floor_pct"] is not None else None
-            ),
+            profit_floor_pct=float(row["profit_floor_pct"]) if row["profit_floor_pct"] is not None else None,
             liquidation_proxy_pct=float(row["liquidation_proxy_pct"]),
-            mexc_position_id=(
-                int(row["mexc_position_id"]) if row["mexc_position_id"] is not None else None
-            ),
-            mexc_open_order_id=(
-                int(row["mexc_open_order_id"]) if row["mexc_open_order_id"] is not None else None
-            ),
+            target_20_at=row.get("target_20_at"),
+            protection_armed_at=row.get("protection_armed_at"),
+            mexc_protection_order_id=int(row["mexc_protection_order_id"]) if row.get("mexc_protection_order_id") is not None else None,
+            breach_100_at=row.get("breach_100_at"),
+            breach_200_at=row.get("breach_200_at"),
+            breach_300_at=row.get("breach_300_at"),
+            breach_400_at=row.get("breach_400_at"),
+            entry_fee_usdt=float(row.get("entry_fee_usdt") or 0.0),
+            exit_fee_usdt=float(row.get("exit_fee_usdt") or 0.0),
+            mexc_position_id=int(row["mexc_position_id"]) if row["mexc_position_id"] is not None else None,
+            mexc_open_order_id=int(row["mexc_open_order_id"]) if row["mexc_open_order_id"] is not None else None,
             metadata=metadata,
         )

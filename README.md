@@ -1,4 +1,4 @@
-# MEXC Exhaustion Scanner + STANDARD Short Trader v1.0.0
+# MEXC Exhaustion Scanner + Multi-Slot Futures Trader v1.2.0
 
 Hotfix: restores Discord formatting helpers used by signal and performance reports. Fixes `AttributeError: DiscordNotifier has no attribute _percent` in both scheduled and on-demand reports.
 
@@ -173,80 +173,9 @@ These thresholds are research proxies, not MEXC liquidation prices. Actual liqui
 - Existing Render environments that still contain `exhaustion_watch` in `DISCORD_SIGNAL_LEVELS` cannot cause exhaustion alerts to be posted.
 - Performance reporting is unchanged.
 
-## v1.0.0 — STANDARD short trader (paper first)
+## v1.0.0 — original trader (historical)
 
-This repository now contains a second Render worker, `mexc-standard-short-trader`, which consumes the scanner's persisted `confirmed_short` signals from the same PostgreSQL database.
-
-### Trading rules
-
-- Only `STANDARD` execution-risk `confirmed_short` signals are eligible.
-- Exactly one trader position may be open at a time. Any later confirmed signal is permanently recorded as `ignored_busy` while that position is open.
-- The default start mode is `TRADING_MODE=paper`; no MEXC API key is needed for paper mode.
-- Paper entry uses the current MEXC futures last price when the trader processes the new signal, not the historical scanner retest close.
-- Exposure is always modeled at 1x.
-- `TRADER_CAPITAL_STRATEGY=isolated_full`: notional = 100% of current account equity, with a configurable +100% adverse-move liquidation research proxy.
-- `TRADER_CAPITAL_STRATEGY=cross_20`: notional = 20% of current account equity, with a configurable +400% adverse-move cross-buffer research proxy.
-- Paper account P&L compounds after each closed/liquidated paper position.
-
-### Position maturity (current behavior)
-
-The v1.0 ratchet/trailing experiment has been superseded by a simpler maturity setting. The trader now has three independent configuration axes: trading mode, capital/margin model, and position maturity.
-
-```text
-TRADING_MODE=paper                         # paper | live
-TRADER_CAPITAL_STRATEGY=cross_20          # cross_20 | isolated_full
-TRADER_POSITION_MATURITY=profit_20         # profit_20 | 1d | 2d | 3d | 7d
-TRADER_PROFIT_TARGET_PCT=20
-PAPER_STARTING_EQUITY_USDT=2000
-TRADER_POLL_SECONDS=5
-TRADER_PROCESS_EXISTING_SIGNALS=false
-TRADER_MAX_SIGNAL_AGE_SECONDS=900
-TRADER_ISOLATED_ADVERSE_LIMIT_PCT=100
-TRADER_CROSS_ADVERSE_LIMIT_PCT=400
-DISCORD_TRADER_WEBHOOK_URL=                 # optional paper/live trade-event channel
-```
-
-- `profit_20`: close at the first observed +20% short return (or configured `TRADER_PROFIT_TARGET_PCT`).
-- `1d`, `2d`, `3d`, `7d`: hold until that elapsed maturity and close at market at the horizon.
-- In paper mode, the selected liquidation research proxy closes the position earlier if breached.
-- Exactly one position can be open. New signals while busy are recorded as ignored and are not replayed.
-
-`TRADER_PROCESS_EXISTING_SIGNALS=false` is intentional: on the first trader start, the cursor is initialized to the newest already-stored confirmed-short signal, so an old signal cannot accidentally open a new position.
-
-### Live mode safety gate
-
-The live adapter contains MEXC Contract API authentication, USDT-equity queries, contract sizing, open-position queries, market short submission and market close submission. However, MEXC's current public Contract API documentation labels the order mutation endpoints as under maintenance. For that reason live mode is fail-closed.
-
-To arm live mode in a future environment where your MEXC account has verified futures order API access, all of these are required:
-
-```text
-TRADING_MODE=live
-MEXC_API_KEY=...
-MEXC_API_SECRET=...
-MEXC_LIVE_ORDER_API_ENABLED=true
-LIVE_TRADING_CONFIRM=I_UNDERSTAND_LIVE_TRADING
-```
-
-Do not set these flags merely to test the worker. Use `paper` until live futures order access is independently verified on the account.
-
-### Database
-
-Migration `009_trader_bot.sql` adds:
-
-- `trader_runtime`
-- `trader_positions`
-- `trader_signal_decisions`
-- `trader_position_events`
-
-A partial unique index guarantees one open trader position at database level. Schema migrations are also protected by a PostgreSQL advisory lock because the scanner and trader workers can deploy simultaneously.
-
-### Render Shell status
-
-```bash
-python -m app.trader_status
-```
-
-This prints paper equity, the signal cursor and the active position's entry/current return/peak/adverse excursion/profit floor.
+v1.0 introduced the second Render worker and a one-position STANDARD-only paper trader. Its `TRADER_CAPITAL_STRATEGY` and fixed-maturity execution model are retained in release history only and are superseded by v1.2.0 below.
 
 ## v1.1.0 — +20% target analytics and configurable position maturity
 
@@ -338,3 +267,45 @@ python -m app.signal_ledger_now
 ```
 
 Each table row shows signal time/price, +20% target timing, 1D/2D/3D/7D price + short return, and first -100/-200/-300/-400 adverse-breach times. Color semantics: green = profitable/target, amber = negative but not liquidated at -100%, red = liquidation-type breach already occurred, blue = pending. The full exact ledger remains attached as CSV.
+
+
+## v1.2.0 — multi-slot runner trader + live execution safety + Discord operations
+
+The trader is now a configurable portfolio engine. The default paper strategy is the current Strategy 1 experiment: STANDARD + HIGH_RISK, cross model, 1x, six slots, approximately 3.33% notional per slot, 20% aggregate exposure cap, and at most five HIGH_RISK positions so STANDARD can retain capacity. EXTREME_RISK is excluded by default.
+
+`+20%` is now a milestone rather than an exit. At +25% peak short return the trader arms profit protection. It protects approximately +20% gross return and then ratchets the floor upward with a 15% price-retracement rule while the short continues to run. Paper mode emulates the stop locally; live mode places and modifies a position-level protection stop at MEXC and periodically verifies that the exchange-side protection still exists.
+
+Key configuration:
+
+```text
+TRADING_MODE=paper
+TRADER_MARGIN_MODE=cross
+TRADER_LEVERAGE=1
+TRADER_ALLOWED_RISK_TIERS=STANDARD,HIGH_RISK
+TRADER_MAX_OPEN_POSITIONS=6
+TRADER_MAX_TOTAL_EXPOSURE_PCT=20
+TRADER_MAX_HIGH_RISK_POSITIONS=5
+TRADER_ALLOW_SAME_SYMBOL_PARALLEL=false
+TRADER_PROFIT_TARGET_PCT=20
+TRADER_PROTECTION_ARM_PCT=25
+TRADER_TRAIL_CALLBACK_PCT=15
+DISCORD_TRADER_EVENTS_WEBHOOK_URL=...
+```
+
+`TRADER_SLOT_ALLOCATION_PCT` is optional; when omitted it is calculated as max total exposure divided by the configured number of slots. The HIGH cap also defaults dynamically: it reserves one STANDARD slot only when STANDARD and HIGH_RISK are both enabled.
+
+Trader-event Discord notifications include opens, +20 milestones, protection arming/ratchets, cumulative -100/-200/-300/-400 adverse breaches, closes, server/API errors, recoveries and periodic heartbeats. Each event includes portfolio equity/MTM when available, slot/exposure usage, performance totals and the currently open positions. The scanner independently watches the trader database heartbeat and can alert if the trader process hard-crashes.
+
+Live mode uses the current MEXC Futures API and remains fail-closed until credentials and explicit live gates are configured. Run the read-only preflight before flipping live:
+
+```bash
+python -m app.trader_preflight
+```
+
+Test the trader-events Discord channel:
+
+```bash
+python -m app.trader_notify_test
+```
+
+See `TRADER-DEPLOY.md` for the full Render configuration and live checklist. Migration `012_multi_slot_live_trader.sql` is applied automatically.

@@ -27,6 +27,10 @@ services:
         value: confirmed_short
       - key: DISCORD_PERFORMANCE_WEBHOOK_URL
         sync: false
+      - key: DISCORD_TRADER_EVENTS_WEBHOOK_URL
+        sync: false
+      - key: TRADER_WATCHDOG_STALE_SECONDS
+        value: "180"
       - key: MIN_AMOUNT_24H
         value: "3000000"
       - key: MAX_SPREAD_PCT
@@ -115,15 +119,29 @@ services:
       - key: PYTHON_VERSION
         value: "3.12.11"
       - key: MEXC_BASE_URL
-        value: https://contract.mexc.com
+        value: https://api.mexc.com
+      - key: MEXC_WS_URL
+        value: wss://contract.mexc.com/edge
       - key: TRADING_MODE
         value: paper
-      - key: TRADER_CAPITAL_STRATEGY
-        value: cross_20
-      - key: TRADER_POSITION_MATURITY
-        value: profit_20
+      - key: TRADER_MARGIN_MODE
+        value: cross
+      - key: TRADER_LEVERAGE
+        value: "1"
+      - key: TRADER_ALLOWED_RISK_TIERS
+        value: STANDARD,HIGH_RISK
+      - key: TRADER_MAX_OPEN_POSITIONS
+        value: "6"
+      - key: TRADER_MAX_TOTAL_EXPOSURE_PCT
+        value: "20"
+      - key: TRADER_MAX_HIGH_RISK_POSITIONS
+        value: "5"
+      - key: TRADER_ALLOW_SAME_SYMBOL_PARALLEL
+        value: "false"
       - key: PAPER_STARTING_EQUITY_USDT
         value: "2000"
+      - key: TRADER_PAPER_TAKER_FEE_RATE
+        value: "0.0008"
       - key: TRADER_POLL_SECONDS
         value: "5"
       - key: TRADER_PROCESS_EXISTING_SIGNALS
@@ -132,10 +150,20 @@ services:
         value: "900"
       - key: TRADER_PROFIT_TARGET_PCT
         value: "20"
-      - key: TRADER_ISOLATED_ADVERSE_LIMIT_PCT
-        value: "100"
-      - key: TRADER_CROSS_ADVERSE_LIMIT_PCT
-        value: "400"
+      - key: TRADER_PROTECTION_ARM_PCT
+        value: "25"
+      - key: TRADER_TRAIL_CALLBACK_PCT
+        value: "15"
+      - key: TRADER_PROTECTION_UPDATE_STEP_PCT
+        value: "1"
+      - key: TRADER_PROTECTION_NOTIFY_STEP_PCT
+        value: "10"
+      - key: TRADER_DISCORD_HEARTBEAT_SECONDS
+        value: "900"
+      - key: TRADER_ERROR_ALERT_COOLDOWN_SECONDS
+        value: "300"
+      - key: DISCORD_TRADER_EVENTS_WEBHOOK_URL
+        sync: false
       - key: MEXC_LIVE_ORDER_API_ENABLED
         value: "false"
       - key: MEXC_API_KEY
@@ -143,8 +171,6 @@ services:
       - key: MEXC_API_SECRET
         sync: false
       - key: LIVE_TRADING_CONFIRM
-        sync: false
-      - key: DISCORD_TRADER_WEBHOOK_URL
         sync: false
 
 databases:

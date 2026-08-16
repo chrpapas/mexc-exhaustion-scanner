@@ -760,3 +760,10 @@ class Database:
             worker_name,
             json.dumps(status, separators=(",", ":"), default=str),
         )
+
+    async def worker_heartbeat(self, worker_name: str) -> dict[str, Any] | None:
+        row = await self.pool.fetchrow(
+            "SELECT worker_name, last_seen_at, status FROM worker_heartbeat WHERE worker_name=$1",
+            worker_name,
+        )
+        return dict(row) if row else None

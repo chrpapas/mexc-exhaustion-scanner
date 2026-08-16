@@ -4,13 +4,13 @@ import asyncio
 import json
 import logging
 import time
+from dataclasses import dataclass, field
 from typing import Any
 
 LOGGER = logging.getLogger(__name__)
 
 
 def ticker_price_from_message(message: str | bytes, symbol: str) -> float | None:
-    """Return lastPrice from a MEXC push.ticker message for *symbol*."""
     if isinstance(message, bytes):
         message = message.decode("utf-8")
     try:
@@ -36,90 +36,88 @@ def ticker_price_from_message(message: str | bytes, symbol: str) -> float | None
     return price if price > 0 else None
 
 
+@dataclass(slots=True)
+class _TickerState:
+    price: float | None = None
+    updated_at: float = 0.0
+    ready: asyncio.Event = field(default_factory=asyncio.Event)
+    task: asyncio.Task[None] | None = None
+
+
 class MexcTickerStream:
-    """Single-symbol MEXC futures ticker stream for the one-position trader."""
+    """Concurrent single-symbol streams, one lightweight WS connection per open symbol."""
 
     def __init__(self, url: str = "wss://contract.mexc.com/edge") -> None:
         self.url = url
-        self._symbol: str | None = None
-        self._price: float | None = None
-        self._updated_at = 0.0
-        self._task: asyncio.Task[None] | None = None
-        self._ready = asyncio.Event()
+        self._states: dict[str, _TickerState] = {}
         self._lock = asyncio.Lock()
 
     async def close(self) -> None:
         async with self._lock:
-            task = self._task
-            self._task = None
-            self._symbol = None
-            self._ready.clear()
-        if task is not None:
+            tasks = [s.task for s in self._states.values() if s.task is not None]
+            self._states.clear()
+        for task in tasks:
             task.cancel()
-            await asyncio.gather(task, return_exceptions=True)
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+
+    async def remove(self, symbol: str) -> None:
+        async with self._lock:
+            state = self._states.pop(symbol, None)
+        if state and state.task:
+            state.task.cancel()
+            await asyncio.gather(state.task, return_exceptions=True)
 
     async def last_price(
-        self,
-        symbol: str,
-        *,
-        timeout_seconds: float = 4.0,
-        max_age_seconds: float = 5.0,
+        self, symbol: str, *, timeout_seconds: float = 4.0, max_age_seconds: float = 5.0
     ) -> float:
-        await self._ensure_symbol(symbol)
-        if self._fresh(max_age_seconds):
-            assert self._price is not None
-            return self._price
-        self._ready.clear()
-        # Re-check after clearing so a price arriving between the first freshness
-        # check and Event.clear() cannot be lost.
-        if self._fresh(max_age_seconds):
-            assert self._price is not None
-            return self._price
+        state = await self._ensure_symbol(symbol)
+        if self._fresh(state, max_age_seconds):
+            assert state.price is not None
+            return state.price
+        state.ready.clear()
+        if self._fresh(state, max_age_seconds):
+            assert state.price is not None
+            return state.price
         try:
-            await asyncio.wait_for(self._ready.wait(), timeout=timeout_seconds)
+            await asyncio.wait_for(state.ready.wait(), timeout=timeout_seconds)
         except TimeoutError as exc:
             raise RuntimeError(f"MEXC ticker WebSocket timed out for {symbol}") from exc
-        if self._price is None:
+        if state.price is None:
             raise RuntimeError(f"MEXC ticker WebSocket has no price for {symbol}")
-        return self._price
+        return state.price
 
-    def _fresh(self, max_age_seconds: float) -> bool:
-        return self._price is not None and (time.monotonic() - self._updated_at) <= max_age_seconds
+    @staticmethod
+    def _fresh(state: _TickerState, max_age_seconds: float) -> bool:
+        return state.price is not None and (time.monotonic() - state.updated_at) <= max_age_seconds
 
-    async def _ensure_symbol(self, symbol: str) -> None:
+    async def _ensure_symbol(self, symbol: str) -> _TickerState:
         async with self._lock:
-            if self._symbol == symbol and self._task is not None and not self._task.done():
-                return
-            previous = self._task
-            self._symbol = symbol
-            self._price = None
-            self._updated_at = 0.0
-            self._ready.clear()
-            self._task = asyncio.create_task(self._run(symbol), name=f"mexc-ticker-{symbol}")
-        if previous is not None:
-            previous.cancel()
-            await asyncio.gather(previous, return_exceptions=True)
+            state = self._states.get(symbol)
+            if state is None:
+                state = _TickerState()
+                state.task = asyncio.create_task(self._run(symbol, state), name=f"mexc-ticker-{symbol}")
+                self._states[symbol] = state
+            elif state.task is None or state.task.done():
+                state.task = asyncio.create_task(self._run(symbol, state), name=f"mexc-ticker-{symbol}")
+            return state
 
-    async def _run(self, symbol: str) -> None:
+    async def _run(self, symbol: str, state: _TickerState) -> None:
         backoff = 1.0
-        while self._symbol == symbol:
+        while self._states.get(symbol) is state:
             try:
                 try:
                     from websockets.asyncio.client import connect
                 except ModuleNotFoundError as exc:
                     raise RuntimeError("Python package 'websockets' is not installed") from exc
                 async with connect(
-                    self.url,
-                    open_timeout=10,
-                    close_timeout=5,
-                    ping_interval=None,
-                    max_queue=32,
+                    self.url, open_timeout=10, close_timeout=5, ping_interval=None, max_queue=32
                 ) as ws:
                     await ws.send(json.dumps({"method": "sub.ticker", "param": {"symbol": symbol}}))
                     LOGGER.info("MEXC ticker WebSocket subscribed symbol=%s", symbol)
                     backoff = 1.0
                     last_ping = time.monotonic()
-                    while self._symbol == symbol:
+                    while self._states.get(symbol) is state:
                         try:
                             message: Any = await asyncio.wait_for(ws.recv(), timeout=15.0)
                         except TimeoutError:
@@ -133,17 +131,15 @@ class MexcTickerStream:
                         price = ticker_price_from_message(message, symbol)
                         if price is None:
                             continue
-                        self._price = price
-                        self._updated_at = now
-                        self._ready.set()
+                        state.price = price
+                        state.updated_at = now
+                        state.ready.set()
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
                 LOGGER.warning(
                     "MEXC ticker WebSocket disconnected symbol=%s error=%s; reconnecting in %.0fs",
-                    symbol,
-                    exc,
-                    backoff,
+                    symbol, exc, backoff,
                 )
                 await asyncio.sleep(backoff)
                 backoff = min(backoff * 2.0, 30.0)
