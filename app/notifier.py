@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -7,6 +8,7 @@ from zoneinfo import ZoneInfo
 import httpx
 
 from app.models import RunSignal
+from app.signal_ledger import SignalLedger, SignalLedgerItem
 from app.performance import (
     HorizonSummary,
     HorizonSurvivalSummary,
@@ -315,6 +317,207 @@ class DiscordNotifier:
         except (httpx.HTTPError, ValueError):
             LOGGER.exception("Discord performance report failed")
             return False
+
+
+    async def send_signal_ledger(
+        self,
+        ledger: SignalLedger,
+        *,
+        csv_bytes: bytes | None = None,
+        as_of: datetime | None = None,
+        timezone_name: str = "Europe/Zurich",
+    ) -> bool:
+        """Send a subscriber-facing per-signal outcome ledger.
+
+        The ledger is intentionally separate from the aggregate performance board.
+        It uses the same performance webhook and sends a compact summary followed
+        by paginated risk-tier cards. A CSV attachment contains the full raw table.
+        """
+        if not self._performance_webhook_url:
+            return False
+
+        tz = ZoneInfo(timezone_name)
+        display_time = (as_of or ledger.generated_at).astimezone(tz)
+        risk_counts = {
+            "standard": len(ledger.by_risk("standard")),
+            "high_risk": len(ledger.by_risk("high_risk")),
+            "extreme_risk": len(ledger.by_risk("extreme_risk")),
+        }
+        target_before_100 = sum(item.target_before_100_breach is True for item in ledger.items)
+        breach_before_target = sum(
+            item.target_before_100_breach is False and item.first_100_breach_at is not None
+            for item in ledger.items
+        )
+        pending_target_race = ledger.total - target_before_100 - breach_before_target
+
+        summary = {
+            "title": "📒 Exhaustion Scanner • Signal Outcome Ledger",
+            "description": (
+                f"Updated **{display_time.strftime('%d %b %Y • %H:%M %Z')}**\n"
+                "Every confirmed-short signal shown individually • newest first"
+            ),
+            "color": 0x5865F2,
+            "fields": [
+                {
+                    "name": "📦 Signals",
+                    "value": (
+                        f"**{ledger.total}** total\n"
+                        f"🟢 STANDARD **{risk_counts['standard']}** • "
+                        f"🟡 HIGH **{risk_counts['high_risk']}** • "
+                        f"🔴 EXTREME **{risk_counts['extreme_risk']}**"
+                    ),
+                    "inline": False,
+                },
+                {
+                    "name": "🎯 +20% vs -100% Path",
+                    "value": (
+                        f"🟢 Target first **{target_before_100}** • "
+                        f"🔴 -100% breach first **{breach_before_target}** • "
+                        f"🔵 unresolved **{pending_target_race}**"
+                    ),
+                    "inline": False,
+                },
+                {
+                    "name": "💥 Observed Adverse Breaches",
+                    "value": (
+                        f"🔴 -100% **{ledger.count_breach(100)}** • "
+                        f"🟥 -200% **{ledger.count_breach(200)}** • "
+                        f"🟣 -300% **{ledger.count_breach(300)}** • "
+                        f"⚫ -400% **{ledger.count_breach(400)}**"
+                    ),
+                    "inline": False,
+                },
+                {
+                    "name": "Legend",
+                    "value": (
+                        "🟢 target/profitable • 🟡 profitable but <20% • "
+                        "⚪ negative but no -100% breach • 🔴/🟥/🟣/⚫ breach severity • 🔵 pending"
+                    ),
+                    "inline": False,
+                },
+            ],
+            "footer": {"text": "Horizon prices are reconstructed from the stored short returns and signal entry price."},
+        }
+
+        cards: list[dict] = [summary]
+        for risk_tier, title, color in (
+            ("standard", "🟢 STANDARD • Signal Ledger", 0x57F287),
+            ("high_risk", "🟡 HIGH RISK • Signal Ledger", 0xFEE75C),
+            ("extreme_risk", "🔴 EXTREME RISK • Signal Ledger", 0xED4245),
+        ):
+            group = list(ledger.by_risk(risk_tier))
+            if not group:
+                continue
+            page_size = 7
+            total_pages = (len(group) + page_size - 1) // page_size
+            for page_index in range(total_pages):
+                page = group[page_index * page_size:(page_index + 1) * page_size]
+                cards.append({
+                    "title": title,
+                    "description": f"Page **{page_index + 1}/{total_pages}** • {len(group)} traced signals",
+                    "color": color,
+                    "fields": [self._ledger_signal_field(item, tz) for item in page],
+                })
+
+        try:
+            for index, embed in enumerate(cards):
+                self._validate_discord_embed(embed)
+                payload = {
+                    "username": "Exhaustion Scanner • Ledger",
+                    "embeds": [embed],
+                    "allowed_mentions": {"parse": []},
+                }
+                if index == 0 and csv_bytes is not None:
+                    filename = f"signal-outcome-ledger-{display_time.strftime('%Y-%m-%d')}.csv"
+                    response = await self._client.post(
+                        self._performance_webhook_url,
+                        data={"payload_json": json.dumps(payload)},
+                        files={"files[0]": (filename, csv_bytes, "text/csv")},
+                    )
+                else:
+                    response = await self._client.post(self._performance_webhook_url, json=payload)
+                if response.status_code >= 400:
+                    LOGGER.error(
+                        "Discord signal-ledger card %d/%d rejected status=%s body=%s",
+                        index + 1,
+                        len(cards),
+                        response.status_code,
+                        response.text[:2000],
+                    )
+                response.raise_for_status()
+            return True
+        except (httpx.HTTPError, ValueError):
+            LOGGER.exception("Discord signal outcome ledger failed")
+            return False
+
+    def _ledger_signal_field(self, item: SignalLedgerItem, tz: ZoneInfo) -> dict:
+        status_icon, status_label = self._ledger_status(item)
+        target = (
+            f"✅ **{self._hours(item.time_to_target_20_hours)}**"
+            if item.target_20_at is not None
+            else "⏳ not reached"
+        )
+        if item.target_20_at is not None:
+            target += f" • {item.target_20_at.astimezone(tz).strftime('%d %b %H:%M')}"
+
+        horizon_parts: list[str] = []
+        for horizon in item.horizons:
+            if horizon.return_pct is None:
+                horizon_parts.append(f"**{horizon.label}** ⏳")
+                continue
+            icon = "🟢" if horizon.return_pct > 0 else "⚪"
+            horizon_parts.append(
+                f"**{horizon.label}** {icon} {self._price(horizon.price)} "
+                f"({self._signed_percent(horizon.return_pct)})"
+            )
+
+        breach_parts: list[str] = []
+        breach_icons = {100: "🔴", 200: "🟥", 300: "🟣", 400: "⚫"}
+        for breach in item.breaches:
+            if breach.occurred_at is None:
+                breach_parts.append(f"-{breach.adverse_limit_pct}% 🟢 none")
+            else:
+                breach_parts.append(
+                    f"-{breach.adverse_limit_pct}% {breach_icons[breach.adverse_limit_pct]} "
+                    f"{self._hours(breach.hours_after_signal)}"
+                )
+
+        value = (
+            f"**{status_icon} {status_label}**\n"
+            f"Signal: `{item.confirmed_at.astimezone(tz).strftime('%d %b %H:%M')}` • "
+            f"price **{self._price(item.signal_price)}** • episode #{item.episode_id}\n"
+            f"🎯 +20%: {target}\n"
+            f"{' • '.join(horizon_parts[:2])}\n"
+            f"{' • '.join(horizon_parts[2:])}\n"
+            f"Risk path: {' • '.join(breach_parts[:2])}\n"
+            f"{' • '.join(breach_parts[2:])}"
+        )
+        return {
+            "name": item.symbol,
+            "value": value,
+            "inline": False,
+        }
+
+    @staticmethod
+    def _ledger_status(item: SignalLedgerItem) -> tuple[str, str]:
+        status = item.headline_status
+        if status == "target_hit":
+            return "🟢", "TARGET HIT"
+        if status == "target_then_breach":
+            return "🟢→🔴", "TARGET HIT, LATER BREACH OBSERVED"
+        if status == "breach_400":
+            return "⚫", "CATASTROPHIC • -400% BREACH BEFORE +20%"
+        if status == "breach_300":
+            return "🟣", "SEVERE • -300% BREACH BEFORE +20%"
+        if status == "breach_200":
+            return "🟥", "SEVERE • -200% BREACH BEFORE +20%"
+        if status == "breach_100":
+            return "🔴", "LIQUIDATION-TYPE • -100% BREACH BEFORE +20%"
+        if status == "profitable_below_target":
+            return "🟡", "PROFITABLE • TARGET NOT YET HIT"
+        if status == "safe_negative":
+            return "⚪", "NEGATIVE • NO -100% BREACH OBSERVED"
+        return "🔵", "PENDING"
 
 
     @staticmethod

@@ -306,3 +306,23 @@ Fixed-horizon strategy-matrix cells now split failures into mutually exclusive r
 ## v1.1.8 — HIGH vs EXTREME stats split
 
 Performance Discord now renders STANDARD, HIGH RISK, and EXTREME RISK as separate strategy-matrix cards. The previous combined HIGH+EXTREME calculations remain available internally for compatibility, but subscriber-facing stats no longer average the two risk tiers together. No database migration is required.
+
+## v1.1.9 — per-signal outcome ledger
+
+A second, on-demand subscriber report now complements the aggregate strategy board:
+
+```bash
+python -m app.signal_ledger_now
+```
+
+The report posts to `DISCORD_PERFORMANCE_WEBHOOK_URL` (falling back to the signal webhook for backward compatibility) and includes:
+
+- every confirmed-short signal, grouped into STANDARD / HIGH RISK / EXTREME RISK;
+- confirmed-short time and signal price;
+- whether +20% was reached and elapsed time to target;
+- reconstructed 1D / 2D / 3D / 7D prices plus short-return percentages;
+- first observed -100% / -200% / -300% / -400% adverse breach times;
+- intuitive visual outcomes for target-hit, profitable-below-target, negative-but-unbreached, pending and breach severity;
+- a CSV attachment containing the complete raw ledger for filtering and offline analysis.
+
+The ledger is on-demand only by default and does not alter the existing scheduled performance board. No database migration is required.

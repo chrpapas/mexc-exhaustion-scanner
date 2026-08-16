@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mexc-exhaustion-scanner"
-version = "1.1.8"
+version = "1.1.9"
 description = "MEXC exhaustion scanner plus one-position STANDARD short trader with configurable paper/live, margin and maturity modes"
 requires-python = ">=3.12,<3.15"
 dependencies = [

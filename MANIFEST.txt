@@ -1,5 +1,6 @@
 .gitignore
 .python-version
+MANIFEST.txt
 README.md
 README_v0.8.8.md
 TRADER-DEPLOY.md
@@ -16,6 +17,8 @@ app/models.py
 app/notifier.py
 app/performance.py
 app/report_now.py
+app/signal_ledger.py
+app/signal_ledger_now.py
 app/signals.py
 app/trader.py
 app/trader_config.py
@@ -45,6 +48,7 @@ tests/test_mexc_trade.py
 tests/test_notifier.py
 tests/test_performance.py
 tests/test_report_now.py
+tests/test_signal_ledger.py
 tests/test_signals.py
 tests/test_trader_config.py
 tests/test_trader_db.py
