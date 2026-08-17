@@ -51,7 +51,7 @@ The old `TRADER_CAPITAL_STRATEGY`, `TRADER_POSITION_MATURITY`, `TRADER_ISOLATED_
 
 ## Discord operations channel
 
-Set the same `DISCORD_TRADER_EVENTS_WEBHOOK_URL` on **both** the trader and scanner Render services. The trader reports opens, target milestones, protection changes, cumulative -100/-200/-300/-400 adverse breaches, closes, API/server errors, recovery, and a periodic portfolio heartbeat. Each notification includes account/capacity/open-position context.
+Set the same `DISCORD_TRADER_EVENTS_WEBHOOK_URL` on **both** the trader and scanner Render services. The trader Discord reports position opens, the first +20% profit milestone, each first-time -100%/-200%/-300%/-400% adverse breach, position closes/exchange-side exits, and API/server/live-safety errors. Skip decisions, protection-arm/ratchet updates, startup/shutdown and routine heartbeats stay in Render logs/PostgreSQL. Notifications include account/capacity/open-position context.
 
 The scanner independently watches the trader's PostgreSQL heartbeat. Set:
 
@@ -94,7 +94,7 @@ MEXC_LIVE_ORDER_API_ENABLED=true
 LIVE_TRADING_CONFIRM=I_UNDERSTAND_LIVE_TRADING
 ```
 
-6. Redeploy and confirm the `TRADER ONLINE` Discord event reports `LIVE` mode and the expected strategy before allowing new scanner signals.
+6. Redeploy, verify the startup strategy line in Render logs, and use `python -m app.trader_notify_test` to confirm the trader-events webhook before allowing new scanner signals.
 
 The preflight deliberately places no order. Unit/integration tests verify request signing/body construction, current MEXC endpoint selection, multi-slot/risk logic and protection order behavior, but an account-specific live fill cannot be proven without an actual live order.
 

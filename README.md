@@ -1,4 +1,4 @@
-# MEXC Exhaustion Scanner + Multi-Slot Futures Trader v1.2.0
+# MEXC Exhaustion Scanner + Multi-Slot Futures Trader v1.2.3
 
 Hotfix: restores Discord formatting helpers used by signal and performance reports. Fixes `AttributeError: DiscordNotifier has no attribute _percent` in both scheduled and on-demand reports.
 
@@ -294,7 +294,7 @@ DISCORD_TRADER_EVENTS_WEBHOOK_URL=...
 
 `TRADER_SLOT_ALLOCATION_PCT` is optional; when omitted it is calculated as max total exposure divided by the configured number of slots. The HIGH cap also defaults dynamically: it reserves one STANDARD slot only when STANDARD and HIGH_RISK are both enabled.
 
-Trader-event Discord notifications include opens, +20 milestones, protection arming/ratchets, cumulative -100/-200/-300/-400 adverse breaches, closes, server/API errors, recoveries and periodic heartbeats. Each event includes portfolio equity/MTM when available, slot/exposure usage, performance totals and the currently open positions. The scanner independently watches the trader database heartbeat and can alert if the trader process hard-crashes.
+Trader-event Discord is intentionally selective: it sends position opens, the first +20% profit milestone, each first-time cumulative -100%/-200%/-300%/-400% adverse breach, position closes/exchange-side exits, and server/API/live-safety errors. Skip decisions, protection-arm/ratchet updates, startup/shutdown and routine heartbeats remain in Render logs/PostgreSQL only. Discord event messages include portfolio equity/MTM when available, slot/exposure usage, performance totals and current open positions. The scanner independently watches the trader database heartbeat and alerts if the trader process hard-crashes.
 
 Live mode uses the current MEXC Futures API and remains fail-closed until credentials and explicit live gates are configured. Run the read-only preflight before flipping live:
 
@@ -309,3 +309,17 @@ python -m app.trader_notify_test
 ```
 
 See `TRADER-DEPLOY.md` for the full Render configuration and live checklist. Migration `012_multi_slot_live_trader.sql` is applied automatically.
+
+## v1.2.1 operational audit hotfix
+
+Every confirmed-short signal consumed by the trader now produces an explicit audit decision. Opened positions are logged as `OPENED`; non-traded signals are persisted, logged at INFO, and sent to `DISCORD_TRADER_EVENTS_WEBHOOK_URL` with the exact reason and current portfolio snapshot. Skip reasons include risk-tier filtering, stale signal, reconciliation halt, slot capacity, duplicate symbol, reserved STANDARD capacity, and aggregate exposure cap. Position closes are also logged at INFO.
+
+
+
+## v1.2.3 — trader Discord milestones
+
+Restores concise trader-event Discord milestones without bringing back routine noise. The trader now sends one alert when a position first reaches +20% and one alert for each first-time cumulative adverse threshold crossed at -100%, -200%, -300% and -400%. Each alert includes the triggering price/P&L plus the current portfolio snapshot. Skip/filter decisions, protection-ratchet updates and routine heartbeats remain log/DB only.
+
+## v1.2.2 — quiet trader Discord
+
+Discord is restricted to OPEN / CLOSE / ERROR events. All other trader decisions and milestones remain fully logged in Render/PostgreSQL without Discord noise. No migration is required.

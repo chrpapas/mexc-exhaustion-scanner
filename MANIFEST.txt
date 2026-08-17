@@ -1,5 +1,6 @@
 .gitignore
 .python-version
+MANIFEST.txt
 README.md
 README_v0.8.8.md
 TRADER-DEPLOY.md
@@ -57,3 +58,5 @@ tests/test_trader_config.py
 tests/test_trader_db.py
 tests/test_trader_logic.py
 tests/test_trader_v120.py
+tests/test_trader_v122.py
+tests/test_trader_v123.py

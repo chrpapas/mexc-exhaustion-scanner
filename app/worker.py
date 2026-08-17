@@ -1297,12 +1297,7 @@ class ScannerWorker:
             )
         elif not stale and self._trader_watchdog_alerted:
             self._trader_watchdog_alerted = False
-            await self.trader_watchdog_notifier.send(
-                "🟢 TRADER HEARTBEAT RECOVERED",
-                "The scanner can see fresh trader heartbeats again.",
-                [{"name": "Heartbeat age", "value": f"{age:.0f}s", "inline": True}],
-                color=0x2ECC71,
-            )
+            LOGGER.info("Trader heartbeat recovered age=%.0fs", age)
 
     async def write_heartbeat(self) -> None:
         discovery = await self.discovery_symbols(include_benchmark=True)

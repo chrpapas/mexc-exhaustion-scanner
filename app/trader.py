@@ -65,15 +65,7 @@ class PortfolioShortTrader:
             self.settings.slot_allocation_pct,
             self.settings.max_total_exposure_pct,
         )
-        await self._notify(
-            "🟢 TRADER ONLINE",
-            "Portfolio trader started successfully. Event reporting is active.",
-            [
-                {"name": "Strategy", "value": self._strategy_label(), "inline": False},
-                {"name": "Mode", "value": self.settings.trading_mode.upper(), "inline": True},
-            ],
-            color=GREEN,
-        )
+        # Discord is intentionally quiet: normal startup is logged/heartbeated in DB only.
         self._last_discord_heartbeat = time.monotonic()
         await self._write_db_heartbeat()
 
@@ -90,7 +82,7 @@ class PortfolioShortTrader:
                 started = True
             except Exception as exc:
                 LOGGER.exception("Trader startup failed")
-                await self.notifier.send(
+                await self._notify(
                     "🚨 TRADER STARTUP FAILED",
                     "The trader could not complete startup/preflight and will not trade until this is fixed.",
                     [
@@ -107,11 +99,7 @@ class PortfolioShortTrader:
                     await self.tick()
                     if self._had_tick_error:
                         self._had_tick_error = False
-                        await self._notify(
-                            "🟢 TRADER RECOVERED",
-                            "A successful trading cycle completed after the previous server/API error.",
-                            color=GREEN,
-                        )
+                        LOGGER.info("Trader recovered after previous server/API error")
                 except Exception as exc:
                     LOGGER.exception("Trader tick failed")
                     self._had_tick_error = True
@@ -119,14 +107,7 @@ class PortfolioShortTrader:
                 await asyncio.sleep(self.settings.poll_seconds)
         finally:
             if started:
-                try:
-                    await self._notify(
-                        "🟠 TRADER STOPPING",
-                        "The trader process is shutting down. The scanner watchdog will alert if it does not return promptly.",
-                        color=ORANGE,
-                    )
-                except Exception:
-                    LOGGER.warning("Could not send trader shutdown notification", exc_info=True)
+                LOGGER.info("Trader process stopping")
             await self.close()
 
     async def tick(self) -> None:
@@ -193,31 +174,71 @@ class PortfolioShortTrader:
                 await self.repo.set_cursor(signal.id)
 
     async def _handle_signal(self, signal: TradeSignal) -> None:
+        age = max(0.0, (datetime.now(UTC) - signal.signaled_at).total_seconds())
         if signal.risk_tier not in self.settings.allowed_risk_tiers:
-            await self.repo.decision(signal.id, "ignored_risk", f"risk tier {signal.risk_tier} not enabled")
+            await self._ignore_signal(
+                signal,
+                "ignored_risk",
+                f"risk tier {signal.risk_tier} not enabled",
+                event_fields=[
+                    {"name": "Allowed tiers", "value": ", ".join(self.settings.allowed_risk_tiers), "inline": False},
+                ],
+            )
             return
-        age = (datetime.now(UTC) - signal.signaled_at).total_seconds()
         if age > self.settings.max_signal_age_seconds:
-            await self.repo.decision(
-                signal.id, "ignored_stale", f"signal age {age:.0f}s exceeds {self.settings.max_signal_age_seconds}s"
+            await self._ignore_signal(
+                signal,
+                "ignored_stale",
+                f"signal age {age:.0f}s exceeds {self.settings.max_signal_age_seconds}s",
+                event_fields=[
+                    {"name": "Signal age", "value": f"{age / 60.0:.1f} min", "inline": True},
+                    {"name": "Max age", "value": f"{self.settings.max_signal_age_seconds / 60.0:.1f} min", "inline": True},
+                ],
             )
             return
         if self._live_execution_halted:
-            await self.repo.decision(signal.id, "ignored_invalid", "live execution halted by reconciliation safety check")
+            await self._ignore_signal(
+                signal,
+                "ignored_invalid",
+                "live execution halted by reconciliation safety check",
+            )
             return
 
         active = await self.repo.active_positions()
         if len(active) >= self.settings.max_open_positions:
-            await self.repo.decision(signal.id, "ignored_capacity", "all configured slots are occupied")
+            await self._ignore_signal(
+                signal,
+                "ignored_capacity",
+                "all configured slots are occupied",
+                active=active,
+                event_fields=[
+                    {"name": "Slots", "value": f"{len(active)}/{self.settings.max_open_positions}", "inline": True},
+                ],
+            )
             return
         if not self.settings.allow_same_symbol_parallel and any(p.symbol == signal.symbol for p in active):
-            await self.repo.decision(signal.id, "ignored_duplicate_symbol", f"{signal.symbol} already open")
+            await self._ignore_signal(
+                signal,
+                "ignored_duplicate_symbol",
+                f"{signal.symbol} already open",
+                active=active,
+            )
             return
         if signal.risk_tier == "HIGH_RISK":
             high_count = sum(p.risk_tier == "HIGH_RISK" for p in active)
             if high_count >= self.settings.max_high_risk_positions:
-                await self.repo.decision(
-                    signal.id, "ignored_capacity", "HIGH_RISK capacity reached; preserving STANDARD capacity"
+                await self._ignore_signal(
+                    signal,
+                    "ignored_capacity",
+                    "HIGH_RISK capacity reached; preserving STANDARD capacity",
+                    active=active,
+                    event_fields=[
+                        {
+                            "name": "HIGH capacity",
+                            "value": f"{high_count}/{self.settings.max_high_risk_positions}",
+                            "inline": True,
+                        },
+                    ],
                 )
                 return
 
@@ -226,9 +247,22 @@ class PortfolioShortTrader:
             raise RuntimeError("account equity is not positive")
         total_notional = sum(p.notional_usdt for p in active)
         desired = equity * self.settings.slot_fraction
-        remaining = equity * self.settings.max_total_exposure_fraction - total_notional
+        max_notional = equity * self.settings.max_total_exposure_fraction
+        remaining = max_notional - total_notional
+        current_exposure = total_notional / equity * 100.0 if equity > 0 else 0.0
         if remaining <= 0 or remaining < desired * 0.5:
-            await self.repo.decision(signal.id, "ignored_exposure", "20% aggregate exposure cap reached")
+            await self._ignore_signal(
+                signal,
+                "ignored_exposure",
+                f"aggregate exposure cap reached ({current_exposure:.2f}% / {self.settings.max_total_exposure_pct:.2f}%)",
+                active=active,
+                event_fields=[
+                    {"name": "Current exposure", "value": f"{current_exposure:.2f}%", "inline": True},
+                    {"name": "Exposure cap", "value": f"{self.settings.max_total_exposure_pct:.2f}%", "inline": True},
+                    {"name": "Requested slot", "value": f"${desired:,.2f} ({self.settings.slot_allocation_pct:.2f}%)", "inline": True},
+                    {"name": "Remaining capacity", "value": f"${max(0.0, remaining):,.2f}", "inline": True},
+                ],
+            )
             return
         notional = min(desired, remaining)
         slot_no = next(i for i in range(1, self.settings.max_open_positions + 1) if all(p.slot_no != i for p in active))
@@ -237,6 +271,16 @@ class PortfolioShortTrader:
             await self._open_paper(signal, slot_no, equity, notional)
             if self.settings.trading_mode == "paper"
             else await self._open_live(signal, slot_no, equity, notional)
+        )
+        LOGGER.info(
+            "Signal accepted id=%s symbol=%s risk=%s action=OPENED position_id=%s slot=%s notional=%.4f equity=%.4f",
+            signal.id,
+            signal.symbol,
+            signal.risk_tier,
+            position.id,
+            position.slot_no,
+            position.notional_usdt,
+            equity,
         )
         await self._notify(
             "🧾 PAPER SHORT OPENED" if position.mode == "paper" else "🔴 LIVE SHORT OPENED",
@@ -249,6 +293,30 @@ class PortfolioShortTrader:
             ],
             color=BLUE,
         )
+
+    async def _ignore_signal(
+        self,
+        signal: TradeSignal,
+        decision: str,
+        reason: str,
+        *,
+        active: list[TraderPosition] | None = None,
+        event_fields: list[dict[str, Any]] | None = None,
+    ) -> None:
+        """Persist, log and Discord-report every confirmed signal that is not traded."""
+        await self.repo.decision(signal.id, decision, reason)
+        active = active if active is not None else await self.repo.active_positions()
+        LOGGER.info(
+            "Signal not traded id=%s symbol=%s risk=%s decision=%s reason=%s open_positions=%s/%s",
+            signal.id,
+            signal.symbol,
+            signal.risk_tier,
+            decision.upper(),
+            reason,
+            len(active),
+            self.settings.max_open_positions,
+        )
+        # Skip decisions are intentionally Render-log/DB only. Discord is reserved for OPEN/CLOSE/ERROR.
 
     async def _open_paper(self, signal: TradeSignal, slot_no: int, equity: float, notional: float) -> TraderPosition:
         price = await self.mexc.last_price(signal.symbol)
@@ -345,31 +413,64 @@ class PortfolioShortTrader:
         if position.mode == "live" and position.protection_armed_at is not None:
             await self._ensure_live_protection_exists(position)
 
+        # Persist the current tick before sending any milestone notification so the
+        # portfolio snapshot attached to Discord reflects the same price/P&L that
+        # triggered the event rather than the previous tick.
+        position = await self.repo.update_market(
+            position.id,
+            price=price,
+            return_pct=current_return,
+            peak_profit_pct=peak,
+            max_adverse_pct=adverse,
+            profit_floor_pct=position.profit_floor_pct,
+        )
+
         already = {
             t for t, at in ((100, position.breach_100_at), (200, position.breach_200_at), (300, position.breach_300_at), (400, position.breach_400_at)) if at is not None
         }
         for threshold in newly_breached_thresholds(max_adverse_pct=adverse, already_breached=already):
             if await self.repo.mark_breach(position.id, threshold, price=price, return_pct=current_return):
                 position = (await self.repo.position(position.id)) or position
+                LOGGER.warning(
+                    "Adverse level breached position_id=%s symbol=%s threshold=-%s%% current_return=%.4f max_adverse=%.4f",
+                    position.id, position.symbol, threshold, current_return, adverse,
+                )
+                breach_titles = {
+                    100: "⚠️ -100% ADVERSE BREACH",
+                    200: "🟥 -200% ADVERSE BREACH",
+                    300: "🟣 -300% ADVERSE BREACH",
+                    400: "⚫ -400% ADVERSE BREACH",
+                }
+                breach_colors = {100: ORANGE, 200: RED, 300: PURPLE, 400: RED}
                 await self._notify(
-                    f"{'🔴' if threshold == 100 else '🟥' if threshold == 200 else '🟣' if threshold == 300 else '⚫'} -{threshold}% ADVERSE LEVEL BREACHED",
-                    f"**{position.symbol}** • {position.risk_tier} • slot {position.slot_no}\nThe position remains tracked; this event is not erased if it later reverses into profit.",
+                    breach_titles[threshold],
+                    f"**{position.symbol}** crossed the -{threshold}% adverse-return level. The position remains open unless another execution rule closes it.",
                     [
-                        {"name": "Current short P/L", "value": f"{current_return:+.2f}%", "inline": True},
+                        {"name": "Current return", "value": f"{current_return:+.2f}%", "inline": True},
                         {"name": "Max adverse", "value": f"-{adverse:.2f}%", "inline": True},
+                        {"name": "Current price", "value": f"{price:.10g}", "inline": True},
+                        {"name": "Entry", "value": f"{position.entry_price:.10g}", "inline": True},
+                        {"name": "+20% target", "value": "Already reached" if position.target_20_at else "Not reached yet", "inline": True},
                     ],
-                    color=RED,
+                    color=breach_colors[threshold],
                 )
 
         if position.target_20_at is None and peak >= self.settings.profit_target_pct:
             if await self.repo.mark_target_hit(position.id, price=price, return_pct=current_return):
                 position = (await self.repo.position(position.id)) or position
+                LOGGER.info(
+                    "Profit target reached; runner remains open position_id=%s symbol=%s current_return=%.4f peak=%.4f",
+                    position.id, position.symbol, current_return, peak,
+                )
                 await self._notify(
-                    "🎯 +20% TARGET REACHED — RUNNER ACTIVE",
-                    f"**{position.symbol}** reached the strategy target. The bot will keep the short open and prepare profit protection.",
+                    "🎯 +20% PROFIT MILESTONE REACHED",
+                    f"**{position.symbol}** reached the +{self.settings.profit_target_pct:.0f}% short-return milestone. The runner stays open for additional upside.",
                     [
-                        {"name": "Current", "value": f"{current_return:+.2f}%", "inline": True},
-                        {"name": "Peak", "value": f"{peak:+.2f}%", "inline": True},
+                        {"name": "Current return", "value": f"{current_return:+.2f}%", "inline": True},
+                        {"name": "Peak return", "value": f"{peak:+.2f}%", "inline": True},
+                        {"name": "Current price", "value": f"{price:.10g}", "inline": True},
+                        {"name": "Entry", "value": f"{position.entry_price:.10g}", "inline": True},
+                        {"name": "Next step", "value": f"Protection arms at +{self.settings.protection_arm_pct:.0f}% peak; then the +{self.settings.profit_target_pct:.0f}% floor / {self.settings.trail_callback_pct:.0f}% price trail manages the runner.", "inline": False},
                     ],
                     color=GREEN,
                 )
@@ -391,14 +492,9 @@ class PortfolioShortTrader:
                 ):
                     position = (await self.repo.position(position.id)) or position
                     existing_floor = floor
-                    await self._notify(
-                        "🛡️ PROFIT PROTECTION ARMED",
-                        f"**{position.symbol}** can continue running, with the current protected floor at approximately **+{floor:.2f}%** before slippage/fees.",
-                        [
-                            {"name": "Peak profit", "value": f"+{peak:.2f}%", "inline": True},
-                            {"name": "Protected floor", "value": f"+{floor:.2f}%", "inline": True},
-                        ],
-                        color=GREEN,
+                    LOGGER.info(
+                        "Profit protection armed position_id=%s symbol=%s peak=%.4f floor=%.4f",
+                        position.id, position.symbol, peak, floor,
                     )
             elif existing_floor is None or floor >= existing_floor + self.settings.protection_update_step_pct:
                 if position.mode == "live":
@@ -406,14 +502,9 @@ class PortfolioShortTrader:
                 await self.repo.set_protection(position.id, order_id=position.mexc_protection_order_id, floor_pct=floor)
                 if self._should_notify_floor(position, floor):
                     await self.repo.patch_metadata(position.id, {"last_protection_notified_floor": floor})
-                    await self._notify(
-                        "📈 PROTECTED PROFIT RAISED",
-                        f"**{position.symbol}** runner continues. The protected profit level moved higher.",
-                        [
-                            {"name": "Peak profit", "value": f"+{peak:.2f}%", "inline": True},
-                            {"name": "Protected floor", "value": f"+{floor:.2f}%", "inline": True},
-                        ],
-                        color=GREEN,
+                    LOGGER.info(
+                        "Protected profit raised position_id=%s symbol=%s peak=%.4f floor=%.4f",
+                        position.id, position.symbol, peak, floor,
                     )
                 existing_floor = floor
 
@@ -460,8 +551,12 @@ class PortfolioShortTrader:
             return
         order_id = await self._place_live_protection(position, position.profit_floor_pct)
         await self.repo.set_protection(position.id, order_id=order_id, floor_pct=position.profit_floor_pct)
+        LOGGER.error(
+            "Live protection was missing and restored position_id=%s symbol=%s floor=%.4f new_stop_order_id=%s",
+            position.id, position.symbol, position.profit_floor_pct, order_id,
+        )
         await self._notify(
-            "🛡️ LIVE PROTECTION RESTORED",
+            "🚨 LIVE PROTECTION WAS MISSING — RESTORED",
             f"**{position.symbol}** had no active MEXC protection order. A replacement exchange-side stop was placed immediately.",
             [
                 {"name": "Protected floor", "value": f"+{position.profit_floor_pct:.2f}%", "inline": True},
@@ -538,6 +633,10 @@ class PortfolioShortTrader:
         realized = short_return_pct(position.entry_price, price)
         gross_pnl = position.quantity_base * (position.entry_price - price)
         net_pnl = gross_pnl - position.entry_fee_usdt - exit_fee
+        LOGGER.info(
+            "Position closed id=%s symbol=%s reason=%s return_pct=%.4f net_pnl=%.4f exit_price=%.10g",
+            position.id, position.symbol, reason, realized, net_pnl, price,
+        )
         await self._notify(
             "💰 POSITION CLOSED",
             f"**{position.symbol}** • {reason}",
@@ -559,6 +658,7 @@ class PortfolioShortTrader:
         extras = [r for r in exchange_rows if int(r.get("positionId") or 0) not in managed_ids]
         if extras and not self._live_execution_halted:
             self._live_execution_halted = True
+            LOGGER.error("Live execution halted: unmanaged MEXC positions=%s", [r.get("symbol") for r in extras])
             await self._notify(
                 "🚨 LIVE EXECUTION HALTED — UNMANAGED MEXC POSITION",
                 "MEXC reports an open futures position that is not in the bot database. New entries are halted; the bot will not touch the unmanaged position.",
@@ -595,6 +695,10 @@ class PortfolioShortTrader:
             exit_fee_usdt=exit_fee, mexc_close_order_id=close_order_id,
         )
         await self.mexc.ticker_stream.remove(position.symbol)
+        LOGGER.info(
+            "Exchange-side position close reconciled id=%s symbol=%s reason=%s exit_price=%.10g",
+            position.id, position.symbol, reason, price,
+        )
         await self._notify(
             "🛡️ EXCHANGE-SIDE EXIT CONFIRMED" if reason == "exchange_protection_stop" else "🚨 MEXC POSITION CLOSED OUTSIDE BOT FLOW",
             f"**{position.symbol}** • {reason}",
@@ -747,11 +851,9 @@ class PortfolioShortTrader:
         if now - self._last_discord_heartbeat < self.settings.heartbeat_seconds:
             return
         self._last_discord_heartbeat = now
-        await self._notify(
-            "💓 TRADER HEARTBEAT",
-            "Trader loop is healthy. This periodic status means you do not need to inspect Render logs or MEXC manually.",
-            [{"name": "Strategy", "value": self._strategy_label(), "inline": False}],
-            color=BLUE,
+        LOGGER.info(
+            "Trader heartbeat healthy strategy=%s",
+            self._strategy_label(),
         )
 
     async def _write_db_heartbeat(self) -> None:
@@ -765,7 +867,7 @@ class PortfolioShortTrader:
                 "open_count": len(positions),
                 "slot_allocation_pct": self.settings.slot_allocation_pct,
                 "max_total_exposure_pct": self.settings.max_total_exposure_pct,
-                "version": "1.2.0",
+                "version": "1.2.3",
             },
         )
 
