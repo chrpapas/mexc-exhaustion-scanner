@@ -24,7 +24,6 @@ class LedgerTableImage:
 _RISK_META = {
     "standard": ("STANDARD", (36, 91, 62)),
     "high_risk": ("HIGH RISK", (139, 105, 20)),
-    "extreme_risk": ("EXTREME RISK", (150, 45, 45)),
 }
 
 # Designed for Discord desktop/mobile preview. Cells deliberately favor scanability
@@ -286,7 +285,7 @@ def render_signal_ledger_tables(
     rows_per_page: int = 16,
 ) -> tuple[LedgerTableImage, ...]:
     outputs: list[LedgerTableImage] = []
-    for risk_tier in ("standard", "high_risk", "extreme_risk"):
+    for risk_tier in ("standard", "high_risk"):
         group = list(ledger.by_risk(risk_tier))
         if not group:
             continue

@@ -144,7 +144,7 @@ def test_same_candle_target_and_breach_is_conservatively_breach_first():
 
 
 
-def test_strategy_matrix_compares_all_thresholds_and_only_exposes_profit_on_perfect_cells():
+def test_target_race_has_no_synthetic_profit_and_horizons_use_raw_returns_including_breaches():
     confirmed = datetime(2026, 8, 1, 0, 0, tzinfo=UTC)
     winner = {**_row(risk_tier="standard", ret24=0.10),
               "target_20_at": confirmed.replace(hour=8),
@@ -165,22 +165,25 @@ def test_strategy_matrix_compares_all_thresholds_and_only_exposes_profit_on_perf
     assert [x.adverse_limit_pct for x in target.thresholds] == [100, 200, 300, 400]
     assert target.thresholds[0].win_rate == pytest.approx(0.5)
     assert target.thresholds[0].avg_profit is None
+    assert target.thresholds[0].sum_profit is None
     assert target.thresholds[1].win_rate == pytest.approx(1.0)
-    assert target.thresholds[1].avg_profit == pytest.approx(0.20)
-    assert target.thresholds[1].sum_profit == pytest.approx(0.40)
+    assert target.thresholds[1].avg_profit is None
+    assert target.thresholds[1].sum_profit is None
 
     one_day = matrix.rows[1]
-    assert one_day.thresholds[0].win_rate == pytest.approx(0.5)
+    # Both signals are profitable at 1D, even though one crossed -100% first.
+    assert one_day.thresholds[0].win_rate == pytest.approx(1.0)
     assert one_day.thresholds[1].win_rate == pytest.approx(1.0)
     assert one_day.thresholds[0].breach_failures == 1
-    assert one_day.thresholds[0].maturity_failures == 0
     assert one_day.thresholds[1].breach_failures == 0
-    assert one_day.thresholds[1].maturity_failures == 0
+    # Raw Avg/Σ include every matured return regardless of path breaches.
+    assert one_day.thresholds[0].avg_profit == pytest.approx(0.125)
+    assert one_day.thresholds[0].sum_profit == pytest.approx(0.25)
     assert one_day.thresholds[1].avg_profit == pytest.approx(0.125)
     assert one_day.thresholds[1].sum_profit == pytest.approx(0.25)
 
 
-def test_fixed_horizon_matrix_splits_breach_and_maturity_losses_without_double_counting():
+def test_fixed_horizon_raw_outcomes_keep_breach_counts_separate_and_allow_overlap():
     confirmed = datetime(2026, 8, 1, 0, 0, tzinfo=UTC)
     winner = {**_row(risk_tier="standard", ret24=0.10)}
     negative = {**_row(risk_tier="standard", ret24=-0.15)}
@@ -194,7 +197,30 @@ def test_fixed_horizon_matrix_splits_breach_and_maturity_losses_without_double_c
     one_day = report.standard_strategy_matrix.rows[1]
     iso = one_day.thresholds[0]
     buffered = one_day.thresholds[1]
-    assert (iso.wins, iso.maturity_failures, iso.breach_failures) == (1, 1, 1)
-    assert iso.wins + iso.maturity_failures + iso.breach_failures == iso.total == 3
+    assert (iso.wins, iso.maturity_failures, iso.breach_failures) == (1, 2, 1)
     assert (buffered.wins, buffered.maturity_failures, buffered.breach_failures) == (1, 2, 0)
-    assert buffered.wins + buffered.maturity_failures + buffered.breach_failures == buffered.total == 3
+    assert iso.avg_profit == pytest.approx(-0.15)
+    assert iso.sum_profit == pytest.approx(-0.45)
+    assert buffered.avg_profit == pytest.approx(-0.15)
+    assert buffered.sum_profit == pytest.approx(-0.45)
+
+
+
+def test_raw_sum_includes_large_breach_loss_at_horizon():
+    confirmed = datetime(2026, 8, 1, 0, 0, tzinfo=UTC)
+    loss = {**_row(risk_tier="standard", ret24=-2.50),
+            "isolated_100_breach_at": confirmed.replace(hour=4),
+            "adverse_200_breach_at": confirmed.replace(hour=8)}
+    winner = {**_row(risk_tier="standard", ret24=0.70)}
+    report = build_performance_summary(
+        [loss, winner],
+        now_utc=datetime(2026, 8, 12, 12, 0, tzinfo=UTC),
+        timezone_name="Europe/Zurich",
+    )
+    one_day = report.standard_strategy_matrix.rows[1]
+    raw = one_day.thresholds[0]
+    assert raw.sum_profit == pytest.approx(-1.80)
+    assert raw.avg_profit == pytest.approx(-0.90)
+    assert raw.win_rate == pytest.approx(0.50)
+    assert one_day.thresholds[0].breach_failures == 1
+    assert one_day.thresholds[1].breach_failures == 1

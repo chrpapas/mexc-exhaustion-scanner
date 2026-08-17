@@ -75,6 +75,19 @@ def test_csv_contains_all_requested_horizons_and_breach_columns():
     assert "breach_400_at_utc" in text
 
 
+
+def test_ledger_excludes_extreme_risk_from_csv_tracking():
+    ledger = build_signal_ledger([
+        _row(symbol="SAFE_USDT", risk_tier="standard"),
+        _row(symbol="HIGH_USDT", risk_tier="high_risk"),
+        _row(symbol="EXTREME_USDT", risk_tier="extreme_risk"),
+    ], generated_at=datetime.now(UTC))
+    text = signal_ledger_csv(ledger).decode("utf-8")
+    assert ledger.total == 2
+    assert "SAFE_USDT" in text
+    assert "HIGH_USDT" in text
+    assert "EXTREME_USDT" not in text
+
 def test_visual_table_renderer_produces_png_with_risk_pages():
     confirmed = datetime(2026, 8, 10, 12, 0, tzinfo=UTC)
     rows = [
@@ -89,6 +102,7 @@ def test_visual_table_renderer_produces_png_with_risk_pages():
     ]
     ledger = build_signal_ledger(rows, generated_at=confirmed + timedelta(days=2))
     images = render_signal_ledger_tables(ledger, timezone_name="Europe/Zurich", rows_per_page=16)
-    assert [item.risk_tier for item in images] == ["standard", "high_risk", "extreme_risk"]
+    assert ledger.total == 2
+    assert [item.risk_tier for item in images] == ["standard", "high_risk"]
     assert all(item.png_bytes.startswith(b"\x89PNG\r\n\x1a\n") for item in images)
     assert all(len(item.png_bytes) > 1000 for item in images)

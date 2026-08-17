@@ -867,7 +867,7 @@ class PortfolioShortTrader:
                 "open_count": len(positions),
                 "slot_allocation_pct": self.settings.slot_allocation_pct,
                 "max_total_exposure_pct": self.settings.max_total_exposure_pct,
-                "version": "1.2.3",
+                "version": "1.2.4",
             },
         )
 

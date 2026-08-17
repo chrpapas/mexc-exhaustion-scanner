@@ -152,7 +152,7 @@ def test_performance_report_uses_dedicated_stats_webhook_and_embeds():
     )
 
     assert sent
-    assert len(fake.posts) == 5
+    assert len(fake.posts) == 4
     assert all(url == "https://discord.invalid/stats" for url, _ in fake.posts)
     assert all(payload["username"] == "Exhaustion Scanner • Stats" for _, payload in fake.posts)
     assert all(len(payload["embeds"]) == 1 for _, payload in fake.posts)
@@ -164,23 +164,23 @@ def test_performance_report_uses_dedicated_stats_webhook_and_embeds():
          for embed in embeds]
     )
     assert "Performance Board" in all_text
-    assert "STANDARD Execution Risk" in all_text
-    assert "HIGH RISK Execution Risk" in all_text
-    assert "EXTREME RISK Execution Risk" in all_text
-    assert "HIGH + EXTREME Execution Risk" not in all_text
-    assert "-100% max loss" in all_text
-    assert "-200% max loss" in all_text
-    assert "-300% max loss" in all_text
-    assert "-400% max loss" in all_text
+    assert "STANDARD Signal Outcomes" in all_text
+    assert "HIGH RISK Signal Outcomes" in all_text
+    assert "EXTREME RISK" not in all_text
+    assert "-100% adverse" in all_text
+    assert "-200% adverse" in all_text
+    assert "-300% adverse" in all_text
+    assert "-400% adverse" in all_text
     assert "20%-sized acct equiv" not in all_text
     assert "+20% before breach" not in all_text
-    assert "+20% Profit Target • Horizon Independent" in all_text
-    assert "+20% Profit Target • Horizon Independent" in all_text
-    assert "1D profitable" in all_text
-    assert "not profitable at 1D" in all_text
-    assert "breached" in all_text
+    assert "+20% Target Race • Horizon Independent" in all_text
+    assert "1D Outcomes" in all_text
+    assert "Not profitable" in all_text
+    assert "Adverse crossed before horizon" in all_text
     assert "avg t" in all_text
-    assert "Strategy Matrix" in all_text
+    assert "Avg raw" in all_text
+    assert "Σ raw" in all_text
+    assert "How to Read the Signal Outcomes" in all_text
 
 
 def test_performance_webhook_falls_back_to_signal_webhook_for_backward_compatibility():
@@ -203,7 +203,7 @@ def test_performance_cards_respect_discord_embed_limits():
     sent = asyncio.run(notifier.send_performance_report(_report()))
 
     assert sent
-    assert len(fake.posts) == 5
+    assert len(fake.posts) == 4
     for _, payload in fake.posts:
         assert len(payload["embeds"]) == 1
         embed = payload["embeds"][0]

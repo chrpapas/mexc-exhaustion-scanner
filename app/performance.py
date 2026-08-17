@@ -5,6 +5,8 @@ from datetime import date, datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
+PUBLIC_PERFORMANCE_RISK_TIERS = frozenset({"standard", "high_risk"})
+
 def short_return(entry_price: float, exit_price: float) -> float:
     if entry_price <= 0 or exit_price <= 0:
         raise ValueError("prices must be positive")
@@ -310,6 +312,14 @@ def build_performance_summary(
     def rate(flags: list[bool]) -> float | None:
         return sum(flags) / len(flags) if flags else None
 
+    # Subscriber-facing performance deliberately excludes EXTREME risk.
+    # Extreme signals remain stored by the scanner for internal research, but
+    # they do not contribute to public counts, returns, excursions, or ledgers.
+    rows = [
+        row for row in rows
+        if str(row.get("risk_tier") or "standard") in PUBLIC_PERFORMANCE_RISK_TIERS
+    ]
+
     confirmed_today = sum(1 for row in rows if start_utc <= row["confirmed_at"] < end_utc)
     open_rows = [row for row in rows if row.get("return_168h_pct") is None]
     open_returns = [float(row["current_return_pct"]) for row in open_rows if row.get("current_return_pct") is not None]
@@ -379,7 +389,7 @@ def build_performance_summary(
 
         return HorizonSurvivalSummary(
             hours=hours,
-            risk_label="STANDARD" if standard else "HIGH+EXTREME",
+            risk_label="STANDARD" if standard else "HIGH RISK",
             matured_total=len(group),
             isolated=model("isolated_100_breach_at"),
             cross_buffer=model("cross_400_breach_at"),
@@ -425,7 +435,7 @@ def build_performance_summary(
             )
 
         return ProfitTargetSummary(
-            risk_label="STANDARD" if standard else "HIGH+EXTREME",
+            risk_label="STANDARD" if standard else "HIGH RISK",
             isolated=model("isolated_100_breach_at"),
             cross_buffer=model("cross_400_breach_at"),
         )
@@ -438,11 +448,6 @@ def build_performance_summary(
             (300, "adverse_300_breach_at"),
             (400, "cross_400_breach_at"),
         )
-
-        def perfect_profit_stats(values: list[float], win_rate: float | None) -> tuple[float | None, float | None]:
-            if win_rate is None or abs(win_rate - 1.0) > 1e-12 or not values:
-                return None, None
-            return average(values), sum(values)
 
         target_cells: list[StrategyThresholdSummary] = []
         for adverse_limit, event_key in threshold_events:
@@ -460,8 +465,6 @@ def build_performance_summary(
             resolved = wins + failures
             pending = len(group) - resolved
             wr = (wins / resolved) if resolved else None
-            profit_values = [0.20] * wins
-            avg_profit, sum_profit = perfect_profit_stats(profit_values, wr)
             target_cells.append(StrategyThresholdSummary(
                 adverse_limit_pct=adverse_limit,
                 total=len(group),
@@ -470,8 +473,8 @@ def build_performance_summary(
                 failures=failures,
                 pending=pending,
                 win_rate=wr,
-                avg_profit=avg_profit,
-                sum_profit=sum_profit,
+                avg_profit=None,
+                sum_profit=None,
                 avg_time_to_target_hours=average(target_times),
             ))
 
@@ -482,47 +485,42 @@ def build_performance_summary(
             thresholds=tuple(target_cells),
         )]
 
-        for hours, label in ((24, "1D profitable"), (48, "2D profitable"), (72, "3D profitable"), (168, "7D profitable")):
+        for hours, label in ((24, "1D outcomes"), (48, "2D outcomes"), (72, "3D outcomes"), (168, "7D outcomes")):
             return_key = f"return_{hours}h_pct"
             matured = [row for row in group if row.get(return_key) is not None]
             deadline_delta = timedelta(hours=hours)
+            raw_returns = [float(row[return_key]) for row in matured]
+            profitable = sum(value > 0 for value in raw_returns)
+            not_profitable = len(raw_returns) - profitable
+            raw_positive_rate = (profitable / len(raw_returns)) if raw_returns else None
+            raw_avg = average(raw_returns)
+            raw_sum = sum(raw_returns) if raw_returns else None
+
+            # Fixed-horizon outcomes are raw observations, not stop-loss
+            # strategies. Every matured return contributes to Avg and Σ even if
+            # that signal crossed one or more adverse thresholds on the way. The
+            # threshold counts are therefore independent path statistics and may
+            # overlap with profitable/not-profitable outcomes.
             cells: list[StrategyThresholdSummary] = []
             for adverse_limit, event_key in threshold_events:
-                successful_returns: list[float] = []
-                wins = 0
-                breach_failures = 0
-                maturity_failures = 0
+                breach_count = 0
                 for row in matured:
                     deadline = row["confirmed_at"] + deadline_delta
                     breach = row.get(event_key)
-                    ret = float(row[return_key])
-                    # Failure reasons are intentionally mutually exclusive. A
-                    # threshold breach takes precedence because that strategy
-                    # would no longer have a live position at maturity. Only
-                    # unbreached trades can then fail for being non-profitable
-                    # at the exact horizon.
                     if breach is not None and breach <= deadline:
-                        breach_failures += 1
-                    elif ret > 0:
-                        wins += 1
-                        successful_returns.append(ret)
-                    else:
-                        maturity_failures += 1
-                failures = breach_failures + maturity_failures
-                wr = (wins / len(matured)) if matured else None
-                avg_profit, sum_profit = perfect_profit_stats(successful_returns, wr)
+                        breach_count += 1
                 cells.append(StrategyThresholdSummary(
                     adverse_limit_pct=adverse_limit,
                     total=len(matured),
                     resolved=len(matured),
-                    wins=wins,
-                    failures=failures,
+                    wins=profitable,
+                    failures=not_profitable,
                     pending=0,
-                    win_rate=wr,
-                    avg_profit=avg_profit,
-                    sum_profit=sum_profit,
-                    breach_failures=breach_failures,
-                    maturity_failures=maturity_failures,
+                    win_rate=raw_positive_rate,
+                    avg_profit=raw_avg,
+                    sum_profit=raw_sum,
+                    breach_failures=breach_count,
+                    maturity_failures=not_profitable,
                 ))
             strategy_rows.append(StrategyRowSummary(
                 strategy=f"{hours}h",
@@ -539,8 +537,8 @@ def build_performance_summary(
 
     def strategy_matrix(*, standard: bool) -> StrategyMatrixSummary:
         return strategy_matrix_for(
-            risk_label="STANDARD" if standard else "HIGH+EXTREME",
-            risk_tiers={"standard"} if standard else {"high_risk", "extreme_risk"},
+            risk_label="STANDARD" if standard else "HIGH RISK",
+            risk_tiers={"standard"} if standard else {"high_risk"},
         )
 
     def weekly_risk_for(*, risk_label: str, risk_tiers: set[str]) -> WeeklyRiskSummary:
@@ -586,8 +584,8 @@ def build_performance_summary(
 
     def weekly_risk(*, standard: bool) -> WeeklyRiskSummary:
         return weekly_risk_for(
-            risk_label="STANDARD" if standard else "HIGH+EXTREME",
-            risk_tiers={"standard"} if standard else {"high_risk", "extreme_risk"},
+            risk_label="STANDARD" if standard else "HIGH RISK",
+            risk_tiers={"standard"} if standard else {"high_risk"},
         )
 
     h24 = horizon_summary(24)
@@ -616,13 +614,13 @@ def build_performance_summary(
         standard_weekly=weekly_risk(standard=True),
         risky_weekly=weekly_risk(standard=False),
         high_weekly=weekly_risk_for(risk_label="HIGH RISK", risk_tiers={"high_risk"}),
-        extreme_weekly=weekly_risk_for(risk_label="EXTREME RISK", risk_tiers={"extreme_risk"}),
+        extreme_weekly=weekly_risk_for(risk_label="EXTREME RISK", risk_tiers=set()),
         standard_profit_target=profit_target_summary(standard=True),
         risky_profit_target=profit_target_summary(standard=False),
         standard_strategy_matrix=strategy_matrix(standard=True),
         risky_strategy_matrix=strategy_matrix(standard=False),
         high_strategy_matrix=strategy_matrix_for(risk_label="HIGH RISK", risk_tiers={"high_risk"}),
-        extreme_strategy_matrix=strategy_matrix_for(risk_label="EXTREME RISK", risk_tiers={"extreme_risk"}),
+        extreme_strategy_matrix=strategy_matrix_for(risk_label="EXTREME RISK", risk_tiers=set()),
         avg_return_1h=average(values_for("return_1h_pct")),
         avg_return_4h=average(values_for("return_4h_pct")),
         avg_return_12h=average(values_for("return_12h_pct")),

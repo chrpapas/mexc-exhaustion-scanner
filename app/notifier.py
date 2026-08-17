@@ -149,7 +149,7 @@ class DiscordNotifier:
             "description": (
                 f"**{self._pretty_label(label)}**\n"
                 f"Updated **{as_of_text}**\n\n"
-                "Confirmed-short signals only • Shadow analytics • Positive return = profitable short"
+                "Confirmed-short signals only • STANDARD + HIGH only • Positive return = profitable short"
             ),
             "color": 0x5865F2,
             "fields": [
@@ -170,7 +170,7 @@ class DiscordNotifier:
                     "inline": True,
                 },
                 {
-                    "name": "🎯 Raw Results — All Signals",
+                    "name": "🎯 Raw Results — STANDARD + HIGH",
                     "value": "\n".join(
                         self._raw_horizon_line(h)
                         for h in self._horizons(report)
@@ -220,82 +220,71 @@ class DiscordNotifier:
             )
 
         standard = self._risk_embed(
-            title="🟢 STANDARD Execution Risk",
+            title="🟢 STANDARD Signal Outcomes",
             color=0x57F287,
             matrix=report.standard_strategy_matrix,
             weekly=report.standard_weekly,
         )
         high = self._risk_embed(
-            title="🟡 HIGH RISK Execution Risk",
+            title="🟡 HIGH RISK Signal Outcomes",
             color=0xFEE75C,
             matrix=report.high_strategy_matrix,
             weekly=report.high_weekly,
         )
-        extreme = self._risk_embed(
-            title="🔴 EXTREME RISK Execution Risk",
-            color=0xED4245,
-            matrix=report.extreme_strategy_matrix,
-            weekly=report.extreme_weekly,
-        )
         methodology = {
-            "title": "🧭 Strategy Matrix — How to Read It",
+            "title": "🧭 How to Read the Signal Outcomes",
             "description": (
-                "Choose a target row, then a maximum adverse-loss threshold. The displayed WR is the percentage "
-                "that achieved that target without first crossing the selected threshold."
+                "This board describes historical signal behavior. It does **not** prescribe a stop-loss, "
+                "holding period, leverage, position size, or portfolio strategy."
             ),
             "color": 0x99AAB5,
             "fields": [
                 {
-                    "name": "Loss thresholds",
+                    "name": "🎯 +20% target race",
                     "value": (
-                        "**-100%** = price reaches 2× entry • **-200%** = 3× • "
-                        "**-300%** = 4× • **-400%** = 5×."
+                        "For each adverse threshold, **Target-first rate** uses only resolved target-vs-breach "
+                        "outcomes. Pending signals stay pending. Same-15m-candle target/breach is conservatively "
+                        "breach-first. Average time is measured only for target-first observations."
                     ),
                     "inline": False,
                 },
                 {
-                    "name": "🎯 +20% target",
+                    "name": "⏱️ 1D / 2D / 3D / 7D outcomes",
                     "value": (
-                        "Horizon-independent race. Pending signals remain pending. WR uses resolved target-vs-breach "
-                        "outcomes; same-15m-candle target/breach is conservatively breach-first."
+                        "Every signal that reached the exact horizon contributes its raw short return to **Avg raw** "
+                        "and **Σ raw** — including negative returns and signals that crossed adverse thresholds. "
+                        "Profitable rate simply means return > 0 at that horizon."
                     ),
                     "inline": False,
                 },
                 {
-                    "name": "⏱️ 1D / 2D / 3D / 7D profitable",
+                    "name": "💥 Adverse thresholds",
                     "value": (
-                        "A win means the short return is **positive at that exact horizon** and the selected adverse "
-                        "threshold was never crossed beforehand. Losses are split into **breached before maturity** "
-                        "versus **not profitable at maturity**; these categories are mutually exclusive."
+                        "**-100%** = price reaches 2× entry • **-200%** = 3× • **-300%** = 4× • **-400%** = 5×. "
+                        "Counts show whether that excursion occurred before the horizon; they are path observations, "
+                        "not assumed exits."
                     ),
                     "inline": False,
                 },
                 {
-                    "name": "💯 100% strategy rows",
+                    "name": "Σ raw returns",
                     "value": (
-                        "When a cell has **100% WR**, the board also shows average and summed profit for that exact "
-                        "strategy/threshold combination. For +20% target, profit is modeled at the +20% exit target."
+                        "Arithmetic sum of the matured signal returns at that horizon. It is **not portfolio return**, "
+                        "because signals may overlap and position sizing is not modeled."
                     ),
                     "inline": False,
                 },
                 {
-                    "name": "Important",
-                    "value": (
-                        "These are **research thresholds, not exact exchange liquidation prices**. Actual liquidation "
-                        "depends on maintenance margin, fees, contract tier, equity and margin configuration."
-                    ),
+                    "name": "Audience scope",
+                    "value": "Only **STANDARD** and **HIGH RISK** signals are included in the public performance and ledger datasets.",
                     "inline": False,
                 },
             ],
             "footer": {"text": "No fees, slippage, funding, leverage or overlapping-position portfolio effects included."},
         }
 
-        # Discord limits the combined textual content across all embeds in one
-        # message to 6,000 characters. The strategy matrices can legitimately
-        # exceed that when combined with the overview and methodology, so send
-        # each visual card as its own webhook message. This keeps the same
-        # subscriber-facing board while giving every card its own embed budget.
-        embeds = (overview, standard, high, extreme, methodology)
+        # Each card is sent separately so every embed has its own Discord text budget.
+        embeds = (overview, standard, high, methodology)
         try:
             for index, embed in enumerate(embeds, start=1):
                 self._validate_discord_embed(embed)
@@ -342,7 +331,6 @@ class DiscordNotifier:
         risk_counts = {
             "standard": len(ledger.by_risk("standard")),
             "high_risk": len(ledger.by_risk("high_risk")),
-            "extreme_risk": len(ledger.by_risk("extreme_risk")),
         }
         target_before_100 = sum(item.target_before_100_breach is True for item in ledger.items)
         breach_before_target = sum(
@@ -364,8 +352,7 @@ class DiscordNotifier:
                     "value": (
                         f"**{ledger.total}** total • "
                         f"🟢 STANDARD **{risk_counts['standard']}** • "
-                        f"🟡 HIGH **{risk_counts['high_risk']}** • "
-                        f"🔴 EXTREME **{risk_counts['extreme_risk']}**"
+                        f"🟡 HIGH **{risk_counts['high_risk']}**"
                     ),
                     "inline": False,
                 },
@@ -430,7 +417,6 @@ class DiscordNotifier:
                     "color": {
                         "standard": 0x57F287,
                         "high_risk": 0xFEE75C,
-                        "extreme_risk": 0xED4245,
                     }.get(table.risk_tier, 0x5865F2),
                     "image": {"url": f"attachment://{table.filename}"},
                 }
@@ -588,15 +574,15 @@ class DiscordNotifier:
             })
 
         fields.append({
-            "name": "📅 Full 7-Day Path",
+            "name": "📅 7-Day Path Context",
             "value": self._weekly_summary(weekly),
             "inline": False,
         })
         return {
             "title": title,
             "description": (
-                f"**{matrix.total_signals}** traced signals • Strategy viability by maximum tolerated adverse move.\n"
-                "A win means the strategy target was achieved **without first crossing** the selected loss threshold."
+                f"**{matrix.total_signals}** traced signals • Historical outcomes and adverse excursions.\n"
+                "Raw signal analytics only — no trading or risk-management strategy is assumed."
             ),
             "color": color,
             "fields": fields,
@@ -604,47 +590,42 @@ class DiscordNotifier:
 
     def _strategy_row_title(self, row: StrategyRowSummary) -> str:
         if row.strategy == "profit_20":
-            return "🎯 +20% Profit Target • Horizon Independent"
+            return "🎯 +20% Target Race • Horizon Independent"
+        if row.horizon_hours is not None:
+            return f"⏱️ {self._horizon_label(row.horizon_hours)} Outcomes"
         return f"⏱️ {row.label}"
 
     def _strategy_row_value(self, row: StrategyRowSummary) -> str:
-        return "\n".join(self._strategy_threshold_line(row, cell) for cell in row.thresholds)
-
-    def _strategy_threshold_line(
-        self,
-        row: StrategyRowSummary,
-        cell: StrategyThresholdSummary,
-    ) -> str:
-        threshold = f"-{cell.adverse_limit_pct}%"
-        icon = "✅" if cell.win_rate is not None and abs(cell.win_rate - 1.0) < 1e-12 else self._win_icon(cell.win_rate)
-
         if row.strategy == "profit_20":
-            base = (
-                f"{icon} **{threshold} max loss:** WR **{self._percent(cell.win_rate)}** • "
-                f"wins {cell.wins}/{cell.resolved} resolved"
-            )
-            if cell.pending:
-                base += f" • pending {cell.pending}"
-            if cell.win_rate is not None and abs(cell.win_rate - 1.0) < 1e-12:
-                base += (
-                    f" • Avg **{self._signed_percent(cell.avg_profit)}** • "
-                    f"Σ **{self._signed_percent(cell.sum_profit)}**"
-                )
-            if cell.avg_time_to_target_hours is not None:
-                base += f" • avg t **{self._hours(cell.avg_time_to_target_hours)}**"
-            return base
+            return "\n".join(self._target_race_line(cell) for cell in row.thresholds)
 
-        horizon = row.label.replace(" profitable", "")
-        base = (
-            f"{icon} **{threshold} max loss:** WR **{self._percent(cell.win_rate)}** • "
-            f"{cell.wins} wins • {cell.maturity_failures} not profitable at {horizon} • "
-            f"{cell.breach_failures} breached"
+        if not row.thresholds:
+            return "⏳ No matured signals yet."
+        base = row.thresholds[0]
+        if base.total == 0:
+            return "⏳ No matured signals yet."
+        profitable_rate = base.win_rate
+        not_profitable_rate = (base.failures / base.total) if base.total else None
+        breaches = " • ".join(
+            f"-{cell.adverse_limit_pct}% **{cell.breach_failures}**" for cell in row.thresholds
         )
-        if cell.win_rate is not None and abs(cell.win_rate - 1.0) < 1e-12:
-            base += (
-                f" • Avg **{self._signed_percent(cell.avg_profit)}** • "
-                f"Σ **{self._signed_percent(cell.sum_profit)}**"
-            )
+        return (
+            f"**{base.total}** matured • Profitable **{base.wins}/{base.total} ({self._percent(profitable_rate)})** • "
+            f"Not profitable **{base.failures}/{base.total} ({self._percent(not_profitable_rate)})**\n"
+            f"Avg raw **{self._signed_percent(base.avg_profit)}** • Σ raw **{self._signed_percent(base.sum_profit)}**\n"
+            f"Adverse crossed before horizon: {breaches}"
+        )
+
+    def _target_race_line(self, cell: StrategyThresholdSummary) -> str:
+        threshold = f"-{cell.adverse_limit_pct}%"
+        base = (
+            f"**{threshold} adverse:** Target-first **{self._percent(cell.win_rate)}** • "
+            f"target first {cell.wins}/{cell.resolved} resolved • breach first {cell.failures}"
+        )
+        if cell.pending:
+            base += f" • pending {cell.pending}"
+        if cell.avg_time_to_target_hours is not None:
+            base += f" • avg t **{self._hours(cell.avg_time_to_target_hours)}**"
         return base
 
     def _weekly_summary(self, summary: WeeklyRiskSummary) -> str:

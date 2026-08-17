@@ -76,7 +76,7 @@ async def main() -> None:
         print(
             "On-demand signal outcome ledger sent to Discord: "
             f"signals={ledger.total} standard={len(ledger.by_risk('standard'))} "
-            f"high={len(ledger.by_risk('high_risk'))} extreme={len(ledger.by_risk('extreme_risk'))}"
+            f"high={len(ledger.by_risk('high_risk'))}"
         )
     finally:
         await mexc.close()

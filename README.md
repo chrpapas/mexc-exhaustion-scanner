@@ -1,4 +1,4 @@
-# MEXC Exhaustion Scanner + Multi-Slot Futures Trader v1.2.3
+# MEXC Exhaustion Scanner + Multi-Slot Futures Trader v1.2.4
 
 Hotfix: restores Discord formatting helpers used by signal and performance reports. Fixes `AttributeError: DiscordNotifier has no attribute _percent` in both scheduled and on-demand reports.
 
@@ -315,6 +315,14 @@ See `TRADER-DEPLOY.md` for the full Render configuration and live checklist. Mig
 Every confirmed-short signal consumed by the trader now produces an explicit audit decision. Opened positions are logged as `OPENED`; non-traded signals are persisted, logged at INFO, and sent to `DISCORD_TRADER_EVENTS_WEBHOOK_URL` with the exact reason and current portfolio snapshot. Skip reasons include risk-tier filtering, stale signal, reconciliation halt, slot capacity, duplicate symbol, reserved STANDARD capacity, and aggregate exposure cap. Position closes are also logged at INFO.
 
 
+
+## v1.2.4 — neutral public outcomes + STD/HIGH-only tracking
+
+- Public performance and signal ledger datasets include only `standard` and `high_risk`. `extreme_risk` remains stored internally by the scanner but is excluded from public counts, CSVs, tables, MTM summaries, horizon returns, excursions, and Discord performance cards.
+- Fixed 1D/2D/3D/7D sections are raw outcome summaries rather than hypothetical stop-loss strategies. Every matured return contributes to Avg raw and Σ raw, including negative returns and signals that crossed adverse thresholds.
+- Adverse -100/-200/-300/-400 counts are shown separately as path observations and may overlap with profitable/not-profitable outcomes.
+- The horizon-independent +20% section reports target-first rate, target/breach/pending counts, and average target time only; it no longer reports synthetic +20% Avg/Σ profit.
+- Discord performance cards are now `STANDARD Signal Outcomes` and `HIGH RISK Signal Outcomes`, with neutral methodology wording and no EXTREME card.
 
 ## v1.2.3 — trader Discord milestones
 

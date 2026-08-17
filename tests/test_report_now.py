@@ -92,7 +92,7 @@ def test_cross_breach_filters_survivor_returns_by_horizon():
     assert h48.cross_buffer.avg_return == pytest.approx(0.05)
 
 
-def test_strategy_matrix_splits_high_and_extreme_risk():
+def test_public_performance_excludes_extreme_risk_everywhere():
     now = datetime(2026, 8, 12, 12, 0, tzinfo=UTC)
     confirmed = datetime(2026, 8, 10, 10, 0, tzinfo=UTC)
     rows = [
@@ -111,17 +111,10 @@ def test_strategy_matrix_splits_high_and_extreme_risk():
     report = build_performance_summary(rows, now_utc=now, timezone_name="Europe/Zurich")
 
     assert report.high_strategy_matrix.total_signals == 1
-    assert report.extreme_strategy_matrix.total_signals == 1
-    high_target = report.high_strategy_matrix.rows[0].thresholds[0]
-    extreme_target = report.extreme_strategy_matrix.rows[0].thresholds[0]
-    assert high_target.win_rate == 1.0
-    assert high_target.wins == 1
-    assert extreme_target.win_rate == 0.0
-    assert extreme_target.breach_failures == 0
-    assert extreme_target.failures == 1
+    assert report.extreme_strategy_matrix.total_signals == 0
+    assert report.horizon_24h.matured_total == 1
+    assert report.horizon_24h.avg_return == pytest.approx(0.10)
+    assert report.horizon_168h.sum_return == pytest.approx(0.30)
+    assert report.best_symbol_7d == "HIGH_WIN_USDT"
+    assert report.worst_symbol_7d == "HIGH_WIN_USDT"
 
-    high_1d = report.high_strategy_matrix.rows[1].thresholds[0]
-    extreme_1d = report.extreme_strategy_matrix.rows[1].thresholds[0]
-    assert high_1d.win_rate == 1.0
-    assert extreme_1d.win_rate == 0.0
-    assert extreme_1d.breach_failures == 1

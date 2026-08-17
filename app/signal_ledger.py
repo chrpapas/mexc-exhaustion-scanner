@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Iterable
 
+PUBLIC_LEDGER_RISK_TIERS = frozenset({"standard", "high_risk"})
+
 
 HORIZONS: tuple[tuple[int, str], ...] = (
     (24, "1D"),
@@ -138,6 +140,9 @@ def _elapsed_hours(start: datetime, end: datetime | None) -> float | None:
 def build_signal_ledger(rows: Iterable[dict[str, Any]], *, generated_at: datetime) -> SignalLedger:
     items: list[SignalLedgerItem] = []
     for row in rows:
+        risk_tier = str(row.get("risk_tier") or "standard")
+        if risk_tier not in PUBLIC_LEDGER_RISK_TIERS:
+            continue
         entry = float(row["entry_price"])
         confirmed_at = row["confirmed_at"]
         target_at = row.get("target_20_at")
@@ -164,7 +169,7 @@ def build_signal_ledger(rows: Iterable[dict[str, Any]], *, generated_at: datetim
             SignalLedgerItem(
                 episode_id=int(row["episode_id"]),
                 symbol=str(row["symbol"]),
-                risk_tier=str(row.get("risk_tier") or "standard"),
+                risk_tier=risk_tier,
                 confirmed_at=confirmed_at,
                 signal_price=entry,
                 target_20_at=target_at,
