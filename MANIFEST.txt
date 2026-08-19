@@ -17,6 +17,7 @@ app/models.py
 app/notifier.py
 app/performance.py
 app/report_now.py
+app/research_status.py
 app/signal_ledger.py
 app/signal_ledger_now.py
 app/signal_ledger_table.py
@@ -43,6 +44,7 @@ migrations/009_trader_bot.sql
 migrations/010_position_maturity.sql
 migrations/011_strategy_threshold_matrix.sql
 migrations/012_multi_slot_live_trader.sql
+migrations/013_research_signal_paths.sql
 pyproject.toml
 render.yaml
 scripts/verify_project.py
@@ -52,6 +54,7 @@ tests/test_mexc_trade.py
 tests/test_notifier.py
 tests/test_performance.py
 tests/test_report_now.py
+tests/test_research_v126.py
 tests/test_signal_ledger.py
 tests/test_signals.py
 tests/test_trader_config.py

@@ -141,6 +141,14 @@ class ScannerWorker:
                         self.track_performance,
                     )
                 )
+                if self.settings.research_logging_enabled:
+                    group.create_task(
+                        self._periodic(
+                            "research",
+                            self.settings.research_path_poll_seconds,
+                            self.sync_research_data,
+                        )
+                    )
                 group.create_task(
                     self._periodic(
                         "performance_report",
@@ -180,6 +188,7 @@ class ScannerWorker:
             "performance": 25,
             "performance_report": 35,
             "trader_watchdog": 45,
+            "research": 55,
         }.get(name, 0)
         if stagger:
             await asyncio.sleep(stagger)
@@ -1090,6 +1099,25 @@ class ScannerWorker:
             await self.notifier.send_signal(signal_obj)
             return state
         return None
+
+    async def sync_research_data(self) -> None:
+        """Persist optional internal research data without touching exchange APIs."""
+        loop = asyncio.get_running_loop()
+        started = loop.time()
+        snapshots = await self.db.sync_research_signal_snapshots()
+        path_rows = await self.db.sync_research_signal_paths(
+            batch_rows=self.settings.research_path_batch_rows,
+            horizon_hours=self.settings.research_path_horizon_hours,
+            statement_timeout_seconds=self.settings.research_db_timeout_seconds,
+        )
+        LOGGER.info(
+            "Research sync: snapshots=%d path_rows=%d batch_cap=%d horizon=%dh duration=%.2fs",
+            snapshots,
+            path_rows,
+            self.settings.research_path_batch_rows,
+            self.settings.research_path_horizon_hours,
+            loop.time() - started,
+        )
 
     async def track_performance(self) -> None:
         now = datetime.now(UTC)

@@ -87,6 +87,16 @@ services:
         value: "18"
       - key: PERFORMANCE_REPORT_TIMEZONE
         value: Europe/Zurich
+      - key: RESEARCH_LOGGING_ENABLED
+        value: "true"
+      - key: RESEARCH_PATH_POLL_SECONDS
+        value: "900"
+      - key: RESEARCH_PATH_BATCH_ROWS
+        value: "2000"
+      - key: RESEARCH_PATH_HORIZON_HOURS
+        value: "168"
+      - key: RESEARCH_DB_TIMEOUT_SECONDS
+        value: "10"
       - key: MAX_SYMBOLS
         value: "400"
       - key: TICKER_POLL_SECONDS

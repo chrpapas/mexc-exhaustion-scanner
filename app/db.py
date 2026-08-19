@@ -512,6 +512,139 @@ class Database:
         )
         return result == "INSERT 0 1"
 
+    async def sync_research_signal_snapshots(self) -> int:
+        """Backfill frozen confirmed-signal features from data already in PostgreSQL."""
+        result = await self.pool.execute(
+            """
+            INSERT INTO research_signal_features (
+                episode_id, symbol, confirmed_at, entry_price, risk_tier,
+                run_score, exhaustion_score, episode_started_at, peak_at,
+                breakdown_at, retest_at, feature_snapshot, reasons
+            )
+            SELECT DISTINCT ON (rs.episode_id)
+                rs.episode_id,
+                rs.symbol,
+                rs.signaled_at,
+                st.entry_price,
+                COALESCE(st.risk_tier, rs.features->>'risk_tier'),
+                COALESCE(NULLIF(rs.features->>'run_score', '')::integer, rs.score),
+                NULLIF(rs.features->>'exhaustion_score', '')::integer,
+                pe.started_at,
+                pe.peak_at,
+                COALESCE(pe.breakdown_at, NULLIF(rs.features->>'breakdown_at', '')::timestamptz),
+                COALESCE(pe.retest_at, NULLIF(rs.features->>'retest_at', '')::timestamptz),
+                rs.features,
+                rs.reasons
+            FROM run_signals rs
+            JOIN pump_episodes pe ON pe.id = rs.episode_id
+            LEFT JOIN shadow_trades st ON st.episode_id = rs.episode_id
+            WHERE rs.level = 'confirmed_short'
+              AND rs.episode_id IS NOT NULL
+            ORDER BY rs.episode_id, rs.signaled_at ASC
+            ON CONFLICT (episode_id) DO NOTHING
+            """
+        )
+        try:
+            return int(result.rsplit(" ", 1)[-1])
+        except (TypeError, ValueError):
+            return 0
+
+    async def sync_research_signal_paths(
+        self,
+        *,
+        batch_rows: int,
+        horizon_hours: int,
+        statement_timeout_seconds: int,
+    ) -> int:
+        """Persist a bounded batch of 15m post-signal candles already stored locally.
+
+        No MEXC/API calls are made here. A research-specific PostgreSQL statement
+        timeout prevents this optional backfill from competing with scanner hot paths.
+        """
+        query = """
+            WITH bounds AS (
+                SELECT
+                    st.episode_id,
+                    st.symbol,
+                    st.confirmed_at,
+                    st.entry_price,
+                    COALESCE(
+                        rp.last_recorded_close,
+                        st.confirmed_at - interval '1 microsecond'
+                    ) AS last_recorded_close
+                FROM shadow_trades st
+                LEFT JOIN LATERAL (
+                    SELECT max(candle_close_at) AS last_recorded_close
+                    FROM research_signal_path_15m
+                    WHERE episode_id = st.episode_id
+                ) rp ON true
+            ),
+            candidates AS (
+                SELECT
+                    b.episode_id,
+                    b.symbol,
+                    c.open_time + interval '15 minutes' AS candle_close_at,
+                    c.open, c.high, c.low, c.close, c.volume, c.amount,
+                    (b.entry_price - c.close) / b.entry_price AS close_return_pct,
+                    (b.entry_price - c.low) / b.entry_price AS favorable_return_pct,
+                    (b.entry_price - c.high) / b.entry_price AS adverse_return_pct,
+                    btc.close AS btc_close
+                FROM bounds b
+                JOIN candles c
+                  ON c.symbol = b.symbol
+                 AND c.interval = 'Min15'
+                 AND c.open_time + interval '15 minutes' > b.last_recorded_close
+                 AND c.open_time + interval '15 minutes' >= b.confirmed_at
+                 AND c.open_time + interval '15 minutes' <= now()
+                 AND c.open_time + interval '15 minutes' <=
+                     b.confirmed_at + ($2::double precision * interval '1 hour')
+                LEFT JOIN candles btc
+                  ON btc.symbol = 'BTC_USDT'
+                 AND btc.interval = 'Min15'
+                 AND btc.open_time = c.open_time
+                ORDER BY b.confirmed_at ASC, c.open_time ASC
+                LIMIT $1
+            ),
+            inserted AS (
+                INSERT INTO research_signal_path_15m (
+                    episode_id, symbol, candle_close_at, open, high, low, close,
+                    volume, amount, close_return_pct, favorable_return_pct,
+                    adverse_return_pct, btc_close
+                )
+                SELECT
+                    episode_id, symbol, candle_close_at, open, high, low, close,
+                    volume, amount, close_return_pct, favorable_return_pct,
+                    adverse_return_pct, btc_close
+                FROM candidates
+                ON CONFLICT (episode_id, candle_close_at) DO NOTHING
+                RETURNING 1
+            )
+            SELECT count(*)::integer FROM inserted
+        """
+        async with self.pool.acquire() as conn:
+            async with conn.transaction():
+                await conn.execute(
+                    "SELECT set_config('statement_timeout', $1, true)",
+                    f"{statement_timeout_seconds}s",
+                )
+                value = await conn.fetchval(query, batch_rows, horizon_hours)
+        return int(value or 0)
+
+    async def research_signal_counts(self) -> dict[str, int | datetime | None]:
+        row = await self.pool.fetchrow(
+            """
+            SELECT
+                (SELECT count(*) FROM research_signal_features) AS feature_rows,
+                (SELECT count(*) FROM research_signal_path_15m) AS path_rows,
+                (SELECT max(candle_close_at) FROM research_signal_path_15m) AS last_path_at
+            """
+        )
+        return dict(row) if row is not None else {
+            "feature_rows": 0,
+            "path_rows": 0,
+            "last_path_at": None,
+        }
+
     async def fetch_shadow_trades(self) -> list[dict[str, Any]]:
         rows = await self.pool.fetch(
             """

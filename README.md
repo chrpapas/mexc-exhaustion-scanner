@@ -1,4 +1,4 @@
-# MEXC Exhaustion Scanner + Multi-Slot Futures Trader v1.2.5
+# MEXC Exhaustion Scanner + Multi-Slot Futures Trader v1.2.6
 
 Hotfix: restores Discord formatting helpers used by signal and performance reports. Fixes `AttributeError: DiscordNotifier has no attribute _percent` in both scheduled and on-demand reports.
 
@@ -316,6 +316,18 @@ Every confirmed-short signal consumed by the trader now produces an explicit aud
 
 
 
+
+## v1.2.6 — low-impact research logging
+
+- Adds internal `research_signal_features` snapshots and a bounded `research_signal_path_15m` dataset for strategy research.
+- The research layer uses only candles/signals already stored in PostgreSQL; it makes **no additional MEXC API calls** and does not add writes to the confirmed-signal hot path.
+- A separate research loop runs every 15 minutes by default, upserts missing feature snapshots, and copies at most 2,000 15m path rows per cycle.
+- Research path collection defaults to the first 168h after each confirmed signal and records raw OHLCV/amount, close return, per-candle favorable/adverse excursion, and the matching stored BTC 15m close.
+- `research_signal_features_enriched` derives run/breakdown/retest/confirmation timing, while `research_signal_path_15m_enriched` derives cumulative MFE/MAE, best/worst close return, giveback from best, rebound from worst, minutes since signal, and BTC return since signal only when queried.
+- Research SQL uses its own 10-second PostgreSQL statement timeout so optional backfill cannot monopolize the scanner DB pool. A failed research cycle is isolated by the existing periodic-loop error handling.
+- Defaults: `RESEARCH_LOGGING_ENABLED=true`, `RESEARCH_PATH_POLL_SECONDS=900`, `RESEARCH_PATH_BATCH_ROWS=2000`, `RESEARCH_PATH_HORIZON_HOURS=168`, `RESEARCH_DB_TIMEOUT_SECONDS=10`.
+- Run `python -m app.research_status` to inspect snapshot/path row counts.
+- Public Discord reporting, signal rules, episode locking/re-arm behavior, performance tracking, and trader strategy are unchanged. Migration `013_research_signal_paths.sql` is applied automatically.
 
 ## v1.2.5 — concurrent signal evaluation + progress diagnostics
 
