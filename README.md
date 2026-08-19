@@ -1,4 +1,4 @@
-# MEXC Exhaustion Scanner + Multi-Slot Futures Trader v1.2.4
+# MEXC Exhaustion Scanner + Multi-Slot Futures Trader v1.2.5
 
 Hotfix: restores Discord formatting helpers used by signal and performance reports. Fixes `AttributeError: DiscordNotifier has no attribute _percent` in both scheduled and on-demand reports.
 
@@ -315,6 +315,16 @@ See `TRADER-DEPLOY.md` for the full Render configuration and live checklist. Mig
 Every confirmed-short signal consumed by the trader now produces an explicit audit decision. Opened positions are logged as `OPENED`; non-traded signals are persisted, logged at INFO, and sent to `DISCORD_TRADER_EVENTS_WEBHOOK_URL` with the exact reason and current portfolio snapshot. Skip reasons include risk-tier filtering, stale signal, reconciliation halt, slot capacity, duplicate symbol, reserved STANDARD capacity, and aggregate exposure cap. Position closes are also logged at INFO.
 
 
+
+
+## v1.2.5 — concurrent signal evaluation + progress diagnostics
+
+- Signal evaluation now processes symbols with controlled concurrency instead of strictly sequential symbol-by-symbol database reads.
+- `SIGNAL_EVAL_CONCURRENCY` defaults to `3`. Each symbol initially reads 15m and 4h candles in parallel, so three active symbols use at most about six of the scanner PostgreSQL pool’s eight connections and leave headroom for ticker/performance/other worker tasks.
+- Every cycle logs `Signal evaluation started`, periodic `Signal evaluation progress`, and `Signal evaluation complete` with failures and wall-clock duration.
+- `SIGNAL_EVAL_PROGRESS_EVERY` defaults to `50` symbols.
+- A failure on one symbol is logged and isolated instead of aborting the entire evaluation cycle.
+- Signal rules, pump-episode locking/re-arm logic, Discord filtering, performance tracking and trader behavior are unchanged.
 
 ## v1.2.4 — neutral public outcomes + STD/HIGH-only tracking
 

@@ -529,381 +529,369 @@ class ScannerWorker:
         confirmed_shorts = 0
         rearmed_episodes = 0
 
-        for symbol in symbols:
-            ticker = self.latest_tickers[symbol]
-            candles_15m, candles_4h = await asyncio.gather(
-                self.db.fetch_candles(symbol, "Min15", 400),
-                self.db.fetch_candles(symbol, "Hour4", 80),
-            )
-            now = datetime.now(UTC)
-            completed_15m = [
-                item
-                for item in candles_15m
-                if item.open_time + timedelta(minutes=15) <= now
-            ]
-            completed_4h = [
-                item
-                for item in candles_4h
-                if item.open_time + timedelta(hours=4) <= now
-            ]
-            if len(completed_15m) < 289 or len(completed_4h) < 25:
+        loop = asyncio.get_running_loop()
+        evaluation_started = loop.time()
+        LOGGER.info(
+            "Signal evaluation started: symbols=%d concurrency=%d",
+            len(symbols),
+            self.settings.signal_eval_concurrency,
+        )
+        semaphore = asyncio.Semaphore(self.settings.signal_eval_concurrency)
+
+        async def evaluate_symbol(symbol: str) -> None:
+            nonlocal evaluated
+            nonlocal standard_evaluated
+            nonlocal high_risk_evaluated
+            nonlocal extreme_risk_evaluated
+            nonlocal run_watches
+            nonlocal exhaustion_watches
+            nonlocal breakdown_watches
+            nonlocal breakdown_waiting
+            nonlocal confirmed_shorts
+            nonlocal rearmed_episodes
+            async with semaphore:
+                ticker = self.latest_tickers[symbol]
+                candles_15m, candles_4h = await asyncio.gather(
+                    self.db.fetch_candles(symbol, "Min15", 400),
+                    self.db.fetch_candles(symbol, "Hour4", 80),
+                )
+                now = datetime.now(UTC)
+                completed_15m = [
+                    item
+                    for item in candles_15m
+                    if item.open_time + timedelta(minutes=15) <= now
+                ]
+                completed_4h = [
+                    item
+                    for item in candles_4h
+                    if item.open_time + timedelta(hours=4) <= now
+                ]
+                if len(completed_15m) < 289 or len(completed_4h) < 25:
+                    if symbol in self.settings.diagnostic_symbols:
+                        LOGGER.info(
+                            "Signal diagnostic %s: waiting_for_history 15m=%d/289 4h=%d/25",
+                            symbol,
+                            len(completed_15m),
+                            len(completed_4h),
+                        )
+                    return
+
+                evaluated += 1
+                closes_15m = [item.close for item in completed_15m]
+                highs_15m = [item.high for item in completed_15m]
+                lows_15m = [item.low for item in completed_15m]
+                volumes_15m = [item.volume for item in completed_15m]
+                closes_4h = [item.close for item in completed_4h]
+                highs_4h = [item.high for item in completed_4h]
+                lows_4h = [item.low for item in completed_4h]
+
+                return_72h = pct_return(closes_15m[-289], ticker.last_price)
+                ema20 = ema(closes_4h, 20)
+                atr14_4h = atr(highs_4h, lows_4h, closes_4h, 14)
+                atr14_15m = atr(highs_15m, lows_15m, closes_15m, 14)
+                distance_atr = (
+                    (ticker.last_price - ema20) / atr14_4h
+                    if ema20 is not None and atr14_4h is not None and atr14_4h > 0
+                    else None
+                )
+                premium_pct = (
+                    (ticker.fair_price / ticker.index_price - 1.0) * 100.0
+                    if ticker.fair_price is not None
+                    and ticker.index_price is not None
+                    and ticker.index_price > 0
+                    else None
+                )
+                volume_z = zscore_last(volumes_15m, 96)
+                features = RunFeatures(
+                    return_24h=ticker.rise_fall_rate,
+                    return_72h=return_72h,
+                    btc_return_24h=btc.rise_fall_rate,
+                    residual_return_24h=ticker.rise_fall_rate - btc.rise_fall_rate,
+                    cross_section_percentile=percentile_rank(
+                        ticker.rise_fall_rate, universe_returns
+                    ),
+                    volume_zscore_15m=volume_z,
+                    distance_above_ema20_atr_4h=distance_atr,
+                    amount_24h=ticker.amount24,
+                    spread_pct=ticker.spread_pct,
+                    funding_rate=ticker.funding_rate,
+                    fair_index_premium_pct=premium_pct,
+                    hold_vol=ticker.hold_vol,
+                )
+                run_score, run_reasons, scorable = score_run(features, self.thresholds)
+                risk = classify_execution_risk(
+                    features,
+                    self.thresholds,
+                    high_risk_min_amount_24h=self.settings.high_risk_min_amount_24h,
+                    high_risk_max_spread_pct=self.settings.high_risk_max_spread_pct,
+                )
+                if risk.tier == "standard":
+                    standard_evaluated += 1
+                elif risk.tier == "high_risk":
+                    high_risk_evaluated += 1
+                else:
+                    extreme_risk_evaluated += 1
+
+                latest = completed_15m[-1]
+                previous = completed_15m[-2]
+                ema9_15m = ema(closes_15m, 9)
+                momentum_1h = pct_return(closes_15m[-5], closes_15m[-1])
+                previous_momentum_1h = pct_return(closes_15m[-9], closes_15m[-5])
+                prior_support = min(item.low for item in completed_15m[-5:-1])
+                structural_break = latest.close < prior_support
+                exhaustion = ExhaustionFeatures(
+                    upper_wick_ratio_15m=upper_wick_ratio(
+                        latest.open, latest.high, latest.low, latest.close
+                    ),
+                    close_location_15m=close_location(
+                        latest.high, latest.low, latest.close
+                    ),
+                    momentum_1h=momentum_1h,
+                    previous_momentum_1h=previous_momentum_1h,
+                    momentum_decelerating=(
+                        momentum_1h is not None
+                        and previous_momentum_1h is not None
+                        and momentum_1h < previous_momentum_1h
+                    ),
+                    below_ema9_15m=ema9_15m is not None and latest.close < ema9_15m,
+                    lower_high_and_close=(
+                        latest.high < previous.high and latest.close < previous.close
+                    ),
+                    structural_break_15m=structural_break,
+                    volume_zscore_15m=volume_z,
+                )
+                exhaustion_score, exhaustion_reasons = score_exhaustion(
+                    exhaustion, self.exhaustion_thresholds
+                )
+                state, state_reasons = classify_market_state(
+                    features,
+                    run_score,
+                    exhaustion,
+                    exhaustion_score,
+                    self.state_thresholds,
+                )
                 if symbol in self.settings.diagnostic_symbols:
                     LOGGER.info(
-                        "Signal diagnostic %s: waiting_for_history 15m=%d/289 4h=%d/25",
+                        "Signal diagnostic %s: run_score=%d/6 exhaustion_score=%d/7 state=%s structural_break=%s risk=%s 24h=%.2f%% 72h=%.2f%%",
                         symbol,
-                        len(completed_15m),
-                        len(completed_4h),
+                        run_score,
+                        exhaustion_score,
+                        state or "none",
+                        exhaustion.structural_break_15m,
+                        risk.tier,
+                        (features.return_24h or 0.0) * 100.0,
+                        (features.return_72h or 0.0) * 100.0,
                     )
-                continue
 
-            evaluated += 1
-            closes_15m = [item.close for item in completed_15m]
-            highs_15m = [item.high for item in completed_15m]
-            lows_15m = [item.low for item in completed_15m]
-            volumes_15m = [item.volume for item in completed_15m]
-            closes_4h = [item.close for item in completed_4h]
-            highs_4h = [item.high for item in completed_4h]
-            lows_4h = [item.low for item in completed_4h]
-
-            return_72h = pct_return(closes_15m[-289], ticker.last_price)
-            ema20 = ema(closes_4h, 20)
-            atr14_4h = atr(highs_4h, lows_4h, closes_4h, 14)
-            atr14_15m = atr(highs_15m, lows_15m, closes_15m, 14)
-            distance_atr = (
-                (ticker.last_price - ema20) / atr14_4h
-                if ema20 is not None and atr14_4h is not None and atr14_4h > 0
-                else None
-            )
-            premium_pct = (
-                (ticker.fair_price / ticker.index_price - 1.0) * 100.0
-                if ticker.fair_price is not None
-                and ticker.index_price is not None
-                and ticker.index_price > 0
-                else None
-            )
-            volume_z = zscore_last(volumes_15m, 96)
-            features = RunFeatures(
-                return_24h=ticker.rise_fall_rate,
-                return_72h=return_72h,
-                btc_return_24h=btc.rise_fall_rate,
-                residual_return_24h=ticker.rise_fall_rate - btc.rise_fall_rate,
-                cross_section_percentile=percentile_rank(
-                    ticker.rise_fall_rate, universe_returns
-                ),
-                volume_zscore_15m=volume_z,
-                distance_above_ema20_atr_4h=distance_atr,
-                amount_24h=ticker.amount24,
-                spread_pct=ticker.spread_pct,
-                funding_rate=ticker.funding_rate,
-                fair_index_premium_pct=premium_pct,
-                hold_vol=ticker.hold_vol,
-            )
-            run_score, run_reasons, scorable = score_run(features, self.thresholds)
-            risk = classify_execution_risk(
-                features,
-                self.thresholds,
-                high_risk_min_amount_24h=self.settings.high_risk_min_amount_24h,
-                high_risk_max_spread_pct=self.settings.high_risk_max_spread_pct,
-            )
-            if risk.tier == "standard":
-                standard_evaluated += 1
-            elif risk.tier == "high_risk":
-                high_risk_evaluated += 1
-            else:
-                extreme_risk_evaluated += 1
-
-            latest = completed_15m[-1]
-            previous = completed_15m[-2]
-            ema9_15m = ema(closes_15m, 9)
-            momentum_1h = pct_return(closes_15m[-5], closes_15m[-1])
-            previous_momentum_1h = pct_return(closes_15m[-9], closes_15m[-5])
-            prior_support = min(item.low for item in completed_15m[-5:-1])
-            structural_break = latest.close < prior_support
-            exhaustion = ExhaustionFeatures(
-                upper_wick_ratio_15m=upper_wick_ratio(
-                    latest.open, latest.high, latest.low, latest.close
-                ),
-                close_location_15m=close_location(
-                    latest.high, latest.low, latest.close
-                ),
-                momentum_1h=momentum_1h,
-                previous_momentum_1h=previous_momentum_1h,
-                momentum_decelerating=(
-                    momentum_1h is not None
-                    and previous_momentum_1h is not None
-                    and momentum_1h < previous_momentum_1h
-                ),
-                below_ema9_15m=ema9_15m is not None and latest.close < ema9_15m,
-                lower_high_and_close=(
-                    latest.high < previous.high and latest.close < previous.close
-                ),
-                structural_break_15m=structural_break,
-                volume_zscore_15m=volume_z,
-            )
-            exhaustion_score, exhaustion_reasons = score_exhaustion(
-                exhaustion, self.exhaustion_thresholds
-            )
-            state, state_reasons = classify_market_state(
-                features,
-                run_score,
-                exhaustion,
-                exhaustion_score,
-                self.state_thresholds,
-            )
-            if symbol in self.settings.diagnostic_symbols:
-                LOGGER.info(
-                    "Signal diagnostic %s: run_score=%d/6 exhaustion_score=%d/7 state=%s structural_break=%s risk=%s 24h=%.2f%% 72h=%.2f%%",
-                    symbol,
-                    run_score,
-                    exhaustion_score,
-                    state or "none",
-                    exhaustion.structural_break_15m,
-                    risk.tier,
-                    (features.return_24h or 0.0) * 100.0,
-                    (features.return_72h or 0.0) * 100.0,
+                signaled_at = self._time_bucket(
+                    now, self.settings.signal_poll_seconds
                 )
+                base_features = features.as_dict()
+                base_features.update(exhaustion.as_dict())
+                base_features["run_score"] = run_score
+                base_features["exhaustion_score"] = exhaustion_score
+                base_features["atr_15m"] = atr14_15m
+                base_features["risk_tier"] = risk.tier
+                base_features["execution_eligible"] = risk.execution_eligible
+                base_features["execution_risk_reasons"] = list(risk.reasons)
+                base_features["execution_risk_warning"] = risk.warning
 
-            signaled_at = self._time_bucket(
-                now, self.settings.signal_poll_seconds
-            )
-            base_features = features.as_dict()
-            base_features.update(exhaustion.as_dict())
-            base_features["run_score"] = run_score
-            base_features["exhaustion_score"] = exhaustion_score
-            base_features["atr_15m"] = atr14_15m
-            base_features["risk_tier"] = risk.tier
-            base_features["execution_eligible"] = risk.execution_eligible
-            base_features["execution_risk_reasons"] = list(risk.reasons)
-            base_features["execution_risk_warning"] = risk.warning
+                episode = await self.db.get_active_episode(symbol)
 
-            episode = await self.db.get_active_episode(symbol)
-
-            # Close very old episodes so a later, unrelated pump can be tracked.
-            if episode is not None and (
-                now - episode.started_at
-                > timedelta(hours=self.settings.episode_max_age_hours)
-            ):
-                await self.db.close_episode(
-                    episode.id,
-                    closed_at=now,
-                    reason="episode max age exceeded",
-                )
-                episode = None
-
-            # A confirmed episode is locked. It may only re-arm after a later
-            # completed candle establishes a materially higher high.
-            if episode is not None and episode.confirmed_short_at is not None:
-                post_confirm = [
-                    candle
-                    for candle in completed_15m
-                    if candle.open_time > episode.confirmed_short_at
-                ]
-                new_high = max(
-                    (candle.high for candle in post_confirm), default=0.0
-                )
-                can_rearm = (
-                    scorable
-                    and run_score >= self.settings.state_min_run_score
-                    and state is not None
-                    and new_high
-                    >= episode.peak_price * (1.0 + self.settings.rearm_new_high_pct)
-                )
-                if can_rearm:
+                # Close very old episodes so a later, unrelated pump can be tracked.
+                if episode is not None and (
+                    now - episode.started_at
+                    > timedelta(hours=self.settings.episode_max_age_hours)
+                ):
                     await self.db.close_episode(
                         episode.id,
                         closed_at=now,
-                        reason=(
-                            "rearmed after new high >= "
-                            f"{self.settings.rearm_new_high_pct:.1%} above prior episode peak"
-                        ),
+                        reason="episode max age exceeded",
                     )
                     episode = None
-                    rearmed_episodes += 1
-                else:
-                    continue
 
-            # An active breakdown must keep being evaluated even if run_score
-            # later drops below the normal watch threshold.
-            if episode is not None and episode.state == "breakdown_watch":
-                if (
-                    episode.breakdown_at is None
-                    or episode.broken_level is None
-                    or episode.breakdown_atr_15m is None
-                ):
-                    episode = await self.db.update_episode(
-                        episode.id,
-                        state=state or "exhaustion_watch",
-                        run_score=run_score,
-                        exhaustion_score=exhaustion_score,
-                        clear_breakdown=True,
+                # A confirmed episode is locked. It may only re-arm after a later
+                # completed candle establishes a materially higher high.
+                if episode is not None and episode.confirmed_short_at is not None:
+                    post_confirm = [
+                        candle
+                        for candle in completed_15m
+                        if candle.open_time > episode.confirmed_short_at
+                    ]
+                    new_high = max(
+                        (candle.high for candle in post_confirm), default=0.0
                     )
-                else:
-                    retest = evaluate_failed_retest(
-                        completed_15m,
-                        breakdown_at=episode.breakdown_at,
-                        broken_level=episode.broken_level,
-                        atr_15m=episode.breakdown_atr_15m,
-                        tolerance_atr=self.settings.retest_tolerance_atr,
-                        window_candles=self.settings.retest_window_candles,
+                    can_rearm = (
+                        scorable
+                        and run_score >= self.settings.state_min_run_score
+                        and state is not None
+                        and new_high
+                        >= episode.peak_price * (1.0 + self.settings.rearm_new_high_pct)
                     )
-                    if retest.confirmed:
-                        confirm_features = dict(base_features)
-                        confirm_features.update(
-                            {
-                                "episode_peak_price": episode.peak_price,
-                                "broken_level": episode.broken_level,
-                                "breakdown_at": episode.breakdown_at,
-                                "retest_at": retest.retest_at,
-                                "retest_high": retest.retest_high,
-                                "retest_close": retest.retest_close,
-                                "retest_tolerance_atr": self.settings.retest_tolerance_atr,
-                                "retest_window_candles": self.settings.retest_window_candles,
-                            }
-                        )
-                        episode = await self.db.update_episode(
+                    if can_rearm:
+                        await self.db.close_episode(
                             episode.id,
-                            state="confirmed_short",
-                            retest_at=retest.retest_at,
-                            confirmed_short_at=signaled_at,
-                            run_score=run_score,
-                            exhaustion_score=exhaustion_score,
-                            metadata={"confirmation_reason": retest.reason},
+                            closed_at=now,
+                            reason=(
+                                "rearmed after new high >= "
+                                f"{self.settings.rearm_new_high_pct:.1%} above prior episode peak"
+                            ),
                         )
-                        signal_obj = RunSignal(
-                            symbol=symbol,
-                            signaled_at=signaled_at,
-                            level="confirmed_short",
-                            score=run_score + exhaustion_score,
-                            features=confirm_features,
-                            reasons=[
-                                "prior pump episode entered breakdown watch",
-                                retest.reason or "failed retest confirmed",
-                                "one confirmed short allowed for this episode",
-                            ],
-                            episode_id=episode.id,
-                        )
-                        inserted = await self.db.insert_signal(signal_obj)
-                        if retest.retest_close is not None and retest.retest_close > 0:
-                            await self.db.create_shadow_trade(
-                                episode_id=episode.id,
-                                symbol=symbol,
-                                confirmed_at=signaled_at,
-                                entry_price=retest.retest_close,
-                                risk_tier=risk.tier,
-                            )
-                        if inserted:
-                            confirmed_shorts += 1
-                            await self.notifier.send_signal(signal_obj)
-                        continue
+                        episode = None
+                        rearmed_episodes += 1
+                    else:
+                        return
 
-                    if retest.invalidated:
-                        fallback_state = state or "exhaustion_watch"
-                        old_state = episode.state
-                        episode = await self.db.update_episode(
-                            episode.id,
-                            state=fallback_state,
-                            run_score=run_score,
-                            exhaustion_score=exhaustion_score,
-                            metadata={"last_breakdown_result": retest.reason},
-                            clear_breakdown=True,
-                        )
-                        if state is not None and old_state != fallback_state:
-                            sent = await self._emit_watch_transition(
-                                symbol=symbol,
-                                state=fallback_state,
-                                signaled_at=signaled_at,
-                                run_score=run_score,
-                                exhaustion_score=exhaustion_score,
-                                features=base_features,
-                                reasons=[
-                                    retest.reason or "breakdown invalidated",
-                                    *state_reasons,
-                                    *run_reasons,
-                                    *(
-                                        exhaustion_reasons
-                                        if fallback_state == "exhaustion_watch"
-                                        else []
-                                    ),
-                                ],
-                                episode=episode,
-                            )
-                            if sent == "run_watch":
-                                run_watches += 1
-                            elif sent == "exhaustion_watch":
-                                exhaustion_watches += 1
-                        continue
-
-                    if retest.expired:
+                # An active breakdown must keep being evaluated even if run_score
+                # later drops below the normal watch threshold.
+                if episode is not None and episode.state == "breakdown_watch":
+                    if (
+                        episode.breakdown_at is None
+                        or episode.broken_level is None
+                        or episode.breakdown_atr_15m is None
+                    ):
                         episode = await self.db.update_episode(
                             episode.id,
                             state=state or "exhaustion_watch",
                             run_score=run_score,
                             exhaustion_score=exhaustion_score,
-                            metadata={"last_breakdown_result": retest.reason},
                             clear_breakdown=True,
                         )
-                        continue
+                    else:
+                        retest = evaluate_failed_retest(
+                            completed_15m,
+                            breakdown_at=episode.breakdown_at,
+                            broken_level=episode.broken_level,
+                            atr_15m=episode.breakdown_atr_15m,
+                            tolerance_atr=self.settings.retest_tolerance_atr,
+                            window_candles=self.settings.retest_window_candles,
+                        )
+                        if retest.confirmed:
+                            confirm_features = dict(base_features)
+                            confirm_features.update(
+                                {
+                                    "episode_peak_price": episode.peak_price,
+                                    "broken_level": episode.broken_level,
+                                    "breakdown_at": episode.breakdown_at,
+                                    "retest_at": retest.retest_at,
+                                    "retest_high": retest.retest_high,
+                                    "retest_close": retest.retest_close,
+                                    "retest_tolerance_atr": self.settings.retest_tolerance_atr,
+                                    "retest_window_candles": self.settings.retest_window_candles,
+                                }
+                            )
+                            episode = await self.db.update_episode(
+                                episode.id,
+                                state="confirmed_short",
+                                retest_at=retest.retest_at,
+                                confirmed_short_at=signaled_at,
+                                run_score=run_score,
+                                exhaustion_score=exhaustion_score,
+                                metadata={"confirmation_reason": retest.reason},
+                            )
+                            signal_obj = RunSignal(
+                                symbol=symbol,
+                                signaled_at=signaled_at,
+                                level="confirmed_short",
+                                score=run_score + exhaustion_score,
+                                features=confirm_features,
+                                reasons=[
+                                    "prior pump episode entered breakdown watch",
+                                    retest.reason or "failed retest confirmed",
+                                    "one confirmed short allowed for this episode",
+                                ],
+                                episode_id=episode.id,
+                            )
+                            inserted = await self.db.insert_signal(signal_obj)
+                            if retest.retest_close is not None and retest.retest_close > 0:
+                                await self.db.create_shadow_trade(
+                                    episode_id=episode.id,
+                                    symbol=symbol,
+                                    confirmed_at=signaled_at,
+                                    entry_price=retest.retest_close,
+                                    risk_tier=risk.tier,
+                                )
+                            if inserted:
+                                confirmed_shorts += 1
+                                await self.notifier.send_signal(signal_obj)
+                            return
 
-                    breakdown_waiting += 1
-                    await self.db.update_episode(
-                        episode.id,
+                        if retest.invalidated:
+                            fallback_state = state or "exhaustion_watch"
+                            old_state = episode.state
+                            episode = await self.db.update_episode(
+                                episode.id,
+                                state=fallback_state,
+                                run_score=run_score,
+                                exhaustion_score=exhaustion_score,
+                                metadata={"last_breakdown_result": retest.reason},
+                                clear_breakdown=True,
+                            )
+                            if state is not None and old_state != fallback_state:
+                                sent = await self._emit_watch_transition(
+                                    symbol=symbol,
+                                    state=fallback_state,
+                                    signaled_at=signaled_at,
+                                    run_score=run_score,
+                                    exhaustion_score=exhaustion_score,
+                                    features=base_features,
+                                    reasons=[
+                                        retest.reason or "breakdown invalidated",
+                                        *state_reasons,
+                                        *run_reasons,
+                                        *(
+                                            exhaustion_reasons
+                                            if fallback_state == "exhaustion_watch"
+                                            else []
+                                        ),
+                                    ],
+                                    episode=episode,
+                                )
+                                if sent == "run_watch":
+                                    run_watches += 1
+                                elif sent == "exhaustion_watch":
+                                    exhaustion_watches += 1
+                            return
+
+                        if retest.expired:
+                            episode = await self.db.update_episode(
+                                episode.id,
+                                state=state or "exhaustion_watch",
+                                run_score=run_score,
+                                exhaustion_score=exhaustion_score,
+                                metadata={"last_breakdown_result": retest.reason},
+                                clear_breakdown=True,
+                            )
+                            return
+
+                        breakdown_waiting += 1
+                        await self.db.update_episode(
+                            episode.id,
+                            run_score=run_score,
+                            exhaustion_score=exhaustion_score,
+                        )
+                        return
+
+                # Discovery is intentionally independent of execution liquidity.
+                if (
+                    not scorable
+                    or run_score < self.settings.state_min_run_score
+                    or state is None
+                ):
+                    return
+
+                peak_candle = max(completed_15m[-289:], key=lambda item: item.high)
+                if episode is None:
+                    episode = await self.db.create_episode(
+                        symbol=symbol,
+                        started_at=signaled_at,
+                        state=state,
+                        peak_price=peak_candle.high,
+                        peak_at=peak_candle.open_time,
                         run_score=run_score,
                         exhaustion_score=exhaustion_score,
+                        metadata={"detected_return_72h": return_72h},
                     )
-                    continue
-
-            # Discovery is intentionally independent of execution liquidity.
-            if (
-                not scorable
-                or run_score < self.settings.state_min_run_score
-                or state is None
-            ):
-                continue
-
-            peak_candle = max(completed_15m[-289:], key=lambda item: item.high)
-            if episode is None:
-                episode = await self.db.create_episode(
-                    symbol=symbol,
-                    started_at=signaled_at,
-                    state=state,
-                    peak_price=peak_candle.high,
-                    peak_at=peak_candle.open_time,
-                    run_score=run_score,
-                    exhaustion_score=exhaustion_score,
-                    metadata={"detected_return_72h": return_72h},
-                )
-                sent = await self._emit_watch_transition(
-                    symbol=symbol,
-                    state=state,
-                    signaled_at=signaled_at,
-                    run_score=run_score,
-                    exhaustion_score=exhaustion_score,
-                    features=base_features,
-                    reasons=state_reasons
-                    + run_reasons
-                    + (exhaustion_reasons if state == "exhaustion_watch" else []),
-                    episode=episode,
-                )
-                if sent == "run_watch":
-                    run_watches += 1
-                elif sent == "exhaustion_watch":
-                    exhaustion_watches += 1
-            else:
-                old_state = episode.state
-                peak_price = episode.peak_price
-                peak_at = episode.peak_at
-                if peak_candle.high > peak_price:
-                    peak_price = peak_candle.high
-                    peak_at = peak_candle.open_time
-                episode = await self.db.update_episode(
-                    episode.id,
-                    state=state,
-                    peak_price=peak_price,
-                    peak_at=peak_at,
-                    run_score=run_score,
-                    exhaustion_score=exhaustion_score,
-                )
-                if old_state != state:
                     sent = await self._emit_watch_transition(
                         symbol=symbol,
                         state=state,
@@ -913,73 +901,141 @@ class ScannerWorker:
                         features=base_features,
                         reasons=state_reasons
                         + run_reasons
-                        + (
-                            exhaustion_reasons
-                            if state == "exhaustion_watch"
-                            else []
-                        ),
+                        + (exhaustion_reasons if state == "exhaustion_watch" else []),
                         episode=episode,
                     )
                     if sent == "run_watch":
                         run_watches += 1
                     elif sent == "exhaustion_watch":
                         exhaustion_watches += 1
+                else:
+                    old_state = episode.state
+                    peak_price = episode.peak_price
+                    peak_at = episode.peak_at
+                    if peak_candle.high > peak_price:
+                        peak_price = peak_candle.high
+                        peak_at = peak_candle.open_time
+                    episode = await self.db.update_episode(
+                        episode.id,
+                        state=state,
+                        peak_price=peak_price,
+                        peak_at=peak_at,
+                        run_score=run_score,
+                        exhaustion_score=exhaustion_score,
+                    )
+                    if old_state != state:
+                        sent = await self._emit_watch_transition(
+                            symbol=symbol,
+                            state=state,
+                            signaled_at=signaled_at,
+                            run_score=run_score,
+                            exhaustion_score=exhaustion_score,
+                            features=base_features,
+                            reasons=state_reasons
+                            + run_reasons
+                            + (
+                                exhaustion_reasons
+                                if state == "exhaustion_watch"
+                                else []
+                            ),
+                            episode=episode,
+                        )
+                        if sent == "run_watch":
+                            run_watches += 1
+                        elif sent == "exhaustion_watch":
+                            exhaustion_watches += 1
 
-            # Structural break no longer produces a short. It arms the retest
-            # state and stores the exact support level and ATR from this candle.
+                # Structural break no longer produces a short. It arms the retest
+                # state and stores the exact support level and ATR from this candle.
+                if (
+                    state == "exhaustion_watch"
+                    and structural_break
+                    and exhaustion_score >= self.settings.short_exhaustion_score
+                    and atr14_15m is not None
+                    and atr14_15m > 0
+                ):
+                    episode = await self.db.update_episode(
+                        episode.id,
+                        state="breakdown_watch",
+                        broken_level=prior_support,
+                        breakdown_at=latest.open_time,
+                        breakdown_atr_15m=atr14_15m,
+                        run_score=run_score,
+                        exhaustion_score=exhaustion_score,
+                        metadata={"breakdown_close": latest.close},
+                    )
+                    breakdown_features = dict(base_features)
+                    breakdown_features.update(
+                        {
+                            "episode_peak_price": episode.peak_price,
+                            "broken_level": prior_support,
+                            "breakdown_at": latest.open_time,
+                            "retest_tolerance_atr": self.settings.retest_tolerance_atr,
+                            "retest_window_candles": self.settings.retest_window_candles,
+                        }
+                    )
+                    breakdown_signal = RunSignal(
+                        symbol=symbol,
+                        signaled_at=signaled_at,
+                        level="breakdown_watch",
+                        score=run_score + exhaustion_score,
+                        features=breakdown_features,
+                        reasons=state_reasons
+                        + run_reasons
+                        + exhaustion_reasons
+                        + [
+                            "structural break recorded; waiting for failed retest",
+                            (
+                                f"retest must occur within {self.settings.retest_window_candles} "
+                                "completed 15m candles"
+                            ),
+                        ],
+                        episode_id=episode.id,
+                    )
+                    if await self.db.insert_signal(breakdown_signal):
+                        breakdown_watches += 1
+                        await self.notifier.send_signal(breakdown_signal)
+
+        async def run_symbol(symbol: str) -> tuple[str, Exception | None]:
+            try:
+                await evaluate_symbol(symbol)
+                return symbol, None
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                return symbol, exc
+
+        tasks = [asyncio.create_task(run_symbol(symbol)) for symbol in symbols]
+        processed = 0
+        failures = 0
+        for future in asyncio.as_completed(tasks):
+            symbol, error = await future
+            processed += 1
+            if error is not None:
+                failures += 1
+                LOGGER.error(
+                    "Signal evaluation failed symbol=%s: %s",
+                    symbol,
+                    error,
+                    exc_info=(type(error), error, error.__traceback__),
+                )
             if (
-                state == "exhaustion_watch"
-                and structural_break
-                and exhaustion_score >= self.settings.short_exhaustion_score
-                and atr14_15m is not None
-                and atr14_15m > 0
+                processed % self.settings.signal_eval_progress_every == 0
+                or processed == len(symbols)
             ):
-                episode = await self.db.update_episode(
-                    episode.id,
-                    state="breakdown_watch",
-                    broken_level=prior_support,
-                    breakdown_at=latest.open_time,
-                    breakdown_atr_15m=atr14_15m,
-                    run_score=run_score,
-                    exhaustion_score=exhaustion_score,
-                    metadata={"breakdown_close": latest.close},
+                LOGGER.info(
+                    "Signal evaluation progress: %d/%d failures=%d elapsed=%.1fs",
+                    processed,
+                    len(symbols),
+                    failures,
+                    loop.time() - evaluation_started,
                 )
-                breakdown_features = dict(base_features)
-                breakdown_features.update(
-                    {
-                        "episode_peak_price": episode.peak_price,
-                        "broken_level": prior_support,
-                        "breakdown_at": latest.open_time,
-                        "retest_tolerance_atr": self.settings.retest_tolerance_atr,
-                        "retest_window_candles": self.settings.retest_window_candles,
-                    }
-                )
-                breakdown_signal = RunSignal(
-                    symbol=symbol,
-                    signaled_at=signaled_at,
-                    level="breakdown_watch",
-                    score=run_score + exhaustion_score,
-                    features=breakdown_features,
-                    reasons=state_reasons
-                    + run_reasons
-                    + exhaustion_reasons
-                    + [
-                        "structural break recorded; waiting for failed retest",
-                        (
-                            f"retest must occur within {self.settings.retest_window_candles} "
-                            "completed 15m candles"
-                        ),
-                    ],
-                    episode_id=episode.id,
-                )
-                if await self.db.insert_signal(breakdown_signal):
-                    breakdown_watches += 1
-                    await self.notifier.send_signal(breakdown_signal)
 
         LOGGER.info(
-            "Signal evaluation: evaluated=%d standard=%d high_risk=%d extreme_risk=%d "
-            "run_watches=%d exhaustion_watches=%d breakdown_watches=%d "
-            "breakdown_waiting=%d confirmed_shorts=%d rearmed=%d",
+            "Signal evaluation complete: symbols=%d evaluated=%d standard=%d high_risk=%d "
+            "extreme_risk=%d run_watches=%d exhaustion_watches=%d breakdown_watches=%d "
+            "breakdown_waiting=%d confirmed_shorts=%d rearmed=%d failures=%d duration=%.1fs",
+            len(symbols),
             evaluated,
             standard_evaluated,
             high_risk_evaluated,
@@ -990,6 +1046,8 @@ class ScannerWorker:
             breakdown_waiting,
             confirmed_shorts,
             rearmed_episodes,
+            failures,
+            loop.time() - evaluation_started,
         )
 
     async def _emit_watch_transition(

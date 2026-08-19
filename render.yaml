@@ -95,6 +95,10 @@ services:
         value: "300"
       - key: SIGNAL_POLL_SECONDS
         value: "300"
+      - key: SIGNAL_EVAL_CONCURRENCY
+        value: "3"
+      - key: SIGNAL_EVAL_PROGRESS_EVERY
+        value: "50"
       - key: CANDLE_POLL_SECONDS
         value: "900"
       - key: FUNDING_REFRESH_SECONDS

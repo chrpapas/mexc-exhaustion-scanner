@@ -39,6 +39,8 @@ class Settings:
     ticker_store_seconds: int
     candle_poll_seconds: int
     signal_poll_seconds: int
+    signal_eval_concurrency: int
+    signal_eval_progress_every: int
     contract_refresh_seconds: int
     funding_refresh_seconds: int
 
@@ -108,6 +110,8 @@ class Settings:
             ticker_store_seconds=int(os.getenv("TICKER_STORE_SECONDS", "300")),
             candle_poll_seconds=int(os.getenv("CANDLE_POLL_SECONDS", "900")),
             signal_poll_seconds=int(os.getenv("SIGNAL_POLL_SECONDS", "300")),
+            signal_eval_concurrency=int(os.getenv("SIGNAL_EVAL_CONCURRENCY", "3")),
+            signal_eval_progress_every=int(os.getenv("SIGNAL_EVAL_PROGRESS_EVERY", "50")),
             contract_refresh_seconds=int(os.getenv("CONTRACT_REFRESH_SECONDS", "21600")),
             funding_refresh_seconds=int(os.getenv("FUNDING_REFRESH_SECONDS", "3600")),
             min_amount_24h=float(os.getenv("MIN_AMOUNT_24H", "3000000")),
@@ -172,6 +176,8 @@ class Settings:
             ("TICKER_STORE_SECONDS", self.ticker_store_seconds),
             ("CANDLE_POLL_SECONDS", self.candle_poll_seconds),
             ("SIGNAL_POLL_SECONDS", self.signal_poll_seconds),
+            ("SIGNAL_EVAL_CONCURRENCY", self.signal_eval_concurrency),
+            ("SIGNAL_EVAL_PROGRESS_EVERY", self.signal_eval_progress_every),
             ("CONTRACT_REFRESH_SECONDS", self.contract_refresh_seconds),
             ("FUNDING_REFRESH_SECONDS", self.funding_refresh_seconds),
             ("WIDE_SCAN_SECONDS", self.wide_scan_seconds),

@@ -60,3 +60,4 @@ tests/test_trader_logic.py
 tests/test_trader_v120.py
 tests/test_trader_v122.py
 tests/test_trader_v123.py
+tests/test_worker_v125.py

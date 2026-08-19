@@ -148,6 +148,8 @@ def test_scanner_watchdog_defaults(monkeypatch):
     settings = Settings.from_env()
     assert settings.trader_watchdog_stale_seconds == 180
     assert settings.discord_trader_events_webhook_url.endswith("/webhook")
+    assert settings.signal_eval_concurrency == 3
+    assert settings.signal_eval_progress_every == 50
 
 @pytest.mark.asyncio
 async def test_high_signal_blocked_by_exposure_is_logged_persisted_but_not_discord_notified(monkeypatch, caplog):
