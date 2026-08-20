@@ -10,6 +10,7 @@ import httpx
 from app.models import RunSignal
 from app.signal_ledger import SignalLedger, SignalLedgerItem
 from app.signal_ledger_table import LedgerTableImage
+from app.research_analytics import ResearchAnalyticsReport, FeatureSliceSummary
 from app.performance import (
     HorizonSummary,
     HorizonSurvivalSummary,
@@ -443,6 +444,157 @@ class DiscordNotifier:
             return True
         except (httpx.HTTPError, ValueError):
             LOGGER.exception("Discord signal outcome ledger failed")
+            return False
+
+    async def send_research_analytics(
+        self,
+        report: ResearchAnalyticsReport,
+        *,
+        feature_csv: bytes | None = None,
+        dataset_csv: bytes | None = None,
+        as_of: datetime | None = None,
+        timezone_name: str = "Europe/Zurich",
+    ) -> bool:
+        """Send an on-demand research-only strategy diagnostic board."""
+        if not self._performance_webhook_url:
+            return False
+
+        tz = ZoneInfo(timezone_name)
+        display_time = (as_of or report.generated_at).astimezone(tz)
+        b = report.baseline
+        completeness = (b.complete_paths_7d / b.matured_7d) if b.matured_7d else None
+        target_lines = []
+        for target in report.target_sweep:
+            target_lines.append(
+                f"**+{target.target_pct}%**  hit **{self._percent(target.hit_rate)}** "
+                f"({target.hits}/{target.sample}) • median **{self._hours(target.median_time_hours)}** "
+                f"• p75 **{self._hours(target.p75_time_hours)}**"
+            )
+
+        def slice_lines(items: tuple[FeatureSliceSummary, ...], icon: str) -> str:
+            if not items:
+                return "Not enough matured observations yet."
+            lines = []
+            for item in items:
+                lines.append(
+                    f"{icon} **{item.feature_label} — {item.bucket}** • n={item.sample} • "
+                    f"target lift {self._signed_percent(item.target_lift_pp)} • "
+                    f"7d positive lift {self._signed_percent(item.positive_lift_pp)} • "
+                    f"avg-return lift {self._signed_percent(item.avg_return_lift_pp)}"
+                )
+            return "\n".join(lines)
+
+        overview = {
+            "title": "🔬 Exhaustion Scanner • Research Analytics",
+            "description": (
+                f"Updated **{display_time.strftime('%d %b %Y • %H:%M %Z')}**\n"
+                "Research-only diagnostics from frozen signal features + stored 15m post-signal paths."
+            ),
+            "color": 0x5865F2,
+            "fields": [
+                {
+                    "name": "📦 Sample & path completeness",
+                    "value": (
+                        f"Signals **{b.total_signals}** • 7d matured **{b.matured_7d}** • "
+                        f"complete 15m paths **{b.complete_paths_7d}** "
+                        f"({self._percent(completeness)})\n"
+                        f"Feature-slice ranking requires at least **n={report.min_rank_sample}** per bucket."
+                    ),
+                    "inline": False,
+                },
+                {
+                    "name": "🎯 Current baseline",
+                    "value": (
+                        f"+20% within 7d **{self._percent(b.target_20_rate_7d)}** • "
+                        f"positive at 7d **{self._percent(b.positive_7d_rate)}**\n"
+                        f"Avg 7d **{self._signed_percent(b.avg_return_7d)}** • "
+                        f"median 7d **{self._signed_percent(b.median_return_7d)}** • "
+                        f"median time to +20% **{self._hours(b.median_time_to_20_hours)}**"
+                    ),
+                    "inline": False,
+                },
+                {
+                    "name": "🌊 Fully observed 7d path",
+                    "value": (
+                        f"Median MFE **{self._signed_percent(b.median_mfe_7d)}** • "
+                        f"median adverse excursion **-{self._percent(b.median_adverse_7d)}**\n"
+                        f"Median adverse before +20% **-{self._percent(b.median_adverse_before_20)}** • "
+                        f"MFE timing **{self._hours(b.median_time_to_mfe_hours)}** • "
+                        f"worst-adverse timing **{self._hours(b.median_time_to_mae_hours)}**"
+                    ),
+                    "inline": False,
+                },
+            ],
+            "footer": {
+                "text": "No scanner/trader rule changes are made by this report. Feature lifts are univariate and exploratory."
+            },
+        }
+        targets = {
+            "title": "🎚️ Profit-Target Sweep • 7-Day Paths",
+            "description": (
+                "How often each favorable excursion was reached from the original confirmed-short entry. "
+                "Only complete 7-day research paths are included."
+            ),
+            "color": 0x57F287,
+            "fields": [{"name": "Target hit rate & speed", "value": "\n".join(target_lines) or "No complete paths yet.", "inline": False}],
+        }
+        features = {
+            "title": "🧪 Feature Lift • Candidate Filters",
+            "description": (
+                "Tertile/boolean slices versus the all-signal 7d baseline. These show where the signal appears "
+                "stronger or weaker; they are not yet causal rules."
+            ),
+            "color": 0xFEE75C,
+            "fields": [
+                {"name": "⬆️ Strongest observed slices", "value": slice_lines(report.best_slices, "🟢"), "inline": False},
+                {"name": "⬇️ Weakest observed slices", "value": slice_lines(report.worst_slices, "🔴"), "inline": False},
+            ],
+        }
+
+        try:
+            for embed in (overview, targets, features):
+                self._validate_discord_embed(embed)
+            payload = {
+                "username": "Exhaustion Scanner • Research",
+                "embeds": [overview],
+                "allowed_mentions": {"parse": []},
+            }
+            files: dict[str, tuple[str, bytes, str]] = {}
+            if feature_csv is not None:
+                files["files[0]"] = (
+                    f"research-feature-lift-{display_time.strftime('%Y-%m-%d')}.csv",
+                    feature_csv,
+                    "text/csv",
+                )
+            if dataset_csv is not None:
+                files["files[1]"] = (
+                    f"research-signal-dataset-{display_time.strftime('%Y-%m-%d')}.csv",
+                    dataset_csv,
+                    "text/csv",
+                )
+            if files:
+                response = await self._client.post(
+                    self._performance_webhook_url,
+                    data={"payload_json": json.dumps(payload)},
+                    files=files,
+                )
+            else:
+                response = await self._client.post(self._performance_webhook_url, json=payload)
+            response.raise_for_status()
+
+            for embed in (targets, features):
+                response = await self._client.post(
+                    self._performance_webhook_url,
+                    json={
+                        "username": "Exhaustion Scanner • Research",
+                        "embeds": [embed],
+                        "allowed_mentions": {"parse": []},
+                    },
+                )
+                response.raise_for_status()
+            return True
+        except (httpx.HTTPError, ValueError):
+            LOGGER.exception("Discord research analytics failed")
             return False
 
     def _ledger_signal_field(self, item: SignalLedgerItem, tz: ZoneInfo) -> dict:

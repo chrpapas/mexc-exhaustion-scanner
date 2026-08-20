@@ -1,4 +1,4 @@
-# MEXC Exhaustion Scanner + Multi-Slot Futures Trader v1.2.6
+# MEXC Exhaustion Scanner + Multi-Slot Futures Trader v1.2.7
 
 Hotfix: restores Discord formatting helpers used by signal and performance reports. Fixes `AttributeError: DiscordNotifier has no attribute _percent` in both scheduled and on-demand reports.
 
@@ -316,6 +316,28 @@ Every confirmed-short signal consumed by the trader now produces an explicit aud
 
 
 
+
+
+## v1.2.7 — research analytics & feature lift
+
+Builds actionable research analytics on top of the v1.2.6 frozen feature snapshots and 15m post-signal paths. No scanner thresholds or trader behavior change automatically.
+
+Run from the scanner Render shell:
+
+```bash
+python -m app.research_analytics_now
+```
+
+The on-demand report posts to the performance Discord webhook and includes:
+
+- sample size, 7-day maturity and complete-path coverage so incomplete research data is visible rather than silently treated as failure;
+- baseline +20% hit rate within seven days, exact 7-day profitability, average/median 7-day short return, median MFE/MAE, median adverse excursion before a successful +20% hit, and timing of MFE/MAE;
+- a 7-day favorable-excursion sweep for +5%, +10%, +15%, +20%, +25%, +30% and +40%, including hit rate, median time-to-hit and p75 time-to-hit;
+- univariate feature-lift analysis across the frozen run/exhaustion features plus episode/breakdown/retest timing. Numeric features are split into sample tertiles and booleans into TRUE/FALSE groups;
+- strongest and weakest candidate feature slices ranked only after a minimum sample guard (`max(3, 15% of matured signals)`);
+- two CSV attachments: a full flattened per-signal research dataset and the complete feature-bucket lift table for offline analysis.
+
+The feature-lift board is deliberately exploratory. It is intended to identify hypotheses for the next strategy iteration, not to mutate production filters from a small or correlated sample. The command uses PostgreSQL data only and performs no MEXC API calls.
 
 ## v1.2.6 — low-impact research logging
 

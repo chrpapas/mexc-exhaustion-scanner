@@ -645,6 +645,75 @@ class Database:
             "last_path_at": None,
         }
 
+    async def research_analytics_rows(self) -> list[dict[str, Any]]:
+        """Return one research row per public confirmed-short signal.
+
+        Path aggregation stays in PostgreSQL so the on-demand analytics command does
+        not pull hundreds of 15m candles per signal across the network. No exchange
+        calls are made.
+        """
+        rows = await self.pool.fetch(
+            """
+            WITH path_targets AS (
+                SELECT
+                    p.episode_id,
+                    min(p.candle_close_at) FILTER (WHERE p.favorable_return_pct >= 0.20)
+                        AS target_20_path_at
+                FROM research_signal_path_15m p
+                GROUP BY p.episode_id
+            ),
+            path_summary AS (
+                SELECT
+                    p.episode_id,
+                    count(*)::integer AS path_rows,
+                    max(p.candle_close_at) AS path_last_at,
+                    max(p.favorable_return_pct) AS path_mfe_7d,
+                    min(p.adverse_return_pct) AS path_mae_7d,
+                    min(p.adverse_return_pct) FILTER (
+                        WHERE t.target_20_path_at IS NOT NULL
+                          AND p.candle_close_at <= t.target_20_path_at
+                    ) AS path_mae_before_target_20,
+                    (array_agg(
+                        p.candle_close_at
+                        ORDER BY p.favorable_return_pct DESC, p.candle_close_at ASC
+                    ))[1] AS path_mfe_at,
+                    (array_agg(
+                        p.candle_close_at
+                        ORDER BY p.adverse_return_pct ASC, p.candle_close_at ASC
+                    ))[1] AS path_mae_at,
+                    min(p.candle_close_at) FILTER (WHERE p.favorable_return_pct >= 0.05) AS target_5_at,
+                    min(p.candle_close_at) FILTER (WHERE p.favorable_return_pct >= 0.10) AS target_10_at,
+                    min(p.candle_close_at) FILTER (WHERE p.favorable_return_pct >= 0.15) AS target_15_at,
+                    t.target_20_path_at,
+                    min(p.candle_close_at) FILTER (WHERE p.favorable_return_pct >= 0.25) AS target_25_at,
+                    min(p.candle_close_at) FILTER (WHERE p.favorable_return_pct >= 0.30) AS target_30_at,
+                    min(p.candle_close_at) FILTER (WHERE p.favorable_return_pct >= 0.40) AS target_40_at
+                FROM research_signal_path_15m p
+                LEFT JOIN path_targets t ON t.episode_id = p.episode_id
+                GROUP BY p.episode_id, t.target_20_path_at
+            )
+            SELECT
+                f.episode_id, f.symbol, f.confirmed_at, f.entry_price, f.risk_tier,
+                f.run_score, f.exhaustion_score, f.episode_started_at, f.peak_at,
+                f.breakdown_at, f.retest_at, f.feature_snapshot, f.reasons,
+                f.hours_run_to_breakdown, f.hours_breakdown_to_retest,
+                f.hours_breakdown_to_confirmation, f.hours_episode_to_confirmation,
+                st.return_24h_pct, st.return_48h_pct, st.return_72h_pct, st.return_168h_pct,
+                st.first_profit_at, st.target_20_at, st.isolated_100_breach_at,
+                st.adverse_200_breach_at, st.adverse_300_breach_at, st.cross_400_breach_at,
+                ps.path_rows, ps.path_last_at, ps.path_mfe_7d, ps.path_mae_7d,
+                ps.path_mae_before_target_20, ps.path_mfe_at, ps.path_mae_at, ps.target_5_at, ps.target_10_at,
+                ps.target_15_at, ps.target_20_path_at,
+                ps.target_25_at, ps.target_30_at, ps.target_40_at
+            FROM research_signal_features_enriched f
+            LEFT JOIN shadow_trades st ON st.episode_id = f.episode_id
+            LEFT JOIN path_summary ps ON ps.episode_id = f.episode_id
+            WHERE f.risk_tier IN ('standard', 'high_risk')
+            ORDER BY f.confirmed_at ASC
+            """
+        )
+        return [dict(row) for row in rows]
+
     async def fetch_shadow_trades(self) -> list[dict[str, Any]]:
         rows = await self.pool.fetch(
             """

@@ -17,6 +17,8 @@ app/models.py
 app/notifier.py
 app/performance.py
 app/report_now.py
+app/research_analytics.py
+app/research_analytics_now.py
 app/research_status.py
 app/signal_ledger.py
 app/signal_ledger_now.py
@@ -54,6 +56,7 @@ tests/test_mexc_trade.py
 tests/test_notifier.py
 tests/test_performance.py
 tests/test_report_now.py
+tests/test_research_analytics_v127.py
 tests/test_research_v126.py
 tests/test_signal_ledger.py
 tests/test_signals.py
