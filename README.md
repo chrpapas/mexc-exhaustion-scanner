@@ -1,4 +1,4 @@
-# MEXC Exhaustion Scanner + Multi-Slot Futures Trader v1.2.8
+# MEXC Exhaustion Scanner + Multi-Slot Futures Trader v1.2.9
 
 Hotfix: restores Discord formatting helpers used by signal and performance reports. Fixes `AttributeError: DiscordNotifier has no attribute _percent` in both scheduled and on-demand reports.
 
@@ -317,6 +317,23 @@ Every confirmed-short signal consumed by the trader now produces an explicit aud
 
 
 
+
+## v1.2.9 — paired-cohort analytics corrections
+
+Corrects the comparison biases exposed by the first v1.2.8 report. Live scanner and trader rules remain unchanged.
+
+- STANDARD 1d–7d exit horizons now use the **same complete-7d cohort**. Extended 8d–14d horizons use the same complete-14d cohort, so horizon comparisons no longer change denominator as signals mature.
+- HIGH RISK `TP20 or timeout` now requires a signal to have **actually reached the timeout age** before it is eligible. An early +20% hit can no longer make a young signal appear as a 10d/14d winner.
+- HIGH RISK exit rows now report **average actual holding time** and **return per occupied slot-day** (`sum(strategy returns) / sum(holding days)`) to compare capital efficiency as well as raw return.
+- Delayed-entry simulations now use one **common complete cohort across every configured delay** (0m through 8h), making the timing rows directly comparable.
+- CSV strategy exports mark paired/mature-only analyses and include cohort horizon, average holding hours, and slot-day efficiency.
+- No MEXC/API calls, migrations, scanner filters, slot allocation, or trader exit behavior are changed.
+
+Run:
+
+```bash
+python -m app.research_analytics_now
+```
 
 ## v1.2.8 — entry/exit research lab
 

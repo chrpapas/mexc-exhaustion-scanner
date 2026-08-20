@@ -115,6 +115,7 @@ class FeatureSliceSummary:
 class ExitHorizonSummary:
     risk_tier: str
     horizon_hours: int
+    cohort_horizon_hours: int
     sample: int
     positive_rate: float | None
     avg_return: float | None
@@ -134,6 +135,8 @@ class HighRiskTimeoutSummary:
     median_strategy_return: float | None
     positive_rate: float | None
     worst_strategy_return: float | None
+    avg_holding_hours: float | None
+    return_per_slot_day: float | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -509,15 +512,37 @@ def _bool_feature_slices(
 
 
 def _build_standard_exit_sweep(rows: list[dict[str, Any]]) -> tuple[ExitHorizonSummary, ...]:
+    """Compare fixed-time Standard exits on paired cohorts.
+
+    Horizons through 7d use only Standard signals with a complete 7d path, so every
+    reported 1d..7d value is calculated from the exact same episodes. Extended
+    horizons use only complete 14d paths, again preserving a common cohort. This
+    prevents younger signals from making short horizons look artificially different.
+    """
     standard = [row for row in rows if str(row.get("risk_tier") or "standard") == "standard"]
+    cohort_7d = [row for row in standard if _path_complete_for_hours(row, 168)]
+    cohort_14d = [row for row in standard if _path_complete_for_hours(row, 336)]
     result: list[ExitHorizonSummary] = []
     for hours in STANDARD_EXIT_HORIZONS_HOURS:
-        values = [value for row in standard for value in [_horizon_return(row, hours)] if value is not None]
+        cohort_horizon = 168 if hours <= 168 else 336
+        cohort = cohort_7d if cohort_horizon == 168 else cohort_14d
+        values = [
+            value
+            for row in cohort
+            for value in [_horizon_return(row, hours)]
+            if value is not None
+        ]
+        # A paired cohort should have a value for every episode. If a row is missing
+        # the requested horizon despite being path-complete, exclude the entire
+        # horizon from comparison rather than silently changing the denominator.
+        if len(values) != len(cohort):
+            values = []
         days = hours / 24.0
         result.append(
             ExitHorizonSummary(
                 risk_tier="standard",
                 horizon_hours=hours,
+                cohort_horizon_hours=cohort_horizon,
                 sample=len(values),
                 positive_rate=_rate([value > 0 for value in values]),
                 avg_return=_mean(values),
@@ -530,20 +555,48 @@ def _build_standard_exit_sweep(rows: list[dict[str, Any]]) -> tuple[ExitHorizonS
     return tuple(result)
 
 
-def _build_high_risk_timeout_sweep(rows: list[dict[str, Any]]) -> tuple[HighRiskTimeoutSummary, ...]:
+def _eligible_at_timeout(row: dict[str, Any], hours: int, generated_at: datetime) -> bool:
+    confirmed = row.get("confirmed_at")
+    return bool(confirmed is not None and confirmed + timedelta(hours=hours) <= generated_at)
+
+
+def _build_high_risk_timeout_sweep(
+    rows: list[dict[str, Any]], *, generated_at: datetime
+) -> tuple[HighRiskTimeoutSummary, ...]:
+    """Simulate TP20-or-timeout without right-censoring.
+
+    A signal is eligible for an Nh timeout only after it has actually aged N hours.
+    Hitting TP20 early does not make a young signal eligible for a future timeout.
+    This removes the survivorship bias that previously produced artificial 100% TP
+    rates at 10d/14d before those cohorts had matured.
+    """
     risky = [row for row in rows if str(row.get("risk_tier") or "standard") == "high_risk"]
     result: list[HighRiskTimeoutSummary] = []
     for hours in HIGH_RISK_TIMEOUT_HOURS:
         outcomes: list[float] = []
+        holding_hours: list[float] = []
         target_hits = 0
         for row in risky:
+            if not _eligible_at_timeout(row, hours, generated_at):
+                continue
             if _target_within_hours(row, hours, prefer_path=True):
+                target_at_candidates = [
+                    value for value in (row.get("target_20_path_at"), row.get("target_20_at"))
+                    if value is not None
+                ]
+                target_at = min(target_at_candidates) if target_at_candidates else None
+                elapsed = _elapsed_hours(row.get("confirmed_at"), target_at)
+                if elapsed is None:
+                    continue
                 outcomes.append(0.20)
+                holding_hours.append(min(float(hours), elapsed))
                 target_hits += 1
                 continue
             timeout_return = _horizon_return(row, hours)
             if timeout_return is not None:
                 outcomes.append(timeout_return)
+                holding_hours.append(float(hours))
+        total_slot_days = sum(holding_hours) / 24.0
         result.append(
             HighRiskTimeoutSummary(
                 timeout_hours=hours,
@@ -554,6 +607,8 @@ def _build_high_risk_timeout_sweep(rows: list[dict[str, Any]]) -> tuple[HighRisk
                 median_strategy_return=_median(outcomes),
                 positive_rate=_rate([value > 0 for value in outcomes]),
                 worst_strategy_return=min(outcomes) if outcomes else None,
+                avg_holding_hours=_mean(holding_hours),
+                return_per_slot_day=(sum(outcomes) / total_slot_days) if total_slot_days > 0 else None,
             )
         )
     return tuple(result)
@@ -665,11 +720,34 @@ def _build_interactions(
 
 
 def _build_delayed_entries(raw_rows: Iterable[dict[str, Any]]) -> tuple[DelayedEntrySummary, ...]:
+    """Compare delays on one common complete cohort.
+
+    Only episodes that have a complete 7d delayed path for every configured delay
+    are used. This makes +0m, +15m, +30m, ... directly comparable instead of letting
+    each delay silently use a different set of signals.
+    """
     rows = [dict(row) for row in raw_rows]
     rows = [row for row in rows if str(row.get("risk_tier") or "standard") in PUBLIC_RESEARCH_RISK_TIERS]
+    by_episode: dict[Any, dict[int, dict[str, Any]]] = {}
+    for row in rows:
+        episode_id = row.get("episode_id")
+        if episode_id is None:
+            continue
+        delay = int(row.get("delay_minutes") or 0)
+        by_episode.setdefault(episode_id, {})[delay] = row
+
+    complete_episode_ids = {
+        episode_id
+        for episode_id, variants in by_episode.items()
+        if all(
+            delay in variants and bool(variants[delay].get("path_complete_7d"))
+            for delay in DELAYED_ENTRY_MINUTES
+        )
+    }
+
     result: list[DelayedEntrySummary] = []
     for delay in DELAYED_ENTRY_MINUTES:
-        group = [row for row in rows if int(row.get("delay_minutes") or 0) == delay and bool(row.get("path_complete_7d"))]
+        group = [by_episode[episode_id][delay] for episode_id in complete_episode_ids]
         returns = [value for row in group for value in [_float(row.get("return_7d_pct"))] if value is not None]
         targets = [row for row in group if row.get("target_20_at") is not None]
         target_times = [
@@ -803,7 +881,7 @@ def build_research_analytics(
         target_sweep=tuple(target_sweep),
         feature_slices=tuple(slices),
         standard_exit_sweep=_build_standard_exit_sweep(rows),
-        high_risk_timeout_sweep=_build_high_risk_timeout_sweep(rows),
+        high_risk_timeout_sweep=_build_high_risk_timeout_sweep(rows, generated_at=generated_at),
         stop_survival=_build_stop_survival(rows),
         score_buckets=score_buckets,
         interactions=interactions,
@@ -844,23 +922,28 @@ def research_feature_lift_csv(report: ResearchAnalyticsReport) -> bytes:
 def research_strategy_sweeps_csv(report: ResearchAnalyticsReport) -> bytes:
     output = io.StringIO(newline="")
     writer = csv.writer(output)
-    writer.writerow(["analysis", "risk_tier", "horizon_or_threshold", "sample", "metric_1", "metric_2", "metric_3", "metric_4"])
+    writer.writerow([
+        "analysis", "risk_tier", "horizon_or_threshold", "sample",
+        "metric_1", "metric_2", "metric_3", "metric_4", "metric_5", "metric_6",
+    ])
     for item in report.standard_exit_sweep:
         writer.writerow([
-            "standard_exit_horizon", item.risk_tier, f"{item.horizon_hours}h", item.sample,
+            "standard_exit_horizon_paired", item.risk_tier, f"{item.horizon_hours}h", item.sample,
             _csv_pct(item.avg_return), _csv_pct(item.median_return), _csv_pct(item.positive_rate),
-            _csv_pct(item.avg_return_per_day),
+            _csv_pct(item.avg_return_per_day), f"cohort_complete_{item.cohort_horizon_hours}h", "",
         ])
     for item in report.high_risk_timeout_sweep:
         writer.writerow([
-            "high_risk_tp20_timeout", "high_risk", f"{item.timeout_hours}h", item.sample,
+            "high_risk_tp20_timeout_mature_only", "high_risk", f"{item.timeout_hours}h", item.sample,
             _csv_pct(item.avg_strategy_return), _csv_pct(item.median_strategy_return),
             _csv_pct(item.target_hit_rate), _csv_pct(item.worst_strategy_return),
+            "" if item.avg_holding_hours is None else f"{item.avg_holding_hours:.6f}",
+            _csv_pct(item.return_per_slot_day),
         ])
     for item in report.stop_survival:
         writer.writerow([
             "winner_stop_survival", item.risk_tier, f"{item.stop_pct}%", item.winners_with_path,
-            item.winners_killed, _csv_pct(item.kill_rate), _csv_pct(item.survivor_rate), "",
+            item.winners_killed, _csv_pct(item.kill_rate), _csv_pct(item.survivor_rate), "", "", "",
         ])
     return output.getvalue().encode("utf-8")
 
@@ -883,7 +966,7 @@ def research_entry_research_csv(report: ResearchAnalyticsReport) -> bytes:
         ])
     for item in report.delayed_entries:
         writer.writerow([
-            "delayed_entry", "all_public_tiers", f"{item.delay_minutes}m", item.sample,
+            "delayed_entry_paired", "all_public_tiers", f"{item.delay_minutes}m", item.sample,
             _csv_pct(item.target_20_rate_7d), _csv_pct(item.positive_7d_rate),
             _csv_pct(item.avg_return_7d), _csv_pct(item.median_return_7d),
             _csv_pct(item.median_adverse_7d),

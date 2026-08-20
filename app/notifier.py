@@ -10,7 +10,7 @@ import httpx
 from app.models import RunSignal
 from app.signal_ledger import SignalLedger, SignalLedgerItem
 from app.signal_ledger_table import LedgerTableImage
-from app.research_analytics import ResearchAnalyticsReport, FeatureSliceSummary
+from app.research_analytics import ResearchAnalyticsReport, FeatureSliceSummary, ExitHorizonSummary
 from app.performance import (
     HorizonSummary,
     HorizonSurvivalSummary,
@@ -485,19 +485,35 @@ class DiscordNotifier:
                 for item in items
             )
 
-        standard_lines = [
-            f"**{item.horizon_hours // 24}d** n={item.sample} • avg **{self._signed_percent(item.avg_return)}** • "
-            f"median **{self._signed_percent(item.median_return)}** • positive **{self._percent(item.positive_rate)}** • "
-            f"avg/day **{self._signed_percent(item.avg_return_per_day)}**"
+        def standard_exit_line(item: ExitHorizonSummary) -> str:
+            return (
+                f"**{item.horizon_hours // 24}d** n={item.sample} • avg **{self._signed_percent(item.avg_return)}** • "
+                f"median **{self._signed_percent(item.median_return)}** • positive **{self._percent(item.positive_rate)}** • "
+                f"avg/day **{self._signed_percent(item.avg_return_per_day)}**"
+            )
+
+        standard_early_lines = [
+            standard_exit_line(item)
             for item in report.standard_exit_sweep
-            if item.sample
+            if item.cohort_horizon_hours == 168 and item.sample
+        ]
+        standard_extended_lines = [
+            standard_exit_line(item)
+            for item in report.standard_exit_sweep
+            if item.cohort_horizon_hours == 336 and item.sample
         ]
         risky_lines = [
-            f"**TP20 or {item.timeout_hours // 24}d** n={item.sample} • TP **{self._percent(item.target_hit_rate)}** • "
-            f"avg **{self._signed_percent(item.avg_strategy_return)}** • median **{self._signed_percent(item.median_strategy_return)}** • "
-            f"worst **{self._signed_percent(item.worst_strategy_return)}**"
+            (
+                f"**TP20 or {item.timeout_hours // 24}d** n={item.sample} • "
+                + (
+                    f"TP **{self._percent(item.target_hit_rate)}** • avg **{self._signed_percent(item.avg_strategy_return)}** • "
+                    f"worst **{self._signed_percent(item.worst_strategy_return)}** • hold **{self._hours(item.avg_holding_hours)}** • "
+                    f"slot/day **{self._signed_percent(item.return_per_slot_day)}**"
+                    if item.sample
+                    else "cohort not mature / complete yet"
+                )
+            )
             for item in report.high_risk_timeout_sweep
-            if item.sample
         ]
         all_stop = [item for item in report.stop_survival if item.risk_tier == "all"]
         stop_lines = [
@@ -571,12 +587,12 @@ class DiscordNotifier:
         }
         exits = {
             "title": "🧭 Exit Research • Standard vs High Risk",
-            "description": "Standard is tested as a fixed-time hold. High Risk is tested as +20% TP first, otherwise exit at timeout.",
+            "description": "Paired-cohort exits: Standard horizons use the same matured episodes; High Risk requires full timeout maturity before TP20-or-timeout evaluation.",
             "color": 0x3498DB,
             "fields": [
-                {"name": "STANDARD fixed-time exits • early", "value": "\n".join(standard_lines[:7]) or "No observations yet.", "inline": False},
-                {"name": "STANDARD fixed-time exits • extended", "value": "\n".join(standard_lines[7:]) or "14d path collection is still maturing.", "inline": False},
-                {"name": "HIGH RISK • TP20 + timeout", "value": "\n".join(risky_lines) or "No observations yet.", "inline": False},
+                {"name": "STANDARD paired cohort • 1–7d", "value": "\n".join(standard_early_lines) or "Complete paired 7d cohort is still maturing.", "inline": False},
+                {"name": "STANDARD paired cohort • 8–14d", "value": "\n".join(standard_extended_lines) or "Complete paired 14d cohort is still maturing.", "inline": False},
+                {"name": "HIGH RISK • mature TP20 + timeout", "value": "\n".join(risky_lines) or "No fully mature timeout cohorts yet.", "inline": False},
             ],
         }
         survival = {
@@ -592,7 +608,7 @@ class DiscordNotifier:
             "fields": [
                 {"name": "Shadow score buckets", "value": "\n".join(score_lines) or "No matured observations yet.", "inline": False},
                 {"name": "Strongest interactions", "value": "\n".join(interaction_lines) or "Not enough interaction sample yet.", "inline": False},
-                {"name": "Delayed-entry simulation", "value": "\n".join(delayed_lines) or "Complete delayed 7d paths are still maturing.", "inline": False},
+                {"name": "Delayed-entry simulation • paired cohort", "value": "\n".join(delayed_lines) or "Common complete delayed-entry cohort is still maturing.", "inline": False},
             ],
         }
         features = {

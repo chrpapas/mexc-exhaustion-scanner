@@ -58,6 +58,7 @@ tests/test_performance.py
 tests/test_report_now.py
 tests/test_research_analytics_v127.py
 tests/test_research_analytics_v128.py
+tests/test_research_analytics_v129.py
 tests/test_research_v126.py
 tests/test_signal_ledger.py
 tests/test_signals.py

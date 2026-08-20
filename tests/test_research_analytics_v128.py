@@ -140,38 +140,43 @@ def test_shadow_scores_reward_fade_profile_and_flag_continuation_profile():
     assert continuation2 >= 8
 
 
-def test_delayed_entry_summary_uses_only_complete_delayed_paths():
+def test_delayed_entry_summary_uses_one_common_complete_cohort():
     raw = _base_row(1)
-    delayed = [
-        {
-            "episode_id": 1,
-            "risk_tier": "standard",
-            "delay_minutes": 60,
-            "entry_at": raw["confirmed_at"] + timedelta(hours=1),
-            "path_complete_7d": True,
-            "return_7d_pct": 0.40,
-            "mfe_7d": 0.55,
-            "mae_7d": -0.10,
-            "target_20_at": raw["confirmed_at"] + timedelta(hours=25),
-        },
-        {
-            "episode_id": 2,
-            "risk_tier": "standard",
-            "delay_minutes": 60,
-            "entry_at": raw["confirmed_at"] + timedelta(hours=1),
-            "path_complete_7d": False,
-            "return_7d_pct": 0.80,
-            "mfe_7d": 0.90,
-            "mae_7d": -0.05,
-            "target_20_at": raw["confirmed_at"] + timedelta(hours=5),
-        },
-    ]
+    delayed = []
+    for delay in (0, 15, 30, 60, 120, 240, 480):
+        delayed.append(
+            {
+                "episode_id": 1,
+                "risk_tier": "standard",
+                "delay_minutes": delay,
+                "entry_at": raw["confirmed_at"] + timedelta(minutes=delay),
+                "path_complete_7d": True,
+                "return_7d_pct": 0.40 - delay / 10_000,
+                "mfe_7d": 0.55,
+                "mae_7d": -0.10,
+                "target_20_at": raw["confirmed_at"] + timedelta(hours=25),
+            }
+        )
+        delayed.append(
+            {
+                "episode_id": 2,
+                "risk_tier": "standard",
+                "delay_minutes": delay,
+                "entry_at": raw["confirmed_at"] + timedelta(minutes=delay),
+                "path_complete_7d": delay != 480,
+                "return_7d_pct": 0.80,
+                "mfe_7d": 0.90,
+                "mae_7d": -0.05,
+                "target_20_at": raw["confirmed_at"] + timedelta(hours=5),
+            }
+        )
+
     report = build_research_analytics(
         [raw], generated_at=datetime(2026, 8, 20, tzinfo=UTC), delayed_entry_rows=delayed
     )
+    assert {item.sample for item in report.delayed_entries} == {1}
     plus60 = next(item for item in report.delayed_entries if item.delay_minutes == 60)
-    assert plus60.sample == 1
-    assert plus60.avg_return_7d == 0.40
+    assert abs(plus60.avg_return_7d - 0.394) < 1e-12
     assert plus60.median_adverse_7d == 0.10
 
 
