@@ -116,3 +116,45 @@ def test_research_migration_keeps_expensive_analytics_in_query_time_view():
     assert "MIN(p.adverse_return_pct) OVER w AS mae_pct" in sql
     # The migration intentionally does not bulk-copy historical path candles.
     assert "INSERT INTO research_signal_path_15m" not in sql
+
+
+@pytest.mark.asyncio
+async def test_delayed_entry_research_is_post_entry_and_locally_time_bounded():
+    calls: list[tuple[str, tuple[object, ...]]] = []
+
+    class FakeTransaction:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    class FakeConn:
+        def transaction(self):
+            return FakeTransaction()
+
+        async def execute(self, query: str, *args):
+            calls.append((query, args))
+
+        async def fetch(self, query: str, *args):
+            calls.append((query, args))
+            assert "p.candle_close_at > e.entry_at" in query
+            assert "interval '168 hours'" in query
+            assert "s.path_rows >= 659" in query
+            return []
+
+    class FakeAcquire:
+        async def __aenter__(self):
+            return FakeConn()
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    class FakePool:
+        def acquire(self):
+            return FakeAcquire()
+
+    db = Database("postgresql://unused")
+    db._pool = FakePool()
+    assert await db.research_delayed_entry_rows(statement_timeout_seconds=10) == []
+    assert calls[0][1] == ("10s",)

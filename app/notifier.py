@@ -452,6 +452,8 @@ class DiscordNotifier:
         *,
         feature_csv: bytes | None = None,
         dataset_csv: bytes | None = None,
+        strategy_csv: bytes | None = None,
+        entry_csv: bytes | None = None,
         as_of: datetime | None = None,
         timezone_name: str = "Europe/Zurich",
     ) -> bool:
@@ -462,27 +464,65 @@ class DiscordNotifier:
         tz = ZoneInfo(timezone_name)
         display_time = (as_of or report.generated_at).astimezone(tz)
         b = report.baseline
-        completeness = (b.complete_paths_7d / b.matured_7d) if b.matured_7d else None
-        target_lines = []
-        for target in report.target_sweep:
-            target_lines.append(
-                f"**+{target.target_pct}%**  hit **{self._percent(target.hit_rate)}** "
-                f"({target.hits}/{target.sample}) • median **{self._hours(target.median_time_hours)}** "
-                f"• p75 **{self._hours(target.p75_time_hours)}**"
-            )
+        completeness_7d = (b.complete_paths_7d / b.matured_7d) if b.matured_7d else None
+        completeness_14d = (b.complete_paths_14d / b.total_signals) if b.total_signals else None
+
+        target_lines = [
+            f"**+{target.target_pct}%** hit **{self._percent(target.hit_rate)}** "
+            f"({target.hits}/{target.sample}) • median **{self._hours(target.median_time_hours)}** "
+            f"• p75 **{self._hours(target.p75_time_hours)}**"
+            for target in report.target_sweep
+        ]
 
         def slice_lines(items: tuple[FeatureSliceSummary, ...], icon: str) -> str:
             if not items:
                 return "Not enough matured observations yet."
-            lines = []
-            for item in items:
-                lines.append(
-                    f"{icon} **{item.feature_label} — {item.bucket}** • n={item.sample} • "
-                    f"target lift {self._signed_percent(item.target_lift_pp)} • "
-                    f"7d positive lift {self._signed_percent(item.positive_lift_pp)} • "
-                    f"avg-return lift {self._signed_percent(item.avg_return_lift_pp)}"
-                )
-            return "\n".join(lines)
+            return "\n".join(
+                f"{icon} **{item.feature_label} — {item.bucket}** • n={item.sample} • "
+                f"target lift {self._signed_percent(item.target_lift_pp)} • "
+                f"7d positive lift {self._signed_percent(item.positive_lift_pp)} • "
+                f"avg-return lift {self._signed_percent(item.avg_return_lift_pp)}"
+                for item in items
+            )
+
+        standard_lines = [
+            f"**{item.horizon_hours // 24}d** n={item.sample} • avg **{self._signed_percent(item.avg_return)}** • "
+            f"median **{self._signed_percent(item.median_return)}** • positive **{self._percent(item.positive_rate)}** • "
+            f"avg/day **{self._signed_percent(item.avg_return_per_day)}**"
+            for item in report.standard_exit_sweep
+            if item.sample
+        ]
+        risky_lines = [
+            f"**TP20 or {item.timeout_hours // 24}d** n={item.sample} • TP **{self._percent(item.target_hit_rate)}** • "
+            f"avg **{self._signed_percent(item.avg_strategy_return)}** • median **{self._signed_percent(item.median_strategy_return)}** • "
+            f"worst **{self._signed_percent(item.worst_strategy_return)}**"
+            for item in report.high_risk_timeout_sweep
+            if item.sample
+        ]
+        all_stop = [item for item in report.stop_survival if item.risk_tier == "all"]
+        stop_lines = [
+            f"**-{item.stop_pct}%** would kill **{item.winners_killed}/{item.winners_with_path}** eventual +20% winners "
+            f"({self._percent(item.kill_rate)})"
+            for item in all_stop
+        ]
+        score_lines = [
+            f"**{item.score_name.replace('_', ' ').title()} {item.bucket}** • n={item.sample} • "
+            f"TP20 {self._percent(item.target_20_rate_7d)} • 7d+ {self._percent(item.positive_7d_rate)} • "
+            f"avg {self._signed_percent(item.avg_return_7d)}"
+            for item in report.score_buckets
+        ]
+        top_interactions = report.ranked_interactions[:4]
+        interaction_lines = [
+            f"🧬 **{item.interaction}** — {item.bucket} • n={item.sample} • "
+            f"rank lift {self._signed_percent(item.rank_score)}"
+            for item in top_interactions
+        ]
+        delayed_lines = [
+            f"**+{item.delay_minutes}m** n={item.sample} • TP20 {self._percent(item.target_20_rate_7d)} • "
+            f"avg7d {self._signed_percent(item.avg_return_7d)} • median adverse -{self._percent(item.median_adverse_7d)}"
+            for item in report.delayed_entries
+            if item.sample
+        ]
 
         overview = {
             "title": "🔬 Exhaustion Scanner • Research Analytics",
@@ -495,20 +535,18 @@ class DiscordNotifier:
                 {
                     "name": "📦 Sample & path completeness",
                     "value": (
-                        f"Signals **{b.total_signals}** • 7d matured **{b.matured_7d}** • "
-                        f"complete 15m paths **{b.complete_paths_7d}** "
-                        f"({self._percent(completeness)})\n"
-                        f"Feature-slice ranking requires at least **n={report.min_rank_sample}** per bucket."
+                        f"Signals **{b.total_signals}** • 7d matured **{b.matured_7d}**\n"
+                        f"Complete 7d paths **{b.complete_paths_7d}** ({self._percent(completeness_7d)}) • "
+                        f"complete 14d paths **{b.complete_paths_14d}** ({self._percent(completeness_14d)})\n"
+                        f"Feature ranking minimum **n={report.min_rank_sample}**."
                     ),
                     "inline": False,
                 },
                 {
-                    "name": "🎯 Current baseline",
+                    "name": "🎯 Current 7d baseline",
                     "value": (
-                        f"+20% within 7d **{self._percent(b.target_20_rate_7d)}** • "
-                        f"positive at 7d **{self._percent(b.positive_7d_rate)}**\n"
-                        f"Avg 7d **{self._signed_percent(b.avg_return_7d)}** • "
-                        f"median 7d **{self._signed_percent(b.median_return_7d)}** • "
+                        f"+20% **{self._percent(b.target_20_rate_7d)}** • positive **{self._percent(b.positive_7d_rate)}**\n"
+                        f"Avg **{self._signed_percent(b.avg_return_7d)}** • median **{self._signed_percent(b.median_return_7d)}** • "
                         f"median time to +20% **{self._hours(b.median_time_to_20_hours)}**"
                     ),
                     "inline": False,
@@ -516,34 +554,50 @@ class DiscordNotifier:
                 {
                     "name": "🌊 Fully observed 7d path",
                     "value": (
-                        f"Median MFE **{self._signed_percent(b.median_mfe_7d)}** • "
-                        f"median adverse excursion **-{self._percent(b.median_adverse_7d)}**\n"
-                        f"Median adverse before +20% **-{self._percent(b.median_adverse_before_20)}** • "
-                        f"MFE timing **{self._hours(b.median_time_to_mfe_hours)}** • "
-                        f"worst-adverse timing **{self._hours(b.median_time_to_mae_hours)}**"
+                        f"Median MFE **{self._signed_percent(b.median_mfe_7d)}** • adverse **-{self._percent(b.median_adverse_7d)}**\n"
+                        f"Adverse before +20% **-{self._percent(b.median_adverse_before_20)}** • "
+                        f"MFE timing **{self._hours(b.median_time_to_mfe_hours)}** • worst timing **{self._hours(b.median_time_to_mae_hours)}**"
                     ),
                     "inline": False,
                 },
             ],
-            "footer": {
-                "text": "No scanner/trader rule changes are made by this report. Feature lifts are univariate and exploratory."
-            },
+            "footer": {"text": "Shadow research only: no scanner or trader rule is changed by this report."},
         }
         targets = {
             "title": "🎚️ Profit-Target Sweep • 7-Day Paths",
-            "description": (
-                "How often each favorable excursion was reached from the original confirmed-short entry. "
-                "Only complete 7-day research paths are included."
-            ),
+            "description": "Favorable excursions from the original confirmed-short entry; complete 7-day paths only.",
             "color": 0x57F287,
             "fields": [{"name": "Target hit rate & speed", "value": "\n".join(target_lines) or "No complete paths yet.", "inline": False}],
         }
+        exits = {
+            "title": "🧭 Exit Research • Standard vs High Risk",
+            "description": "Standard is tested as a fixed-time hold. High Risk is tested as +20% TP first, otherwise exit at timeout.",
+            "color": 0x3498DB,
+            "fields": [
+                {"name": "STANDARD fixed-time exits • early", "value": "\n".join(standard_lines[:7]) or "No observations yet.", "inline": False},
+                {"name": "STANDARD fixed-time exits • extended", "value": "\n".join(standard_lines[7:]) or "14d path collection is still maturing.", "inline": False},
+                {"name": "HIGH RISK • TP20 + timeout", "value": "\n".join(risky_lines) or "No observations yet.", "inline": False},
+            ],
+        }
+        survival = {
+            "title": "🛡️ Winner Survival • Hypothetical Stops",
+            "description": "Among observed signals that eventually reached +20% within 7d, how many would an adverse stop have killed first?",
+            "color": 0xED4245,
+            "fields": [{"name": "All public tiers", "value": "\n".join(stop_lines) or "Not enough path data yet.", "inline": False}],
+        }
+        entry = {
+            "title": "🧠 Entry Research • Shadow Only",
+            "description": "Candidate quality/continuation scores are frozen hypotheses; interactions and delayed entries are exploratory.",
+            "color": 0x9B59B6,
+            "fields": [
+                {"name": "Shadow score buckets", "value": "\n".join(score_lines) or "No matured observations yet.", "inline": False},
+                {"name": "Strongest interactions", "value": "\n".join(interaction_lines) or "Not enough interaction sample yet.", "inline": False},
+                {"name": "Delayed-entry simulation", "value": "\n".join(delayed_lines) or "Complete delayed 7d paths are still maturing.", "inline": False},
+            ],
+        }
         features = {
             "title": "🧪 Feature Lift • Candidate Filters",
-            "description": (
-                "Tertile/boolean slices versus the all-signal 7d baseline. These show where the signal appears "
-                "stronger or weaker; they are not yet causal rules."
-            ),
+            "description": "Univariate tertile/boolean slices versus the all-signal 7d baseline; exploratory, not causal.",
             "color": 0xFEE75C,
             "fields": [
                 {"name": "⬆️ Strongest observed slices", "value": slice_lines(report.best_slices, "🟢"), "inline": False},
@@ -551,8 +605,9 @@ class DiscordNotifier:
             ],
         }
 
+        embeds = (overview, targets, exits, survival, entry, features)
         try:
-            for embed in (overview, targets, features):
+            for embed in embeds:
                 self._validate_discord_embed(embed)
             payload = {
                 "username": "Exhaustion Scanner • Research",
@@ -560,18 +615,15 @@ class DiscordNotifier:
                 "allowed_mentions": {"parse": []},
             }
             files: dict[str, tuple[str, bytes, str]] = {}
-            if feature_csv is not None:
-                files["files[0]"] = (
-                    f"research-feature-lift-{display_time.strftime('%Y-%m-%d')}.csv",
-                    feature_csv,
-                    "text/csv",
-                )
-            if dataset_csv is not None:
-                files["files[1]"] = (
-                    f"research-signal-dataset-{display_time.strftime('%Y-%m-%d')}.csv",
-                    dataset_csv,
-                    "text/csv",
-                )
+            attachments = [
+                (feature_csv, f"research-feature-lift-{display_time.strftime('%Y-%m-%d')}.csv"),
+                (dataset_csv, f"research-signal-dataset-{display_time.strftime('%Y-%m-%d')}.csv"),
+                (strategy_csv, f"research-strategy-sweeps-{display_time.strftime('%Y-%m-%d')}.csv"),
+                (entry_csv, f"research-entry-analysis-{display_time.strftime('%Y-%m-%d')}.csv"),
+            ]
+            for index, (content, filename) in enumerate(attachments):
+                if content is not None:
+                    files[f"files[{index}]"] = (filename, content, "text/csv")
             if files:
                 response = await self._client.post(
                     self._performance_webhook_url,
@@ -582,7 +634,7 @@ class DiscordNotifier:
                 response = await self._client.post(self._performance_webhook_url, json=payload)
             response.raise_for_status()
 
-            for embed in (targets, features):
+            for embed in embeds[1:]:
                 response = await self._client.post(
                     self._performance_webhook_url,
                     json={

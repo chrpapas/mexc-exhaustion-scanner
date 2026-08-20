@@ -594,7 +594,7 @@ class Database:
                   ON c.symbol = b.symbol
                  AND c.interval = 'Min15'
                  AND c.open_time + interval '15 minutes' > b.last_recorded_close
-                 AND c.open_time + interval '15 minutes' >= b.confirmed_at
+                 AND c.open_time + interval '15 minutes' > b.confirmed_at
                  AND c.open_time + interval '15 minutes' <= now()
                  AND c.open_time + interval '15 minutes' <=
                      b.confirmed_at + ($2::double precision * interval '1 hour')
@@ -646,11 +646,10 @@ class Database:
         }
 
     async def research_analytics_rows(self) -> list[dict[str, Any]]:
-        """Return one research row per public confirmed-short signal.
+        """Return one aggregated research row per public confirmed-short signal.
 
-        Path aggregation stays in PostgreSQL so the on-demand analytics command does
-        not pull hundreds of 15m candles per signal across the network. No exchange
-        calls are made.
+        The research path can extend to 14 days, while legacy 7-day metrics remain
+        explicitly bounded to the first 168h. All work is PostgreSQL-only.
         """
         rows = await self.pool.fetch(
             """
@@ -660,15 +659,27 @@ class Database:
                     min(p.candle_close_at) FILTER (WHERE p.favorable_return_pct >= 0.20)
                         AS target_20_path_at
                 FROM research_signal_path_15m p
+                JOIN research_signal_features f ON f.episode_id = p.episode_id
+                WHERE p.candle_close_at > f.confirmed_at
                 GROUP BY p.episode_id
             ),
             path_summary AS (
                 SELECT
                     p.episode_id,
                     count(*)::integer AS path_rows,
+                    (count(*) FILTER (
+                        WHERE p.candle_close_at <= f.confirmed_at + interval '168 hours'
+                    ))::integer AS path_rows_7d,
+                    (count(*) FILTER (
+                        WHERE p.candle_close_at <= f.confirmed_at + interval '336 hours'
+                    ))::integer AS path_rows_14d,
                     max(p.candle_close_at) AS path_last_at,
-                    max(p.favorable_return_pct) AS path_mfe_7d,
-                    min(p.adverse_return_pct) AS path_mae_7d,
+                    max(p.favorable_return_pct) FILTER (
+                        WHERE p.candle_close_at <= f.confirmed_at + interval '168 hours'
+                    ) AS path_mfe_7d,
+                    min(p.adverse_return_pct) FILTER (
+                        WHERE p.candle_close_at <= f.confirmed_at + interval '168 hours'
+                    ) AS path_mae_7d,
                     min(p.adverse_return_pct) FILTER (
                         WHERE t.target_20_path_at IS NOT NULL
                           AND p.candle_close_at <= t.target_20_path_at
@@ -676,11 +687,66 @@ class Database:
                     (array_agg(
                         p.candle_close_at
                         ORDER BY p.favorable_return_pct DESC, p.candle_close_at ASC
+                    ) FILTER (
+                        WHERE p.candle_close_at <= f.confirmed_at + interval '168 hours'
                     ))[1] AS path_mfe_at,
                     (array_agg(
                         p.candle_close_at
                         ORDER BY p.adverse_return_pct ASC, p.candle_close_at ASC
+                    ) FILTER (
+                        WHERE p.candle_close_at <= f.confirmed_at + interval '168 hours'
                     ))[1] AS path_mae_at,
+                    max(p.favorable_return_pct) FILTER (
+                        WHERE p.candle_close_at <= f.confirmed_at + interval '336 hours'
+                    ) AS path_mfe_14d,
+                    min(p.adverse_return_pct) FILTER (
+                        WHERE p.candle_close_at <= f.confirmed_at + interval '336 hours'
+                    ) AS path_mae_14d,
+                    (array_agg(
+                        p.candle_close_at
+                        ORDER BY p.favorable_return_pct DESC, p.candle_close_at ASC
+                    ) FILTER (
+                        WHERE p.candle_close_at <= f.confirmed_at + interval '336 hours'
+                    ))[1] AS path_mfe_14d_at,
+                    (array_agg(
+                        p.candle_close_at
+                        ORDER BY p.adverse_return_pct ASC, p.candle_close_at ASC
+                    ) FILTER (
+                        WHERE p.candle_close_at <= f.confirmed_at + interval '336 hours'
+                    ))[1] AS path_mae_14d_at,
+                    (array_agg(p.close_return_pct ORDER BY p.candle_close_at DESC) FILTER (
+                        WHERE p.candle_close_at <= f.confirmed_at + interval '24 hours'
+                    ))[1] AS path_return_24h,
+                    (array_agg(p.close_return_pct ORDER BY p.candle_close_at DESC) FILTER (
+                        WHERE p.candle_close_at <= f.confirmed_at + interval '48 hours'
+                    ))[1] AS path_return_48h,
+                    (array_agg(p.close_return_pct ORDER BY p.candle_close_at DESC) FILTER (
+                        WHERE p.candle_close_at <= f.confirmed_at + interval '72 hours'
+                    ))[1] AS path_return_72h,
+                    (array_agg(p.close_return_pct ORDER BY p.candle_close_at DESC) FILTER (
+                        WHERE p.candle_close_at <= f.confirmed_at + interval '96 hours'
+                    ))[1] AS path_return_96h,
+                    (array_agg(p.close_return_pct ORDER BY p.candle_close_at DESC) FILTER (
+                        WHERE p.candle_close_at <= f.confirmed_at + interval '120 hours'
+                    ))[1] AS path_return_120h,
+                    (array_agg(p.close_return_pct ORDER BY p.candle_close_at DESC) FILTER (
+                        WHERE p.candle_close_at <= f.confirmed_at + interval '144 hours'
+                    ))[1] AS path_return_144h,
+                    (array_agg(p.close_return_pct ORDER BY p.candle_close_at DESC) FILTER (
+                        WHERE p.candle_close_at <= f.confirmed_at + interval '168 hours'
+                    ))[1] AS path_return_168h,
+                    (array_agg(p.close_return_pct ORDER BY p.candle_close_at DESC) FILTER (
+                        WHERE p.candle_close_at <= f.confirmed_at + interval '192 hours'
+                    ))[1] AS path_return_192h,
+                    (array_agg(p.close_return_pct ORDER BY p.candle_close_at DESC) FILTER (
+                        WHERE p.candle_close_at <= f.confirmed_at + interval '240 hours'
+                    ))[1] AS path_return_240h,
+                    (array_agg(p.close_return_pct ORDER BY p.candle_close_at DESC) FILTER (
+                        WHERE p.candle_close_at <= f.confirmed_at + interval '288 hours'
+                    ))[1] AS path_return_288h,
+                    (array_agg(p.close_return_pct ORDER BY p.candle_close_at DESC) FILTER (
+                        WHERE p.candle_close_at <= f.confirmed_at + interval '336 hours'
+                    ))[1] AS path_return_336h,
                     min(p.candle_close_at) FILTER (WHERE p.favorable_return_pct >= 0.05) AS target_5_at,
                     min(p.candle_close_at) FILTER (WHERE p.favorable_return_pct >= 0.10) AS target_10_at,
                     min(p.candle_close_at) FILTER (WHERE p.favorable_return_pct >= 0.15) AS target_15_at,
@@ -689,8 +755,10 @@ class Database:
                     min(p.candle_close_at) FILTER (WHERE p.favorable_return_pct >= 0.30) AS target_30_at,
                     min(p.candle_close_at) FILTER (WHERE p.favorable_return_pct >= 0.40) AS target_40_at
                 FROM research_signal_path_15m p
+                JOIN research_signal_features f ON f.episode_id = p.episode_id
                 LEFT JOIN path_targets t ON t.episode_id = p.episode_id
-                GROUP BY p.episode_id, t.target_20_path_at
+                WHERE p.candle_close_at > f.confirmed_at
+                GROUP BY p.episode_id, f.confirmed_at, t.target_20_path_at
             )
             SELECT
                 f.episode_id, f.symbol, f.confirmed_at, f.entry_price, f.risk_tier,
@@ -701,9 +769,15 @@ class Database:
                 st.return_24h_pct, st.return_48h_pct, st.return_72h_pct, st.return_168h_pct,
                 st.first_profit_at, st.target_20_at, st.isolated_100_breach_at,
                 st.adverse_200_breach_at, st.adverse_300_breach_at, st.cross_400_breach_at,
-                ps.path_rows, ps.path_last_at, ps.path_mfe_7d, ps.path_mae_7d,
-                ps.path_mae_before_target_20, ps.path_mfe_at, ps.path_mae_at, ps.target_5_at, ps.target_10_at,
-                ps.target_15_at, ps.target_20_path_at,
+                ps.path_rows, ps.path_rows_7d, ps.path_rows_14d, ps.path_last_at,
+                ps.path_mfe_7d, ps.path_mae_7d, ps.path_mae_before_target_20,
+                ps.path_mfe_at, ps.path_mae_at,
+                ps.path_mfe_14d, ps.path_mae_14d, ps.path_mfe_14d_at, ps.path_mae_14d_at,
+                ps.path_return_24h, ps.path_return_48h, ps.path_return_72h,
+                ps.path_return_96h, ps.path_return_120h, ps.path_return_144h,
+                ps.path_return_168h, ps.path_return_192h, ps.path_return_240h,
+                ps.path_return_288h, ps.path_return_336h,
+                ps.target_5_at, ps.target_10_at, ps.target_15_at, ps.target_20_path_at,
                 ps.target_25_at, ps.target_30_at, ps.target_40_at
             FROM research_signal_features_enriched f
             LEFT JOIN shadow_trades st ON st.episode_id = f.episode_id
@@ -712,6 +786,90 @@ class Database:
             ORDER BY f.confirmed_at ASC
             """
         )
+        return [dict(row) for row in rows]
+
+    async def research_delayed_entry_rows(
+        self,
+        *,
+        statement_timeout_seconds: int,
+    ) -> list[dict[str, Any]]:
+        """Simulate delayed entries from stored 15m paths, with a 7-day hold per entry.
+
+        Delay zero uses the original confirmed price/time. Delayed variants enter on
+        the first stored 15m close at or after the requested delay. No exchange calls.
+        """
+        query = """
+            WITH delays(delay_minutes) AS (
+                VALUES (0), (15), (30), (60), (120), (240), (480)
+            ),
+            entries AS (
+                SELECT
+                    f.episode_id,
+                    f.symbol,
+                    f.risk_tier,
+                    d.delay_minutes,
+                    CASE WHEN d.delay_minutes = 0 THEN f.confirmed_at ELSE ec.candle_close_at END AS entry_at,
+                    CASE WHEN d.delay_minutes = 0 THEN f.entry_price ELSE ec.close END AS delayed_entry_price
+                FROM research_signal_features f
+                CROSS JOIN delays d
+                LEFT JOIN LATERAL (
+                    SELECT p.candle_close_at, p.close
+                    FROM research_signal_path_15m p
+                    WHERE p.episode_id = f.episode_id
+                      AND p.candle_close_at >= f.confirmed_at + (d.delay_minutes * interval '1 minute')
+                    ORDER BY p.candle_close_at ASC
+                    LIMIT 1
+                ) ec ON d.delay_minutes > 0
+                WHERE f.risk_tier IN ('standard', 'high_risk')
+                  AND f.entry_price IS NOT NULL
+                  AND f.entry_price > 0
+                  AND (d.delay_minutes = 0 OR ec.close IS NOT NULL)
+            ),
+            summarized AS (
+                SELECT
+                    e.episode_id,
+                    e.symbol,
+                    e.risk_tier,
+                    e.delay_minutes,
+                    e.entry_at,
+                    e.delayed_entry_price,
+                    count(p.candle_close_at)::integer AS path_rows,
+                    max(p.candle_close_at) AS path_last_at,
+                    (array_agg(
+                        (e.delayed_entry_price - p.close) / e.delayed_entry_price
+                        ORDER BY p.candle_close_at DESC
+                    ) FILTER (WHERE p.candle_close_at IS NOT NULL))[1] AS return_7d_pct,
+                    max((e.delayed_entry_price - p.low) / e.delayed_entry_price) AS mfe_7d,
+                    min((e.delayed_entry_price - p.high) / e.delayed_entry_price) AS mae_7d,
+                    min(p.candle_close_at) FILTER (
+                        WHERE (e.delayed_entry_price - p.low) / e.delayed_entry_price >= 0.20
+                    ) AS target_20_at
+                FROM entries e
+                LEFT JOIN research_signal_path_15m p
+                  ON p.episode_id = e.episode_id
+                 AND p.candle_close_at > e.entry_at
+                 AND p.candle_close_at <= e.entry_at + interval '168 hours'
+                GROUP BY
+                    e.episode_id, e.symbol, e.risk_tier, e.delay_minutes,
+                    e.entry_at, e.delayed_entry_price
+            )
+            SELECT
+                s.*,
+                CASE
+                    WHEN s.path_last_at IS NULL THEN false
+                    ELSE s.path_last_at >= s.entry_at + interval '167 hours 45 minutes'
+                         AND s.path_rows >= 659
+                END AS path_complete_7d
+            FROM summarized s
+            ORDER BY s.episode_id, s.delay_minutes
+        """
+        async with self.pool.acquire() as conn:
+            async with conn.transaction():
+                await conn.execute(
+                    "SELECT set_config('statement_timeout', $1, true)",
+                    f"{statement_timeout_seconds}s",
+                )
+                rows = await conn.fetch(query)
         return [dict(row) for row in rows]
 
     async def fetch_shadow_trades(self) -> list[dict[str, Any]]:

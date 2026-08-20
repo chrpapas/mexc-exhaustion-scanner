@@ -9,8 +9,10 @@ from app.db import Database
 from app.notifier import DiscordNotifier
 from app.research_analytics import (
     build_research_analytics,
+    research_entry_research_csv,
     research_feature_lift_csv,
     research_signal_dataset_csv,
+    research_strategy_sweeps_csv,
 )
 
 
@@ -42,15 +44,28 @@ async def main() -> None:
         )
 
         rows = await db.research_analytics_rows()
+        try:
+            delayed_rows = await db.research_delayed_entry_rows(
+                statement_timeout_seconds=settings.research_db_timeout_seconds,
+            )
+        except Exception:
+            logging.exception("Delayed-entry research query failed; continuing without it")
+            delayed_rows = []
         now = datetime.now(UTC)
-        report = build_research_analytics(rows, generated_at=now)
+        report = build_research_analytics(
+            rows, generated_at=now, delayed_entry_rows=delayed_rows
+        )
         feature_csv = research_feature_lift_csv(report)
         dataset_csv = research_signal_dataset_csv(rows)
+        strategy_csv = research_strategy_sweeps_csv(report)
+        entry_csv = research_entry_research_csv(report)
 
         sent = await notifier.send_research_analytics(
             report,
             feature_csv=feature_csv,
             dataset_csv=dataset_csv,
+            strategy_csv=strategy_csv,
+            entry_csv=entry_csv,
             as_of=now,
             timezone_name=settings.performance_report_timezone,
         )
@@ -64,7 +79,7 @@ async def main() -> None:
         print(
             "On-demand research analytics sent to Discord: "
             f"signals={b.total_signals} matured7d={b.matured_7d} "
-            f"complete_paths7d={b.complete_paths_7d} "
+            f"complete_paths7d={b.complete_paths_7d} complete_paths14d={b.complete_paths_14d} "
             f"target20_7d={b.target_20_rate_7d} positive7d={b.positive_7d_rate}"
         )
     finally:

@@ -161,7 +161,7 @@ class Settings:
             research_logging_enabled=_env_bool("RESEARCH_LOGGING_ENABLED", True),
             research_path_poll_seconds=int(os.getenv("RESEARCH_PATH_POLL_SECONDS", "900")),
             research_path_batch_rows=int(os.getenv("RESEARCH_PATH_BATCH_ROWS", "2000")),
-            research_path_horizon_hours=int(os.getenv("RESEARCH_PATH_HORIZON_HOURS", "168")),
+            research_path_horizon_hours=int(os.getenv("RESEARCH_PATH_HORIZON_HOURS", "336")),
             research_db_timeout_seconds=int(os.getenv("RESEARCH_DB_TIMEOUT_SECONDS", "10")),
         )
         settings.validate()

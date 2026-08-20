@@ -1,15 +1,12 @@
-MEXC Exhaustion Scanner + STANDARD Short Trader v1.1.5
+MEXC Exhaustion Scanner + Multi-Slot Short Trader v1.2.8
 
 Full deployment:
-- Upload/deploy the entire repository.
-- Render defines two workers sharing the same PostgreSQL database:
-  1) mexc-exhaustion-scanner
-  2) mexc-standard-short-trader
-- Migration 011_strategy_threshold_matrix.sql is automatic.
-- Performance board now includes a strategy viability matrix for STANDARD vs HIGH+EXTREME.
-- Strategy rows: +20% target, 1D profitable, 2D profitable, 3D profitable, 7D profitable.
-- Adverse thresholds: -100%, -200%, -300%, -400%.
-- Average/summed profit is highlighted only for cells with 100% observed win rate.
-- Trader execution behavior is unchanged from v1.1.4.
-- Use `python -m app.report_now` in the scanner shell to trigger stats.
-- Use `python -m app.trader_status` in the trader shell to inspect trader state.
+- Deploy the entire repository to the existing Render Blueprint/services.
+- Scanner and trader continue sharing the same PostgreSQL database.
+- No new migration is required for v1.2.8; migration 013 remains the latest schema migration.
+- Scanner research path horizon now defaults to 336h / 14d. If Render has a manually overridden RESEARCH_PATH_HORIZON_HOURS, set it to 336.
+- Live scanner/trader entry and exit rules are NOT changed by this build.
+- Run `python -m app.research_analytics_now` in the scanner shell for the new research report.
+- Run `python -m app.research_status` to inspect research-path catch-up progress.
+- The report includes Standard exit horizons, High-Risk TP20+timeout sweeps, stop-survival, shadow entry scores, feature interactions and delayed-entry simulations.
+- All research uses PostgreSQL-only stored data; no additional MEXC requests are made.

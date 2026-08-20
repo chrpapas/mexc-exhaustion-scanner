@@ -1,4 +1,4 @@
-# MEXC Exhaustion Scanner + Multi-Slot Futures Trader v1.2.7
+# MEXC Exhaustion Scanner + Multi-Slot Futures Trader v1.2.8
 
 Hotfix: restores Discord formatting helpers used by signal and performance reports. Fixes `AttributeError: DiscordNotifier has no attribute _percent` in both scheduled and on-demand reports.
 
@@ -317,6 +317,31 @@ Every confirmed-short signal consumed by the trader now produces an explicit aud
 
 
 
+
+## v1.2.8 — entry/exit research lab
+
+Extends the v1.2.7 analytics into a research-only strategy lab. Live scanner and trader rules are still unchanged.
+
+Run from the scanner Render shell:
+
+```bash
+python -m app.research_analytics_now
+```
+
+New research capabilities:
+
+- Post-signal 15m path collection now defaults to **336h / 14 days** (`RESEARCH_PATH_HORIZON_HOURS=336`). Existing 7-day MFE/MAE and target statistics remain explicitly bounded to the first 168h, so extending storage cannot contaminate the old baseline.
+- Complete-path classification now requires the expected end timestamp and, for 7d/14d, at least **98% 15m candle coverage**. Exact signal-close candles are excluded from post-entry excursions to avoid pre-entry look-ahead.
+- STANDARD fixed-time exit sweep: **1d, 2d, 3d, 4d, 5d, 6d, 7d, 8d, 10d, 12d, 14d**, reporting sample, positive rate, average/median/worst/best return and average return per day of slot occupation.
+- HIGH RISK strategy sweep: **+20% TP first, otherwise timeout** at 1d/2d/3d/4d/5d/7d/10d/14d.
+- Winner stop-survival analysis at adverse **10/20/30/50/75/100%** thresholds to quantify how many eventual +20% winners a hypothetical stop would have killed first.
+- Two frozen, reproducible **shadow scores** derived from the first v1.2.7 evidence sample: `entry_quality` and `continuation_risk`. They are diagnostics only and do not gate signals.
+- Feature-interaction research for the highest-priority pairs, including exhaustion×volume, exhaustion×funding, run-score×volume, turnover×volume, premium×funding, pump×momentum and 72h-run×run-score.
+- Delayed-entry simulations at **0m, 15m, 30m, 1h, 2h, 4h and 8h**, using the first 15m close at/after the delay and then a fresh seven-day path from that delayed entry. The entry candle's earlier high/low is excluded.
+- Discord now adds exit-research, stop-survival and shadow-entry cards, plus two additional CSVs for strategy sweeps and entry research.
+- The heavier delayed-entry SQL has its own research statement timeout and fails independently; the rest of the report is still sent if that optional analysis times out.
+
+No MEXC/API calls are added. All new analytics use frozen features and candles already stored in PostgreSQL.
 
 ## v1.2.7 — research analytics & feature lift
 
