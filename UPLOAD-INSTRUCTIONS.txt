@@ -1,12 +1,40 @@
-MEXC Exhaustion Scanner + Multi-Slot Short Trader v1.2.9
+MEXC Exhaustion Scanner + Multi-Slot Short Trader v1.3.2
 
-Full deployment:
-- Deploy the entire repository to the existing Render Blueprint/services.
-- Scanner and trader continue sharing the same PostgreSQL database.
-- No new migration is required for v1.2.9; migration 013 remains the latest schema migration.
-- Scanner research path horizon now defaults to 336h / 14d. If Render has a manually overridden RESEARCH_PATH_HORIZON_HOURS, set it to 336.
-- Live scanner/trader entry and exit rules are NOT changed by this build.
-- Run `python -m app.research_analytics_now` in the scanner shell for the new research report.
-- Run `python -m app.research_status` to inspect research-path catch-up progress.
-- The report now uses paired Standard/delayed-entry cohorts and mature-only High-Risk TP20+timeout cohorts; it also reports average risky holding time and return per occupied slot-day.
-- All research uses PostgreSQL-only stored data; no additional MEXC requests are made.
+Deploy the entire project directory/ZIP contents together.
+
+v1.3.2 is a research/ledger extension only. Live trader behavior remains the v1.3.1 strategy:
+- 6 total slots; 5 STANDARD + 1 HIGH_RISK
+- 20% aggregate initial notional exposure; ~3.3333% per slot by default
+- STANDARD: fixed 7-day hold; +20% is telemetry only
+- HIGH_RISK: close at +20% or 4-day timeout
+- Entry Quality / Continuation Risk remain shadow-only
+- Existing pre-v1.3 positions keep their persisted legacy exit strategy
+
+New v1.3.2 research outputs:
+- Signal ledger: +5% hit time, pre-TP5 MAE, TP5-vs--100% race
+- Research board: frozen TP5 challenger (6 generic slots x 5% equity, 30% cap, 1x, TP +5%)
+- Paired complete-7d champion-vs-challenger chronological portfolio replay
+- TP5 adverse races at -10/-20/-30/-50/-75/-100%
+- 0.08%/fill fee assumption in portfolio replay
+- No new MEXC requests and no database migration
+
+Render trader variables to verify (unchanged):
+TRADER_MAX_OPEN_POSITIONS=6
+TRADER_MAX_TOTAL_EXPOSURE_PCT=20
+TRADER_MAX_STANDARD_POSITIONS=5
+TRADER_MAX_HIGH_RISK_POSITIONS=1
+TRADER_STANDARD_HOLD_DAYS=7
+TRADER_HIGH_RISK_TIMEOUT_DAYS=4
+TRADER_PROFIT_TARGET_PCT=20
+TRADER_LEVERAGE=1
+TRADER_MARGIN_MODE=cross
+
+Scanner research:
+RESEARCH_PATH_HORIZON_HOURS=336
+python -m app.research_analytics_now
+python -m app.signal_ledger_now
+
+Migration 014_tier_exit_strategy.sql remains the latest migration and is applied automatically at startup.
+Run tests/verification before deployment:
+pytest -q
+python scripts/verify_project.py

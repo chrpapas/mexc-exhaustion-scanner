@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import statistics
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -333,6 +334,13 @@ class DiscordNotifier:
             "standard": len(ledger.by_risk("standard")),
             "high_risk": len(ledger.by_risk("high_risk")),
         }
+        target5_before_100 = sum(item.target_5_before_100_breach is True for item in ledger.items)
+        target5_hits = sum(item.target_5_at is not None for item in ledger.items)
+        target5_mae = [
+            -item.path_mae_before_target_5
+            for item in ledger.items
+            if item.path_mae_before_target_5 is not None
+        ]
         target_before_100 = sum(item.target_before_100_breach is True for item in ledger.items)
         breach_before_target = sum(
             item.target_before_100_breach is False and item.first_100_breach_at is not None
@@ -354,6 +362,18 @@ class DiscordNotifier:
                         f"**{ledger.total}** total • "
                         f"🟢 STANDARD **{risk_counts['standard']}** • "
                         f"🟡 HIGH **{risk_counts['high_risk']}**"
+                    ),
+                    "inline": False,
+                },
+                {
+                    "name": "⚡ TP5 research race",
+                    "value": (
+                        f"+5% hit **{target5_hits}/{ledger.total}** • "
+                        f"before -100% **{target5_before_100}**"
+                        + (
+                            f" • median pre-hit adverse **{self._percent(statistics.median(target5_mae))}**"
+                            if target5_mae else ""
+                        )
                     ),
                     "inline": False,
                 },
@@ -474,6 +494,27 @@ class DiscordNotifier:
             for target in report.target_sweep
         ]
 
+        tp5 = report.tp5_risk
+        tp5_race_lines = [
+            f"**-{item.adverse_threshold_pct}%**: TP5 first **{item.target_first}/{item.sample}** "
+            f"({self._percent(item.target_first_rate)}) • adverse first **{item.adverse_first}**"
+            + (f" • same 15m candle **{item.same_candle}**" if item.same_candle else "")
+            + (f" • unresolved **{item.unresolved}**" if item.unresolved else "")
+            for item in tp5.adverse_races
+        ]
+
+        def portfolio_line(item) -> str:
+            return (
+                f"**{item.strategy}** • signals {item.signals} • entered **{item.entered}** • "
+                f"closed {item.closed} • open {item.open_positions}\n"
+                f"return **{self._signed_percent(item.marked_return)}** • realized "
+                f"{self._signed_percent(item.realized_return)} • max slots **{item.max_open_positions}** • "
+                f"max exposure **{self._percent(item.max_observed_exposure_pct)}**\n"
+                f"missed capacity {item.missed_capacity} • same-symbol {item.missed_same_symbol} • "
+                f"median hold **{self._hours(item.median_holding_hours)}** • slot-days **{item.slot_days:.2f}** • "
+                f"return/slot-day **{self._signed_percent(item.return_per_slot_day)}**"
+            )
+
         def slice_lines(items: tuple[FeatureSliceSummary, ...], icon: str) -> str:
             if not items:
                 return "Not enough matured observations yet."
@@ -585,6 +626,44 @@ class DiscordNotifier:
             "color": 0x57F287,
             "fields": [{"name": "Target hit rate & speed", "value": "\n".join(target_lines) or "No complete paths yet.", "inline": False}],
         }
+        tp5_challenger = {
+            "title": "⚡ TP5 Challenger • Frozen Shadow Portfolio",
+            "description": (
+                "Research only. Paired complete-7d signal cohort. Challenger is frozen at "
+                "6 generic slots × 5% equity, 30% cap, 1×, immediate entry, full +5% exit, "
+                "one open position per symbol. Fees: 0.08% per fill."
+            ),
+            "color": 0x2ECC71,
+            "fields": [
+                {
+                    "name": "Pre-TP5 path risk",
+                    "value": (
+                        f"+5% hit **{tp5.hits}/{tp5.sample}** ({self._percent(tp5.hit_rate)}) • "
+                        f"median **{self._hours(tp5.median_time_hours)}** • p75 **{self._hours(tp5.p75_time_hours)}**\n"
+                        f"Pre-hit adverse: median **-{self._percent(tp5.median_adverse_before_target)}** • "
+                        f"p75 **-{self._percent(tp5.p75_adverse_before_target)}** • "
+                        f"worst **-{self._percent(tp5.worst_adverse_before_target)}**"
+                    ),
+                    "inline": False,
+                },
+                {
+                    "name": "+5% race vs adverse move",
+                    "value": "\n".join(tp5_race_lines) or "No complete paths yet.",
+                    "inline": False,
+                },
+                {
+                    "name": "Champion vs challenger • same cohort",
+                    "value": (
+                        portfolio_line(report.portfolio_current) + "\n\n" +
+                        portfolio_line(report.portfolio_tp5)
+                    ),
+                    "inline": False,
+                },
+            ],
+            "footer": {
+                "text": "No live trader rules are changed. Same-candle TP/adverse races are intentionally reported as ambiguous."
+            },
+        }
         exits = {
             "title": "🧭 Exit Research • Standard vs High Risk",
             "description": "Paired-cohort exits: Standard 1–7d uses one complete-7d cohort; High Risk 1–10d uses one fully mature/evaluable 10d cohort. 14d remains separate until mature.",
@@ -621,7 +700,7 @@ class DiscordNotifier:
             ],
         }
 
-        embeds = (overview, targets, exits, survival, entry, features)
+        embeds = (overview, targets, tp5_challenger, exits, survival, entry, features)
         try:
             for embed in embeds:
                 self._validate_discord_embed(embed)

@@ -14,6 +14,9 @@ def _row(**overrides):
         "risk_tier": "standard",
         "current_return_pct": -0.05,
         "first_profit_at": None,
+        "target_5_at": None,
+        "path_mae_before_target_5": None,
+        "path_mae_before_target_5_at": None,
         "target_20_at": None,
         "isolated_100_breach_at": None,
         "adverse_200_breach_at": None,
@@ -106,3 +109,22 @@ def test_visual_table_renderer_produces_png_with_risk_pages():
     assert [item.risk_tier for item in images] == ["standard", "high_risk"]
     assert all(item.png_bytes.startswith(b"\x89PNG\r\n\x1a\n") for item in images)
     assert all(len(item.png_bytes) > 1000 for item in images)
+
+
+def test_ledger_includes_tp5_timing_pre_hit_mae_and_race_columns():
+    confirmed = datetime(2026, 8, 10, 12, 0, tzinfo=UTC)
+    ledger = build_signal_ledger([
+        _row(
+            target_5_at=confirmed + timedelta(hours=2),
+            path_mae_before_target_5=-0.18,
+            path_mae_before_target_5_at=confirmed + timedelta(hours=1),
+        )
+    ], generated_at=confirmed + timedelta(days=2))
+    item = ledger.items[0]
+    assert item.time_to_target_5_hours == 2.0
+    assert item.path_mae_before_target_5 == -0.18
+    assert item.target_5_before_100_breach is True
+    text = signal_ledger_csv(ledger).decode("utf-8")
+    assert "target_5_at_utc" in text
+    assert "mae_before_target_5_pct" in text
+    assert "target_5_before_100_breach" in text

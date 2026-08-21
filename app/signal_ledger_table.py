@@ -33,6 +33,7 @@ _COLUMNS = (
     ("TOKEN", 175),
     ("SIGNAL", 175),
     ("ENTRY", 130),
+    ("+5%", 135),
     ("+20%", 135),
     ("1D", 165),
     ("2D", 165),
@@ -135,6 +136,19 @@ def _cell_for_horizon(item: SignalLedgerItem, hours: int) -> tuple[str, tuple[in
     if horizon.return_pct > 0:
         return text, _GREEN, _GREEN_TEXT
     return text, _AMBER, _AMBER_TEXT
+
+
+def _cell_for_target_5(item: SignalLedgerItem) -> tuple[str, tuple[int, int, int], tuple[int, int, int]]:
+    if item.target_5_at is not None:
+        race = item.target_5_before_100_breach
+        mae = item.path_mae_before_target_5
+        mae_text = "" if mae is None else f"\npre {mae * 100:.1f}%"
+        if race is not False:
+            return f"HIT {_elapsed(item.time_to_target_5_hours)}{mae_text}", _GREEN, _GREEN_TEXT
+        return f"late {_elapsed(item.time_to_target_5_hours)}{mae_text}", _RED, _RED_TEXT
+    if item.first_100_breach_at is not None:
+        return "BREACH\nfirst", _RED, _RED_TEXT
+    return "pending", _BLUE, _BLUE_TEXT
 
 
 def _cell_for_target(item: SignalLedgerItem) -> tuple[str, tuple[int, int, int], tuple[int, int, int]]:
@@ -245,6 +259,7 @@ def _render_page(
 
     for item in items:
         status_text, status_fill, status_text_color = _status(item)
+        target5_text, target5_fill, target5_text_color = _cell_for_target_5(item)
         target_text, target_fill, target_text_color = _cell_for_target(item)
         signal_text = item.confirmed_at.astimezone(tz).strftime("%d %b\n%H:%M")
         values: list[tuple[str, tuple[int, int, int], tuple[int, int, int], object, str]] = [
@@ -252,6 +267,7 @@ def _render_page(
             (item.symbol.replace("_USDT", ""), _NEUTRAL, _TEXT, cell_bold, "left"),
             (signal_text, _NEUTRAL, _MUTED, cell_font, "center"),
             (_price(item.signal_price), _NEUTRAL, _TEXT, cell_font, "center"),
+            (target5_text, target5_fill, target5_text_color, cell_bold, "center"),
             (target_text, target_fill, target_text_color, cell_bold, "center"),
         ]
         for hours in (24, 48, 72, 168):
@@ -268,7 +284,8 @@ def _render_page(
         y += row_h
 
     footer = (
-        "Each horizon cell = price / short return. Breach columns show first elapsed time from signal. "
+        "+5% shows hit time and pre-hit adverse excursion when available. Each horizon cell = price / short return. "
+        "Breach columns show first elapsed time from signal. "
         "Exact timestamps/raw values are in the attached CSV."
     )
     draw.text((margin + 4, y + 13), footer, fill=_MUTED, font=foot_font)

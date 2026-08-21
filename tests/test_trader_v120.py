@@ -9,9 +9,9 @@ def _clear(monkeypatch):
     keys = [
         "TRADING_MODE", "TRADER_MARGIN_MODE", "TRADER_ALLOWED_RISK_TIERS",
         "TRADER_MAX_OPEN_POSITIONS", "TRADER_SLOT_ALLOCATION_PCT",
-        "TRADER_MAX_TOTAL_EXPOSURE_PCT", "TRADER_MAX_HIGH_RISK_POSITIONS",
+        "TRADER_MAX_TOTAL_EXPOSURE_PCT", "TRADER_MAX_STANDARD_POSITIONS", "TRADER_MAX_HIGH_RISK_POSITIONS",
         "TRADER_PROFIT_TARGET_PCT", "TRADER_PROTECTION_ARM_PCT",
-        "TRADER_TRAIL_CALLBACK_PCT", "MEXC_BASE_URL",
+        "TRADER_TRAIL_CALLBACK_PCT", "TRADER_STANDARD_HOLD_DAYS", "TRADER_HIGH_RISK_TIMEOUT_DAYS", "MEXC_BASE_URL",
     ]
     for key in keys:
         monkeypatch.delenv(key, raising=False)
@@ -27,7 +27,10 @@ def test_strategy_one_is_new_default(monkeypatch):
     assert s.max_open_positions == 6
     assert s.slot_allocation_pct == pytest.approx(3.333333)
     assert s.max_total_exposure_pct == 20
-    assert s.max_high_risk_positions == 5
+    assert s.max_standard_positions == 5
+    assert s.max_high_risk_positions == 1
+    assert s.standard_hold_days == 7
+    assert s.high_risk_timeout_days == 4
     assert s.profit_target_pct == 20
     assert s.protection_arm_pct == 25
     assert s.trail_callback_pct == 15
@@ -110,7 +113,8 @@ def test_slot_defaults_follow_configured_capacity(monkeypatch):
     monkeypatch.setenv("TRADER_MAX_TOTAL_EXPOSURE_PCT", "20")
     s = TraderSettings.from_env()
     assert s.slot_allocation_pct == pytest.approx(5.0)
-    assert s.max_high_risk_positions == 3
+    assert s.max_standard_positions == 3
+    assert s.max_high_risk_positions == 1
 
 
 def test_high_only_does_not_reserve_unused_standard_slot(monkeypatch):

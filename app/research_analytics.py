@@ -16,6 +16,13 @@ STANDARD_EXIT_HORIZONS_HOURS: tuple[int, ...] = (24, 48, 72, 96, 120, 144, 168, 
 HIGH_RISK_TIMEOUT_HOURS: tuple[int, ...] = (24, 48, 72, 96, 120, 168, 240, 336)
 STOP_THRESHOLDS_PCT: tuple[int, ...] = (10, 20, 30, 50, 75, 100)
 DELAYED_ENTRY_MINUTES: tuple[int, ...] = (0, 15, 30, 60, 120, 240, 480)
+TP5_ADVERSE_THRESHOLDS_PCT: tuple[int, ...] = (10, 20, 30, 50, 75, 100)
+SHADOW_FEE_PER_FILL = 0.0008
+CURRENT_TOTAL_EXPOSURE_PCT = 0.20
+CURRENT_SLOT_PCT = CURRENT_TOTAL_EXPOSURE_PCT / 6.0
+TP5_CHALLENGER_SLOT_PCT = 0.05
+TP5_CHALLENGER_MAX_SLOTS = 6
+TP5_CHALLENGER_TOTAL_EXPOSURE_PCT = TP5_CHALLENGER_SLOT_PCT * TP5_CHALLENGER_MAX_SLOTS
 
 
 @dataclass(frozen=True, slots=True)
@@ -188,6 +195,52 @@ class DelayedEntrySummary:
 
 
 @dataclass(frozen=True, slots=True)
+class Tp5AdverseRaceSummary:
+    adverse_threshold_pct: int
+    sample: int
+    target_first: int
+    adverse_first: int
+    same_candle: int
+    unresolved: int
+    target_first_rate: float | None
+
+
+@dataclass(frozen=True, slots=True)
+class Tp5RiskSummary:
+    sample: int
+    hits: int
+    hit_rate: float | None
+    median_time_hours: float | None
+    p75_time_hours: float | None
+    median_adverse_before_target: float | None
+    p75_adverse_before_target: float | None
+    worst_adverse_before_target: float | None
+    adverse_races: tuple[Tp5AdverseRaceSummary, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class PortfolioReplaySummary:
+    strategy: str
+    cohort: str
+    signals: int
+    entered: int
+    closed: int
+    open_positions: int
+    missed_capacity: int
+    missed_same_symbol: int
+    realized_return: float
+    marked_return: float
+    max_open_positions: int
+    max_observed_exposure_pct: float
+    median_holding_hours: float | None
+    avg_holding_hours: float | None
+    slot_days: float
+    return_per_slot_day: float | None
+    replay_span_days: float | None
+    unmarked_open_positions: int
+
+
+@dataclass(frozen=True, slots=True)
 class ResearchAnalyticsReport:
     generated_at: datetime
     baseline: BaselineSummary
@@ -199,6 +252,9 @@ class ResearchAnalyticsReport:
     score_buckets: tuple[ScoreBucketSummary, ...]
     interactions: tuple[InteractionSummary, ...]
     delayed_entries: tuple[DelayedEntrySummary, ...]
+    tp5_risk: Tp5RiskSummary
+    portfolio_current: PortfolioReplaySummary
+    portfolio_tp5: PortfolioReplaySummary
     min_rank_sample: int
 
     @property
@@ -805,6 +861,266 @@ def _build_delayed_entries(raw_rows: Iterable[dict[str, Any]]) -> tuple[DelayedE
     return tuple(result)
 
 
+def _tp5_risk_summary(rows: list[dict[str, Any]]) -> Tp5RiskSummary:
+    sample = len(rows)
+    hit_rows = [row for row in rows if _time_to_target_hours(row, 5, max_hours=168) is not None]
+    times = [
+        value
+        for row in hit_rows
+        for value in [_time_to_target_hours(row, 5, max_hours=168)]
+        if value is not None
+    ]
+    adverse_before: list[float] = []
+    for row in hit_rows:
+        # Older exported datasets do not contain the v1.3.2 pre-TP5 field at all.
+        # Missing column means unknown; a present SQL NULL means there was no
+        # earlier post-signal candle before a first-candle +5% hit, which is 0
+        # observed pre-hit adverse excursion.
+        if "path_mae_before_target_5" not in row:
+            continue
+        raw = _float(row.get("path_mae_before_target_5"))
+        adverse_before.append(max(0.0, -raw) if raw is not None else 0.0)
+
+    races: list[Tp5AdverseRaceSummary] = []
+    for threshold in TP5_ADVERSE_THRESHOLDS_PCT:
+        target_first = adverse_first = same_candle = unresolved = 0
+        for row in rows:
+            confirmed = row.get("confirmed_at")
+            if confirmed is None:
+                unresolved += 1
+                continue
+            cutoff = confirmed + timedelta(hours=168)
+            target = row.get("target_5_at")
+            adverse_key = f"adverse_{threshold}_at"
+            if adverse_key not in row:
+                unresolved += 1
+                continue
+            adverse = row.get(adverse_key)
+            if target is not None and target > cutoff:
+                target = None
+            if adverse is not None and adverse > cutoff:
+                adverse = None
+            if target is not None and (adverse is None or target < adverse):
+                target_first += 1
+            elif adverse is not None and (target is None or adverse < target):
+                adverse_first += 1
+            elif target is not None and adverse is not None and target == adverse:
+                same_candle += 1
+            else:
+                unresolved += 1
+        races.append(
+            Tp5AdverseRaceSummary(
+                adverse_threshold_pct=threshold,
+                sample=sample,
+                target_first=target_first,
+                adverse_first=adverse_first,
+                same_candle=same_candle,
+                unresolved=unresolved,
+                target_first_rate=(target_first / sample) if sample else None,
+            )
+        )
+
+    return Tp5RiskSummary(
+        sample=sample,
+        hits=len(hit_rows),
+        hit_rate=(len(hit_rows) / sample) if sample else None,
+        median_time_hours=_median(times),
+        p75_time_hours=_percentile(times, 0.75),
+        median_adverse_before_target=_median(adverse_before),
+        p75_adverse_before_target=_percentile(adverse_before, 0.75),
+        worst_adverse_before_target=max(adverse_before) if adverse_before else None,
+        adverse_races=tuple(races),
+    )
+
+
+def _first_target_20(row: dict[str, Any]) -> datetime | None:
+    values = [
+        value
+        for value in (row.get("target_20_path_at"), row.get("target_20_at"))
+        if value is not None
+    ]
+    return min(values) if values else None
+
+
+def _latest_observed_return(row: dict[str, Any]) -> float | None:
+    direct = _float(row.get("path_latest_return"))
+    if direct is not None:
+        return direct
+    for hours in reversed(STANDARD_EXIT_HORIZONS_HOURS):
+        value = _float(row.get(f"path_return_{hours}h"))
+        if value is not None:
+            return value
+    for key in ("return_168h_pct", "return_72h_pct", "return_48h_pct", "return_24h_pct"):
+        value = _float(row.get(key))
+        if value is not None:
+            return value
+    return _float(row.get("current_return_pct"))
+
+
+def _known_exit(
+    row: dict[str, Any], *, strategy: str, generated_at: datetime
+) -> tuple[datetime | None, float | None]:
+    confirmed = row.get("confirmed_at")
+    if confirmed is None:
+        return None, None
+    if strategy == "tp5_challenger":
+        target = row.get("target_5_at")
+        if target is not None and target <= generated_at:
+            return target, 0.05
+        return None, None
+
+    tier = str(row.get("risk_tier") or "standard")
+    if tier == "standard":
+        exit_at = confirmed + timedelta(hours=168)
+        if exit_at > generated_at:
+            return None, None
+        value = _horizon_return(row, 168)
+        return (exit_at, value) if value is not None else (None, None)
+
+    if tier == "high_risk":
+        timeout = confirmed + timedelta(hours=96)
+        target = _first_target_20(row)
+        if target is not None and target <= timeout and target <= generated_at:
+            return target, 0.20
+        if timeout <= generated_at:
+            value = _float(row.get("path_return_96h"))
+            if value is None:
+                value = _horizon_return(row, 96)
+            return (timeout, value) if value is not None else (None, None)
+    return None, None
+
+
+def _portfolio_replay(
+    rows: list[dict[str, Any]], *, strategy: str, generated_at: datetime
+) -> PortfolioReplaySummary:
+    ordered = sorted(
+        [row for row in rows if row.get("confirmed_at") is not None and row.get("confirmed_at") <= generated_at],
+        key=lambda row: row["confirmed_at"],
+    )
+    if strategy == "tp5_challenger":
+        position_fraction = TP5_CHALLENGER_SLOT_PCT
+        max_total = TP5_CHALLENGER_MAX_SLOTS
+        max_standard = max_high = None
+        strategy_name = "tp5_challenger_6x5pct"
+    else:
+        position_fraction = CURRENT_SLOT_PCT
+        max_total = 6
+        max_standard = 5
+        max_high = 1
+        strategy_name = "current_live_5standard_1high"
+
+    equity = 1.0
+    positions: list[dict[str, Any]] = []
+    closed_holds: list[float] = []
+    entered = closed = missed_capacity = missed_same_symbol = 0
+    max_open = 0
+    max_exposure = 0.0
+    first_entry: datetime | None = None
+    last_exit: datetime | None = None
+
+    def close_due(cutoff: datetime) -> None:
+        nonlocal equity, closed, last_exit
+        due = sorted(
+            [p for p in positions if p["exit_at"] is not None and p["exit_at"] <= cutoff],
+            key=lambda p: p["exit_at"],
+        )
+        for pos in due:
+            gross_return = float(pos["exit_return"])
+            equity += pos["notional"] * (gross_return - SHADOW_FEE_PER_FILL)
+            hold = _elapsed_hours(pos["entry_at"], pos["exit_at"])
+            if hold is not None:
+                closed_holds.append(hold)
+            last_exit = pos["exit_at"] if last_exit is None else max(last_exit, pos["exit_at"])
+            positions.remove(pos)
+            closed += 1
+
+    for row in ordered:
+        entry_at = row["confirmed_at"]
+        close_due(entry_at)
+        symbol = str(row.get("symbol") or "")
+        tier = str(row.get("risk_tier") or "standard")
+        if any(pos["symbol"] == symbol for pos in positions):
+            missed_same_symbol += 1
+            continue
+        if len(positions) >= max_total:
+            missed_capacity += 1
+            continue
+        if strategy != "tp5_challenger":
+            if tier == "standard" and sum(pos["tier"] == "standard" for pos in positions) >= int(max_standard or 0):
+                missed_capacity += 1
+                continue
+            if tier == "high_risk" and sum(pos["tier"] == "high_risk" for pos in positions) >= int(max_high or 0):
+                missed_capacity += 1
+                continue
+
+        exit_at, exit_return = _known_exit(row, strategy=strategy, generated_at=generated_at)
+        pre_fee_equity = equity
+        notional = max(0.0, pre_fee_equity) * position_fraction
+        equity -= notional * SHADOW_FEE_PER_FILL
+        positions.append(
+            {
+                "episode_id": row.get("episode_id"),
+                "symbol": symbol,
+                "tier": tier,
+                "entry_at": entry_at,
+                "notional": notional,
+                "exit_at": exit_at,
+                "exit_return": exit_return,
+                "latest_return": _latest_observed_return(row),
+            }
+        )
+        entered += 1
+        first_entry = entry_at if first_entry is None else min(first_entry, entry_at)
+        max_open = max(max_open, len(positions))
+        # Fixed fraction-of-equity sizing means this is the cleanest comparable
+        # exposure proxy across strategies; actual notionals drift slightly as equity compounds.
+        max_exposure = max(max_exposure, len(positions) * position_fraction)
+
+    close_due(generated_at)
+
+    unmarked = 0
+    marked_equity = equity
+    open_holds: list[float] = []
+    for pos in positions:
+        hold = _elapsed_hours(pos["entry_at"], generated_at)
+        if hold is not None:
+            open_holds.append(hold)
+        mark = pos["latest_return"]
+        if mark is None:
+            unmarked += 1
+            continue
+        marked_equity += pos["notional"] * (float(mark) - SHADOW_FEE_PER_FILL)
+
+    all_holds = closed_holds + open_holds
+    slot_days = sum(all_holds) / 24.0
+    marked_return = marked_equity - 1.0
+    replay_end = generated_at if positions else last_exit
+    replay_span_days = None
+    if first_entry is not None and replay_end is not None:
+        replay_span_days = max(0.0, (replay_end - first_entry).total_seconds() / 86400.0)
+
+    return PortfolioReplaySummary(
+        strategy=strategy_name,
+        cohort="paired_complete_7d",
+        signals=len(ordered),
+        entered=entered,
+        closed=closed,
+        open_positions=len(positions),
+        missed_capacity=missed_capacity,
+        missed_same_symbol=missed_same_symbol,
+        realized_return=equity - 1.0,
+        marked_return=marked_return,
+        max_open_positions=max_open,
+        max_observed_exposure_pct=max_exposure,
+        median_holding_hours=_median(all_holds),
+        avg_holding_hours=_mean(all_holds),
+        slot_days=slot_days,
+        return_per_slot_day=(marked_return / slot_days) if slot_days > 0 else None,
+        replay_span_days=replay_span_days,
+        unmarked_open_positions=unmarked,
+    )
+
+
 def build_research_analytics(
     raw_rows: Iterable[dict[str, Any]],
     *,
@@ -917,6 +1233,13 @@ def build_research_analytics(
         score_buckets=score_buckets,
         interactions=interactions,
         delayed_entries=_build_delayed_entries(delayed_entry_rows),
+        tp5_risk=_tp5_risk_summary(complete_paths_7d),
+        portfolio_current=_portfolio_replay(
+            complete_paths_7d, strategy="current", generated_at=generated_at
+        ),
+        portfolio_tp5=_portfolio_replay(
+            complete_paths_7d, strategy="tp5_challenger", generated_at=generated_at
+        ),
         min_rank_sample=min_rank_sample,
     )
 
@@ -954,14 +1277,16 @@ def research_strategy_sweeps_csv(report: ResearchAnalyticsReport) -> bytes:
     output = io.StringIO(newline="")
     writer = csv.writer(output)
     writer.writerow([
-        "analysis", "risk_tier", "horizon_or_threshold", "sample",
+        "analysis", "risk_tier_or_strategy", "horizon_or_threshold", "sample",
         "metric_1", "metric_2", "metric_3", "metric_4", "metric_5", "metric_6",
+        "metric_7", "metric_8", "metric_9", "metric_10", "metric_11", "metric_12",
     ])
     for item in report.standard_exit_sweep:
         writer.writerow([
             "standard_exit_horizon_paired", item.risk_tier, f"{item.horizon_hours}h", item.sample,
             _csv_pct(item.avg_return), _csv_pct(item.median_return), _csv_pct(item.positive_rate),
             _csv_pct(item.avg_return_per_day), f"cohort_complete_{item.cohort_horizon_hours}h", "",
+            "", "", "", "", "", "",
         ])
     for item in report.high_risk_timeout_sweep:
         writer.writerow([
@@ -969,12 +1294,41 @@ def research_strategy_sweeps_csv(report: ResearchAnalyticsReport) -> bytes:
             _csv_pct(item.avg_strategy_return), _csv_pct(item.median_strategy_return),
             _csv_pct(item.target_hit_rate), _csv_pct(item.worst_strategy_return),
             "" if item.avg_holding_hours is None else f"{item.avg_holding_hours:.6f}",
-            _csv_pct(item.return_per_slot_day),
+            _csv_pct(item.return_per_slot_day), "", "", "", "", "", "",
         ])
     for item in report.stop_survival:
         writer.writerow([
             "winner_stop_survival", item.risk_tier, f"{item.stop_pct}%", item.winners_with_path,
             item.winners_killed, _csv_pct(item.kill_rate), _csv_pct(item.survivor_rate), "", "", "",
+            "", "", "", "", "", "",
+        ])
+
+    risk = report.tp5_risk
+    writer.writerow([
+        "tp5_pre_hit_summary", "all_public_tiers", "+5% within 7d", risk.sample,
+        risk.hits, _csv_pct(risk.hit_rate),
+        "" if risk.median_time_hours is None else f"{risk.median_time_hours:.6f}",
+        "" if risk.p75_time_hours is None else f"{risk.p75_time_hours:.6f}",
+        _csv_pct(risk.median_adverse_before_target),
+        _csv_pct(risk.p75_adverse_before_target),
+        _csv_pct(risk.worst_adverse_before_target), "", "", "", "", "",
+    ])
+    for item in risk.adverse_races:
+        writer.writerow([
+            "tp5_adverse_race_7d", "all_public_tiers", f"-{item.adverse_threshold_pct}%", item.sample,
+            item.target_first, _csv_pct(item.target_first_rate), item.adverse_first,
+            item.same_candle, item.unresolved, "", "", "", "", "", "", "",
+        ])
+
+    for portfolio in (report.portfolio_current, report.portfolio_tp5):
+        writer.writerow([
+            "portfolio_replay_paired_7d", portfolio.strategy, portfolio.cohort, portfolio.signals,
+            portfolio.entered, portfolio.closed, portfolio.open_positions,
+            portfolio.missed_capacity, portfolio.missed_same_symbol,
+            _csv_pct(portfolio.realized_return), _csv_pct(portfolio.marked_return),
+            portfolio.max_open_positions, _csv_pct(portfolio.max_observed_exposure_pct),
+            "" if portfolio.median_holding_hours is None else f"{portfolio.median_holding_hours:.6f}",
+            f"{portfolio.slot_days:.6f}", _csv_pct(portfolio.return_per_slot_day),
         ])
     return output.getvalue().encode("utf-8")
 
@@ -1011,16 +1365,18 @@ def research_signal_dataset_csv(rows: Iterable[dict[str, Any]]) -> bytes:
     fixed = [
         "episode_id", "symbol", "risk_tier", "confirmed_at", "entry_price",
         "return_24h_pct", "return_48h_pct", "return_72h_pct", "return_168h_pct",
-        "target_20_at", "target_20_path_at", "path_rows", "path_last_at",
+        "target_20_at", "target_20_path_at", "path_rows", "path_last_at", "path_latest_return",
         "path_rows_7d", "path_rows_14d",
-        "path_mfe_7d", "path_mae_7d", "path_mae_before_target_20", "path_mfe_at", "path_mae_at",
+        "path_mfe_7d", "path_mae_7d", "path_mae_before_target_5", "path_mae_before_target_5_at",
+        "path_mae_before_target_20", "path_mfe_at", "path_mae_at",
         "path_mfe_14d", "path_mae_14d", "path_mfe_14d_at", "path_mae_14d_at",
     ]
     horizon_fields = [f"path_return_{hours}h" for hours in STANDARD_EXIT_HORIZONS_HOURS]
     target_fields = [f"target_{pct}_at" for pct in TARGET_LEVELS_PCT if pct != 20]
+    adverse_race_fields = [f"adverse_{pct}_at" for pct in TP5_ADVERSE_THRESHOLDS_PCT]
     feature_fields = [spec.key for spec in FEATURE_SPECS]
     score_fields = ["shadow_entry_quality_score", "shadow_continuation_risk_score"]
-    writer_fields = fixed + horizon_fields + target_fields + feature_fields + score_fields
+    writer_fields = fixed + horizon_fields + target_fields + adverse_race_fields + feature_fields + score_fields
 
     output = io.StringIO(newline="")
     writer = csv.DictWriter(output, fieldnames=writer_fields, extrasaction="ignore")
@@ -1028,7 +1384,7 @@ def research_signal_dataset_csv(rows: Iterable[dict[str, Any]]) -> bytes:
     for row in normalized:
         snapshot = json_object(row.get("feature_snapshot"))
         flattened: dict[str, Any] = {}
-        for key in fixed + horizon_fields + target_fields:
+        for key in fixed + horizon_fields + target_fields + adverse_race_fields:
             value = row.get(key)
             if isinstance(value, datetime):
                 value = value.isoformat()

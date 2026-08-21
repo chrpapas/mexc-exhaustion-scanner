@@ -1,4 +1,14 @@
-# MEXC Exhaustion Scanner + Multi-Slot Futures Trader v1.3.1
+# MEXC Exhaustion Scanner + Multi-Slot Futures Trader v1.3.2
+
+Research-only TP5 challenger extension. Live trader behavior remains unchanged.
+
+- Adds +5% target timing and pre-TP5 adverse-excursion fields to the signal ledger.
+- Adds a frozen TP5 challenger portfolio: 6 generic slots, 5% equity notional per slot, 30% max exposure, 1x, immediate entry, full +5% exit, one open position per symbol.
+- Adds chronological champion-vs-challenger shadow portfolio reporting with fees, slot occupancy, missed-signal reasons, realized/marked equity and return per slot-day.
+- Adds TP5 adverse-threshold survival analytics for -10/-20/-30/-50/-75/-100% before the +5% hit.
+- Uses only stored PostgreSQL 15m research paths; no additional MEXC requests and no schema migration.
+
+## v1.3.1 — Discord formatting hotfix
 
 Hotfix: restores Discord formatting helpers used by signal and performance reports. Fixes `AttributeError: DiscordNotifier has no attribute _percent` in both scheduled and on-demand reports.
 

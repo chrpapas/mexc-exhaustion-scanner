@@ -656,6 +656,8 @@ class Database:
             WITH path_targets AS (
                 SELECT
                     p.episode_id,
+                    min(p.candle_close_at) FILTER (WHERE p.favorable_return_pct >= 0.05)
+                        AS target_5_path_at,
                     min(p.candle_close_at) FILTER (WHERE p.favorable_return_pct >= 0.20)
                         AS target_20_path_at
                 FROM research_signal_path_15m p
@@ -680,6 +682,17 @@ class Database:
                     min(p.adverse_return_pct) FILTER (
                         WHERE p.candle_close_at <= f.confirmed_at + interval '168 hours'
                     ) AS path_mae_7d,
+                    min(p.adverse_return_pct) FILTER (
+                        WHERE t.target_5_path_at IS NOT NULL
+                          AND p.candle_close_at < t.target_5_path_at
+                    ) AS path_mae_before_target_5,
+                    (array_agg(
+                        p.candle_close_at
+                        ORDER BY p.adverse_return_pct ASC, p.candle_close_at ASC
+                    ) FILTER (
+                        WHERE t.target_5_path_at IS NOT NULL
+                          AND p.candle_close_at < t.target_5_path_at
+                    ))[1] AS path_mae_before_target_5_at,
                     min(p.adverse_return_pct) FILTER (
                         WHERE t.target_20_path_at IS NOT NULL
                           AND p.candle_close_at <= t.target_20_path_at
@@ -747,7 +760,14 @@ class Database:
                     (array_agg(p.close_return_pct ORDER BY p.candle_close_at DESC) FILTER (
                         WHERE p.candle_close_at <= f.confirmed_at + interval '336 hours'
                     ))[1] AS path_return_336h,
-                    min(p.candle_close_at) FILTER (WHERE p.favorable_return_pct >= 0.05) AS target_5_at,
+                    (array_agg(p.close_return_pct ORDER BY p.candle_close_at DESC))[1] AS path_latest_return,
+                    min(p.candle_close_at) FILTER (WHERE p.adverse_return_pct <= -0.10) AS adverse_10_at,
+                    min(p.candle_close_at) FILTER (WHERE p.adverse_return_pct <= -0.20) AS adverse_20_at,
+                    min(p.candle_close_at) FILTER (WHERE p.adverse_return_pct <= -0.30) AS adverse_30_at,
+                    min(p.candle_close_at) FILTER (WHERE p.adverse_return_pct <= -0.50) AS adverse_50_at,
+                    min(p.candle_close_at) FILTER (WHERE p.adverse_return_pct <= -0.75) AS adverse_75_at,
+                    min(p.candle_close_at) FILTER (WHERE p.adverse_return_pct <= -1.00) AS adverse_100_at,
+                    t.target_5_path_at AS target_5_at,
                     min(p.candle_close_at) FILTER (WHERE p.favorable_return_pct >= 0.10) AS target_10_at,
                     min(p.candle_close_at) FILTER (WHERE p.favorable_return_pct >= 0.15) AS target_15_at,
                     t.target_20_path_at,
@@ -758,7 +778,7 @@ class Database:
                 JOIN research_signal_features f ON f.episode_id = p.episode_id
                 LEFT JOIN path_targets t ON t.episode_id = p.episode_id
                 WHERE p.candle_close_at > f.confirmed_at
-                GROUP BY p.episode_id, f.confirmed_at, t.target_20_path_at
+                GROUP BY p.episode_id, f.confirmed_at, t.target_5_path_at, t.target_20_path_at
             )
             SELECT
                 f.episode_id, f.symbol, f.confirmed_at, f.entry_price, f.risk_tier,
@@ -766,17 +786,20 @@ class Database:
                 f.breakdown_at, f.retest_at, f.feature_snapshot, f.reasons,
                 f.hours_run_to_breakdown, f.hours_breakdown_to_retest,
                 f.hours_breakdown_to_confirmation, f.hours_episode_to_confirmation,
-                st.return_24h_pct, st.return_48h_pct, st.return_72h_pct, st.return_168h_pct,
+                st.current_return_pct, st.return_24h_pct, st.return_48h_pct, st.return_72h_pct, st.return_168h_pct,
                 st.first_profit_at, st.target_20_at, st.isolated_100_breach_at,
                 st.adverse_200_breach_at, st.adverse_300_breach_at, st.cross_400_breach_at,
                 ps.path_rows, ps.path_rows_7d, ps.path_rows_14d, ps.path_last_at,
-                ps.path_mfe_7d, ps.path_mae_7d, ps.path_mae_before_target_20,
+                ps.path_mfe_7d, ps.path_mae_7d, ps.path_mae_before_target_5, ps.path_mae_before_target_5_at,
+                ps.path_mae_before_target_20,
                 ps.path_mfe_at, ps.path_mae_at,
                 ps.path_mfe_14d, ps.path_mae_14d, ps.path_mfe_14d_at, ps.path_mae_14d_at,
                 ps.path_return_24h, ps.path_return_48h, ps.path_return_72h,
                 ps.path_return_96h, ps.path_return_120h, ps.path_return_144h,
                 ps.path_return_168h, ps.path_return_192h, ps.path_return_240h,
-                ps.path_return_288h, ps.path_return_336h,
+                ps.path_return_288h, ps.path_return_336h, ps.path_latest_return,
+                ps.adverse_10_at, ps.adverse_20_at, ps.adverse_30_at,
+                ps.adverse_50_at, ps.adverse_75_at, ps.adverse_100_at,
                 ps.target_5_at, ps.target_10_at, ps.target_15_at, ps.target_20_path_at,
                 ps.target_25_at, ps.target_30_at, ps.target_40_at
             FROM research_signal_features_enriched f
@@ -1074,15 +1097,43 @@ class Database:
     async def performance_rows(self) -> list[dict[str, Any]]:
         rows = await self.pool.fetch(
             """
-            SELECT episode_id, symbol, confirmed_at, entry_price, risk_tier,
-                   current_return_pct, mfe_pct, mae_pct,
-                   return_1h_pct, return_4h_pct, return_12h_pct, return_24h_pct,
-                   return_48h_pct, return_72h_pct, return_168h_pct,
-                   matured_at, matured_48h_at, matured_72h_at, matured_168h_at,
-                   first_profit_at, target_20_at, isolated_100_breach_at,
-                   adverse_200_breach_at, adverse_300_breach_at, cross_400_breach_at
-            FROM shadow_trades
-            ORDER BY confirmed_at ASC
+            WITH tp5_target AS (
+                SELECT
+                    episode_id,
+                    min(candle_close_at) FILTER (WHERE favorable_return_pct >= 0.05) AS target_5_at
+                FROM research_signal_path_15m
+                GROUP BY episode_id
+            ),
+            tp5_path AS (
+                SELECT
+                    p.episode_id,
+                    t.target_5_at,
+                    min(p.adverse_return_pct) FILTER (
+                        WHERE t.target_5_at IS NOT NULL
+                          AND p.candle_close_at < t.target_5_at
+                    ) AS path_mae_before_target_5,
+                    (array_agg(
+                        p.candle_close_at
+                        ORDER BY p.adverse_return_pct ASC, p.candle_close_at ASC
+                    ) FILTER (
+                        WHERE t.target_5_at IS NOT NULL
+                          AND p.candle_close_at < t.target_5_at
+                    ))[1] AS path_mae_before_target_5_at
+                FROM research_signal_path_15m p
+                LEFT JOIN tp5_target t ON t.episode_id = p.episode_id
+                GROUP BY p.episode_id, t.target_5_at
+            )
+            SELECT st.episode_id, st.symbol, st.confirmed_at, st.entry_price, st.risk_tier,
+                   st.current_return_pct, st.mfe_pct, st.mae_pct,
+                   st.return_1h_pct, st.return_4h_pct, st.return_12h_pct, st.return_24h_pct,
+                   st.return_48h_pct, st.return_72h_pct, st.return_168h_pct,
+                   st.matured_at, st.matured_48h_at, st.matured_72h_at, st.matured_168h_at,
+                   st.first_profit_at, st.target_20_at, st.isolated_100_breach_at,
+                   st.adverse_200_breach_at, st.adverse_300_breach_at, st.cross_400_breach_at,
+                   tp.target_5_at, tp.path_mae_before_target_5, tp.path_mae_before_target_5_at
+            FROM shadow_trades st
+            LEFT JOIN tp5_path tp ON tp.episode_id = st.episode_id
+            ORDER BY st.confirmed_at ASC
             """
         )
         return [dict(row) for row in rows]

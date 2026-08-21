@@ -46,6 +46,10 @@ class SignalLedgerItem:
     risk_tier: str
     confirmed_at: datetime
     signal_price: float
+    target_5_at: datetime | None
+    time_to_target_5_hours: float | None
+    path_mae_before_target_5: float | None
+    path_mae_before_target_5_at: datetime | None
     target_20_at: datetime | None
     time_to_target_20_hours: float | None
     first_profit_at: datetime | None
@@ -64,6 +68,18 @@ class SignalLedgerItem:
             if breach.adverse_limit_pct == 100:
                 return breach.occurred_at
         return None
+
+    @property
+    def target_5_before_100_breach(self) -> bool | None:
+        breach = self.first_100_breach_at
+        target = self.target_5_at
+        if target is None and breach is None:
+            return None
+        if target is None:
+            return False
+        if breach is None:
+            return True
+        return target < breach
 
     @property
     def target_before_100_breach(self) -> bool | None:
@@ -145,6 +161,7 @@ def build_signal_ledger(rows: Iterable[dict[str, Any]], *, generated_at: datetim
             continue
         entry = float(row["entry_price"])
         confirmed_at = row["confirmed_at"]
+        target_5_at = row.get("target_5_at")
         target_at = row.get("target_20_at")
 
         horizons: list[LedgerHorizon] = []
@@ -172,6 +189,13 @@ def build_signal_ledger(rows: Iterable[dict[str, Any]], *, generated_at: datetim
                 risk_tier=risk_tier,
                 confirmed_at=confirmed_at,
                 signal_price=entry,
+                target_5_at=target_5_at,
+                time_to_target_5_hours=_elapsed_hours(confirmed_at, target_5_at),
+                path_mae_before_target_5=(
+                    float(row["path_mae_before_target_5"])
+                    if row.get("path_mae_before_target_5") is not None else None
+                ),
+                path_mae_before_target_5_at=row.get("path_mae_before_target_5_at"),
                 target_20_at=target_at,
                 time_to_target_20_hours=_elapsed_hours(confirmed_at, target_at),
                 first_profit_at=row.get("first_profit_at"),
@@ -195,6 +219,11 @@ def signal_ledger_csv(ledger: SignalLedger) -> bytes:
         "signal_time_utc",
         "signal_price",
         "headline_status",
+        "target_5_at_utc",
+        "time_to_target_5_hours",
+        "mae_before_target_5_pct",
+        "mae_before_target_5_at_utc",
+        "target_5_before_100_breach",
         "target_20_at_utc",
         "time_to_target_20_hours",
         "current_return_pct",
@@ -226,6 +255,11 @@ def signal_ledger_csv(ledger: SignalLedger) -> bytes:
             item.confirmed_at.isoformat(),
             item.signal_price,
             item.headline_status,
+            item.target_5_at.isoformat() if item.target_5_at else "",
+            item.time_to_target_5_hours if item.time_to_target_5_hours is not None else "",
+            item.path_mae_before_target_5 if item.path_mae_before_target_5 is not None else "",
+            item.path_mae_before_target_5_at.isoformat() if item.path_mae_before_target_5_at else "",
+            item.target_5_before_100_breach if item.target_5_before_100_breach is not None else "",
             item.target_20_at.isoformat() if item.target_20_at else "",
             item.time_to_target_20_hours if item.time_to_target_20_hours is not None else "",
             item.current_return_pct if item.current_return_pct is not None else "",
