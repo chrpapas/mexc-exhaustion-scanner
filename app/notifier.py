@@ -504,13 +504,25 @@ class DiscordNotifier:
         ]
 
         def portfolio_line(item) -> str:
+            gate_text = (
+                f" • gate eligible **{item.eligible_signals}/{item.signals}**"
+                if item.filtered_entry_gate else ""
+            )
+            mtm = (
+                f" • MTM DD **-{self._percent(item.max_mtm_drawdown)}**"
+                if item.max_mtm_drawdown is not None else " • MTM DD n/a"
+            )
+            ratio = (
+                f" • R/DD **{item.return_over_max_drawdown:.2f}x**"
+                if item.return_over_max_drawdown is not None else ""
+            )
             return (
-                f"**{item.strategy}** • signals {item.signals} • entered **{item.entered}** • "
-                f"closed {item.closed} • open {item.open_positions}\n"
-                f"return **{self._signed_percent(item.marked_return)}** • realized "
-                f"{self._signed_percent(item.realized_return)} • max slots **{item.max_open_positions}** • "
-                f"max exposure **{self._percent(item.max_observed_exposure_pct)}**\n"
-                f"missed capacity {item.missed_capacity} • same-symbol {item.missed_same_symbol} • "
+                f"**{item.strategy}** • signals {item.signals}{gate_text} • entered **{item.entered}** • "
+                f"return **{self._signed_percent(item.marked_return)}**{mtm}{ratio}\n"
+                f"max slots **{item.max_open_positions}** • max exp **{self._percent(item.max_observed_exposure_pct)}** • "
+                f"avg/p95 exp {self._percent(item.avg_exposure_pct)}/{self._percent(item.p95_exposure_pct)} • "
+                f"max losers **{item.max_simultaneous_losers}**\n"
+                f"capacity miss {item.missed_capacity} • same-symbol {item.missed_same_symbol} • "
                 f"median hold **{self._hours(item.median_holding_hours)}** • slot-days **{item.slot_days:.2f}** • "
                 f"return/slot-day **{self._signed_percent(item.return_per_slot_day)}**"
             )
@@ -579,6 +591,20 @@ class DiscordNotifier:
             f"avg7d {self._signed_percent(item.avg_return_7d)} • median adverse -{self._percent(item.median_adverse_7d)}"
             for item in report.delayed_entries
             if item.sample
+        ]
+        cohort_lines = [
+            f"**{item.cohort.replace('_', ' ').title()}** • signals **{item.signals}** • complete7d **{item.complete_7d}** • "
+            f"TP5 **{item.tp5_hits}/{item.complete_7d}** ({self._percent(item.tp5_hit_rate)}) • "
+            f"gate eligible **{item.entrygate_eligible}/{item.signals}** ({self._percent(item.entrygate_eligible_rate)})"
+            + (f" • worst pre-TP5 **-{self._percent(item.worst_pre_tp5_adverse)}**" if item.complete_7d else "")
+            for item in report.prospective_cohorts
+        ]
+        post_freeze_score_lines = [
+            f"**{item.score_name.replace('_', ' ').title()} {item.bucket}** • n={item.sample} • "
+            f"TP20 {self._percent(item.target_20_rate_7d)} • 7d+ {self._percent(item.positive_7d_rate)} • "
+            f"avg {self._signed_percent(item.avg_return_7d)}"
+            for item in report.prospective_score_buckets
+            if item.cohort == "post_freeze" and item.sample
         ]
 
         overview = {
@@ -652,16 +678,66 @@ class DiscordNotifier:
                     "inline": False,
                 },
                 {
-                    "name": "Champion vs challenger • same cohort",
+                    "name": "15m close-marked portfolio risk",
                     "value": (
-                        portfolio_line(report.portfolio_current) + "\n\n" +
-                        portfolio_line(report.portfolio_tp5)
+                        f"Max MTM drawdown **-{self._percent(report.portfolio_tp5.max_mtm_drawdown)}** • "
+                        f"worst equity **{self._signed_percent(report.portfolio_tp5.worst_mtm_return)}** • "
+                        f"max unrealized loss **-{self._percent(report.portfolio_tp5.max_unrealized_loss)}**\n"
+                        f"Avg/p95 exposure **{self._percent(report.portfolio_tp5.avg_exposure_pct)} / "
+                        f"{self._percent(report.portfolio_tp5.p95_exposure_pct)}** • "
+                        f"avg slots **{report.portfolio_tp5.avg_open_positions:.2f}** • "
+                        f"max losers **{report.portfolio_tp5.max_simultaneous_losers}** • "
+                        f"recovery **{self._hours(report.portfolio_tp5.drawdown_recovery_hours)}** "
+                        if report.portfolio_tp5.avg_open_positions is not None else "MTM path marks unavailable."
                     ),
                     "inline": False,
                 },
             ],
             "footer": {
                 "text": "No live trader rules are changed. Same-candle TP/adverse races are intentionally reported as ambiguous."
+            },
+        }
+        strategy_lab = {
+            "title": "🏁 Champion vs challenger • Four-Way Paired Portfolio",
+            "description": (
+                "Four frozen research portfolios on the same complete-7d cohort. EntryGate-v1 accepts "
+                "Entry Quality ≥4 and Continuation Risk ≤6. Live execution is unchanged."
+            ),
+            "color": 0xE67E22,
+            "fields": [
+                {
+                    "name": "Champion vs TP5",
+                    "value": "\n\n".join([
+                        portfolio_line(report.portfolio_current),
+                        portfolio_line(report.portfolio_tp5),
+                    ]),
+                    "inline": False,
+                },
+                {
+                    "name": "EntryGate-v1 challengers",
+                    "value": "\n\n".join([
+                        portfolio_line(report.portfolio_entrygate_current),
+                        portfolio_line(report.portfolio_entrygate_tp5),
+                    ]),
+                    "inline": False,
+                },
+                {
+                    "name": "Prospective freeze • discovery vs post-freeze",
+                    "value": (
+                        f"Frozen **{report.oos_freeze_at.astimezone(tz).strftime('%d %b %Y • %H:%M %Z')}**; "
+                        "cohort assignment uses signal confirmation time.\n" +
+                        "\n".join(cohort_lines)
+                    ),
+                    "inline": False,
+                },
+                {
+                    "name": "Post-freeze score buckets",
+                    "value": "\n".join(post_freeze_score_lines) or "No post-freeze complete-7d observations yet.",
+                    "inline": False,
+                },
+            ],
+            "footer": {
+                "text": "EntryGate-v1 and TP5 remain shadow-only. Do not retune frozen thresholds on the prospective cohort."
             },
         }
         exits = {
@@ -700,7 +776,7 @@ class DiscordNotifier:
             ],
         }
 
-        embeds = (overview, targets, tp5_challenger, exits, survival, entry, features)
+        embeds = (overview, targets, tp5_challenger, strategy_lab, exits, survival, entry, features)
         try:
             for embed in embeds:
                 self._validate_discord_embed(embed)

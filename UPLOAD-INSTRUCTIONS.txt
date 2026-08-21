@@ -1,21 +1,22 @@
-MEXC Exhaustion Scanner + Multi-Slot Short Trader v1.3.2
+MEXC Exhaustion Scanner + Multi-Slot Short Trader v1.3.3
 
 Deploy the entire project directory/ZIP contents together.
 
-v1.3.2 is a research/ledger extension only. Live trader behavior remains the v1.3.1 strategy:
+v1.3.3 is a research-only extension. Live trader behavior remains the v1.3.1 strategy:
 - 6 total slots; 5 STANDARD + 1 HIGH_RISK
 - 20% aggregate initial notional exposure; ~3.3333% per slot by default
 - STANDARD: fixed 7-day hold; +20% is telemetry only
 - HIGH_RISK: close at +20% or 4-day timeout
-- Entry Quality / Continuation Risk remain shadow-only
+- Entry Quality / Continuation Risk / EntryGate-v1 remain shadow-only
 - Existing pre-v1.3 positions keep their persisted legacy exit strategy
 
-New v1.3.2 research outputs:
-- Signal ledger: +5% hit time, pre-TP5 MAE, TP5-vs--100% race
-- Research board: frozen TP5 challenger (6 generic slots x 5% equity, 30% cap, 1x, TP +5%)
-- Paired complete-7d champion-vs-challenger chronological portfolio replay
-- TP5 adverse races at -10/-20/-30/-50/-75/-100%
-- 0.08%/fill fee assumption in portfolio replay
+New v1.3.3 research outputs:
+- 15m close-marked portfolio MTM drawdown and exposure diagnostics
+- EntryGate-v1 frozen at EQ >= 4 AND CR <= 6
+- Four-way paired portfolio replay: current, TP5, EntryGate+current, EntryGate+TP5
+- Prospective freeze: 2026-08-21T21:29:00Z; discovery and post-freeze cohorts reported separately
+- Prospective score-bucket CSV rows and dataset EntryGate eligibility
+- TP5 pre-hit MAE/adverse-race analytics from v1.3.2 remain unchanged
 - No new MEXC requests and no database migration
 
 Render trader variables to verify (unchanged):

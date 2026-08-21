@@ -51,9 +51,17 @@ async def main() -> None:
         except Exception:
             logging.exception("Delayed-entry research query failed; continuing without it")
             delayed_rows = []
+        try:
+            portfolio_path_rows = await db.research_portfolio_path_rows(
+                statement_timeout_seconds=settings.research_db_timeout_seconds,
+            )
+        except Exception:
+            logging.exception("Portfolio MTM research query failed; continuing without MTM marks")
+            portfolio_path_rows = []
         now = datetime.now(UTC)
         report = build_research_analytics(
-            rows, generated_at=now, delayed_entry_rows=delayed_rows
+            rows, generated_at=now, delayed_entry_rows=delayed_rows,
+            portfolio_path_rows=portfolio_path_rows,
         )
         feature_csv = research_feature_lift_csv(report)
         dataset_csv = research_signal_dataset_csv(rows)

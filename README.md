@@ -1,12 +1,15 @@
-# MEXC Exhaustion Scanner + Multi-Slot Futures Trader v1.3.2
+# MEXC Exhaustion Scanner + Multi-Slot Futures Trader v1.3.3
 
-Research-only TP5 challenger extension. Live trader behavior remains unchanged.
+Research-only prospective strategy lab. Live trader behavior remains unchanged.
 
-- Adds +5% target timing and pre-TP5 adverse-excursion fields to the signal ledger.
-- Adds a frozen TP5 challenger portfolio: 6 generic slots, 5% equity notional per slot, 30% max exposure, 1x, immediate entry, full +5% exit, one open position per symbol.
-- Adds chronological champion-vs-challenger shadow portfolio reporting with fees, slot occupancy, missed-signal reasons, realized/marked equity and return per slot-day.
-- Adds TP5 adverse-threshold survival analytics for -10/-20/-30/-50/-75/-100% before the +5% hit.
+- Adds 15-minute close-marked MTM portfolio replay for the current strategy and TP5 challenger, including max drawdown, worst equity, max unrealized loss, simultaneous losers, average/p95 exposure, average slots and recovery time.
+- Freezes **EntryGate-v1** at Entry Quality >= 4 and Continuation Risk <= 6; it is shadow-only and never gates live entries.
+- Adds four paired complete-7d portfolio replays: current live, TP5, EntryGate + current exits, and EntryGate + TP5.
+- Freezes the prospective OOS boundary at **2026-08-21 21:29 UTC / 23:29 CEST** and reports discovery vs post-freeze cohorts separately.
+- Exports prospective score buckets and EntryGate eligibility so future evidence can be evaluated without retuning the discovery sample.
 - Uses only stored PostgreSQL 15m research paths; no additional MEXC requests and no schema migration.
+
+The v1.3.2 TP5 research remains intact: +5% target timing, pre-TP5 MAE, adverse races, and the frozen 6 x 5% / 30% TP5 challenger.
 
 ## v1.3.1 — Discord formatting hotfix
 

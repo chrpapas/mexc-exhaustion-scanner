@@ -811,6 +811,37 @@ class Database:
         )
         return [dict(row) for row in rows]
 
+    async def research_portfolio_path_rows(
+        self,
+        *,
+        statement_timeout_seconds: int,
+    ) -> list[dict[str, Any]]:
+        """Return stored 15m close marks needed for research-only portfolio MTM replay.
+
+        Bounded to the first seven days after confirmation because every v1.3.3
+        champion/challenger portfolio in the paired comparison exits by then.
+        PostgreSQL-only; no exchange/API calls.
+        """
+        query = """
+            SELECT
+                p.episode_id, p.candle_close_at, p.close_return_pct
+            FROM research_signal_path_15m p
+            JOIN research_signal_features f ON f.episode_id = p.episode_id
+            WHERE f.risk_tier IN ('standard', 'high_risk')
+              AND p.candle_close_at > f.confirmed_at
+              AND p.candle_close_at <= f.confirmed_at + interval '168 hours'
+            ORDER BY p.candle_close_at ASC, p.episode_id ASC
+        """
+        async with self.pool.acquire() as conn:
+            async with conn.transaction():
+                await conn.execute(
+                    "SELECT set_config('statement_timeout', $1, true)",
+                    f"{statement_timeout_seconds}s",
+                )
+                rows = await conn.fetch(query)
+        return [dict(row) for row in rows]
+
+
     async def research_delayed_entry_rows(
         self,
         *,

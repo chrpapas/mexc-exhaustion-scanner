@@ -5,7 +5,7 @@ import io
 import math
 import statistics
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Any, Iterable
 
 from app.json_utils import json_object
@@ -23,6 +23,9 @@ CURRENT_SLOT_PCT = CURRENT_TOTAL_EXPOSURE_PCT / 6.0
 TP5_CHALLENGER_SLOT_PCT = 0.05
 TP5_CHALLENGER_MAX_SLOTS = 6
 TP5_CHALLENGER_TOTAL_EXPOSURE_PCT = TP5_CHALLENGER_SLOT_PCT * TP5_CHALLENGER_MAX_SLOTS
+RESEARCH_OOS_FREEZE_AT = datetime(2026, 8, 21, 21, 29, tzinfo=UTC)
+ENTRY_GATE_V1_MIN_QUALITY = 4
+ENTRY_GATE_V1_MAX_CONTINUATION = 6
 
 
 @dataclass(frozen=True, slots=True)
@@ -223,6 +226,8 @@ class PortfolioReplaySummary:
     strategy: str
     cohort: str
     signals: int
+    eligible_signals: int
+    filtered_entry_gate: int
     entered: int
     closed: int
     open_positions: int
@@ -238,6 +243,45 @@ class PortfolioReplaySummary:
     return_per_slot_day: float | None
     replay_span_days: float | None
     unmarked_open_positions: int
+    mtm_points: int
+    max_mtm_drawdown: float | None
+    worst_mtm_return: float | None
+    max_unrealized_loss: float | None
+    max_simultaneous_losers: int
+    avg_exposure_pct: float | None
+    p95_exposure_pct: float | None
+    avg_open_positions: float | None
+    drawdown_recovery_hours: float | None
+    return_over_max_drawdown: float | None
+    worst_trade_episode_id: int | None
+    worst_trade_pre_target_mae: float | None
+    portfolio_return_at_worst_trade_mae: float | None
+
+
+@dataclass(frozen=True, slots=True)
+class ProspectiveCohortSummary:
+    cohort: str
+    signal_cutoff: datetime
+    signals: int
+    complete_7d: int
+    tp5_hits: int
+    tp5_hit_rate: float | None
+    median_tp5_hours: float | None
+    worst_pre_tp5_adverse: float | None
+    entrygate_eligible: int
+    entrygate_eligible_rate: float | None
+    entrygate_complete_7d: int
+
+
+@dataclass(frozen=True, slots=True)
+class CohortScoreBucketSummary:
+    cohort: str
+    score_name: str
+    bucket: str
+    sample: int
+    target_20_rate_7d: float | None
+    positive_7d_rate: float | None
+    avg_return_7d: float | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -255,6 +299,11 @@ class ResearchAnalyticsReport:
     tp5_risk: Tp5RiskSummary
     portfolio_current: PortfolioReplaySummary
     portfolio_tp5: PortfolioReplaySummary
+    portfolio_entrygate_current: PortfolioReplaySummary
+    portfolio_entrygate_tp5: PortfolioReplaySummary
+    prospective_cohorts: tuple[ProspectiveCohortSummary, ...]
+    prospective_score_buckets: tuple[CohortScoreBucketSummary, ...]
+    oos_freeze_at: datetime
     min_rank_sample: int
 
     @property
@@ -451,6 +500,16 @@ def shadow_entry_scores(row: dict[str, Any]) -> tuple[int, int]:
     continuation += 1 if run_hours is not None and run_hours > 20.5 else 0
     continuation += 1 if episode_hours is not None and episode_hours > 21 else 0
     return min(10, quality), min(10, continuation)
+
+
+def entry_gate_v1(row: dict[str, Any]) -> bool:
+    """Frozen shadow-only entry gate defined at the v1.3.3 research freeze.
+
+    It intentionally reuses the already-frozen Entry Quality / Continuation Risk
+    score boundaries. It never changes scanner classification or live trader entry.
+    """
+    quality, continuation = shadow_entry_scores(row)
+    return quality >= ENTRY_GATE_V1_MIN_QUALITY and continuation <= ENTRY_GATE_V1_MAX_CONTINUATION
 
 
 def _slice_summary(
@@ -990,8 +1049,165 @@ def _known_exit(
     return None, None
 
 
+def _portfolio_mtm_metrics(
+    accepted: list[dict[str, Any]],
+    *,
+    path_rows: Iterable[dict[str, Any]],
+    position_fraction: float,
+) -> dict[str, Any]:
+    if not accepted:
+        return {
+            "mtm_points": 0,
+            "max_mtm_drawdown": None,
+            "worst_mtm_return": None,
+            "max_unrealized_loss": None,
+            "max_simultaneous_losers": 0,
+            "avg_exposure_pct": None,
+            "p95_exposure_pct": None,
+            "avg_open_positions": None,
+            "drawdown_recovery_hours": None,
+            "worst_trade_episode_id": None,
+            "worst_trade_pre_target_mae": None,
+            "portfolio_return_at_worst_trade_mae": None,
+        }
+
+    accepted_by_episode = {p["episode_id"]: p for p in accepted if p.get("episode_id") is not None}
+    path_by_time: dict[datetime, list[tuple[int, float]]] = {}
+    for raw in path_rows:
+        episode_id = raw.get("episode_id")
+        pos = accepted_by_episode.get(episode_id)
+        at = raw.get("candle_close_at")
+        value = _float(raw.get("close_return_pct"))
+        if pos is None or at is None or value is None:
+            continue
+        if not (pos["entry_at"] < at <= (pos["exit_at"] or pos["mark_until"])):
+            continue
+        path_by_time.setdefault(at, []).append((int(episode_id), value))
+
+    entries_by_time: dict[datetime, list[dict[str, Any]]] = {}
+    exits_by_time: dict[datetime, list[dict[str, Any]]] = {}
+    all_times: set[datetime] = set(path_by_time)
+    for pos in accepted:
+        entries_by_time.setdefault(pos["entry_at"], []).append(pos)
+        all_times.add(pos["entry_at"])
+        if pos["exit_at"] is not None:
+            exits_by_time.setdefault(pos["exit_at"], []).append(pos)
+            all_times.add(pos["exit_at"])
+
+    realized_equity = 1.0
+    open_positions: dict[int, dict[str, Any]] = {}
+    latest_marks: dict[int, float] = {}
+    peak_equity = 1.0
+    peak_at: datetime | None = None
+    underwater_since: datetime | None = None
+    max_recovery_hours = 0.0
+    max_drawdown = 0.0
+    worst_return = 0.0
+    max_unrealized_loss = 0.0
+    max_losers = 0
+    exposures: list[float] = []
+    occupancies: list[float] = []
+    trace: list[tuple[datetime, float]] = []
+
+    # Reconstruct the replay cash/equity state with the exact notionals chosen by
+    # _portfolio_replay. Exit events are processed before same-timestamp entries,
+    # matching the chronological slot-recycling semantics used by the replay.
+    for at in sorted(all_times):
+        for episode_id, mark in path_by_time.get(at, []):
+            if episode_id in open_positions:
+                latest_marks[episode_id] = mark
+
+        for pos in exits_by_time.get(at, []):
+            episode_id = int(pos["episode_id"])
+            if episode_id not in open_positions:
+                continue
+            realized_equity += pos["notional"] * (float(pos["exit_return"]) - SHADOW_FEE_PER_FILL)
+            open_positions.pop(episode_id, None)
+            latest_marks.pop(episode_id, None)
+
+        for pos in entries_by_time.get(at, []):
+            episode_id = int(pos["episode_id"])
+            realized_equity -= pos["notional"] * SHADOW_FEE_PER_FILL
+            open_positions[episode_id] = pos
+            latest_marks[episode_id] = 0.0
+
+        unrealized = sum(
+            float(pos["notional"]) * latest_marks.get(episode_id, 0.0)
+            for episode_id, pos in open_positions.items()
+        )
+        marked_equity = realized_equity + unrealized
+        trace.append((at, marked_equity - 1.0))
+        worst_return = min(worst_return, marked_equity - 1.0)
+        max_unrealized_loss = max(max_unrealized_loss, max(0.0, -unrealized))
+        losers = sum(1 for episode_id in open_positions if latest_marks.get(episode_id, 0.0) < 0)
+        max_losers = max(max_losers, losers)
+        occupancies.append(float(len(open_positions)))
+        exposures.append(len(open_positions) * position_fraction)
+
+        if marked_equity >= peak_equity:
+            if underwater_since is not None:
+                max_recovery_hours = max(
+                    max_recovery_hours,
+                    max(0.0, (at - underwater_since).total_seconds() / 3600.0),
+                )
+                underwater_since = None
+            peak_equity = marked_equity
+            peak_at = at
+        else:
+            if underwater_since is None:
+                underwater_since = peak_at or at
+            if peak_equity > 0:
+                max_drawdown = max(max_drawdown, (peak_equity - marked_equity) / peak_equity)
+
+    if underwater_since is not None and all_times:
+        max_recovery_hours = max(
+            max_recovery_hours,
+            max(0.0, (max(all_times) - underwater_since).total_seconds() / 3600.0),
+        )
+
+    worst_pos: dict[str, Any] | None = None
+    for pos in accepted:
+        raw = _float(pos["row"].get("path_mae_before_target_5"))
+        at = pos["row"].get("path_mae_before_target_5_at")
+        if raw is None or at is None:
+            continue
+        if worst_pos is None or raw < float(worst_pos["raw_mae"]):
+            worst_pos = {"pos": pos, "raw_mae": raw, "at": at}
+
+    portfolio_at_worst = None
+    if worst_pos is not None and trace:
+        target_at = worst_pos["at"]
+        eligible_trace = [item for item in trace if item[0] <= target_at]
+        if eligible_trace:
+            portfolio_at_worst = eligible_trace[-1][1]
+
+    return {
+        "mtm_points": len(trace),
+        "max_mtm_drawdown": max_drawdown if trace else None,
+        "worst_mtm_return": worst_return if trace else None,
+        "max_unrealized_loss": max_unrealized_loss if trace else None,
+        "max_simultaneous_losers": max_losers,
+        "avg_exposure_pct": _mean(exposures),
+        "p95_exposure_pct": _percentile(exposures, 0.95),
+        "avg_open_positions": _mean(occupancies),
+        "drawdown_recovery_hours": max_recovery_hours if trace else None,
+        "worst_trade_episode_id": (
+            int(worst_pos["pos"]["episode_id"]) if worst_pos is not None else None
+        ),
+        "worst_trade_pre_target_mae": (
+            max(0.0, -float(worst_pos["raw_mae"])) if worst_pos is not None else None
+        ),
+        "portfolio_return_at_worst_trade_mae": portfolio_at_worst,
+    }
+
+
 def _portfolio_replay(
-    rows: list[dict[str, Any]], *, strategy: str, generated_at: datetime
+    rows: list[dict[str, Any]],
+    *,
+    strategy: str,
+    generated_at: datetime,
+    path_rows: Iterable[dict[str, Any]] = (),
+    use_entry_gate: bool = False,
 ) -> PortfolioReplaySummary:
     ordered = sorted(
         [row for row in rows if row.get("confirmed_at") is not None and row.get("confirmed_at") <= generated_at],
@@ -1001,18 +1217,20 @@ def _portfolio_replay(
         position_fraction = TP5_CHALLENGER_SLOT_PCT
         max_total = TP5_CHALLENGER_MAX_SLOTS
         max_standard = max_high = None
-        strategy_name = "tp5_challenger_6x5pct"
+        base_name = "tp5_challenger_6x5pct"
     else:
         position_fraction = CURRENT_SLOT_PCT
         max_total = 6
         max_standard = 5
         max_high = 1
-        strategy_name = "current_live_5standard_1high"
+        base_name = "current_live_5standard_1high"
+    strategy_name = f"entrygate_v1__{base_name}" if use_entry_gate else base_name
 
     equity = 1.0
     positions: list[dict[str, Any]] = []
+    accepted: list[dict[str, Any]] = []
     closed_holds: list[float] = []
-    entered = closed = missed_capacity = missed_same_symbol = 0
+    entered = closed = missed_capacity = missed_same_symbol = filtered_entry_gate = 0
     max_open = 0
     max_exposure = 0.0
     first_entry: datetime | None = None
@@ -1037,6 +1255,9 @@ def _portfolio_replay(
     for row in ordered:
         entry_at = row["confirmed_at"]
         close_due(entry_at)
+        if use_entry_gate and not entry_gate_v1(row):
+            filtered_entry_gate += 1
+            continue
         symbol = str(row.get("symbol") or "")
         tier = str(row.get("risk_tier") or "standard")
         if any(pos["symbol"] == symbol for pos in positions):
@@ -1057,23 +1278,23 @@ def _portfolio_replay(
         pre_fee_equity = equity
         notional = max(0.0, pre_fee_equity) * position_fraction
         equity -= notional * SHADOW_FEE_PER_FILL
-        positions.append(
-            {
-                "episode_id": row.get("episode_id"),
-                "symbol": symbol,
-                "tier": tier,
-                "entry_at": entry_at,
-                "notional": notional,
-                "exit_at": exit_at,
-                "exit_return": exit_return,
-                "latest_return": _latest_observed_return(row),
-            }
-        )
+        pos = {
+            "episode_id": row.get("episode_id"),
+            "symbol": symbol,
+            "tier": tier,
+            "entry_at": entry_at,
+            "notional": notional,
+            "exit_at": exit_at,
+            "exit_return": exit_return,
+            "latest_return": _latest_observed_return(row),
+            "mark_until": generated_at,
+            "row": row,
+        }
+        positions.append(pos)
+        accepted.append(pos)
         entered += 1
         first_entry = entry_at if first_entry is None else min(first_entry, entry_at)
         max_open = max(max_open, len(positions))
-        # Fixed fraction-of-equity sizing means this is the cleanest comparable
-        # exposure proxy across strategies; actual notionals drift slightly as equity compounds.
         max_exposure = max(max_exposure, len(positions) * position_fraction)
 
     close_due(generated_at)
@@ -1099,10 +1320,18 @@ def _portfolio_replay(
     if first_entry is not None and replay_end is not None:
         replay_span_days = max(0.0, (replay_end - first_entry).total_seconds() / 86400.0)
 
+    mtm = _portfolio_mtm_metrics(
+        accepted,
+        path_rows=path_rows,
+        position_fraction=position_fraction,
+    )
+    max_dd = mtm["max_mtm_drawdown"]
     return PortfolioReplaySummary(
         strategy=strategy_name,
         cohort="paired_complete_7d",
         signals=len(ordered),
+        eligible_signals=len(ordered) - filtered_entry_gate,
+        filtered_entry_gate=filtered_entry_gate,
         entered=entered,
         closed=closed,
         open_positions=len(positions),
@@ -1118,6 +1347,57 @@ def _portfolio_replay(
         return_per_slot_day=(marked_return / slot_days) if slot_days > 0 else None,
         replay_span_days=replay_span_days,
         unmarked_open_positions=unmarked,
+        mtm_points=mtm["mtm_points"],
+        max_mtm_drawdown=max_dd,
+        worst_mtm_return=mtm["worst_mtm_return"],
+        max_unrealized_loss=mtm["max_unrealized_loss"],
+        max_simultaneous_losers=mtm["max_simultaneous_losers"],
+        avg_exposure_pct=mtm["avg_exposure_pct"],
+        p95_exposure_pct=mtm["p95_exposure_pct"],
+        avg_open_positions=mtm["avg_open_positions"],
+        drawdown_recovery_hours=mtm["drawdown_recovery_hours"],
+        return_over_max_drawdown=(marked_return / max_dd) if max_dd and max_dd > 0 else None,
+        worst_trade_episode_id=mtm["worst_trade_episode_id"],
+        worst_trade_pre_target_mae=mtm["worst_trade_pre_target_mae"],
+        portfolio_return_at_worst_trade_mae=mtm["portfolio_return_at_worst_trade_mae"],
+    )
+
+
+def _prospective_cohort_summary(
+    rows: list[dict[str, Any]], *, cohort: str, freeze_at: datetime
+) -> ProspectiveCohortSummary:
+    complete = [row for row in rows if row.get("return_168h_pct") is not None and _path_complete_7d(row)]
+    risk = _tp5_risk_summary(complete)
+    gate_eligible = sum(entry_gate_v1(row) for row in rows)
+    gate_complete = sum(entry_gate_v1(row) for row in complete)
+    return ProspectiveCohortSummary(
+        cohort=cohort,
+        signal_cutoff=freeze_at,
+        signals=len(rows),
+        complete_7d=len(complete),
+        tp5_hits=risk.hits,
+        tp5_hit_rate=risk.hit_rate,
+        median_tp5_hours=risk.median_time_hours,
+        worst_pre_tp5_adverse=risk.worst_adverse_before_target,
+        entrygate_eligible=gate_eligible,
+        entrygate_eligible_rate=(gate_eligible / len(rows)) if rows else None,
+        entrygate_complete_7d=gate_complete,
+    )
+
+
+def _cohort_score_buckets(rows: list[dict[str, Any]], cohort: str) -> tuple[CohortScoreBucketSummary, ...]:
+    complete = [row for row in rows if row.get("return_168h_pct") is not None and _path_complete_7d(row)]
+    return tuple(
+        CohortScoreBucketSummary(
+            cohort=cohort,
+            score_name=item.score_name,
+            bucket=item.bucket,
+            sample=item.sample,
+            target_20_rate_7d=item.target_20_rate_7d,
+            positive_7d_rate=item.positive_7d_rate,
+            avg_return_7d=item.avg_return_7d,
+        )
+        for item in _build_score_buckets(complete)
     )
 
 
@@ -1126,6 +1406,8 @@ def build_research_analytics(
     *,
     generated_at: datetime,
     delayed_entry_rows: Iterable[dict[str, Any]] = (),
+    portfolio_path_rows: Iterable[dict[str, Any]] = (),
+    oos_freeze_at: datetime = RESEARCH_OOS_FREEZE_AT,
 ) -> ResearchAnalyticsReport:
     rows = [dict(row) for row in raw_rows]
     rows = [row for row in rows if str(row.get("risk_tier") or "standard") in PUBLIC_RESEARCH_RISK_TIERS]
@@ -1222,6 +1504,17 @@ def build_research_analytics(
         baseline_positive=baseline.positive_7d_rate,
         baseline_avg_return=baseline.avg_return_7d,
     )
+    discovery_rows = [row for row in rows if row.get("confirmed_at") is not None and row["confirmed_at"] <= oos_freeze_at]
+    post_freeze_rows = [row for row in rows if row.get("confirmed_at") is not None and row["confirmed_at"] > oos_freeze_at]
+    prospective_cohorts = (
+        _prospective_cohort_summary(discovery_rows, cohort="discovery", freeze_at=oos_freeze_at),
+        _prospective_cohort_summary(post_freeze_rows, cohort="post_freeze", freeze_at=oos_freeze_at),
+    )
+    prospective_score_buckets = (
+        *_cohort_score_buckets(discovery_rows, "discovery"),
+        *_cohort_score_buckets(post_freeze_rows, "post_freeze"),
+    )
+    portfolio_path_rows = tuple(dict(row) for row in portfolio_path_rows)
     return ResearchAnalyticsReport(
         generated_at=generated_at,
         baseline=baseline,
@@ -1235,11 +1528,24 @@ def build_research_analytics(
         delayed_entries=_build_delayed_entries(delayed_entry_rows),
         tp5_risk=_tp5_risk_summary(complete_paths_7d),
         portfolio_current=_portfolio_replay(
-            complete_paths_7d, strategy="current", generated_at=generated_at
+            complete_paths_7d, strategy="current", generated_at=generated_at,
+            path_rows=portfolio_path_rows,
         ),
         portfolio_tp5=_portfolio_replay(
-            complete_paths_7d, strategy="tp5_challenger", generated_at=generated_at
+            complete_paths_7d, strategy="tp5_challenger", generated_at=generated_at,
+            path_rows=portfolio_path_rows,
         ),
+        portfolio_entrygate_current=_portfolio_replay(
+            complete_paths_7d, strategy="current", generated_at=generated_at,
+            path_rows=portfolio_path_rows, use_entry_gate=True,
+        ),
+        portfolio_entrygate_tp5=_portfolio_replay(
+            complete_paths_7d, strategy="tp5_challenger", generated_at=generated_at,
+            path_rows=portfolio_path_rows, use_entry_gate=True,
+        ),
+        prospective_cohorts=prospective_cohorts,
+        prospective_score_buckets=prospective_score_buckets,
+        oos_freeze_at=oos_freeze_at,
         min_rank_sample=min_rank_sample,
     )
 
@@ -1320,15 +1626,37 @@ def research_strategy_sweeps_csv(report: ResearchAnalyticsReport) -> bytes:
             item.same_candle, item.unresolved, "", "", "", "", "", "", "",
         ])
 
-    for portfolio in (report.portfolio_current, report.portfolio_tp5):
+    for portfolio in (
+        report.portfolio_current, report.portfolio_tp5,
+        report.portfolio_entrygate_current, report.portfolio_entrygate_tp5,
+    ):
         writer.writerow([
             "portfolio_replay_paired_7d", portfolio.strategy, portfolio.cohort, portfolio.signals,
-            portfolio.entered, portfolio.closed, portfolio.open_positions,
+            portfolio.eligible_signals, portfolio.entered, portfolio.closed,
             portfolio.missed_capacity, portfolio.missed_same_symbol,
             _csv_pct(portfolio.realized_return), _csv_pct(portfolio.marked_return),
-            portfolio.max_open_positions, _csv_pct(portfolio.max_observed_exposure_pct),
-            "" if portfolio.median_holding_hours is None else f"{portfolio.median_holding_hours:.6f}",
-            f"{portfolio.slot_days:.6f}", _csv_pct(portfolio.return_per_slot_day),
+            _csv_pct(portfolio.max_mtm_drawdown), _csv_pct(portfolio.worst_mtm_return),
+            _csv_pct(portfolio.avg_exposure_pct), _csv_pct(portfolio.p95_exposure_pct),
+            _csv_pct(portfolio.return_per_slot_day),
+        ])
+        writer.writerow([
+            "portfolio_mtm_detail", portfolio.strategy, "15m_close_marked", portfolio.mtm_points,
+            _csv_pct(portfolio.max_mtm_drawdown), _csv_pct(portfolio.worst_mtm_return),
+            _csv_pct(portfolio.max_unrealized_loss), portfolio.max_simultaneous_losers,
+            _csv_pct(portfolio.avg_exposure_pct), _csv_pct(portfolio.p95_exposure_pct),
+            "" if portfolio.avg_open_positions is None else f"{portfolio.avg_open_positions:.6f}",
+            "" if portfolio.drawdown_recovery_hours is None else f"{portfolio.drawdown_recovery_hours:.6f}",
+            "" if portfolio.return_over_max_drawdown is None else f"{portfolio.return_over_max_drawdown:.6f}",
+            portfolio.worst_trade_episode_id or "", _csv_pct(portfolio.worst_trade_pre_target_mae),
+            _csv_pct(portfolio.portfolio_return_at_worst_trade_mae),
+        ])
+    for cohort in report.prospective_cohorts:
+        writer.writerow([
+            "prospective_oos_cohort", cohort.cohort, cohort.signal_cutoff.isoformat(), cohort.signals,
+            cohort.complete_7d, cohort.tp5_hits, _csv_pct(cohort.tp5_hit_rate),
+            "" if cohort.median_tp5_hours is None else f"{cohort.median_tp5_hours:.6f}",
+            _csv_pct(cohort.worst_pre_tp5_adverse), cohort.entrygate_eligible,
+            _csv_pct(cohort.entrygate_eligible_rate), cohort.entrygate_complete_7d, "", "", "", "",
         ])
     return output.getvalue().encode("utf-8")
 
@@ -1356,6 +1684,12 @@ def research_entry_research_csv(report: ResearchAnalyticsReport) -> bytes:
             _csv_pct(item.avg_return_7d), _csv_pct(item.median_return_7d),
             _csv_pct(item.median_adverse_7d),
         ])
+    for item in report.prospective_score_buckets:
+        writer.writerow([
+            "prospective_score_bucket", f"{item.cohort}:{item.score_name}", item.bucket, item.sample,
+            _csv_pct(item.target_20_rate_7d), _csv_pct(item.positive_7d_rate),
+            _csv_pct(item.avg_return_7d), "", "",
+        ])
     return output.getvalue().encode("utf-8")
 
 
@@ -1375,7 +1709,10 @@ def research_signal_dataset_csv(rows: Iterable[dict[str, Any]]) -> bytes:
     target_fields = [f"target_{pct}_at" for pct in TARGET_LEVELS_PCT if pct != 20]
     adverse_race_fields = [f"adverse_{pct}_at" for pct in TP5_ADVERSE_THRESHOLDS_PCT]
     feature_fields = [spec.key for spec in FEATURE_SPECS]
-    score_fields = ["shadow_entry_quality_score", "shadow_continuation_risk_score"]
+    score_fields = [
+        "shadow_entry_quality_score", "shadow_continuation_risk_score",
+        "entry_gate_v1_eligible", "prospective_cohort",
+    ]
     writer_fields = fixed + horizon_fields + target_fields + adverse_race_fields + feature_fields + score_fields
 
     output = io.StringIO(newline="")
@@ -1394,5 +1731,12 @@ def research_signal_dataset_csv(rows: Iterable[dict[str, Any]]) -> bytes:
         quality, continuation = shadow_entry_scores(row)
         flattened["shadow_entry_quality_score"] = quality
         flattened["shadow_continuation_risk_score"] = continuation
+        flattened["entry_gate_v1_eligible"] = entry_gate_v1(row)
+        confirmed = row.get("confirmed_at")
+        flattened["prospective_cohort"] = (
+            "post_freeze"
+            if isinstance(confirmed, datetime) and confirmed > RESEARCH_OOS_FREEZE_AT
+            else "discovery"
+        )
         writer.writerow(flattened)
     return output.getvalue().encode("utf-8")
