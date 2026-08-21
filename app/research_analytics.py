@@ -27,6 +27,7 @@ RESEARCH_OOS_FREEZE_AT = datetime(2026, 8, 21, 21, 29, tzinfo=UTC)
 ENTRY_GATE_V1_MIN_QUALITY = 4
 ENTRY_GATE_V1_MAX_CONTINUATION = 6
 PROSPECTIVE_GATE_ROLLING_WINDOW = 20
+CALENDAR_MONTH_DAYS = 30
 
 
 @dataclass(frozen=True, slots=True)
@@ -316,6 +317,19 @@ class RegimeDriftSummary:
 
 
 @dataclass(frozen=True, slots=True)
+class CalendarThroughputComparison:
+    history_start: datetime | None
+    history_end: datetime
+    history_span_days: float
+    current: PortfolioReplaySummary
+    tp5: PortfolioReplaySummary
+    latest_30d_current: PortfolioReplaySummary | None
+    latest_30d_tp5: PortfolioReplaySummary | None
+    latest_30d_start: datetime | None
+    days_until_30d: float
+
+
+@dataclass(frozen=True, slots=True)
 class CohortScoreBucketSummary:
     cohort: str
     score_name: str
@@ -349,6 +363,7 @@ class ResearchAnalyticsReport:
     prospective_gate_acceptance: ProspectiveGateAcceptanceSummary
     prospective_regime_drift: tuple[RegimeDriftSummary, ...]
     prospective_portfolios: tuple[PortfolioReplaySummary, ...]
+    calendar_throughput: CalendarThroughputComparison
     oos_freeze_at: datetime
     min_rank_sample: int
 
@@ -1254,6 +1269,7 @@ def _portfolio_replay(
     generated_at: datetime,
     path_rows: Iterable[dict[str, Any]] = (),
     use_entry_gate: bool = False,
+    cohort: str = "paired_complete_7d",
 ) -> PortfolioReplaySummary:
     ordered = sorted(
         [row for row in rows if row.get("confirmed_at") is not None and row.get("confirmed_at") <= generated_at],
@@ -1374,7 +1390,7 @@ def _portfolio_replay(
     max_dd = mtm["max_mtm_drawdown"]
     return PortfolioReplaySummary(
         strategy=strategy_name,
-        cohort="paired_complete_7d",
+        cohort=cohort,
         signals=len(ordered),
         eligible_signals=len(ordered) - filtered_entry_gate,
         filtered_entry_gate=filtered_entry_gate,
@@ -1406,6 +1422,67 @@ def _portfolio_replay(
         worst_trade_episode_id=mtm["worst_trade_episode_id"],
         worst_trade_pre_target_mae=mtm["worst_trade_pre_target_mae"],
         portfolio_return_at_worst_trade_mae=mtm["portfolio_return_at_worst_trade_mae"],
+    )
+
+
+def _calendar_throughput_comparison(
+    rows: list[dict[str, Any]],
+    *,
+    generated_at: datetime,
+    path_rows: Iterable[dict[str, Any]],
+) -> CalendarThroughputComparison:
+    observed = sorted(
+        [
+            row for row in rows
+            if row.get("confirmed_at") is not None and row["confirmed_at"] <= generated_at
+        ],
+        key=lambda row: row["confirmed_at"],
+    )
+    history_start = observed[0]["confirmed_at"] if observed else None
+    history_span_days = (
+        max(0.0, (generated_at - history_start).total_seconds() / 86400.0)
+        if history_start is not None else 0.0
+    )
+    current = _portfolio_replay(
+        observed, strategy="current", generated_at=generated_at, path_rows=path_rows,
+        cohort="calendar_observed_all_signals",
+    )
+    tp5 = _portfolio_replay(
+        observed, strategy="tp5_challenger", generated_at=generated_at, path_rows=path_rows,
+        cohort="calendar_observed_all_signals",
+    )
+
+    latest_start: datetime | None = None
+    latest_current: PortfolioReplaySummary | None = None
+    latest_tp5: PortfolioReplaySummary | None = None
+    if history_start is not None and history_span_days >= CALENDAR_MONTH_DAYS:
+        latest_start = generated_at - timedelta(days=CALENDAR_MONTH_DAYS)
+        latest_rows = [
+            row for row in observed
+            if latest_start <= row["confirmed_at"] <= generated_at
+        ]
+        # Each monthly window is an equal-footing $1-equity / empty-book replay at
+        # the exact window start. This avoids extrapolating a short backtest into a
+        # monthly return and makes Current vs TP5 consume the same arriving signals.
+        latest_current = _portfolio_replay(
+            latest_rows, strategy="current", generated_at=generated_at, path_rows=path_rows,
+            cohort="calendar_latest_30d_empty_book",
+        )
+        latest_tp5 = _portfolio_replay(
+            latest_rows, strategy="tp5_challenger", generated_at=generated_at, path_rows=path_rows,
+            cohort="calendar_latest_30d_empty_book",
+        )
+
+    return CalendarThroughputComparison(
+        history_start=history_start,
+        history_end=generated_at,
+        history_span_days=history_span_days,
+        current=current,
+        tp5=tp5,
+        latest_30d_current=latest_current,
+        latest_30d_tp5=latest_tp5,
+        latest_30d_start=latest_start,
+        days_until_30d=max(0.0, CALENDAR_MONTH_DAYS - history_span_days),
     )
 
 
@@ -1715,6 +1792,9 @@ def build_research_analytics(
     )
     prospective_gate_acceptance = _prospective_gate_acceptance_summary(post_freeze_rows)
     prospective_regime_drift = _prospective_regime_drift(discovery_rows, post_freeze_rows)
+    calendar_throughput = _calendar_throughput_comparison(
+        rows, generated_at=generated_at, path_rows=portfolio_path_rows
+    )
     prospective_portfolios = (
         _portfolio_replay(
             post_freeze_complete_paths_7d, strategy="current", generated_at=generated_at,
@@ -1767,6 +1847,7 @@ def build_research_analytics(
         prospective_gate_acceptance=prospective_gate_acceptance,
         prospective_regime_drift=prospective_regime_drift,
         prospective_portfolios=prospective_portfolios,
+        calendar_throughput=calendar_throughput,
         oos_freeze_at=oos_freeze_at,
         min_rank_sample=min_rank_sample,
     )
@@ -1906,6 +1987,31 @@ def research_strategy_sweeps_csv(report: ResearchAnalyticsReport) -> bytes:
             _csv_pct(portfolio.return_per_slot_day), _csv_pct(portfolio.avg_exposure_pct),
             _csv_pct(portfolio.p95_exposure_pct),
         ])
+
+    calendar = report.calendar_throughput
+    for portfolio in (calendar.current, calendar.tp5):
+        writer.writerow([
+            "calendar_throughput_observed", portfolio.strategy, portfolio.cohort, portfolio.signals,
+            portfolio.entered, portfolio.closed, portfolio.open_positions, portfolio.missed_capacity,
+            portfolio.missed_same_symbol, _csv_pct(portfolio.marked_return),
+            _csv_pct(portfolio.max_mtm_drawdown), _csv_pct(portfolio.avg_exposure_pct),
+            _csv_pct(portfolio.p95_exposure_pct),
+            f"{calendar.history_span_days:.6f}",
+            "" if not calendar.history_span_days else f"{portfolio.entered / calendar.history_span_days:.6f}",
+            "" if not portfolio.signals else f"{portfolio.entered / portfolio.signals:.6f}",
+        ])
+    if calendar.latest_30d_current is not None and calendar.latest_30d_tp5 is not None:
+        for portfolio in (calendar.latest_30d_current, calendar.latest_30d_tp5):
+            writer.writerow([
+                "calendar_latest_30d_empty_book", portfolio.strategy, portfolio.cohort, portfolio.signals,
+                portfolio.entered, portfolio.closed, portfolio.open_positions, portfolio.missed_capacity,
+                portfolio.missed_same_symbol, _csv_pct(portfolio.marked_return),
+                _csv_pct(portfolio.max_mtm_drawdown), _csv_pct(portfolio.avg_exposure_pct),
+                _csv_pct(portfolio.p95_exposure_pct),
+                f"{CALENDAR_MONTH_DAYS}",
+                f"{portfolio.entered / CALENDAR_MONTH_DAYS:.6f}",
+                "" if not portfolio.signals else f"{portfolio.entered / portfolio.signals:.6f}",
+            ])
     return output.getvalue().encode("utf-8")
 
 

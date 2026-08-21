@@ -1,15 +1,21 @@
-# MEXC Exhaustion Scanner + Multi-Slot Futures Trader v1.3.4
+# MEXC Exhaustion Scanner + Multi-Slot Futures Trader v1.3.5
 
-Research-only prospective monitoring upgrade. Live trader behavior remains unchanged.
+Research-only calendar-throughput upgrade. Live trader behavior remains unchanged.
 
-- Adds a **fast post-freeze TP5 tracker** that counts hits immediately, keeps unresolved signals as waiting, and only marks a TP5 failure after a complete 7-day path without +5%.
-- Adds prospective **EntryGate-v1 acceptance telemetry**, including the frozen all-post-freeze acceptance rate and a rolling latest-20-signal rate.
-- Adds simple **regime-drift diagnostics** for exhaustion, run score, turnover, 24h pump, 15m volume z-score, Entry Quality, and Continuation Risk using frozen discovery medians/quartiles as the reference.
-- Adds a compact **post-freeze four-way portfolio comparison** once complete 7-day observations exist.
-- Keeps the v1.3.3 paired MTM portfolio engine, frozen EntryGate-v1, and OOS boundary at **2026-08-21 21:29 UTC / 23:29 CEST**.
-- Uses only stored PostgreSQL 15m research paths; no additional MEXC requests and no schema migration.
+- Adds a **Calendar Throughput • Current vs TP5** board that replays every observed signal chronologically, including immature/open signals, so slot congestion and capital recycling are measured directly instead of inferred from the complete-7d cohort.
+- Reports signal utilization, entered/closed/open trades, capacity and same-symbol misses, entries/day, releases/day, marked return, MTM drawdown and median holding time for Current vs TP5 on the same observed calendar window.
+- Adds a **true latest 30-day empty-book replay** once at least 30 calendar days of signal history exist. Both strategies start with equal equity and consume the exact same signals inside the window. Shorter histories explicitly do **not** extrapolate return to a month.
+- Exports `calendar_throughput_observed` and `calendar_latest_30d_empty_book` rows in the strategy-sweeps CSV.
+- Keeps the v1.3.4 fast prospective TP5 monitor, EntryGate acceptance, regime drift, post-freeze comparison, frozen EntryGate-v1, and OOS boundary at **2026-08-21 21:29 UTC / 23:29 CEST**.
+- Uses only stored PostgreSQL research data; no additional MEXC requests and no schema migration.
 
 The live trader is unchanged: 5 STANDARD + 1 HIGH_RISK, 20% aggregate exposure, 1x cross, STANDARD 7d, HIGH_RISK +20% or 4d.
+
+## v1.3.4 — prospective monitoring
+
+- Added immediate post-freeze TP5 hit/wait/fail monitoring.
+- Added rolling-20 EntryGate-v1 acceptance and discovery-vs-post-freeze regime diagnostics.
+- Added the post-freeze four-way paired portfolio table.
 
 ## v1.3.3 — prospective strategy lab
 

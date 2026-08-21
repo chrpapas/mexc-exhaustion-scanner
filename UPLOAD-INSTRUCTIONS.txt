@@ -1,8 +1,8 @@
-MEXC Exhaustion Scanner + Multi-Slot Short Trader v1.3.4
+MEXC Exhaustion Scanner + Multi-Slot Short Trader v1.3.5
 
 Deploy the entire project directory/ZIP contents together.
 
-v1.3.4 is a research-only extension. Live trader behavior remains the v1.3.1 strategy:
+v1.3.5 is a research-only extension. Live trader behavior remains the v1.3.1 strategy:
 - 6 total slots; 5 STANDARD + 1 HIGH_RISK
 - 20% aggregate initial notional exposure; ~3.3333% per slot by default
 - STANDARD: fixed 7-day hold; +20% is telemetry only
@@ -10,12 +10,12 @@ v1.3.4 is a research-only extension. Live trader behavior remains the v1.3.1 str
 - Entry Quality / Continuation Risk / EntryGate-v1 remain shadow-only
 - Existing pre-v1.3 positions keep their persisted legacy exit strategy
 
-New v1.3.4 research outputs:
-- Fast post-freeze TP5 tracker: hits, waiting, 7d failures, resolved hit rate and hit speed
-- Prospective EntryGate-v1 acceptance plus rolling latest-20 acceptance
-- Discovery-vs-post-freeze regime drift diagnostics for seven frozen entry features/scores
-- Compact post-freeze four-way portfolio comparison once complete 7d paths exist
-- Existing v1.3.3 MTM portfolio replay, EntryGate-v1, OOS freeze and v1.3.2 TP5 risk analytics remain intact
+New v1.3.5 research outputs:
+- Calendar Throughput board comparing Current vs TP5 on all observed signals, including immature/open positions
+- Signal utilization, capacity misses, entries/day, releases/day, marked return, MTM DD and median hold
+- True latest 30-day empty-book replay after 30 calendar days of history; no short-window monthly return extrapolation
+- Strategy CSV rows for observed calendar throughput and the latest true 30-day window
+- Existing v1.3.4 prospective monitoring, v1.3.3 MTM/EntryGate, OOS freeze and v1.3.2 TP5 risk analytics remain intact
 - No new MEXC requests and no database migration
 
 Render trader variables to verify (unchanged):

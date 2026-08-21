@@ -648,6 +648,40 @@ class DiscordNotifier:
             if item.signals
         ]
 
+        calendar = report.calendar_throughput
+
+        def throughput_line(item) -> str:
+            utilization = (item.entered / item.signals) if item.signals else None
+            entries_per_day = (item.entered / calendar.history_span_days) if calendar.history_span_days > 0 else None
+            releases_per_day = (item.closed / calendar.history_span_days) if calendar.history_span_days > 0 else None
+            return (
+                f"**{portfolio_names.get(item.strategy, item.strategy)}** • entered **{item.entered}/{item.signals}** "
+                f"({self._percent(utilization)}) • closed **{item.closed}** • open **{item.open_positions}**\n"
+                f"capacity miss **{item.missed_capacity}** • same-symbol **{item.missed_same_symbol}** • "
+                f"entries/day **{entries_per_day:.2f}** • releases/day **{releases_per_day:.2f}**\n"
+                f"return **{self._signed_percent(item.marked_return)}** • MTM DD "
+                f"**{'-' + self._percent(item.max_mtm_drawdown) if item.max_mtm_drawdown is not None else 'n/a'}** • "
+                f"median hold **{self._hours(item.median_holding_hours)}**"
+            )
+
+        if calendar.latest_30d_current is not None and calendar.latest_30d_tp5 is not None:
+            monthly_lines = [
+                (
+                    f"**{portfolio_names.get(item.strategy, item.strategy)}** • signals {item.signals} • "
+                    f"entered **{item.entered}** • utilization **{self._percent(item.entered / item.signals if item.signals else None)}** • "
+                    f"30d return **{self._signed_percent(item.marked_return)}** • DD "
+                    f"**{'-' + self._percent(item.max_mtm_drawdown) if item.max_mtm_drawdown is not None else 'n/a'}**"
+                )
+                for item in (calendar.latest_30d_current, calendar.latest_30d_tp5)
+            ]
+            monthly_value = "\n".join(monthly_lines)
+        else:
+            monthly_value = (
+                f"Not available yet: observed history **{calendar.history_span_days:.2f}d**; "
+                f"need **{calendar.days_until_30d:.2f}d** more for the first true 30-day empty-book replay. "
+                "No short-window return is extrapolated."
+            )
+
         overview = {
             "title": "🔬 Exhaustion Scanner • Research Analytics",
             "description": (
@@ -828,6 +862,32 @@ class DiscordNotifier:
                 "text": "Fast TP5 monitoring is descriptive; strategy selection remains based on frozen prospective comparisons."
             },
         }
+        calendar_throughput = {
+            "title": "♻️ Calendar Throughput • Current vs TP5",
+            "description": (
+                "Same incoming signal stream, chronological slot occupancy, fees and equity recycling. "
+                "Unlike the paired 7d board, this includes immature/open signals so burst congestion is visible."
+            ),
+            "color": 0xF1C40F,
+            "fields": [
+                {
+                    "name": f"Observed calendar window • {calendar.history_span_days:.2f}d",
+                    "value": "\n\n".join([
+                        throughput_line(calendar.current),
+                        throughput_line(calendar.tp5),
+                    ]) if calendar.current.signals else "No observed signals yet.",
+                    "inline": False,
+                },
+                {
+                    "name": "📅 Latest true 30-day replay",
+                    "value": monthly_value,
+                    "inline": False,
+                },
+            ],
+            "footer": {
+                "text": "30d windows start with equal equity and an empty book; report actual calendar return, never short-window annualization."
+            },
+        }
         exits = {
             "title": "🧭 Exit Research • Standard vs High Risk",
             "description": "Paired-cohort exits: Standard 1–7d uses one complete-7d cohort; High Risk 1–10d uses one fully mature/evaluable 10d cohort. 14d remains separate until mature.",
@@ -864,7 +924,7 @@ class DiscordNotifier:
             ],
         }
 
-        embeds = (overview, targets, tp5_challenger, strategy_lab, prospective_monitor, exits, survival, entry, features)
+        embeds = (overview, targets, tp5_challenger, strategy_lab, prospective_monitor, calendar_throughput, exits, survival, entry, features)
         try:
             for embed in embeds:
                 self._validate_discord_embed(embed)
