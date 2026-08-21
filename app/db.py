@@ -818,7 +818,7 @@ class Database:
     ) -> list[dict[str, Any]]:
         """Return stored 15m close marks needed for research-only portfolio MTM replay.
 
-        Bounded to the first seven days after confirmation because every v1.3.3
+        Bounded to the first seven days after confirmation because every v1.3.4
         champion/challenger portfolio in the paired comparison exits by then.
         PostgreSQL-only; no exchange/API calls.
         """

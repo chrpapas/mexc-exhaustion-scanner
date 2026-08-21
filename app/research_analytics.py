@@ -26,6 +26,7 @@ TP5_CHALLENGER_TOTAL_EXPOSURE_PCT = TP5_CHALLENGER_SLOT_PCT * TP5_CHALLENGER_MAX
 RESEARCH_OOS_FREEZE_AT = datetime(2026, 8, 21, 21, 29, tzinfo=UTC)
 ENTRY_GATE_V1_MIN_QUALITY = 4
 ENTRY_GATE_V1_MAX_CONTINUATION = 6
+PROSPECTIVE_GATE_ROLLING_WINDOW = 20
 
 
 @dataclass(frozen=True, slots=True)
@@ -274,6 +275,47 @@ class ProspectiveCohortSummary:
 
 
 @dataclass(frozen=True, slots=True)
+class ProspectiveTp5LiveSummary:
+    signals: int
+    hits: int
+    waiting: int
+    failed: int
+    resolved: int
+    resolved_hit_rate: float | None
+    median_hit_hours: float | None
+    p75_hit_hours: float | None
+    worst_pre_hit_adverse: float | None
+    worst_waiting_close_adverse: float | None
+    oldest_waiting_hours: float | None
+
+
+@dataclass(frozen=True, slots=True)
+class ProspectiveGateAcceptanceSummary:
+    signals: int
+    eligible: int
+    eligible_rate: float | None
+    rolling_window: int
+    rolling_signals: int
+    rolling_eligible: int
+    rolling_eligible_rate: float | None
+
+
+@dataclass(frozen=True, slots=True)
+class RegimeDriftSummary:
+    feature: str
+    feature_label: str
+    discovery_sample: int
+    post_freeze_sample: int
+    discovery_median: float | None
+    post_freeze_median: float | None
+    discovery_p25: float | None
+    discovery_p75: float | None
+    post_below_discovery_p25_rate: float | None
+    post_inside_discovery_iqr_rate: float | None
+    post_above_discovery_p75_rate: float | None
+
+
+@dataclass(frozen=True, slots=True)
 class CohortScoreBucketSummary:
     cohort: str
     score_name: str
@@ -303,6 +345,10 @@ class ResearchAnalyticsReport:
     portfolio_entrygate_tp5: PortfolioReplaySummary
     prospective_cohorts: tuple[ProspectiveCohortSummary, ...]
     prospective_score_buckets: tuple[CohortScoreBucketSummary, ...]
+    prospective_tp5_live: ProspectiveTp5LiveSummary
+    prospective_gate_acceptance: ProspectiveGateAcceptanceSummary
+    prospective_regime_drift: tuple[RegimeDriftSummary, ...]
+    prospective_portfolios: tuple[PortfolioReplaySummary, ...]
     oos_freeze_at: datetime
     min_rank_sample: int
 
@@ -1385,6 +1431,151 @@ def _prospective_cohort_summary(
     )
 
 
+def _prospective_tp5_live_summary(
+    rows: list[dict[str, Any]],
+    *,
+    generated_at: datetime,
+    path_rows: Iterable[dict[str, Any]],
+) -> ProspectiveTp5LiveSummary:
+    hit_rows: list[dict[str, Any]] = []
+    waiting_rows: list[dict[str, Any]] = []
+    failed_rows: list[dict[str, Any]] = []
+    for row in rows:
+        if _time_to_target_hours(row, 5, max_hours=168) is not None:
+            hit_rows.append(row)
+        elif _path_complete_7d(row):
+            failed_rows.append(row)
+        else:
+            waiting_rows.append(row)
+
+    hit_times = [
+        value
+        for row in hit_rows
+        for value in [_time_to_target_hours(row, 5, max_hours=168)]
+        if value is not None
+    ]
+    pre_hit_adverse: list[float] = []
+    for row in hit_rows:
+        if "path_mae_before_target_5" not in row:
+            continue
+        raw = _float(row.get("path_mae_before_target_5"))
+        pre_hit_adverse.append(max(0.0, -raw) if raw is not None else 0.0)
+
+    waiting_ids = {int(row["episode_id"]) for row in waiting_rows if row.get("episode_id") is not None}
+    waiting_min_close: dict[int, float] = {}
+    for path in path_rows:
+        episode_id = path.get("episode_id")
+        if episode_id is None or int(episode_id) not in waiting_ids:
+            continue
+        value = _float(path.get("close_return_pct"))
+        if value is None:
+            continue
+        episode_id = int(episode_id)
+        waiting_min_close[episode_id] = min(value, waiting_min_close.get(episode_id, value))
+    waiting_adverse = [max(0.0, -value) for value in waiting_min_close.values()]
+    waiting_ages = [
+        value
+        for row in waiting_rows
+        for value in [_elapsed_hours(row.get("confirmed_at"), generated_at)]
+        if value is not None
+    ]
+    resolved = len(hit_rows) + len(failed_rows)
+    return ProspectiveTp5LiveSummary(
+        signals=len(rows),
+        hits=len(hit_rows),
+        waiting=len(waiting_rows),
+        failed=len(failed_rows),
+        resolved=resolved,
+        resolved_hit_rate=(len(hit_rows) / resolved) if resolved else None,
+        median_hit_hours=_median(hit_times),
+        p75_hit_hours=_percentile(hit_times, 0.75),
+        worst_pre_hit_adverse=max(pre_hit_adverse) if pre_hit_adverse else None,
+        worst_waiting_close_adverse=max(waiting_adverse) if waiting_adverse else None,
+        oldest_waiting_hours=max(waiting_ages) if waiting_ages else None,
+    )
+
+
+def _prospective_gate_acceptance_summary(
+    rows: list[dict[str, Any]],
+    *,
+    rolling_window: int = PROSPECTIVE_GATE_ROLLING_WINDOW,
+) -> ProspectiveGateAcceptanceSummary:
+    ordered = sorted(
+        [row for row in rows if row.get("confirmed_at") is not None],
+        key=lambda row: row["confirmed_at"],
+    )
+    eligible = sum(entry_gate_v1(row) for row in ordered)
+    recent = ordered[-rolling_window:]
+    recent_eligible = sum(entry_gate_v1(row) for row in recent)
+    return ProspectiveGateAcceptanceSummary(
+        signals=len(ordered),
+        eligible=eligible,
+        eligible_rate=(eligible / len(ordered)) if ordered else None,
+        rolling_window=rolling_window,
+        rolling_signals=len(recent),
+        rolling_eligible=recent_eligible,
+        rolling_eligible_rate=(recent_eligible / len(recent)) if recent else None,
+    )
+
+
+def _regime_metric_value(row: dict[str, Any], feature: str) -> float | None:
+    if feature == "entry_quality_score":
+        return float(shadow_entry_scores(row)[0])
+    if feature == "continuation_risk_score":
+        return float(shadow_entry_scores(row)[1])
+    spec = FEATURE_BY_KEY.get(feature)
+    if spec is None:
+        return None
+    return _float(_feature_value(row, spec))
+
+
+def _prospective_regime_drift(
+    discovery_rows: list[dict[str, Any]],
+    post_freeze_rows: list[dict[str, Any]],
+) -> tuple[RegimeDriftSummary, ...]:
+    features = (
+        ("exhaustion_score", "Exhaustion"),
+        ("run_score", "Run"),
+        ("amount_24h", "24h turnover"),
+        ("return_24h", "24h pump"),
+        ("volume_zscore_15m", "15m volume z"),
+        ("entry_quality_score", "Entry Quality"),
+        ("continuation_risk_score", "Continuation Risk"),
+    )
+    result: list[RegimeDriftSummary] = []
+    for feature, label in features:
+        discovery = [
+            value for row in discovery_rows
+            for value in [_regime_metric_value(row, feature)] if value is not None
+        ]
+        post = [
+            value for row in post_freeze_rows
+            for value in [_regime_metric_value(row, feature)] if value is not None
+        ]
+        p25 = _percentile(discovery, 0.25)
+        p75 = _percentile(discovery, 0.75)
+        if post and p25 is not None and p75 is not None:
+            below = sum(value < p25 for value in post) / len(post)
+            above = sum(value > p75 for value in post) / len(post)
+            inside = 1.0 - below - above
+        else:
+            below = inside = above = None
+        result.append(RegimeDriftSummary(
+            feature=feature,
+            feature_label=label,
+            discovery_sample=len(discovery),
+            post_freeze_sample=len(post),
+            discovery_median=_median(discovery),
+            post_freeze_median=_median(post),
+            discovery_p25=p25,
+            discovery_p75=p75,
+            post_below_discovery_p25_rate=below,
+            post_inside_discovery_iqr_rate=inside,
+            post_above_discovery_p75_rate=above,
+        ))
+    return tuple(result)
+
+
 def _cohort_score_buckets(rows: list[dict[str, Any]], cohort: str) -> tuple[CohortScoreBucketSummary, ...]:
     complete = [row for row in rows if row.get("return_168h_pct") is not None and _path_complete_7d(row)]
     return tuple(
@@ -1515,6 +1706,33 @@ def build_research_analytics(
         *_cohort_score_buckets(post_freeze_rows, "post_freeze"),
     )
     portfolio_path_rows = tuple(dict(row) for row in portfolio_path_rows)
+    post_freeze_complete_paths_7d = [
+        row for row in complete_paths_7d
+        if row.get("confirmed_at") is not None and row["confirmed_at"] > oos_freeze_at
+    ]
+    prospective_tp5_live = _prospective_tp5_live_summary(
+        post_freeze_rows, generated_at=generated_at, path_rows=portfolio_path_rows
+    )
+    prospective_gate_acceptance = _prospective_gate_acceptance_summary(post_freeze_rows)
+    prospective_regime_drift = _prospective_regime_drift(discovery_rows, post_freeze_rows)
+    prospective_portfolios = (
+        _portfolio_replay(
+            post_freeze_complete_paths_7d, strategy="current", generated_at=generated_at,
+            path_rows=portfolio_path_rows,
+        ),
+        _portfolio_replay(
+            post_freeze_complete_paths_7d, strategy="tp5_challenger", generated_at=generated_at,
+            path_rows=portfolio_path_rows,
+        ),
+        _portfolio_replay(
+            post_freeze_complete_paths_7d, strategy="current", generated_at=generated_at,
+            path_rows=portfolio_path_rows, use_entry_gate=True,
+        ),
+        _portfolio_replay(
+            post_freeze_complete_paths_7d, strategy="tp5_challenger", generated_at=generated_at,
+            path_rows=portfolio_path_rows, use_entry_gate=True,
+        ),
+    )
     return ResearchAnalyticsReport(
         generated_at=generated_at,
         baseline=baseline,
@@ -1545,6 +1763,10 @@ def build_research_analytics(
         ),
         prospective_cohorts=prospective_cohorts,
         prospective_score_buckets=prospective_score_buckets,
+        prospective_tp5_live=prospective_tp5_live,
+        prospective_gate_acceptance=prospective_gate_acceptance,
+        prospective_regime_drift=prospective_regime_drift,
+        prospective_portfolios=prospective_portfolios,
         oos_freeze_at=oos_freeze_at,
         min_rank_sample=min_rank_sample,
     )
@@ -1658,6 +1880,32 @@ def research_strategy_sweeps_csv(report: ResearchAnalyticsReport) -> bytes:
             _csv_pct(cohort.worst_pre_tp5_adverse), cohort.entrygate_eligible,
             _csv_pct(cohort.entrygate_eligible_rate), cohort.entrygate_complete_7d, "", "", "", "",
         ])
+    live = report.prospective_tp5_live
+    writer.writerow([
+        "prospective_tp5_live", "post_freeze", "up_to_7d", live.signals,
+        live.hits, live.waiting, live.failed, live.resolved, _csv_pct(live.resolved_hit_rate),
+        "" if live.median_hit_hours is None else f"{live.median_hit_hours:.6f}",
+        "" if live.p75_hit_hours is None else f"{live.p75_hit_hours:.6f}",
+        _csv_pct(live.worst_pre_hit_adverse), _csv_pct(live.worst_waiting_close_adverse),
+        "" if live.oldest_waiting_hours is None else f"{live.oldest_waiting_hours:.6f}", "", "",
+    ])
+    gate = report.prospective_gate_acceptance
+    writer.writerow([
+        "prospective_entrygate_acceptance", "entrygate_v1", f"rolling_{gate.rolling_window}", gate.signals,
+        gate.eligible, _csv_pct(gate.eligible_rate), gate.rolling_signals, gate.rolling_eligible,
+        _csv_pct(gate.rolling_eligible_rate), "", "", "", "", "", "", "",
+    ])
+    for portfolio in report.prospective_portfolios:
+        writer.writerow([
+            "prospective_portfolio_replay_paired_7d", portfolio.strategy, "post_freeze", portfolio.signals,
+            portfolio.eligible_signals, portfolio.entered, portfolio.closed,
+            portfolio.missed_capacity, portfolio.missed_same_symbol,
+            _csv_pct(portfolio.realized_return), _csv_pct(portfolio.marked_return),
+            _csv_pct(portfolio.max_mtm_drawdown),
+            "" if portfolio.return_over_max_drawdown is None else f"{portfolio.return_over_max_drawdown:.6f}",
+            _csv_pct(portfolio.return_per_slot_day), _csv_pct(portfolio.avg_exposure_pct),
+            _csv_pct(portfolio.p95_exposure_pct),
+        ])
     return output.getvalue().encode("utf-8")
 
 
@@ -1689,6 +1937,18 @@ def research_entry_research_csv(report: ResearchAnalyticsReport) -> bytes:
             "prospective_score_bucket", f"{item.cohort}:{item.score_name}", item.bucket, item.sample,
             _csv_pct(item.target_20_rate_7d), _csv_pct(item.positive_7d_rate),
             _csv_pct(item.avg_return_7d), "", "",
+        ])
+    for item in report.prospective_regime_drift:
+        extra = (
+            f"discovery_median={item.discovery_median};post_median={item.post_freeze_median};"
+            f"discovery_p25={item.discovery_p25};discovery_p75={item.discovery_p75};"
+            f"post_below_p25={item.post_below_discovery_p25_rate};"
+            f"post_inside_iqr={item.post_inside_discovery_iqr_rate};"
+            f"post_above_p75={item.post_above_discovery_p75_rate}"
+        )
+        writer.writerow([
+            "prospective_regime_drift", item.feature_label, item.feature, item.post_freeze_sample,
+            "", "", "", "", extra,
         ])
     return output.getvalue().encode("utf-8")
 

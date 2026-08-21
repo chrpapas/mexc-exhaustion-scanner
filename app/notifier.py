@@ -607,6 +607,47 @@ class DiscordNotifier:
             if item.cohort == "post_freeze" and item.sample
         ]
 
+        live_tp5 = report.prospective_tp5_live
+        gate_monitor = report.prospective_gate_acceptance
+
+        def regime_value(item, value) -> str:
+            if value is None:
+                return "n/a"
+            if item.feature == "amount_24h":
+                return f"{value / 1_000_000:.2f}m"
+            if item.feature == "return_24h":
+                return self._signed_percent(value)
+            return f"{value:.2f}"
+
+        regime_lines = [
+            (
+                f"**{item.feature_label}** • med {regime_value(item, item.discovery_median)} → "
+                f"{regime_value(item, item.post_freeze_median)} • "
+                f"post below/IQR/above **{self._percent(item.post_below_discovery_p25_rate)} / "
+                f"{self._percent(item.post_inside_discovery_iqr_rate)} / "
+                f"{self._percent(item.post_above_discovery_p75_rate)}**"
+            )
+            for item in report.prospective_regime_drift
+            if item.post_freeze_sample
+        ]
+
+        portfolio_names = {
+            "current_live_5standard_1high": "Current",
+            "tp5_challenger_6x5pct": "TP5",
+            "entrygate_v1__current_live_5standard_1high": "Gate + current",
+            "entrygate_v1__tp5_challenger_6x5pct": "Gate + TP5",
+        }
+        prospective_portfolio_lines = [
+            (
+                f"**{portfolio_names.get(item.strategy, item.strategy)}** • entered {item.entered}/{item.signals} • "
+                f"return {self._signed_percent(item.marked_return)} • DD "
+                f"{'-' + self._percent(item.max_mtm_drawdown) if item.max_mtm_drawdown is not None else 'n/a'} • "
+                f"R/DD {f'{item.return_over_max_drawdown:.2f}x' if item.return_over_max_drawdown is not None else 'n/a'}"
+            )
+            for item in report.prospective_portfolios
+            if item.signals
+        ]
+
         overview = {
             "title": "🔬 Exhaustion Scanner • Research Analytics",
             "description": (
@@ -740,6 +781,53 @@ class DiscordNotifier:
                 "text": "EntryGate-v1 and TP5 remain shadow-only. Do not retune frozen thresholds on the prospective cohort."
             },
         }
+        prospective_monitor = {
+            "title": "📡 Prospective Monitor • Post-Freeze",
+            "description": (
+                "Fast shadow monitoring after the frozen 21 Aug 2026 research cutoff. TP5 hits can resolve "
+                "before 7d maturity; paired portfolio comparisons still require complete 7d paths."
+            ),
+            "color": 0x1ABC9C,
+            "fields": [
+                {
+                    "name": "⚡ TP5 live tracker • no 7d wait",
+                    "value": (
+                        f"Signals **{live_tp5.signals}** • hit **{live_tp5.hits}** • waiting **{live_tp5.waiting}** • "
+                        f"failed after complete 7d **{live_tp5.failed}**\n"
+                        f"Resolved hit rate **{self._percent(live_tp5.resolved_hit_rate)}** • "
+                        f"median/p75 hit **{self._hours(live_tp5.median_hit_hours)} / {self._hours(live_tp5.p75_hit_hours)}**\n"
+                        f"Worst pre-hit adverse **-{self._percent(live_tp5.worst_pre_hit_adverse)}** • "
+                        f"worst waiting close-mark adverse **-{self._percent(live_tp5.worst_waiting_close_adverse)}** • "
+                        f"oldest waiting **{self._hours(live_tp5.oldest_waiting_hours)}**"
+                    ),
+                    "inline": False,
+                },
+                {
+                    "name": "🚦 EntryGate-v1 acceptance",
+                    "value": (
+                        f"Post-freeze eligible **{gate_monitor.eligible}/{gate_monitor.signals}** "
+                        f"({self._percent(gate_monitor.eligible_rate)}) • "
+                        f"latest {gate_monitor.rolling_signals}/{gate_monitor.rolling_window} signals: "
+                        f"**{gate_monitor.rolling_eligible}** eligible "
+                        f"({self._percent(gate_monitor.rolling_eligible_rate)})"
+                    ),
+                    "inline": False,
+                },
+                {
+                    "name": "🌡️ Regime drift • discovery median → post-freeze",
+                    "value": "\n".join(regime_lines) or "No post-freeze signals yet; frozen discovery distributions remain the reference.",
+                    "inline": False,
+                },
+                {
+                    "name": "🏁 Post-freeze paired portfolios • complete 7d only",
+                    "value": "\n".join(prospective_portfolio_lines) or "No post-freeze complete-7d observations yet.",
+                    "inline": False,
+                },
+            ],
+            "footer": {
+                "text": "Fast TP5 monitoring is descriptive; strategy selection remains based on frozen prospective comparisons."
+            },
+        }
         exits = {
             "title": "🧭 Exit Research • Standard vs High Risk",
             "description": "Paired-cohort exits: Standard 1–7d uses one complete-7d cohort; High Risk 1–10d uses one fully mature/evaluable 10d cohort. 14d remains separate until mature.",
@@ -776,7 +864,7 @@ class DiscordNotifier:
             ],
         }
 
-        embeds = (overview, targets, tp5_challenger, strategy_lab, exits, survival, entry, features)
+        embeds = (overview, targets, tp5_challenger, strategy_lab, prospective_monitor, exits, survival, entry, features)
         try:
             for embed in embeds:
                 self._validate_discord_embed(embed)

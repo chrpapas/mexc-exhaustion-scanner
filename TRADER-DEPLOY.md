@@ -1,6 +1,6 @@
-# Trader deployment — v1.3.3
+# Trader deployment — v1.3.4
 
-v1.3.3 does **not** change trader execution. The Render trader service (`mexc-standard-short-trader`; service name kept for deployment continuity) continues to execute the tier-specific strategy selected in v1.3.1.
+v1.3.4 does **not** change trader execution. The Render trader service (`mexc-standard-short-trader`; service name kept for deployment continuity) continues to execute the tier-specific strategy selected in v1.3.1.
 
 ## Default strategy
 
@@ -15,7 +15,7 @@ v1.3.3 does **not** change trader execution. The Render trader service (`mexc-st
 - no concurrent duplicate symbol by default.
 - paper taker fee default: 0.08% per fill.
 
-The Entry Quality and Continuation Risk scores remain research/shadow-only. They do **not** gate live or paper entries in v1.3.3.
+The Entry Quality and Continuation Risk scores remain research/shadow-only. They do **not** gate live or paper entries in v1.3.4.
 
 ## Important deployment behavior for positions already open
 
@@ -73,6 +73,12 @@ python -m app.research_analytics_now
 ```
 
 High-Risk 1D/2D/3D/4D/5D/7D/10D timeout research now uses the same paired 10-day cohort. This lets the 4-day live timeout continue to be validated fairly against longer alternatives.
+
+### v1.3.4 prospective monitoring
+
+Research-only additions: immediate post-freeze TP5 hit/wait/fail monitoring, rolling-20
+EntryGate-v1 acceptance, discovery-vs-post-freeze regime diagnostics, and a compact
+post-freeze paired portfolio table once 7-day paths mature. Live execution remains unchanged.
 
 ### v1.3.3 prospective strategy lab
 

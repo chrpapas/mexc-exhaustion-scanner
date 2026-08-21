@@ -1,15 +1,22 @@
-# MEXC Exhaustion Scanner + Multi-Slot Futures Trader v1.3.3
+# MEXC Exhaustion Scanner + Multi-Slot Futures Trader v1.3.4
 
-Research-only prospective strategy lab. Live trader behavior remains unchanged.
+Research-only prospective monitoring upgrade. Live trader behavior remains unchanged.
 
-- Adds 15-minute close-marked MTM portfolio replay for the current strategy and TP5 challenger, including max drawdown, worst equity, max unrealized loss, simultaneous losers, average/p95 exposure, average slots and recovery time.
-- Freezes **EntryGate-v1** at Entry Quality >= 4 and Continuation Risk <= 6; it is shadow-only and never gates live entries.
-- Adds four paired complete-7d portfolio replays: current live, TP5, EntryGate + current exits, and EntryGate + TP5.
-- Freezes the prospective OOS boundary at **2026-08-21 21:29 UTC / 23:29 CEST** and reports discovery vs post-freeze cohorts separately.
-- Exports prospective score buckets and EntryGate eligibility so future evidence can be evaluated without retuning the discovery sample.
+- Adds a **fast post-freeze TP5 tracker** that counts hits immediately, keeps unresolved signals as waiting, and only marks a TP5 failure after a complete 7-day path without +5%.
+- Adds prospective **EntryGate-v1 acceptance telemetry**, including the frozen all-post-freeze acceptance rate and a rolling latest-20-signal rate.
+- Adds simple **regime-drift diagnostics** for exhaustion, run score, turnover, 24h pump, 15m volume z-score, Entry Quality, and Continuation Risk using frozen discovery medians/quartiles as the reference.
+- Adds a compact **post-freeze four-way portfolio comparison** once complete 7-day observations exist.
+- Keeps the v1.3.3 paired MTM portfolio engine, frozen EntryGate-v1, and OOS boundary at **2026-08-21 21:29 UTC / 23:29 CEST**.
 - Uses only stored PostgreSQL 15m research paths; no additional MEXC requests and no schema migration.
 
-The v1.3.2 TP5 research remains intact: +5% target timing, pre-TP5 MAE, adverse races, and the frozen 6 x 5% / 30% TP5 challenger.
+The live trader is unchanged: 5 STANDARD + 1 HIGH_RISK, 20% aggregate exposure, 1x cross, STANDARD 7d, HIGH_RISK +20% or 4d.
+
+## v1.3.3 — prospective strategy lab
+
+- Added 15-minute close-marked MTM portfolio replay for the current strategy and TP5 challenger.
+- Froze **EntryGate-v1** at Entry Quality >= 4 and Continuation Risk <= 6; shadow-only.
+- Added four paired complete-7d portfolio replays: current, TP5, EntryGate + current exits, and EntryGate + TP5.
+- Froze the prospective OOS boundary at **2026-08-21 21:29 UTC / 23:29 CEST** and separated discovery from post-freeze evidence.
 
 ## v1.3.1 — Discord formatting hotfix
 
