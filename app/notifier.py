@@ -587,12 +587,12 @@ class DiscordNotifier:
         }
         exits = {
             "title": "🧭 Exit Research • Standard vs High Risk",
-            "description": "Paired-cohort exits: Standard horizons use the same matured episodes; High Risk requires full timeout maturity before TP20-or-timeout evaluation.",
+            "description": "Paired-cohort exits: Standard 1–7d uses one complete-7d cohort; High Risk 1–10d uses one fully mature/evaluable 10d cohort. 14d remains separate until mature.",
             "color": 0x3498DB,
             "fields": [
                 {"name": "STANDARD paired cohort • 1–7d", "value": "\n".join(standard_early_lines) or "Complete paired 7d cohort is still maturing.", "inline": False},
                 {"name": "STANDARD paired cohort • 8–14d", "value": "\n".join(standard_extended_lines) or "Complete paired 14d cohort is still maturing.", "inline": False},
-                {"name": "HIGH RISK • mature TP20 + timeout", "value": "\n".join(risky_lines) or "No fully mature timeout cohorts yet.", "inline": False},
+                {"name": "HIGH RISK • paired TP20 + timeout", "value": "\n".join(risky_lines) or "No fully mature timeout cohorts yet.", "inline": False},
             ],
         }
         survival = {

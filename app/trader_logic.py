@@ -35,6 +35,42 @@ def newly_breached_thresholds(
 ) -> list[int]:
     return [t for t in thresholds if max_adverse_pct >= t and t not in already_breached]
 
+
+
+def maturity_seconds(position_maturity: str) -> int:
+    horizons = {
+        "1d": 86400, "2d": 172800, "3d": 259200, "4d": 345600,
+        "5d": 432000, "6d": 518400, "7d": 604800, "10d": 864000, "14d": 1209600,
+    }
+    if position_maturity not in horizons:
+        raise ValueError(f"unsupported position maturity {position_maturity}")
+    return horizons[position_maturity]
+
+
+def tier_strategy_exit_reason(
+    *,
+    exit_strategy: str,
+    position_maturity: str,
+    current_return_pct: float,
+    age_seconds: float,
+    profit_target_pct: float,
+) -> str | None:
+    """Exit rule for v1.3 tier-specific positions.
+
+    STANDARD positions use a fixed time hold. HIGH_RISK positions take the full
+    position at the profit target or time out, whichever occurs first.
+    """
+    timeout_seconds = maturity_seconds(position_maturity)
+    if exit_strategy == "fixed_time_standard":
+        return f"standard_maturity_{position_maturity}" if age_seconds >= timeout_seconds else None
+    if exit_strategy == "tp20_or_timeout":
+        if current_return_pct >= profit_target_pct:
+            return f"high_risk_profit_target_{profit_target_pct:g}"
+        if age_seconds >= timeout_seconds:
+            return f"high_risk_timeout_{position_maturity}"
+        return None
+    raise ValueError(f"unsupported tier exit strategy {exit_strategy}")
+
 # Legacy helpers retained for backward-compatible tests and persisted v1.1 positions/tools.
 def ratchet_profit_floor(*, peak_profit_pct: float, activation_pct: float, step_pct: float) -> float | None:
     import math
@@ -61,7 +97,4 @@ def next_profit_floor(*, exit_strategy: str, peak_profit_pct: float, activation_
 def maturity_exit_reason(*, position_maturity: str, current_return_pct: float, age_seconds: float, profit_target_pct: float) -> str | None:
     if position_maturity == "profit_20":
         return "profit_target_20" if current_return_pct >= profit_target_pct else None
-    horizons = {"1d": 86400, "2d": 172800, "3d": 259200, "7d": 604800}
-    if position_maturity not in horizons:
-        raise ValueError(f"unsupported position maturity {position_maturity}")
-    return f"maturity_{position_maturity}" if age_seconds >= horizons[position_maturity] else None
+    return f"maturity_{position_maturity}" if age_seconds >= maturity_seconds(position_maturity) else None

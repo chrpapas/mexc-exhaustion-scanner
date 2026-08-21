@@ -47,6 +47,7 @@ migrations/010_position_maturity.sql
 migrations/011_strategy_threshold_matrix.sql
 migrations/012_multi_slot_live_trader.sql
 migrations/013_research_signal_paths.sql
+migrations/014_tier_exit_strategy.sql
 pyproject.toml
 render.yaml
 scripts/verify_project.py
@@ -68,4 +69,5 @@ tests/test_trader_logic.py
 tests/test_trader_v120.py
 tests/test_trader_v122.py
 tests/test_trader_v123.py
+tests/test_trader_v130.py
 tests/test_worker_v125.py

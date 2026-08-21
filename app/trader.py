@@ -15,6 +15,7 @@ from app.trader_logic import (
     protected_profit_floor_pct,
     short_price_for_return,
     short_return_pct,
+    tier_strategy_exit_reason,
 )
 from app.trader_models import TradeSignal, TraderPosition
 from app.trader_notifier import TraderNotifier
@@ -58,12 +59,17 @@ class PortfolioShortTrader:
         if self.settings.trading_mode == "live":
             await self._live_preflight()
         LOGGER.info(
-            "Trader started mode=%s risks=%s slots=%s slot_pct=%.4f max_exposure=%.2f%%",
+            "Trader started mode=%s risks=%s slots=%s std_cap=%s high_cap=%s slot_pct=%.4f max_exposure=%.2f%% strategy=STD_%sd_HIGH_TP%.0f_OR_%sd",
             self.settings.trading_mode,
             ",".join(self.settings.allowed_risk_tiers),
             self.settings.max_open_positions,
+            self.settings.max_standard_positions,
+            self.settings.max_high_risk_positions,
             self.settings.slot_allocation_pct,
             self.settings.max_total_exposure_pct,
+            self.settings.standard_hold_days,
+            self.settings.profit_target_pct,
+            self.settings.high_risk_timeout_days,
         )
         # Discord is intentionally quiet: normal startup is logged/heartbeated in DB only.
         self._last_discord_heartbeat = time.monotonic()
@@ -224,13 +230,30 @@ class PortfolioShortTrader:
                 active=active,
             )
             return
+        if signal.risk_tier == "STANDARD":
+            standard_count = sum(p.risk_tier == "STANDARD" for p in active)
+            if standard_count >= self.settings.max_standard_positions:
+                await self._ignore_signal(
+                    signal,
+                    "ignored_capacity",
+                    "STANDARD capacity reached; preserving the dedicated HIGH_RISK slot",
+                    active=active,
+                    event_fields=[
+                        {
+                            "name": "STANDARD capacity",
+                            "value": f"{standard_count}/{self.settings.max_standard_positions}",
+                            "inline": True,
+                        },
+                    ],
+                )
+                return
         if signal.risk_tier == "HIGH_RISK":
             high_count = sum(p.risk_tier == "HIGH_RISK" for p in active)
             if high_count >= self.settings.max_high_risk_positions:
                 await self._ignore_signal(
                     signal,
                     "ignored_capacity",
-                    "HIGH_RISK capacity reached; preserving STANDARD capacity",
+                    "HIGH_RISK capacity reached; only one risky slot is allowed",
                     active=active,
                     event_fields=[
                         {
@@ -282,14 +305,18 @@ class PortfolioShortTrader:
             position.notional_usdt,
             equity,
         )
+        if signal.risk_tier == "STANDARD":
+            exit_text = f"Fixed {self.settings.standard_hold_days}d hold; +{self.settings.profit_target_pct:.0f}% is telemetry only"
+        else:
+            exit_text = f"Close at +{self.settings.profit_target_pct:.0f}% or after {self.settings.high_risk_timeout_days}d, whichever comes first"
         await self._notify(
             "🧾 PAPER SHORT OPENED" if position.mode == "paper" else "🔴 LIVE SHORT OPENED",
             f"**{position.symbol}** • {position.risk_tier} • slot {position.slot_no}",
             [
                 {"name": "Entry", "value": f"{position.entry_price:.10g}", "inline": True},
                 {"name": "Notional", "value": f"${position.notional_usdt:,.2f}", "inline": True},
-                {"name": "Target", "value": f"+{self.settings.profit_target_pct:.0f}% then run", "inline": True},
-                {"name": "Protection", "value": f"arm +{self.settings.protection_arm_pct:.0f}% • floor +{self.settings.profit_target_pct:.0f}% • {self.settings.trail_callback_pct:.0f}% price trail", "inline": False},
+                {"name": "Exit plan", "value": exit_text, "inline": False},
+                {"name": "Risk control", "value": "1x cross • no conventional tight stop • adverse breach telemetry remains active", "inline": False},
             ],
             color=BLUE,
         )
@@ -324,13 +351,19 @@ class PortfolioShortTrader:
         entry_fee = notional * self.settings.paper_taker_fee_rate
         runtime = await self.repo.runtime()
         await self.repo.set_paper_equity(max(0.0, float(runtime["paper_equity_usdt"]) - entry_fee))
+        exit_strategy = "fixed_time_standard" if signal.risk_tier == "STANDARD" else "tp20_or_timeout"
+        position_maturity = (
+            f"{self.settings.standard_hold_days}d"
+            if signal.risk_tier == "STANDARD"
+            else f"{self.settings.high_risk_timeout_days}d"
+        )
         return await self.repo.create_position(
             signal=signal,
             slot_no=slot_no,
             mode="paper",
             capital_strategy=self.settings.capital_strategy_label,
-            exit_strategy="trailing_15_floor_20",
-            position_maturity="profit_20",
+            exit_strategy=exit_strategy,
+            position_maturity=position_maturity,
             entry_price=price,
             entry_equity_usdt=equity,
             notional_usdt=notional,
@@ -380,13 +413,19 @@ class PortfolioShortTrader:
         )
         hold_contracts = float(live_position.get("holdVol") or contracts)
         entry_fee = float(order.get("takerFee") or order.get("makerFee") or 0.0)
+        exit_strategy = "fixed_time_standard" if signal.risk_tier == "STANDARD" else "tp20_or_timeout"
+        position_maturity = (
+            f"{self.settings.standard_hold_days}d"
+            if signal.risk_tier == "STANDARD"
+            else f"{self.settings.high_risk_timeout_days}d"
+        )
         return await self.repo.create_position(
             signal=signal,
             slot_no=slot_no,
             mode="live",
             capital_strategy=self.settings.capital_strategy_label,
-            exit_strategy="trailing_15_floor_20",
-            position_maturity="profit_20",
+            exit_strategy=exit_strategy,
+            position_maturity=position_maturity,
             entry_price=entry_price,
             entry_equity_usdt=equity,
             notional_usdt=hold_contracts * spec.contract_size * entry_price,
@@ -454,6 +493,44 @@ class PortfolioShortTrader:
                     ],
                     color=breach_colors[threshold],
                 )
+
+        # v1.3 tier-specific live strategy. Only positions opened with the new persisted
+        # exit_strategy values use these rules. Existing pre-v1.3 positions retain their
+        # legacy runner/protection behavior, avoiding a mid-trade strategy mutation.
+        if position.exit_strategy in {"fixed_time_standard", "tp20_or_timeout"}:
+            age_seconds = max(0.0, (datetime.now(UTC) - position.opened_at).total_seconds())
+
+            if position.exit_strategy == "fixed_time_standard":
+                if position.target_20_at is None and peak >= self.settings.profit_target_pct:
+                    if await self.repo.mark_target_hit(position.id, price=price, return_pct=current_return):
+                        position = (await self.repo.position(position.id)) or position
+                        await self._notify(
+                            "🎯 STANDARD +20% MILESTONE",
+                            f"**{position.symbol}** reached +{self.settings.profit_target_pct:.0f}%. The Standard strategy still holds to {position.position_maturity}.",
+                            [
+                                {"name": "Current return", "value": f"{current_return:+.2f}%", "inline": True},
+                                {"name": "Peak return", "value": f"{peak:+.2f}%", "inline": True},
+                                {"name": "Exit rule", "value": f"Fixed hold to {position.position_maturity}", "inline": True},
+                            ],
+                            color=GREEN,
+                        )
+            elif current_return >= self.settings.profit_target_pct and position.target_20_at is None:
+                await self.repo.mark_target_hit(position.id, price=price, return_pct=current_return)
+                position = (await self.repo.position(position.id)) or position
+
+            reason = tier_strategy_exit_reason(
+                exit_strategy=position.exit_strategy,
+                position_maturity=position.position_maturity,
+                current_return_pct=current_return,
+                age_seconds=age_seconds,
+                profit_target_pct=self.settings.profit_target_pct,
+            )
+            if reason is not None:
+                await self._close(position, price, reason)
+                return
+            # No runner floor/trailing stop for the new tier strategy. The initial
+            # update_market call above already persisted this tick and adverse telemetry.
+            return
 
         if position.target_20_at is None and peak >= self.settings.profit_target_pct:
             if await self.repo.mark_target_hit(position.id, price=price, return_pct=current_return):
@@ -786,7 +863,8 @@ class PortfolioShortTrader:
         )
         exposure_text = f"{exposure:.2f}%" if exposure is not None else "n/a"
         capacity = (
-            f"Slots **{len(positions)}/{self.settings.max_open_positions}** • HIGH "
+            f"Slots **{len(positions)}/{self.settings.max_open_positions}** • STD "
+            f"**{sum(p.risk_tier == 'STANDARD' for p in positions)}/{self.settings.max_standard_positions}** • HIGH "
             f"**{sum(p.risk_tier == 'HIGH_RISK' for p in positions)}/{self.settings.max_high_risk_positions}**\n"
             f"Open notional **${total_notional:,.2f}** • exposure **{exposure_text} / "
             f"{self.settings.max_total_exposure_pct:.2f}%**"
@@ -867,16 +945,17 @@ class PortfolioShortTrader:
                 "open_count": len(positions),
                 "slot_allocation_pct": self.settings.slot_allocation_pct,
                 "max_total_exposure_pct": self.settings.max_total_exposure_pct,
-                "version": "1.2.9",
+                "version": "1.3.0",
             },
         )
 
     def _strategy_label(self) -> str:
         return (
-            f"{'+'.join(self.settings.allowed_risk_tiers)} • {self.settings.max_open_positions} slots × "
-            f"{self.settings.slot_allocation_pct:.2f}% • max {self.settings.max_total_exposure_pct:.1f}% exposure • "
-            f"+{self.settings.profit_target_pct:.0f}% milestone → +{self.settings.protection_arm_pct:.0f}% arm → "
-            f"{self.settings.trail_callback_pct:.0f}% price trail"
+            f"{'+'.join(self.settings.allowed_risk_tiers)} • "
+            f"STD {self.settings.max_standard_positions}×{self.settings.standard_hold_days}d + "
+            f"HIGH {self.settings.max_high_risk_positions}×TP{self.settings.profit_target_pct:.0f}/"
+            f"{self.settings.high_risk_timeout_days}d • {self.settings.max_open_positions} slots × "
+            f"{self.settings.slot_allocation_pct:.2f}% • max {self.settings.max_total_exposure_pct:.1f}% exposure"
         )
 
 

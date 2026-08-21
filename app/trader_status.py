@@ -35,6 +35,7 @@ async def main() -> None:
                 f"  slot {p.slot_no}: {p.symbol} {p.risk_tier} {p.mode} | entry {p.entry_price:.10g} | "
                 f"current {p.current_price:.10g} | return {p.current_return_pct:+.2f}% | "
                 f"peak {p.peak_profit_pct:+.2f}% | adverse {p.max_adverse_pct:.2f}% | "
+                f"exit {p.exit_strategy}/{p.position_maturity} | "
                 f"floor {p.profit_floor_pct if p.profit_floor_pct is not None else 'n/a'}"
             )
     finally:

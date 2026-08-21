@@ -148,8 +148,14 @@ services:
         value: "6"
       - key: TRADER_MAX_TOTAL_EXPOSURE_PCT
         value: "20"
-      - key: TRADER_MAX_HIGH_RISK_POSITIONS
+      - key: TRADER_MAX_STANDARD_POSITIONS
         value: "5"
+      - key: TRADER_MAX_HIGH_RISK_POSITIONS
+        value: "1"
+      - key: TRADER_STANDARD_HOLD_DAYS
+        value: "7"
+      - key: TRADER_HIGH_RISK_TIMEOUT_DAYS
+        value: "4"
       - key: TRADER_ALLOW_SAME_SYMBOL_PARALLEL
         value: "false"
       - key: PAPER_STARTING_EQUITY_USDT

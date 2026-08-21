@@ -309,6 +309,13 @@ def _path_complete_for_hours(row: dict[str, Any], hours: int) -> bool:
         return False
     count_key = {168: "path_rows_7d", 336: "path_rows_14d"}.get(hours, f"path_rows_{hours}h")
     observed = _float(row.get(count_key))
+    # Intermediate horizons do not always have their own row-count column in the
+    # flattened research dataset. The cumulative 14d count is authoritative for
+    # horizons >7d; likewise the 7d count can cover shorter horizons.
+    if observed is None and hours > 168:
+        observed = _float(row.get("path_rows_14d"))
+    elif observed is None and hours < 168:
+        observed = _float(row.get("path_rows_7d"))
     if observed is not None:
         expected = hours * 4  # 15-minute bars
         if observed < math.ceil(expected * 0.98):
@@ -563,22 +570,40 @@ def _eligible_at_timeout(row: dict[str, Any], hours: int, generated_at: datetime
 def _build_high_risk_timeout_sweep(
     rows: list[dict[str, Any]], *, generated_at: datetime
 ) -> tuple[HighRiskTimeoutSummary, ...]:
-    """Simulate TP20-or-timeout without right-censoring.
+    """Simulate TP20-or-timeout on paired mature High-Risk cohorts.
 
-    A signal is eligible for an Nh timeout only after it has actually aged N hours.
-    Hitting TP20 early does not make a young signal eligible for a future timeout.
-    This removes the survivorship bias that previously produced artificial 100% TP
-    rates at 10d/14d before those cohorts had matured.
+    Timeouts through 10d use the exact same 10d-mature cohort, so 1d/2d/3d/4d/
+    5d/7d/10d can be compared directly. A row belongs to that cohort only when every
+    timeout is evaluable: either +20% was already hit by that timeout or a timeout
+    return exists. The 14d row uses its own fully mature/evaluable 14d cohort.
     """
     risky = [row for row in rows if str(row.get("risk_tier") or "standard") == "high_risk"]
+    paired_hours = tuple(h for h in HIGH_RISK_TIMEOUT_HOURS if h <= 240)
+
+    # Strict paired cohorts: every 1d..10d row must come from the exact same
+    # episodes with a complete stored 10-day path. Do not use broad shadow
+    # snapshots here because those can exist for some horizons but not others
+    # and would silently change the denominator between timeout rows.
+    cohort_10d = [
+        row for row in risky
+        if _eligible_at_timeout(row, 240, generated_at)
+        and _path_complete_for_hours(row, 240)
+        and all(_float(row.get(f"path_return_{hours}h")) is not None for hours in paired_hours)
+    ]
+    cohort_14d = [
+        row for row in risky
+        if _eligible_at_timeout(row, 336, generated_at)
+        and _path_complete_for_hours(row, 336)
+        and _float(row.get("path_return_336h")) is not None
+    ]
+
     result: list[HighRiskTimeoutSummary] = []
     for hours in HIGH_RISK_TIMEOUT_HOURS:
+        cohort = cohort_10d if hours <= 240 else cohort_14d
         outcomes: list[float] = []
         holding_hours: list[float] = []
         target_hits = 0
-        for row in risky:
-            if not _eligible_at_timeout(row, hours, generated_at):
-                continue
+        for row in cohort:
             if _target_within_hours(row, hours, prefer_path=True):
                 target_at_candidates = [
                     value for value in (row.get("target_20_path_at"), row.get("target_20_at"))
@@ -592,10 +617,16 @@ def _build_high_risk_timeout_sweep(
                 holding_hours.append(min(float(hours), elapsed))
                 target_hits += 1
                 continue
-            timeout_return = _horizon_return(row, hours)
-            if timeout_return is not None:
-                outcomes.append(timeout_return)
-                holding_hours.append(float(hours))
+            timeout_return = _float(row.get(f"path_return_{hours}h"))
+            if timeout_return is None:
+                # Strict paired cohort invariant: every included episode must have
+                # every timeout return required for the comparison.
+                outcomes = []
+                holding_hours = []
+                target_hits = 0
+                break
+            outcomes.append(timeout_return)
+            holding_hours.append(float(hours))
         total_slot_days = sum(holding_hours) / 24.0
         result.append(
             HighRiskTimeoutSummary(
@@ -934,7 +965,7 @@ def research_strategy_sweeps_csv(report: ResearchAnalyticsReport) -> bytes:
         ])
     for item in report.high_risk_timeout_sweep:
         writer.writerow([
-            "high_risk_tp20_timeout_mature_only", "high_risk", f"{item.timeout_hours}h", item.sample,
+            "high_risk_tp20_timeout_paired_10d", "high_risk", f"{item.timeout_hours}h", item.sample,
             _csv_pct(item.avg_strategy_return), _csv_pct(item.median_strategy_return),
             _csv_pct(item.target_hit_rate), _csv_pct(item.worst_strategy_return),
             "" if item.avg_holding_hours is None else f"{item.avg_holding_hours:.6f}",

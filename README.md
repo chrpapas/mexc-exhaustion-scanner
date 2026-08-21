@@ -1,4 +1,4 @@
-# MEXC Exhaustion Scanner + Multi-Slot Futures Trader v1.2.9
+# MEXC Exhaustion Scanner + Multi-Slot Futures Trader v1.3.1
 
 Hotfix: restores Discord formatting helpers used by signal and performance reports. Fixes `AttributeError: DiscordNotifier has no attribute _percent` in both scheduled and on-demand reports.
 
@@ -317,6 +317,33 @@ Every confirmed-short signal consumed by the trader now produces an explicit aud
 
 
 
+
+## v1.3.1 — tier-specific live strategy
+
+Promotes the exit/capacity structure selected from the v1.2.9 research into the trader while keeping the new entry-quality model in shadow.
+
+- Portfolio capacity is now **5 STANDARD + 1 HIGH_RISK** inside the existing 6-slot / 20% aggregate exposure model. Default slot size remains ~3.3333% of equity at 1x cross.
+- New STANDARD positions use `fixed_time_standard`: enter immediately on confirmation, treat +20% as telemetry only, and close the full position at **7 days**. No runner/trailing protection is applied to these new positions.
+- New HIGH_RISK positions use `tp20_or_timeout`: close the full position at **+20% short return**, otherwise close at **4 days**.
+- Conventional tight stops remain disabled; -100/-200/-300/-400% adverse levels remain cumulative telemetry/alerts.
+- Existing positions opened before v1.3.1 keep their persisted legacy runner/protection strategy so deployment does not mutate a live trade mid-position.
+- Entry timing remains immediate. `entry_quality` and `continuation_risk` remain frozen shadow diagnostics only; they do not filter signals yet.
+- HIGH_RISK research timeouts from 1d through 10d now use the **same paired 10-day cohort**, allowing a fair 4d-vs-longer validation.
+- Adds migration `014_tier_exit_strategy.sql` for the new persisted exit-strategy values and maturities.
+
+Recommended trader defaults:
+
+```text
+TRADER_MAX_OPEN_POSITIONS=6
+TRADER_MAX_TOTAL_EXPOSURE_PCT=20
+TRADER_MAX_STANDARD_POSITIONS=5
+TRADER_MAX_HIGH_RISK_POSITIONS=1
+TRADER_STANDARD_HOLD_DAYS=7
+TRADER_HIGH_RISK_TIMEOUT_DAYS=4
+TRADER_PROFIT_TARGET_PCT=20
+```
+
+See `TRADER-DEPLOY.md` for the deployment/live checklist.
 
 ## v1.2.9 — paired-cohort analytics corrections
 

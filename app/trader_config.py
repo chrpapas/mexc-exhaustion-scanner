@@ -30,7 +30,10 @@ class TraderSettings:
     max_open_positions: int
     slot_allocation_pct: float
     max_total_exposure_pct: float
+    max_standard_positions: int
     max_high_risk_positions: int
+    standard_hold_days: int
+    high_risk_timeout_days: int
     allow_same_symbol_parallel: bool
     paper_starting_equity_usdt: float
     paper_taker_fee_rate: float
@@ -76,11 +79,17 @@ class TraderSettings:
         slot_allocation_pct = float(
             os.getenv("TRADER_SLOT_ALLOCATION_PCT", str(max_total_exposure_pct / max_open_positions))
         )
-        reserve_standard = "STANDARD" in allowed_risk_tiers and "HIGH_RISK" in allowed_risk_tiers
+        paired_tiers = "STANDARD" in allowed_risk_tiers and "HIGH_RISK" in allowed_risk_tiers
+        max_standard_positions = int(
+            os.getenv(
+                "TRADER_MAX_STANDARD_POSITIONS",
+                str(max(0, max_open_positions - 1) if paired_tiers else max_open_positions),
+            )
+        )
         max_high_risk_positions = int(
             os.getenv(
                 "TRADER_MAX_HIGH_RISK_POSITIONS",
-                str(max(0, max_open_positions - 1) if reserve_standard else max_open_positions),
+                "1" if paired_tiers else str(max_open_positions),
             )
         )
         settings = cls(
@@ -95,7 +104,10 @@ class TraderSettings:
             max_open_positions=max_open_positions,
             slot_allocation_pct=slot_allocation_pct,
             max_total_exposure_pct=max_total_exposure_pct,
+            max_standard_positions=max_standard_positions,
             max_high_risk_positions=max_high_risk_positions,
+            standard_hold_days=int(os.getenv("TRADER_STANDARD_HOLD_DAYS", "7")),
+            high_risk_timeout_days=int(os.getenv("TRADER_HIGH_RISK_TIMEOUT_DAYS", "4")),
             allow_same_symbol_parallel=_bool("TRADER_ALLOW_SAME_SYMBOL_PARALLEL", False),
             paper_starting_equity_usdt=float(os.getenv("PAPER_STARTING_EQUITY_USDT", "2000")),
             paper_taker_fee_rate=float(os.getenv("TRADER_PAPER_TAKER_FEE_RATE", "0.0008")),
@@ -124,7 +136,7 @@ class TraderSettings:
             raise ValueError("TRADING_MODE must be paper or live")
         if self.margin_mode not in {"cross", "isolated"}:
             raise ValueError("TRADER_MARGIN_MODE must be cross or isolated")
-        if self.legacy_position_maturity not in {"profit_20", "1d", "2d", "3d", "7d"}:
+        if self.legacy_position_maturity not in {"profit_20", "1d", "2d", "3d", "4d", "5d", "6d", "7d", "10d", "14d"}:
             raise ValueError("TRADER_POSITION_MATURITY legacy value is invalid")
         if self.leverage < 1:
             raise ValueError("TRADER_LEVERAGE must be >= 1")
@@ -139,8 +151,18 @@ class TraderSettings:
             raise ValueError("TRADER_SLOT_ALLOCATION_PCT must be in (0,100]")
         if not 0 < self.max_total_exposure_pct <= 100:
             raise ValueError("TRADER_MAX_TOTAL_EXPOSURE_PCT must be in (0,100]")
+        if self.max_standard_positions < 0 or self.max_standard_positions > self.max_open_positions:
+            raise ValueError("TRADER_MAX_STANDARD_POSITIONS must be between 0 and max slots")
         if self.max_high_risk_positions < 0 or self.max_high_risk_positions > self.max_open_positions:
             raise ValueError("TRADER_MAX_HIGH_RISK_POSITIONS must be between 0 and max slots")
+        if "STANDARD" in self.allowed_risk_tiers and "HIGH_RISK" in self.allowed_risk_tiers:
+            if self.max_standard_positions + self.max_high_risk_positions > self.max_open_positions:
+                raise ValueError("STANDARD + HIGH_RISK tier capacities cannot exceed TRADER_MAX_OPEN_POSITIONS")
+        supported_holds = {1, 2, 3, 4, 5, 6, 7, 10, 14}
+        if self.standard_hold_days not in supported_holds:
+            raise ValueError("TRADER_STANDARD_HOLD_DAYS must be one of 1,2,3,4,5,6,7,10,14")
+        if self.high_risk_timeout_days not in supported_holds:
+            raise ValueError("TRADER_HIGH_RISK_TIMEOUT_DAYS must be one of 1,2,3,4,5,6,7,10,14")
         if self.paper_starting_equity_usdt <= 0:
             raise ValueError("PAPER_STARTING_EQUITY_USDT must be positive")
         if self.paper_taker_fee_rate < 0 or self.paper_taker_fee_rate >= 0.02:
