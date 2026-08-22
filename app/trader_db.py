@@ -15,7 +15,7 @@ class TraderRepository:
 
     async def initialize_runtime(self, *, starting_equity: float, process_existing: bool) -> None:
         current = await self.db.pool.fetchrow(
-            "SELECT last_signal_id, paper_equity_usdt FROM trader_runtime WHERE singleton=true"
+            "SELECT last_signal_id, paper_equity_usdt, active_run_id FROM trader_runtime WHERE singleton=true"
         )
         if current:
             return
@@ -39,7 +39,7 @@ class TraderRepository:
 
     async def runtime(self) -> dict[str, Any]:
         row = await self.db.pool.fetchrow(
-            "SELECT last_signal_id, paper_equity_usdt, initialized_at, updated_at "
+            "SELECT last_signal_id, paper_equity_usdt, active_run_id, initialized_at, updated_at "
             "FROM trader_runtime WHERE singleton=true"
         )
         if not row:
@@ -61,6 +61,62 @@ class TraderRepository:
             "UPDATE trader_runtime SET paper_equity_usdt=$1, updated_at=now() WHERE singleton=true",
             equity,
         )
+
+    async def latest_confirmed_signal_id(self) -> int:
+        return int(
+            await self.db.pool.fetchval(
+                "SELECT COALESCE(MAX(id),0) FROM run_signals WHERE level='confirmed_short'"
+            )
+            or 0
+        )
+
+    async def run_record(self, run_id: str) -> dict[str, Any] | None:
+        row = await self.db.pool.fetchrow(
+            "SELECT run_id, mode, strategy_name, status, started_at, ended_at "
+            "FROM trader_runs WHERE run_id=$1",
+            run_id,
+        )
+        return dict(row) if row else None
+
+    async def activate_paper_run(
+        self, *, run_id: str, starting_equity: float, process_existing: bool, strategy_name: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> bool:
+        runtime = await self.runtime()
+        if str(runtime.get("active_run_id") or "") == run_id:
+            return False
+        existing = await self.run_record(run_id)
+        if existing:
+            raise RuntimeError(
+                f"TRADER_PAPER_RUN_ID {run_id!r} was already used; choose a new unique run ID"
+            )
+        cursor = 0 if process_existing else await self.latest_confirmed_signal_id()
+        old_run = str(runtime.get("active_run_id") or "legacy_pre_v136")
+        async with self.db.pool.acquire() as conn:
+            async with conn.transaction():
+                await conn.execute(
+                    "UPDATE trader_runs SET status='archived', ended_at=COALESCE(ended_at,now()) "
+                    "WHERE run_id=$1 AND status='active'",
+                    old_run,
+                )
+                await conn.execute(
+                    """
+                    INSERT INTO trader_runs(run_id, mode, strategy_name, starting_equity_usdt, status, metadata)
+                    VALUES ($1,'paper',$2,$3,'active',$4::jsonb)
+                    """,
+                    run_id, strategy_name, starting_equity,
+                    json.dumps(metadata or {}, separators=(",", ":"), default=str),
+                )
+                await conn.execute(
+                    """
+                    UPDATE trader_runtime
+                    SET last_signal_id=$1, paper_equity_usdt=$2, active_run_id=$3,
+                        initialized_at=now(), updated_at=now()
+                    WHERE singleton=true
+                    """,
+                    cursor, starting_equity, run_id,
+                )
+        return True
 
     async def next_confirmed_signals(self, after_id: int, limit: int = 100) -> list[TradeSignal]:
         rows = await self.db.pool.fetch(
@@ -127,7 +183,7 @@ class TraderRepository:
         row = await self.db.pool.fetchrow("SELECT * FROM trader_positions WHERE id=$1", position_id)
         return self._position(row) if row else None
 
-    async def portfolio_stats(self) -> dict[str, Any]:
+    async def portfolio_stats(self, run_id: str | None = None) -> dict[str, Any]:
         row = await self.db.pool.fetchrow(
             """
             SELECT
@@ -138,7 +194,9 @@ class TraderRepository:
               COALESCE(SUM(entry_fee_usdt + exit_fee_usdt),0) AS fees,
               COUNT(*) FILTER (WHERE status='open') AS open_count
             FROM trader_positions
-            """
+            WHERE ($1::text IS NULL OR run_id=$1)
+            """,
+            run_id,
         )
         return dict(row) if row else {}
 
@@ -146,6 +204,7 @@ class TraderRepository:
         self,
         *,
         signal: TradeSignal,
+        run_id: str,
         slot_no: int,
         mode: str,
         capital_strategy: str,
@@ -164,19 +223,20 @@ class TraderRepository:
         row = await self.db.pool.fetchrow(
             """
             INSERT INTO trader_positions(
-                signal_id, episode_id, symbol, risk_tier, slot_no, mode, capital_strategy,
+                signal_id, episode_id, symbol, risk_tier, run_id, slot_no, mode, capital_strategy,
                 exit_strategy, position_maturity, status, opened_at, entry_price,
                 entry_equity_usdt, notional_usdt, quantity_base, current_price,
                 current_return_pct, peak_profit_pct, max_adverse_pct, liquidation_proxy_pct,
                 entry_fee_usdt, mexc_position_id, mexc_open_order_id, metadata
             ) VALUES (
-                $1,$2,$3,$4,$5,$6,$7,$8,$9,'open',$10,$11,$12,$13,$14,$11,0,0,0,$15,$16,$17,$18,$19::jsonb
+                $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'open',$11,$12,$13,$14,$15,$12,0,0,0,$16,$17,$18,$19,$20::jsonb
             ) RETURNING *
             """,
             signal.id,
             signal.episode_id,
             signal.symbol,
             signal.risk_tier,
+            run_id,
             slot_no,
             mode,
             capital_strategy,
@@ -355,6 +415,7 @@ class TraderRepository:
             signal_id=int(row["signal_id"]),
             symbol=str(row["symbol"]),
             risk_tier=str(row.get("risk_tier") or metadata.get("risk_tier") or "STANDARD").upper(),
+            run_id=str(row.get("run_id") or "legacy_pre_v136"),
             slot_no=int(row["slot_no"]) if row.get("slot_no") is not None else None,
             mode=str(row["mode"]),
             capital_strategy=str(row["capital_strategy"]),

@@ -206,6 +206,25 @@ class MexcTradeClient:
     async def usdt_equity(self) -> float:
         return float((await self.usdt_asset()).get("equity") or 0.0)
 
+    async def usdt_available_balance(self) -> float:
+        """Return spendable USDT in the MEXC futures account.
+
+        MEXC currently exposes ``availableBalance`` on the contract asset endpoint.
+        The fallbacks cover older/variant payload names without guessing from equity.
+        """
+        asset = await self.usdt_asset()
+        for key in ("availableBalance", "availableCash", "available"): 
+            value = asset.get(key)
+            if value is None or value == "":
+                continue
+            try:
+                return max(0.0, float(value))
+            except (TypeError, ValueError):
+                continue
+        # If no explicit availability field is present, fail closed rather than sizing
+        # live orders from total equity that may already be committed as margin.
+        raise MexcTradeError("MEXC USDT asset response has no usable available-balance field")
+
     async def open_positions(self, symbol: str | None = None) -> list[dict[str, Any]]:
         data = await self._private_get("/api/v1/private/position/open_positions", {"symbol": symbol})
         return [row for row in (data or []) if isinstance(row, dict)]

@@ -1,40 +1,56 @@
-MEXC Exhaustion Scanner + Multi-Slot Short Trader v1.3.5
+MEXC Exhaustion Scanner + Multi-Slot Futures Trader v1.3.6
 
-Deploy the entire project directory/ZIP contents together.
+Deploy the entire project/ZIP together. This release changes trader execution and includes a DB migration.
 
-v1.3.5 is a research-only extension. Live trader behavior remains the v1.3.1 strategy:
-- 6 total slots; 5 STANDARD + 1 HIGH_RISK
-- 20% aggregate initial notional exposure; ~3.3333% per slot by default
-- STANDARD: fixed 7-day hold; +20% is telemetry only
-- HIGH_RISK: close at +20% or 4-day timeout
-- Entry Quality / Continuation Risk / EntryGate-v1 remain shadow-only
-- Existing pre-v1.3 positions keep their persisted legacy exit strategy
+TP5_V1 paper strategy:
+- STANDARD + HIGH_RISK; EXTREME excluded
+- 6 generic slots
+- 5% of current equity per slot
+- 30% aggregate exposure cap
+- 1x cross
+- immediate entry; one open position per symbol
+- full exit at +5% favorable short return
+- no conventional tight stop; adverse telemetry retained
 
-New v1.3.5 research outputs:
-- Calendar Throughput board comparing Current vs TP5 on all observed signals, including immature/open positions
-- Signal utilization, capacity misses, entries/day, releases/day, marked return, MTM DD and median hold
-- True latest 30-day empty-book replay after 30 calendar days of history; no short-window monthly return extrapolation
-- Strategy CSV rows for observed calendar throughput and the latest true 30-day window
-- Existing v1.3.4 prospective monitoring, v1.3.3 MTM/EntryGate, OOS freeze and v1.3.2 TP5 risk analytics remain intact
-- No new MEXC requests and no database migration
+Clean paper run:
+TRADER_EXECUTION_STRATEGY=tp5_v1
+TRADER_PAPER_RUN_ID=tp5_v1
+PAPER_STARTING_EQUITY_USDT=2000
 
-Render trader variables to verify (unchanged):
+The first startup under a new run ID archives the prior paper book and starts the new run at the configured baseline. Redeploying the same active run ID does not reset again. Never reuse an archived run ID; use a new ID for a deliberate future reset.
+
+Required trader variables:
+TRADING_MODE=paper
+TRADER_ALLOWED_RISK_TIERS=STANDARD,HIGH_RISK
 TRADER_MAX_OPEN_POSITIONS=6
-TRADER_MAX_TOTAL_EXPOSURE_PCT=20
-TRADER_MAX_STANDARD_POSITIONS=5
-TRADER_MAX_HIGH_RISK_POSITIONS=1
-TRADER_STANDARD_HOLD_DAYS=7
-TRADER_HIGH_RISK_TIMEOUT_DAYS=4
-TRADER_PROFIT_TARGET_PCT=20
+TRADER_SLOT_ALLOCATION_PCT=5
+TRADER_MAX_TOTAL_EXPOSURE_PCT=30
+TRADER_TP5_TARGET_PCT=5
+TRADER_ALLOW_SAME_SYMBOL_PARALLEL=false
 TRADER_LEVERAGE=1
 TRADER_MARGIN_MODE=cross
+TRADER_PAPER_TAKER_FEE_RATE=0.0008
+MEXC_LIVE_ORDER_API_ENABLED=false
 
-Scanner research:
+Legacy tier variables may remain in Render but are ignored for new TP5_V1 entries.
+
+Live mode later ignores PAPER_STARTING_EQUITY_USDT. It reads actual MEXC Futures USDT equity/available balance and refuses an entry unless a full 5% slot can be funded. Before live mode run:
+python -m app.trader_preflight
+
+Only then deliberately enable:
+TRADING_MODE=live
+MEXC_LIVE_ORDER_API_ENABLED=true
+LIVE_TRADING_CONFIRM=I_UNDERSTAND_LIVE_TRADING
+and configure MEXC_API_KEY / MEXC_API_SECRET.
+
+Scanner research remains enabled with:
 RESEARCH_PATH_HORIZON_HOURS=336
 python -m app.research_analytics_now
 python -m app.signal_ledger_now
 
-Migration 014_tier_exit_strategy.sql remains the latest migration and is applied automatically at startup.
-Run tests/verification before deployment:
+Migration 015_tp5_trader_runs.sql is applied automatically at startup.
+
+Verification before deployment:
 pytest -q
 python scripts/verify_project.py
+python -m app.trader_status   # after deployment, from Render Shell

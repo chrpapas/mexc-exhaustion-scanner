@@ -48,6 +48,8 @@ class PortfolioShortTrader:
         self._live_execution_halted = False
         self._last_snapshot_fields: list[dict[str, Any]] = []
         self._last_protection_check: dict[int, float] = {}
+        self._active_run_id = "live"
+        self._live_starting_available_usdt: float | None = None
 
     async def start(self) -> None:
         await self.db.connect()
@@ -56,24 +58,87 @@ class PortfolioShortTrader:
             starting_equity=self.settings.paper_starting_equity_usdt,
             process_existing=self.settings.process_existing_signals,
         )
-        if self.settings.trading_mode == "live":
+        if self.settings.trading_mode == "paper":
+            await self._ensure_paper_run()
+        else:
+            self._active_run_id = f"live_{self.settings.execution_strategy}"
             await self._live_preflight()
         LOGGER.info(
-            "Trader started mode=%s risks=%s slots=%s std_cap=%s high_cap=%s slot_pct=%.4f max_exposure=%.2f%% strategy=STD_%sd_HIGH_TP%.0f_OR_%sd",
+            "Trader started mode=%s run=%s risks=%s slots=%s slot_pct=%.4f max_exposure=%.2f%% strategy=%s",
             self.settings.trading_mode,
+            self._active_run_id,
             ",".join(self.settings.allowed_risk_tiers),
             self.settings.max_open_positions,
-            self.settings.max_standard_positions,
-            self.settings.max_high_risk_positions,
             self.settings.slot_allocation_pct,
             self.settings.max_total_exposure_pct,
-            self.settings.standard_hold_days,
-            self.settings.profit_target_pct,
-            self.settings.high_risk_timeout_days,
+            self._strategy_label(),
         )
         # Discord is intentionally quiet: normal startup is logged/heartbeated in DB only.
         self._last_discord_heartbeat = time.monotonic()
         await self._write_db_heartbeat()
+
+    async def _active_positions(self) -> list[TraderPosition]:
+        # Keep paper and live books isolated even when they share the same PostgreSQL database.
+        return [
+            p for p in await self.repo.active_positions()
+            if getattr(p, "mode", self.settings.trading_mode) == self.settings.trading_mode
+        ]
+
+    async def _ensure_paper_run(self) -> None:
+        runtime = await self.repo.runtime()
+        current_run = str(runtime.get("active_run_id") or "legacy_pre_v136")
+        self._active_run_id = self.settings.paper_run_id
+        if current_run == self.settings.paper_run_id:
+            return
+
+        # Reject an accidentally reused archived experiment ID before touching the active book.
+        if await self.repo.run_record(self.settings.paper_run_id):
+            raise RuntimeError(
+                f"TRADER_PAPER_RUN_ID {self.settings.paper_run_id!r} was already used; "
+                "choose a new unique run ID"
+            )
+
+        # Archive any old paper positions at the best price available. The new run then starts
+        # from its configured clean equity, so these close values are historical bookkeeping only.
+        old_positions = [p for p in await self.repo.active_positions() if p.mode == "paper"]
+        for position in old_positions:
+            try:
+                price = await self.mexc.last_price(position.symbol)
+            except Exception:
+                LOGGER.warning(
+                    "Could not fetch reset price for %s; using last database price %.10g",
+                    position.symbol, position.current_price, exc_info=True,
+                )
+                price = position.current_price
+            exit_fee = position.quantity_base * price * self.settings.paper_taker_fee_rate
+            await self.repo.close_position(
+                position,
+                exit_price=price,
+                status="closed",
+                reason=f"strategy_run_reset_to_{self.settings.paper_run_id}",
+                exit_fee_usdt=exit_fee,
+            )
+            await self.mexc.ticker_stream.remove(position.symbol)
+
+        changed = await self.repo.activate_paper_run(
+            run_id=self.settings.paper_run_id,
+            starting_equity=self.settings.paper_starting_equity_usdt,
+            process_existing=self.settings.process_existing_signals,
+            strategy_name=self.settings.execution_strategy,
+            metadata={
+                "max_open_positions": self.settings.max_open_positions,
+                "slot_allocation_pct": self.settings.slot_allocation_pct,
+                "max_total_exposure_pct": self.settings.max_total_exposure_pct,
+                "tp5_target_pct": self.settings.tp5_target_pct,
+                "allowed_risk_tiers": list(self.settings.allowed_risk_tiers),
+            },
+        )
+        if changed:
+            LOGGER.warning(
+                "Paper strategy run reset old_run=%s new_run=%s archived_open=%s starting_equity=%.2f strategy=%s",
+                current_run, self.settings.paper_run_id, len(old_positions),
+                self.settings.paper_starting_equity_usdt, self.settings.execution_strategy,
+            )
 
     async def close(self) -> None:
         await asyncio.gather(
@@ -117,12 +182,12 @@ class PortfolioShortTrader:
             await self.close()
 
     async def tick(self) -> None:
-        positions = await self.repo.active_positions()
+        positions = await self._active_positions()
         live_rows: list[dict[str, Any]] | None = None
         if self.settings.trading_mode == "live":
             live_rows = await self.mexc.open_positions()
             await self._reconcile_live_positions(positions, live_rows)
-            positions = await self.repo.active_positions()
+            positions = await self._active_positions()
 
         # Fetch prices concurrently, then process state transitions serially to stay well within order mutation limits.
         if positions:
@@ -146,8 +211,13 @@ class PortfolioShortTrader:
     async def _live_preflight(self) -> None:
         await self.mexc.ping()
         asset = await self.mexc.usdt_asset()
-        if float(asset.get("equity") or 0.0) <= 0:
+        equity = float(asset.get("equity") or 0.0)
+        if equity <= 0:
             raise RuntimeError("MEXC live preflight: USDT futures equity is zero")
+        available = await self.mexc.usdt_available_balance()
+        if available <= 0:
+            raise RuntimeError("MEXC live preflight: available USDT futures balance is zero")
+        self._live_starting_available_usdt = available
         mode = await self.mexc.position_mode()
         if mode is not None and mode != 1:
             raise RuntimeError(
@@ -156,7 +226,7 @@ class PortfolioShortTrader:
         # Warm/cache contract metadata once to avoid the contract-detail endpoint rate limit during clustered signals.
         await self.mexc.refresh_contract_specs()
         exchange = await self.mexc.open_positions()
-        managed = await self.repo.active_positions()
+        managed = await self._active_positions()
         managed_ids = {p.mexc_position_id for p in managed if p.mode == "live" and p.mexc_position_id}
         extras = [r for r in exchange if int(r.get("positionId") or 0) not in managed_ids]
         if extras:
@@ -210,7 +280,7 @@ class PortfolioShortTrader:
             )
             return
 
-        active = await self.repo.active_positions()
+        active = await self._active_positions()
         if len(active) >= self.settings.max_open_positions:
             await self._ignore_signal(
                 signal,
@@ -230,7 +300,7 @@ class PortfolioShortTrader:
                 active=active,
             )
             return
-        if signal.risk_tier == "STANDARD":
+        if self.settings.execution_strategy == "tier_v1" and signal.risk_tier == "STANDARD":
             standard_count = sum(p.risk_tier == "STANDARD" for p in active)
             if standard_count >= self.settings.max_standard_positions:
                 await self._ignore_signal(
@@ -247,7 +317,7 @@ class PortfolioShortTrader:
                     ],
                 )
                 return
-        if signal.risk_tier == "HIGH_RISK":
+        if self.settings.execution_strategy == "tier_v1" and signal.risk_tier == "HIGH_RISK":
             high_count = sum(p.risk_tier == "HIGH_RISK" for p in active)
             if high_count >= self.settings.max_high_risk_positions:
                 await self._ignore_signal(
@@ -273,7 +343,14 @@ class PortfolioShortTrader:
         max_notional = equity * self.settings.max_total_exposure_fraction
         remaining = max_notional - total_notional
         current_exposure = total_notional / equity * 100.0 if equity > 0 else 0.0
-        if remaining <= 0 or remaining < desired * 0.5:
+        live_available: float | None = None
+        if self.settings.trading_mode == "live":
+            live_available = await self.mexc.usdt_available_balance()
+            # Keep a small execution buffer for fees/price movement. At 1x this also prevents
+            # the bot from requesting more margin than MEXC reports as immediately available.
+            remaining = min(remaining, live_available * 0.98)
+        minimum_slot = desired if self.settings.execution_strategy == "tp5_v1" else desired * 0.5
+        if remaining <= 0 or remaining + 1e-9 < minimum_slot:
             await self._ignore_signal(
                 signal,
                 "ignored_exposure",
@@ -284,10 +361,11 @@ class PortfolioShortTrader:
                     {"name": "Exposure cap", "value": f"{self.settings.max_total_exposure_pct:.2f}%", "inline": True},
                     {"name": "Requested slot", "value": f"${desired:,.2f} ({self.settings.slot_allocation_pct:.2f}%)", "inline": True},
                     {"name": "Remaining capacity", "value": f"${max(0.0, remaining):,.2f}", "inline": True},
+                    *([{"name": "MEXC available USDT", "value": f"${live_available:,.2f}", "inline": True}] if live_available is not None else []),
                 ],
             )
             return
-        notional = min(desired, remaining)
+        notional = desired if self.settings.execution_strategy == "tp5_v1" else min(desired, remaining)
         slot_no = next(i for i in range(1, self.settings.max_open_positions + 1) if all(p.slot_no != i for p in active))
 
         position = (
@@ -305,7 +383,9 @@ class PortfolioShortTrader:
             position.notional_usdt,
             equity,
         )
-        if signal.risk_tier == "STANDARD":
+        if self.settings.execution_strategy == "tp5_v1":
+            exit_text = f"Full close at +{self.settings.tp5_target_pct:.0f}% favorable short return"
+        elif signal.risk_tier == "STANDARD":
             exit_text = f"Fixed {self.settings.standard_hold_days}d hold; +{self.settings.profit_target_pct:.0f}% is telemetry only"
         else:
             exit_text = f"Close at +{self.settings.profit_target_pct:.0f}% or after {self.settings.high_risk_timeout_days}d, whichever comes first"
@@ -332,7 +412,7 @@ class PortfolioShortTrader:
     ) -> None:
         """Persist, log and Discord-report every confirmed signal that is not traded."""
         await self.repo.decision(signal.id, decision, reason)
-        active = active if active is not None else await self.repo.active_positions()
+        active = active if active is not None else await self._active_positions()
         LOGGER.info(
             "Signal not traded id=%s symbol=%s risk=%s decision=%s reason=%s open_positions=%s/%s",
             signal.id,
@@ -351,14 +431,19 @@ class PortfolioShortTrader:
         entry_fee = notional * self.settings.paper_taker_fee_rate
         runtime = await self.repo.runtime()
         await self.repo.set_paper_equity(max(0.0, float(runtime["paper_equity_usdt"]) - entry_fee))
-        exit_strategy = "fixed_time_standard" if signal.risk_tier == "STANDARD" else "tp20_or_timeout"
-        position_maturity = (
-            f"{self.settings.standard_hold_days}d"
-            if signal.risk_tier == "STANDARD"
-            else f"{self.settings.high_risk_timeout_days}d"
-        )
+        if self.settings.execution_strategy == "tp5_v1":
+            exit_strategy = "tp5_full"
+            position_maturity = "profit_5"
+        else:
+            exit_strategy = "fixed_time_standard" if signal.risk_tier == "STANDARD" else "tp20_or_timeout"
+            position_maturity = (
+                f"{self.settings.standard_hold_days}d"
+                if signal.risk_tier == "STANDARD"
+                else f"{self.settings.high_risk_timeout_days}d"
+            )
         return await self.repo.create_position(
             signal=signal,
+            run_id=self._active_run_id,
             slot_no=slot_no,
             mode="paper",
             capital_strategy=self.settings.capital_strategy_label,
@@ -376,6 +461,8 @@ class PortfolioShortTrader:
                 "leverage": self.settings.leverage,
                 "risk_tier": signal.risk_tier,
                 "paper_taker_fee_rate": self.settings.paper_taker_fee_rate,
+                "execution_strategy": self.settings.execution_strategy,
+                "tp_target_pct": self.settings.tp5_target_pct if self.settings.execution_strategy == "tp5_v1" else self.settings.profit_target_pct,
             },
         )
 
@@ -413,14 +500,19 @@ class PortfolioShortTrader:
         )
         hold_contracts = float(live_position.get("holdVol") or contracts)
         entry_fee = float(order.get("takerFee") or order.get("makerFee") or 0.0)
-        exit_strategy = "fixed_time_standard" if signal.risk_tier == "STANDARD" else "tp20_or_timeout"
-        position_maturity = (
-            f"{self.settings.standard_hold_days}d"
-            if signal.risk_tier == "STANDARD"
-            else f"{self.settings.high_risk_timeout_days}d"
-        )
+        if self.settings.execution_strategy == "tp5_v1":
+            exit_strategy = "tp5_full"
+            position_maturity = "profit_5"
+        else:
+            exit_strategy = "fixed_time_standard" if signal.risk_tier == "STANDARD" else "tp20_or_timeout"
+            position_maturity = (
+                f"{self.settings.standard_hold_days}d"
+                if signal.risk_tier == "STANDARD"
+                else f"{self.settings.high_risk_timeout_days}d"
+            )
         return await self.repo.create_position(
             signal=signal,
+            run_id=self._active_run_id,
             slot_no=slot_no,
             mode="live",
             capital_strategy=self.settings.capital_strategy_label,
@@ -441,6 +533,8 @@ class PortfolioShortTrader:
                 "leverage": self.settings.leverage,
                 "risk_tier": signal.risk_tier,
                 "mexc_liquidate_price": live_position.get("liquidatePrice"),
+                "execution_strategy": self.settings.execution_strategy,
+                "tp_target_pct": self.settings.tp5_target_pct if self.settings.execution_strategy == "tp5_v1" else self.settings.profit_target_pct,
             },
         )
 
@@ -489,10 +583,18 @@ class PortfolioShortTrader:
                         {"name": "Max adverse", "value": f"-{adverse:.2f}%", "inline": True},
                         {"name": "Current price", "value": f"{price:.10g}", "inline": True},
                         {"name": "Entry", "value": f"{position.entry_price:.10g}", "inline": True},
-                        {"name": "+20% target", "value": "Already reached" if position.target_20_at else "Not reached yet", "inline": True},
+                        {"name": "Exit target", "value": (f"+{float(position.metadata.get('tp_target_pct') or self.settings.tp5_target_pct):g}%" if position.exit_strategy == "tp5_full" else f"+{self.settings.profit_target_pct:.0f}%"), "inline": True},
                     ],
                     color=breach_colors[threshold],
                 )
+
+        if position.exit_strategy == "tp5_full":
+            target_pct = float(position.metadata.get("tp_target_pct") or self.settings.tp5_target_pct)
+            if current_return >= target_pct:
+                await self._close(position, price, f"tp5_profit_target_{target_pct:g}")
+                return
+            # TP5 has no conventional stop or trailing runner. Adverse telemetry above remains active.
+            return
 
         # v1.3 tier-specific live strategy. Only positions opened with the new persisted
         # exit_strategy values use these rules. Existing pre-v1.3 positions retain their
@@ -791,12 +893,12 @@ class PortfolioShortTrader:
             return await self.mexc.usdt_equity()
         runtime = await self.repo.runtime()
         realized_equity = float(runtime["paper_equity_usdt"])
-        positions = positions if positions is not None else await self.repo.active_positions()
+        positions = positions if positions is not None else await self._active_positions()
         unrealized = sum(p.notional_usdt * p.current_return_pct / 100.0 for p in positions if p.mode == "paper")
         return realized_equity + unrealized
 
     async def _snapshot_fields(self) -> list[dict[str, Any]]:
-        positions = await self.repo.active_positions()
+        positions = await self._active_positions()
         equity = await self._account_equity(positions)
         fields = await self._build_snapshot_fields(positions, equity=equity, equity_is_live=True)
         self._last_snapshot_fields = fields
@@ -808,7 +910,7 @@ class PortfolioShortTrader:
         This is intentionally usable during an exchange/API outage so error alerts still contain
         the last database-observed positions and P/L instead of becoming context-free messages.
         """
-        positions = await self.repo.active_positions()
+        positions = await self._active_positions()
         runtime = await self.repo.runtime()
         if self.settings.trading_mode == "paper":
             realized = float(runtime["paper_equity_usdt"])
@@ -843,7 +945,7 @@ class PortfolioShortTrader:
         equity_is_live: bool,
     ) -> list[dict[str, Any]]:
         runtime = await self.repo.runtime()
-        stats = await self.repo.portfolio_stats()
+        stats = await self.repo.portfolio_stats(self._active_run_id)
         total_notional = sum(p.notional_usdt for p in positions)
         exposure = total_notional / equity * 100.0 if equity is not None and equity > 0 else None
         closed = int(stats.get("closed_count") or 0)
@@ -862,13 +964,20 @@ class PortfolioShortTrader:
             f"liquidations {int(stats.get('liquidation_count') or 0)} • fees ${float(stats.get('fees') or 0):,.4f}"
         )
         exposure_text = f"{exposure:.2f}%" if exposure is not None else "n/a"
-        capacity = (
-            f"Slots **{len(positions)}/{self.settings.max_open_positions}** • STD "
-            f"**{sum(p.risk_tier == 'STANDARD' for p in positions)}/{self.settings.max_standard_positions}** • HIGH "
-            f"**{sum(p.risk_tier == 'HIGH_RISK' for p in positions)}/{self.settings.max_high_risk_positions}**\n"
-            f"Open notional **${total_notional:,.2f}** • exposure **{exposure_text} / "
-            f"{self.settings.max_total_exposure_pct:.2f}%**"
-        )
+        if self.settings.execution_strategy == "tp5_v1":
+            capacity = (
+                f"Slots **{len(positions)}/{self.settings.max_open_positions}** • generic STANDARD + HIGH\n"
+                f"Open notional **${total_notional:,.2f}** • exposure **{exposure_text} / "
+                f"{self.settings.max_total_exposure_pct:.2f}%**"
+            )
+        else:
+            capacity = (
+                f"Slots **{len(positions)}/{self.settings.max_open_positions}** • STD "
+                f"**{sum(p.risk_tier == 'STANDARD' for p in positions)}/{self.settings.max_standard_positions}** • HIGH "
+                f"**{sum(p.risk_tier == 'HIGH_RISK' for p in positions)}/{self.settings.max_high_risk_positions}**\n"
+                f"Open notional **${total_notional:,.2f}** • exposure **{exposure_text} / "
+                f"{self.settings.max_total_exposure_pct:.2f}%**"
+            )
         if positions:
             lines = []
             for p in positions[:10]:
@@ -935,7 +1044,7 @@ class PortfolioShortTrader:
         )
 
     async def _write_db_heartbeat(self) -> None:
-        positions = await self.repo.active_positions()
+        positions = await self._active_positions()
         await self.db.heartbeat(
             "portfolio_short_trader",
             {
@@ -945,11 +1054,19 @@ class PortfolioShortTrader:
                 "open_count": len(positions),
                 "slot_allocation_pct": self.settings.slot_allocation_pct,
                 "max_total_exposure_pct": self.settings.max_total_exposure_pct,
-                "version": "1.3.0",
+                "strategy": self.settings.execution_strategy,
+                "run_id": self._active_run_id,
+                "version": "1.3.6",
             },
         )
 
     def _strategy_label(self) -> str:
+        if self.settings.execution_strategy == "tp5_v1":
+            return (
+                f"TP5_V1 • {self.settings.max_open_positions} generic slots × "
+                f"{self.settings.slot_allocation_pct:.2f}% • TP +{self.settings.tp5_target_pct:g}% • "
+                f"max {self.settings.max_total_exposure_pct:.1f}% exposure • one position/symbol"
+            )
         return (
             f"{'+'.join(self.settings.allowed_risk_tiers)} • "
             f"STD {self.settings.max_standard_positions}×{self.settings.standard_hold_days}d + "

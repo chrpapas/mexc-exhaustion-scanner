@@ -19,6 +19,7 @@ async def main() -> None:
     try:
         server_time = await client.ping()
         asset = await client.usdt_asset()
+        available = await client.usdt_available_balance()
         mode = await client.position_mode()
         positions = await client.open_positions()
         await client.refresh_contract_specs()
@@ -26,7 +27,8 @@ async def main() -> None:
         print(f"REST base: {base}")
         print(f"Server time: {server_time}")
         print(f"USDT equity: {float(asset.get('equity') or 0):,.4f}")
-        print(f"USDT available open: {float(asset.get('availableOpen') or 0):,.4f}")
+        print(f"USDT available balance: {available:,.4f}")
+        print(f"USDT cash balance: {float(asset.get('cashBalance') or 0):,.4f}")
         mode_label = 'hedge' if mode == 1 else 'one-way' if mode == 2 else 'unknown/unparseable'
         print(f"Position mode: {mode} ({mode_label})")
         print(f"Existing MEXC futures positions: {len(positions)}")

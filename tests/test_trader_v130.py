@@ -107,6 +107,7 @@ async def test_new_high_risk_position_closes_at_20_or_4d(monkeypatch):
 
 def test_default_capacity_is_exactly_five_standard_one_high(monkeypatch):
     monkeypatch.setenv("DATABASE_URL", "postgresql://example")
+    monkeypatch.setenv("TRADER_EXECUTION_STRATEGY", "tier_v1")
     for key in (
         "TRADER_MAX_OPEN_POSITIONS", "TRADER_MAX_STANDARD_POSITIONS",
         "TRADER_MAX_HIGH_RISK_POSITIONS", "TRADER_STANDARD_HOLD_DAYS",
@@ -129,6 +130,7 @@ async def test_tier_capacity_reserves_five_standard_and_one_high(monkeypatch):
     from app.trader_models import TradeSignal
 
     monkeypatch.setenv("DATABASE_URL", "postgresql://example")
+    monkeypatch.setenv("TRADER_EXECUTION_STRATEGY", "tier_v1")
     settings = TraderSettings.from_env()
     trader = PortfolioShortTrader(settings)
     decisions = []

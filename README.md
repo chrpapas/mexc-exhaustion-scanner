@@ -1,15 +1,19 @@
-# MEXC Exhaustion Scanner + Multi-Slot Futures Trader v1.3.5
+# MEXC Exhaustion Scanner + Multi-Slot Futures Trader v1.3.6
 
-Research-only calendar-throughput upgrade. Live trader behavior remains unchanged.
+TP5 execution release. The paper trader now prospectively executes the frozen TP5_V1 strategy while the research service keeps the former tier strategy as a benchmark.
 
-- Adds a **Calendar Throughput • Current vs TP5** board that replays every observed signal chronologically, including immature/open signals, so slot congestion and capital recycling are measured directly instead of inferred from the complete-7d cohort.
-- Reports signal utilization, entered/closed/open trades, capacity and same-symbol misses, entries/day, releases/day, marked return, MTM drawdown and median holding time for Current vs TP5 on the same observed calendar window.
-- Adds a **true latest 30-day empty-book replay** once at least 30 calendar days of signal history exist. Both strategies start with equal equity and consume the exact same signals inside the window. Shorter histories explicitly do **not** extrapolate return to a month.
-- Exports `calendar_throughput_observed` and `calendar_latest_30d_empty_book` rows in the strategy-sweeps CSV.
-- Keeps the v1.3.4 fast prospective TP5 monitor, EntryGate acceptance, regime drift, post-freeze comparison, frozen EntryGate-v1, and OOS boundary at **2026-08-21 21:29 UTC / 23:29 CEST**.
-- Uses only stored PostgreSQL research data; no additional MEXC requests and no schema migration.
+- **TP5_V1 execution:** 6 generic STANDARD/HIGH_RISK slots, exactly 5% of current equity per position, 30% aggregate cap, 1x cross, immediate entry, one open position per symbol, full close at +5% favorable short return. EXTREME_RISK remains excluded.
+- **Clean paper experiment:** `PAPER_STARTING_EQUITY_USDT` defaults to **2000** and `TRADER_PAPER_RUN_ID` defaults to `tp5_v1`. On the first deployment of a new run ID, open paper positions from the prior run are archived/closed for bookkeeping and the new run starts from the configured baseline.
+- **Reset is idempotent:** redeploying with the same active run ID resumes existing TP5 equity and positions; it does not reset again. Archived run IDs cannot be reused. To intentionally start another clean experiment later, use a new unique run ID.
+- **History is retained:** old trades are not deleted. Positions and aggregate statistics are tagged by run ID so pre-TP5 and TP5 performance do not mix.
+- **Live-ready capital handling:** paper starting equity is ignored in live mode. Live startup reads the MEXC Futures USDT account, validates actual available balance, sizes each full TP5 slot from current Futures account equity, and refuses an order unless sufficient exchange-reported available USDT remains.
+- **Fail-closed live mode:** API keys, Futures order permission gate, explicit live confirmation, hedge-mode/preflight checks and unmanaged-position reconciliation remain required.
+- Adds migration `015_tp5_trader_runs.sql` for run tracking and persisted `tp5_full` / `profit_5` position contracts.
+- Keeps all v1.3.5 research boards, including Calendar Throughput, true 30-day replay when mature, prospective TP5 monitoring and frozen EntryGate comparisons.
 
-The live trader is unchanged: 5 STANDARD + 1 HIGH_RISK, 20% aggregate exposure, 1x cross, STANDARD 7d, HIGH_RISK +20% or 4d.
+The legacy `tier_v1` execution path (5 STANDARD + 1 HIGH_RISK; Standard 7d; High +20%/4d) remains available for rollback and for persisted historical positions, but it is no longer the default.
+
+## v1.3.5 — calendar throughput research
 
 ## v1.3.4 — prospective monitoring
 

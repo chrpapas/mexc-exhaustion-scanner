@@ -7,7 +7,8 @@ from app.trader_logic import newly_breached_thresholds, protected_profit_floor_p
 
 def _clear(monkeypatch):
     keys = [
-        "TRADING_MODE", "TRADER_MARGIN_MODE", "TRADER_ALLOWED_RISK_TIERS",
+        "TRADING_MODE", "TRADER_EXECUTION_STRATEGY", "TRADER_PAPER_RUN_ID",
+        "TRADER_TP5_TARGET_PCT", "TRADER_MARGIN_MODE", "TRADER_ALLOWED_RISK_TIERS",
         "TRADER_MAX_OPEN_POSITIONS", "TRADER_SLOT_ALLOCATION_PCT",
         "TRADER_MAX_TOTAL_EXPOSURE_PCT", "TRADER_MAX_STANDARD_POSITIONS", "TRADER_MAX_HIGH_RISK_POSITIONS",
         "TRADER_PROFIT_TARGET_PCT", "TRADER_PROTECTION_ARM_PCT",
@@ -25,8 +26,11 @@ def test_strategy_one_is_new_default(monkeypatch):
     assert s.margin_mode == "cross"
     assert s.allowed_risk_tiers == ("STANDARD", "HIGH_RISK")
     assert s.max_open_positions == 6
-    assert s.slot_allocation_pct == pytest.approx(3.333333)
-    assert s.max_total_exposure_pct == 20
+    assert s.execution_strategy == "tp5_v1"
+    assert s.slot_allocation_pct == pytest.approx(5.0)
+    assert s.max_total_exposure_pct == 30
+    assert s.tp5_target_pct == 5
+    # Legacy tier caps remain configured for rollback but are ignored by TP5 generic slots.
     assert s.max_standard_positions == 5
     assert s.max_high_risk_positions == 1
     assert s.standard_hold_days == 7
@@ -168,6 +172,7 @@ async def test_high_signal_blocked_by_exposure_is_logged_persisted_but_not_disco
 
     monkeypatch.setenv("DATABASE_URL", "postgresql://example")
     _clear(monkeypatch)
+    monkeypatch.setenv("TRADER_EXECUTION_STRATEGY", "tier_v1")
     settings = TraderSettings.from_env()
     trader = PortfolioShortTrader(settings)
 

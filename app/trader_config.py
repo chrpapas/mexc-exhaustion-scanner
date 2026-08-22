@@ -23,6 +23,8 @@ class TraderSettings:
     mexc_base_url: str
     mexc_ws_url: str
     trading_mode: str
+    execution_strategy: str
+    paper_run_id: str
     margin_mode: str
     legacy_position_maturity: str
     leverage: int
@@ -40,6 +42,7 @@ class TraderSettings:
     poll_seconds: int
     process_existing_signals: bool
     max_signal_age_seconds: int
+    tp5_target_pct: float
     profit_target_pct: float
     protection_arm_pct: float
     trail_callback_pct: float
@@ -71,14 +74,19 @@ class TraderSettings:
             or os.getenv("DISCORD_TRADER_WEBHOOK_URL")
             or None
         )
+        execution_strategy = os.getenv("TRADER_EXECUTION_STRATEGY", "tp5_v1").strip().lower()
         allowed_risk_tiers = _csv_upper("TRADER_ALLOWED_RISK_TIERS", "STANDARD,HIGH_RISK")
         max_open_positions = int(os.getenv("TRADER_MAX_OPEN_POSITIONS", "6"))
         if max_open_positions < 1:
             raise ValueError("TRADER_MAX_OPEN_POSITIONS must be >= 1")
-        max_total_exposure_pct = float(os.getenv("TRADER_MAX_TOTAL_EXPOSURE_PCT", "20"))
-        slot_allocation_pct = float(
-            os.getenv("TRADER_SLOT_ALLOCATION_PCT", str(max_total_exposure_pct / max_open_positions))
+
+        default_exposure = "30" if execution_strategy == "tp5_v1" else "20"
+        max_total_exposure_pct = float(os.getenv("TRADER_MAX_TOTAL_EXPOSURE_PCT", default_exposure))
+        default_slot_pct = "5" if execution_strategy == "tp5_v1" else str(
+            max_total_exposure_pct / max_open_positions
         )
+        slot_allocation_pct = float(os.getenv("TRADER_SLOT_ALLOCATION_PCT", default_slot_pct))
+
         paired_tiers = "STANDARD" in allowed_risk_tiers and "HIGH_RISK" in allowed_risk_tiers
         max_standard_positions = int(
             os.getenv(
@@ -97,6 +105,8 @@ class TraderSettings:
             mexc_base_url=base_url,
             mexc_ws_url=os.getenv("MEXC_WS_URL", "wss://contract.mexc.com/edge").strip(),
             trading_mode=os.getenv("TRADING_MODE", "paper").strip().lower(),
+            execution_strategy=execution_strategy,
+            paper_run_id=os.getenv("TRADER_PAPER_RUN_ID", "tp5_v1").strip(),
             margin_mode=os.getenv("TRADER_MARGIN_MODE", "cross").strip().lower(),
             legacy_position_maturity=os.getenv("TRADER_POSITION_MATURITY", "profit_20").strip().lower(),
             leverage=int(os.getenv("TRADER_LEVERAGE", "1")),
@@ -114,6 +124,7 @@ class TraderSettings:
             poll_seconds=int(os.getenv("TRADER_POLL_SECONDS", "5")),
             process_existing_signals=_bool("TRADER_PROCESS_EXISTING_SIGNALS", False),
             max_signal_age_seconds=int(os.getenv("TRADER_MAX_SIGNAL_AGE_SECONDS", "900")),
+            tp5_target_pct=float(os.getenv("TRADER_TP5_TARGET_PCT", "5")),
             profit_target_pct=float(os.getenv("TRADER_PROFIT_TARGET_PCT", "20")),
             protection_arm_pct=float(os.getenv("TRADER_PROTECTION_ARM_PCT", "25")),
             trail_callback_pct=float(os.getenv("TRADER_TRAIL_CALLBACK_PCT", "15")),
@@ -134,6 +145,10 @@ class TraderSettings:
     def validate(self) -> None:
         if self.trading_mode not in {"paper", "live"}:
             raise ValueError("TRADING_MODE must be paper or live")
+        if self.execution_strategy not in {"tp5_v1", "tier_v1"}:
+            raise ValueError("TRADER_EXECUTION_STRATEGY must be tp5_v1 or tier_v1")
+        if not self.paper_run_id or len(self.paper_run_id) > 80:
+            raise ValueError("TRADER_PAPER_RUN_ID must be a non-empty identifier up to 80 characters")
         if self.margin_mode not in {"cross", "isolated"}:
             raise ValueError("TRADER_MARGIN_MODE must be cross or isolated")
         if self.legacy_position_maturity not in {"profit_20", "1d", "2d", "3d", "4d", "5d", "6d", "7d", "10d", "14d"}:
@@ -145,17 +160,21 @@ class TraderSettings:
         unknown = set(self.allowed_risk_tiers) - {"STANDARD", "HIGH_RISK", "EXTREME_RISK"}
         if unknown:
             raise ValueError(f"unsupported risk tiers: {sorted(unknown)}")
+        if self.execution_strategy == "tp5_v1" and "EXTREME_RISK" in self.allowed_risk_tiers:
+            raise ValueError("TP5_V1 intentionally excludes EXTREME_RISK")
         if self.max_open_positions < 1:
             raise ValueError("TRADER_MAX_OPEN_POSITIONS must be >= 1")
         if not 0 < self.slot_allocation_pct <= 100:
             raise ValueError("TRADER_SLOT_ALLOCATION_PCT must be in (0,100]")
         if not 0 < self.max_total_exposure_pct <= 100:
             raise ValueError("TRADER_MAX_TOTAL_EXPOSURE_PCT must be in (0,100]")
+        if self.slot_allocation_pct * self.max_open_positions > self.max_total_exposure_pct + 1e-9:
+            raise ValueError("slot allocation × max slots cannot exceed aggregate exposure cap")
         if self.max_standard_positions < 0 or self.max_standard_positions > self.max_open_positions:
             raise ValueError("TRADER_MAX_STANDARD_POSITIONS must be between 0 and max slots")
         if self.max_high_risk_positions < 0 or self.max_high_risk_positions > self.max_open_positions:
             raise ValueError("TRADER_MAX_HIGH_RISK_POSITIONS must be between 0 and max slots")
-        if "STANDARD" in self.allowed_risk_tiers and "HIGH_RISK" in self.allowed_risk_tiers:
+        if self.execution_strategy == "tier_v1" and "STANDARD" in self.allowed_risk_tiers and "HIGH_RISK" in self.allowed_risk_tiers:
             if self.max_standard_positions + self.max_high_risk_positions > self.max_open_positions:
                 raise ValueError("STANDARD + HIGH_RISK tier capacities cannot exceed TRADER_MAX_OPEN_POSITIONS")
         supported_holds = {1, 2, 3, 4, 5, 6, 7, 10, 14}
@@ -171,10 +190,12 @@ class TraderSettings:
             raise ValueError("TRADER_POLL_SECONDS must be >= 1")
         if self.max_signal_age_seconds <= 0:
             raise ValueError("TRADER_MAX_SIGNAL_AGE_SECONDS must be positive")
+        if not 0 < self.tp5_target_pct < 100:
+            raise ValueError("TRADER_TP5_TARGET_PCT must be between 0 and 100")
         if not 0 < self.profit_target_pct < 100:
             raise ValueError("TRADER_PROFIT_TARGET_PCT must be between 0 and 100")
         if not self.profit_target_pct < self.protection_arm_pct < 100:
-            raise ValueError("TRADER_PROTECTION_ARM_PCT must exceed target and be below 100")
+            raise ValueError("TRADER_PROTECTION_ARM_PCT must exceed legacy target and be below 100")
         if not 0 < self.trail_callback_pct < 100:
             raise ValueError("TRADER_TRAIL_CALLBACK_PCT must be between 0 and 100")
         if self.protection_update_step_pct <= 0 or self.protection_notify_step_pct <= 0:
@@ -195,6 +216,10 @@ class TraderSettings:
                 raise RuntimeError(
                     "Set LIVE_TRADING_CONFIRM=I_UNDERSTAND_LIVE_TRADING to arm live execution"
                 )
+
+    @property
+    def uses_generic_slots(self) -> bool:
+        return self.execution_strategy == "tp5_v1"
 
     @property
     def slot_fraction(self) -> float:

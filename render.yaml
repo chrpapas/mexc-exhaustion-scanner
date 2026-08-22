@@ -138,6 +138,10 @@ services:
         value: wss://contract.mexc.com/edge
       - key: TRADING_MODE
         value: paper
+      - key: TRADER_EXECUTION_STRATEGY
+        value: tp5_v1
+      - key: TRADER_PAPER_RUN_ID
+        value: tp5_v1
       - key: TRADER_MARGIN_MODE
         value: cross
       - key: TRADER_LEVERAGE
@@ -146,8 +150,12 @@ services:
         value: STANDARD,HIGH_RISK
       - key: TRADER_MAX_OPEN_POSITIONS
         value: "6"
+      - key: TRADER_SLOT_ALLOCATION_PCT
+        value: "5"
       - key: TRADER_MAX_TOTAL_EXPOSURE_PCT
-        value: "20"
+        value: "30"
+      - key: TRADER_TP5_TARGET_PCT
+        value: "5"
       - key: TRADER_MAX_STANDARD_POSITIONS
         value: "5"
       - key: TRADER_MAX_HIGH_RISK_POSITIONS

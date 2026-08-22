@@ -51,3 +51,4 @@ class TraderPosition:
     mexc_position_id: int | None
     mexc_open_order_id: int | None
     metadata: dict[str, Any]
+    run_id: str = "legacy_pre_v136"
