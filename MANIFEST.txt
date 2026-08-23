@@ -24,6 +24,7 @@ app/signal_ledger.py
 app/signal_ledger_now.py
 app/signal_ledger_table.py
 app/signals.py
+app/token_regime.py
 app/trader.py
 app/trader_config.py
 app/trader_db.py
@@ -65,6 +66,7 @@ tests/test_research_analytics_v132.py
 tests/test_research_analytics_v133.py
 tests/test_research_analytics_v134.py
 tests/test_research_analytics_v135.py
+tests/test_research_analytics_v137.py
 tests/test_research_v126.py
 tests/test_signal_ledger.py
 tests/test_signals.py
@@ -77,3 +79,4 @@ tests/test_trader_v123.py
 tests/test_trader_v130.py
 tests/test_trader_v136.py
 tests/test_worker_v125.py
+tests/test_worker_v137.py

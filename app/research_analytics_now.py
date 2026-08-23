@@ -13,7 +13,9 @@ from app.research_analytics import (
     research_feature_lift_csv,
     research_signal_dataset_csv,
     research_strategy_sweeps_csv,
+    research_token_regime_csv,
 )
+from app.token_regime import REGIME_LOOKBACK_DAYS
 
 
 async def main() -> None:
@@ -58,15 +60,24 @@ async def main() -> None:
         except Exception:
             logging.exception("Portfolio MTM research query failed; continuing without MTM marks")
             portfolio_path_rows = []
+        try:
+            regime_history_rows = await db.research_regime_history_rows(
+                lookback_days=REGIME_LOOKBACK_DAYS,
+                statement_timeout_seconds=settings.research_db_timeout_seconds,
+            )
+        except Exception:
+            logging.exception("Token-regime research query failed; continuing without regime profiles")
+            regime_history_rows = []
         now = datetime.now(UTC)
         report = build_research_analytics(
             rows, generated_at=now, delayed_entry_rows=delayed_rows,
-            portfolio_path_rows=portfolio_path_rows,
+            portfolio_path_rows=portfolio_path_rows, regime_history_rows=regime_history_rows,
         )
         feature_csv = research_feature_lift_csv(report)
         dataset_csv = research_signal_dataset_csv(rows)
         strategy_csv = research_strategy_sweeps_csv(report)
         entry_csv = research_entry_research_csv(report)
+        regime_csv = research_token_regime_csv(report)
 
         sent = await notifier.send_research_analytics(
             report,
@@ -74,6 +85,7 @@ async def main() -> None:
             dataset_csv=dataset_csv,
             strategy_csv=strategy_csv,
             entry_csv=entry_csv,
+            regime_csv=regime_csv,
             as_of=now,
             timezone_name=settings.performance_report_timezone,
         )

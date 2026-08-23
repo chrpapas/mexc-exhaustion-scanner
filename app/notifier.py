@@ -474,6 +474,7 @@ class DiscordNotifier:
         dataset_csv: bytes | None = None,
         strategy_csv: bytes | None = None,
         entry_csv: bytes | None = None,
+        regime_csv: bytes | None = None,
         as_of: datetime | None = None,
         timezone_name: str = "Europe/Zurich",
     ) -> bool:
@@ -508,6 +509,10 @@ class DiscordNotifier:
                 f" • gate eligible **{item.eligible_signals}/{item.signals}**"
                 if item.filtered_entry_gate else ""
             )
+            strategy_filter_text = (
+                f" • behavior filtered **{item.filtered_strategy}**"
+                if getattr(item, "filtered_strategy", 0) else ""
+            )
             mtm = (
                 f" • MTM DD **-{self._percent(item.max_mtm_drawdown)}**"
                 if item.max_mtm_drawdown is not None else " • MTM DD n/a"
@@ -517,7 +522,7 @@ class DiscordNotifier:
                 if item.return_over_max_drawdown is not None else ""
             )
             return (
-                f"**{item.strategy}** • signals {item.signals}{gate_text} • entered **{item.entered}** • "
+                f"**{item.strategy}** • signals {item.signals}{gate_text}{strategy_filter_text} • entered **{item.entered}** • "
                 f"return **{self._signed_percent(item.marked_return)}**{mtm}{ratio}\n"
                 f"max slots **{item.max_open_positions}** • max exp **{self._percent(item.max_observed_exposure_pct)}** • "
                 f"avg/p95 exp {self._percent(item.avg_exposure_pct)}/{self._percent(item.p95_exposure_pct)} • "
@@ -526,6 +531,27 @@ class DiscordNotifier:
                 f"median hold **{self._hours(item.median_holding_hours)}** • slot-days **{item.slot_days:.2f}** • "
                 f"return/slot-day **{self._signed_percent(item.return_per_slot_day)}**"
             )
+
+        regime = report.token_regime
+        behavior_lines = []
+        for item in regime.buckets:
+            behavior_lines.append(
+                f"**{item.behavior_class}** • n={item.signals} • TP5 "
+                f"{item.tp5_hits}/{item.signals} ({self._percent(item.tp5_hit_rate)}) • "
+                f"median/p75 {self._hours(item.median_tp5_hours)}/{self._hours(item.p75_tp5_hours)} • "
+                f"MAE med/p75 {self._percent(item.median_pre_tp5_adverse)}/{self._percent(item.p75_pre_tp5_adverse)}"
+            )
+        def regime_portfolio_line(item) -> str:
+            return (
+                f"**{item.strategy}** • entered {item.entered}/{item.signals} • "
+                f"return **{self._signed_percent(item.marked_return)}** • "
+                f"DD **-{self._percent(item.max_mtm_drawdown)}** • "
+                f"cap miss {item.missed_capacity} • median hold {self._hours(item.median_holding_hours)}"
+            )
+
+        regime_portfolio_lines = [regime_portfolio_line(report.calendar_throughput.tp5)] + [
+            regime_portfolio_line(item) for item in report.regime_portfolios
+        ]
 
         def slice_lines(items: tuple[FeatureSliceSummary, ...], icon: str) -> str:
             if not items:
@@ -888,6 +914,40 @@ class DiscordNotifier:
                 "text": "30d windows start with equal equity and an empty book; report actual calendar return, never short-window annualization."
             },
         }
+        token_behavior = {
+            "title": "🧬 Token Behaviour • Regime Dependency",
+            "description": (
+                f"Research only. Uses {regime.lookback_days}d of completed pre-signal 4h token/BTC history. "
+                "Episodicness combines low BTC explanatory power, concentration in a few positive spikes, "
+                "and isolated +5% 4h pumps outperforming BTC. Cutoffs are calibrated on the frozen discovery cohort only."
+            ),
+            "color": 0x3498DB,
+            "fields": [
+                {
+                    "name": "History coverage",
+                    "value": (
+                        f"Profiled **{regime.profiled_signals}** • insufficient **{regime.insufficient_signals}** • "
+                        f"discovery reference **{regime.discovery_profiled_signals}** • "
+                        f"minimum paired 4h returns **{regime.minimum_paired_returns}**"
+                    ),
+                    "inline": False,
+                },
+                {
+                    "name": "Behaviour buckets • TP5 path",
+                    "value": "\n".join(behavior_lines) or "History backfill/profile coverage is not ready yet.",
+                    "inline": False,
+                },
+                {
+                    "name": "TP5-6 shadow portfolios • same calendar stream",
+                    "value": "\n\n".join(regime_portfolio_lines),
+                    "inline": False,
+                },
+            ],
+            "footer": {
+                "text": "No scanner or trader rule is changed. Priority only reorders signals sharing the same confirmation timestamp."
+            },
+        }
+
         exits = {
             "title": "🧭 Exit Research • Standard vs High Risk",
             "description": "Paired-cohort exits: Standard 1–7d uses one complete-7d cohort; High Risk 1–10d uses one fully mature/evaluable 10d cohort. 14d remains separate until mature.",
@@ -924,7 +984,7 @@ class DiscordNotifier:
             ],
         }
 
-        embeds = (overview, targets, tp5_challenger, strategy_lab, prospective_monitor, calendar_throughput, exits, survival, entry, features)
+        embeds = (overview, targets, tp5_challenger, strategy_lab, prospective_monitor, calendar_throughput, token_behavior, exits, survival, entry, features)
         try:
             for embed in embeds:
                 self._validate_discord_embed(embed)
@@ -939,6 +999,7 @@ class DiscordNotifier:
                 (dataset_csv, f"research-signal-dataset-{display_time.strftime('%Y-%m-%d')}.csv"),
                 (strategy_csv, f"research-strategy-sweeps-{display_time.strftime('%Y-%m-%d')}.csv"),
                 (entry_csv, f"research-entry-analysis-{display_time.strftime('%Y-%m-%d')}.csv"),
+                (regime_csv, f"research-token-regime-{display_time.strftime('%Y-%m-%d')}.csv"),
             ]
             for index, (content, filename) in enumerate(attachments):
                 if content is not None:

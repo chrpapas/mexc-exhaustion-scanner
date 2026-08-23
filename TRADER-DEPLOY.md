@@ -1,6 +1,6 @@
-# Trader deployment — v1.3.6
+# Trader deployment — v1.3.7
 
-v1.3.6 switches the **paper trader** to the frozen `TP5_V1` execution strategy and creates a clean, isolated paper run. The scanner/research service continues to replay the old strategy as a benchmark.
+v1.3.7 keeps the **paper trader** on the frozen `TP5_V1` execution strategy from v1.3.6. This release adds research-only token behaviour / regime-dependency analytics; execution semantics are unchanged.
 
 ## Frozen TP5_V1 execution
 
@@ -43,7 +43,7 @@ MEXC_LIVE_ORDER_API_ENABLED=false
 
 Legacy variables such as `TRADER_MAX_STANDARD_POSITIONS`, `TRADER_MAX_HIGH_RISK_POSITIONS`, `TRADER_STANDARD_HOLD_DAYS`, `TRADER_HIGH_RISK_TIMEOUT_DAYS`, and `TRADER_PROFIT_TARGET_PCT` may remain in Render for rollback compatibility. They are ignored by new `tp5_v1` entries.
 
-## First v1.3.6 paper deployment / reset behavior
+## Paper deployment / reset behavior
 
 `TRADER_PAPER_RUN_ID` is the experiment identity. With the default `tp5_v1`:
 
@@ -95,11 +95,17 @@ Migration `015_tp5_trader_runs.sql` is applied automatically at startup. It adds
 
 ## Research
 
-The v1.3.5/v1.3.4 research analytics are unchanged. Keep:
+v1.3.7 adds a research-only token behaviour classifier while leaving TP5 execution frozen. It uses 90 days of completed pre-signal 4h token/BTC history and periodically backfills the required history for stored research signal symbols.
+
+Keep:
 
 ```text
+RESEARCH_LOGGING_ENABLED=true
 RESEARCH_PATH_HORIZON_HOURS=336
+RESEARCH_REGIME_HISTORY_POLL_SECONDS=21600
 ```
+
+The on-demand board compares TP5-All with: excluding only confident regime followers, episodic-only signals, and same-confirmation-bar episodic priority. Newly listed/insufficient-history coins are not rejected by the conservative no-regime-followers variant.
 
 Run reports with:
 
@@ -107,3 +113,5 @@ Run reports with:
 python -m app.research_analytics_now
 python -m app.signal_ledger_now
 ```
+
+The research report attaches `research-token-regime-YYYY-MM-DD.csv`. No new database migration is required in v1.3.7.

@@ -22,6 +22,7 @@ from app.indicators import (
 from app.mexc import MexcClient, is_crypto_usdt_contract
 from app.models import PumpEpisode, RunSignal, Ticker
 from app.notifier import DiscordNotifier
+from app.token_regime import REGIME_LOOKBACK_DAYS
 from app.trader_db import TraderRepository
 from app.trader_notifier import TraderNotifier
 from app.performance import build_performance_summary, short_return, should_send_daily_report
@@ -149,6 +150,13 @@ class ScannerWorker:
                             self.sync_research_data,
                         )
                     )
+                    group.create_task(
+                        self._periodic(
+                            "research_regime_history",
+                            self.settings.research_regime_history_poll_seconds,
+                            self.collect_research_regime_history,
+                        )
+                    )
                 group.create_task(
                     self._periodic(
                         "performance_report",
@@ -188,6 +196,7 @@ class ScannerWorker:
             "performance": 25,
             "performance_report": 35,
             "trader_watchdog": 45,
+            "research_regime_history": 50,
             "research": 55,
         }.get(name, 0)
         if stagger:
@@ -486,16 +495,73 @@ class ScannerWorker:
     async def _sync_interval(
         self, symbol: str, interval: str, bootstrap_days: int, overlap_hours: int
     ) -> None:
+        desired_start = datetime.now(UTC) - timedelta(days=bootstrap_days)
+        await self._sync_interval_from(
+            symbol, interval, desired_start=desired_start, overlap_hours=overlap_hours
+        )
+
+    async def _sync_interval_from(
+        self,
+        symbol: str,
+        interval: str,
+        *,
+        desired_start: datetime,
+        overlap_hours: int,
+    ) -> None:
+        """Backfill missing left-edge history, then refresh the recent overlap."""
+        earliest = await self.db.earliest_candle_time(symbol, interval)
         latest = await self.db.latest_candle_time(symbol, interval)
-        start = (
-            datetime.now(UTC) - timedelta(days=bootstrap_days)
-            if latest is None
-            else latest - timedelta(hours=overlap_hours)
+        if latest is None:
+            candles = await self.mexc.get_klines(symbol, interval, int(desired_start.timestamp()))
+            await self.db.upsert_candles(candles)
+            return
+
+        if earliest is None or earliest > desired_start:
+            history_end = (earliest or latest) - timedelta(seconds=1)
+            if history_end > desired_start:
+                historical = await self.mexc.get_klines(
+                    symbol, interval, int(desired_start.timestamp()), int(history_end.timestamp())
+                )
+                await self.db.upsert_candles(historical)
+
+        recent_start = latest - timedelta(hours=overlap_hours)
+        recent = await self.mexc.get_klines(symbol, interval, int(recent_start.timestamp()))
+        await self.db.upsert_candles(recent)
+
+    async def collect_research_regime_history(self) -> None:
+        """Ensure signal-relative 4h history exists for token-behaviour research only."""
+        requirements = await self.db.research_regime_history_requirements(
+            lookback_days=REGIME_LOOKBACK_DAYS
         )
-        candles = await self.mexc.get_klines(
-            symbol, interval, int(start.timestamp())
+        if not requirements:
+            return
+        semaphore = asyncio.Semaphore(self.settings.request_concurrency)
+
+        async def sync_requirement(item: dict[str, object]) -> None:
+            symbol = str(item.get("symbol") or "")
+            required_start = item.get("required_start")
+            if not symbol or not isinstance(required_start, datetime):
+                return
+            async with semaphore:
+                await self._sync_interval_from(
+                    symbol, "Hour4", desired_start=required_start, overlap_hours=12
+                )
+
+        results = await asyncio.gather(
+            *(sync_requirement(item) for item in requirements), return_exceptions=True
         )
-        await self.db.upsert_candles(candles)
+        failures = 0
+        for item, result in zip(requirements, results, strict=True):
+            if isinstance(result, Exception):
+                failures += 1
+                LOGGER.warning(
+                    "Research regime-history sync failed for %s: %s",
+                    item.get("symbol"), result,
+                )
+        LOGGER.info(
+            "Research regime-history sync complete: symbols=%d failures=%d lookback=%dd",
+            len(requirements), failures, REGIME_LOOKBACK_DAYS,
+        )
 
     async def collect_funding(self) -> None:
         symbols = await self.discovery_symbols(include_benchmark=False)

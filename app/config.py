@@ -81,6 +81,7 @@ class Settings:
 
     research_logging_enabled: bool
     research_path_poll_seconds: int
+    research_regime_history_poll_seconds: int
     research_path_batch_rows: int
     research_path_horizon_hours: int
     research_db_timeout_seconds: int
@@ -160,6 +161,9 @@ class Settings:
             performance_report_timezone=os.getenv("PERFORMANCE_REPORT_TIMEZONE", "Europe/Zurich"),
             research_logging_enabled=_env_bool("RESEARCH_LOGGING_ENABLED", True),
             research_path_poll_seconds=int(os.getenv("RESEARCH_PATH_POLL_SECONDS", "900")),
+            research_regime_history_poll_seconds=int(
+                os.getenv("RESEARCH_REGIME_HISTORY_POLL_SECONDS", "21600")
+            ),
             research_path_batch_rows=int(os.getenv("RESEARCH_PATH_BATCH_ROWS", "2000")),
             research_path_horizon_hours=int(os.getenv("RESEARCH_PATH_HORIZON_HOURS", "336")),
             research_db_timeout_seconds=int(os.getenv("RESEARCH_DB_TIMEOUT_SECONDS", "10")),
@@ -198,6 +202,7 @@ class Settings:
             ("PERFORMANCE_REPORT_CHECK_SECONDS", self.performance_report_check_seconds),
             ("TRADER_WATCHDOG_STALE_SECONDS", self.trader_watchdog_stale_seconds),
             ("RESEARCH_PATH_POLL_SECONDS", self.research_path_poll_seconds),
+            ("RESEARCH_REGIME_HISTORY_POLL_SECONDS", self.research_regime_history_poll_seconds),
             ("RESEARCH_PATH_BATCH_ROWS", self.research_path_batch_rows),
             ("RESEARCH_PATH_HORIZON_HOURS", self.research_path_horizon_hours),
             ("RESEARCH_DB_TIMEOUT_SECONDS", self.research_db_timeout_seconds),

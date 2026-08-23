@@ -9,6 +9,14 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, Iterable
 
 from app.json_utils import json_object
+from app.token_regime import (
+    EPISODIC_CLASS,
+    INSUFFICIENT_CLASS,
+    REGIME_FOLLOWER_CLASS,
+    REGIME_LOOKBACK_DAYS,
+    TokenRegimeResearchSummary,
+    build_token_regime_research,
+)
 
 PUBLIC_RESEARCH_RISK_TIERS = frozenset({"standard", "high_risk"})
 TARGET_LEVELS_PCT: tuple[int, ...] = (5, 10, 15, 20, 25, 30, 40)
@@ -258,6 +266,7 @@ class PortfolioReplaySummary:
     worst_trade_episode_id: int | None
     worst_trade_pre_target_mae: float | None
     portfolio_return_at_worst_trade_mae: float | None
+    filtered_strategy: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -364,6 +373,8 @@ class ResearchAnalyticsReport:
     prospective_regime_drift: tuple[RegimeDriftSummary, ...]
     prospective_portfolios: tuple[PortfolioReplaySummary, ...]
     calendar_throughput: CalendarThroughputComparison
+    token_regime: TokenRegimeResearchSummary
+    regime_portfolios: tuple[PortfolioReplaySummary, ...]
     oos_freeze_at: datetime
     min_rank_sample: int
 
@@ -1270,11 +1281,24 @@ def _portfolio_replay(
     path_rows: Iterable[dict[str, Any]] = (),
     use_entry_gate: bool = False,
     cohort: str = "paired_complete_7d",
+    eligible_episode_ids: set[int] | None = None,
+    strategy_name_override: str | None = None,
+    priority_scores: dict[int, float] | None = None,
 ) -> PortfolioReplaySummary:
-    ordered = sorted(
-        [row for row in rows if row.get("confirmed_at") is not None and row.get("confirmed_at") <= generated_at],
-        key=lambda row: row["confirmed_at"],
-    )
+    candidates = [
+        row for row in rows
+        if row.get("confirmed_at") is not None and row.get("confirmed_at") <= generated_at
+    ]
+
+    def order_key(row: dict[str, Any]) -> tuple[datetime, float]:
+        confirmed_at = row["confirmed_at"]
+        if not priority_scores:
+            return confirmed_at, 0.0
+        episode_id = row.get("episode_id")
+        score = priority_scores.get(int(episode_id), -1.0) if episode_id is not None else -1.0
+        return confirmed_at, -score
+
+    ordered = sorted(candidates, key=order_key)
     if strategy == "tp5_challenger":
         position_fraction = TP5_CHALLENGER_SLOT_PCT
         max_total = TP5_CHALLENGER_MAX_SLOTS
@@ -1287,12 +1311,14 @@ def _portfolio_replay(
         max_high = 1
         base_name = "current_live_5standard_1high"
     strategy_name = f"entrygate_v1__{base_name}" if use_entry_gate else base_name
+    if strategy_name_override:
+        strategy_name = strategy_name_override
 
     equity = 1.0
     positions: list[dict[str, Any]] = []
     accepted: list[dict[str, Any]] = []
     closed_holds: list[float] = []
-    entered = closed = missed_capacity = missed_same_symbol = filtered_entry_gate = 0
+    entered = closed = missed_capacity = missed_same_symbol = filtered_entry_gate = filtered_strategy = 0
     max_open = 0
     max_exposure = 0.0
     first_entry: datetime | None = None
@@ -1319,6 +1345,12 @@ def _portfolio_replay(
         close_due(entry_at)
         if use_entry_gate and not entry_gate_v1(row):
             filtered_entry_gate += 1
+            continue
+        episode_id = row.get("episode_id")
+        if eligible_episode_ids is not None and (
+            episode_id is None or int(episode_id) not in eligible_episode_ids
+        ):
+            filtered_strategy += 1
             continue
         symbol = str(row.get("symbol") or "")
         tier = str(row.get("risk_tier") or "standard")
@@ -1392,7 +1424,7 @@ def _portfolio_replay(
         strategy=strategy_name,
         cohort=cohort,
         signals=len(ordered),
-        eligible_signals=len(ordered) - filtered_entry_gate,
+        eligible_signals=len(ordered) - filtered_entry_gate - filtered_strategy,
         filtered_entry_gate=filtered_entry_gate,
         entered=entered,
         closed=closed,
@@ -1422,6 +1454,7 @@ def _portfolio_replay(
         worst_trade_episode_id=mtm["worst_trade_episode_id"],
         worst_trade_pre_target_mae=mtm["worst_trade_pre_target_mae"],
         portfolio_return_at_worst_trade_mae=mtm["portfolio_return_at_worst_trade_mae"],
+        filtered_strategy=filtered_strategy,
     )
 
 
@@ -1675,6 +1708,7 @@ def build_research_analytics(
     generated_at: datetime,
     delayed_entry_rows: Iterable[dict[str, Any]] = (),
     portfolio_path_rows: Iterable[dict[str, Any]] = (),
+    regime_history_rows: Iterable[dict[str, Any]] = (),
     oos_freeze_at: datetime = RESEARCH_OOS_FREEZE_AT,
 ) -> ResearchAnalyticsReport:
     rows = [dict(row) for row in raw_rows]
@@ -1813,6 +1847,44 @@ def build_research_analytics(
             path_rows=portfolio_path_rows, use_entry_gate=True,
         ),
     )
+    token_regime = build_token_regime_research(
+        rows, regime_history_rows, discovery_cutoff=oos_freeze_at
+    )
+    profile_by_episode = {item.episode_id: item for item in token_regime.profiles}
+    all_episode_ids = {int(row["episode_id"]) for row in rows if row.get("episode_id") is not None}
+    follower_ids = {
+        item.episode_id for item in token_regime.profiles
+        if item.behavior_class == REGIME_FOLLOWER_CLASS
+    }
+    episodic_ids = {
+        item.episode_id for item in token_regime.profiles
+        if item.behavior_class == EPISODIC_CLASS
+    }
+    no_regime_ids = all_episode_ids - follower_ids
+    priority_scores = {
+        item.episode_id: float(item.episodic_score)
+        for item in token_regime.profiles if item.episodic_score is not None
+    }
+    regime_portfolios = (
+        _portfolio_replay(
+            rows, strategy="tp5_challenger", generated_at=generated_at,
+            path_rows=portfolio_path_rows, cohort="calendar_observed_all_signals",
+            eligible_episode_ids=no_regime_ids,
+            strategy_name_override="tp5_no_regime_followers",
+        ),
+        _portfolio_replay(
+            rows, strategy="tp5_challenger", generated_at=generated_at,
+            path_rows=portfolio_path_rows, cohort="calendar_observed_all_signals",
+            eligible_episode_ids=episodic_ids,
+            strategy_name_override="tp5_episodic_only",
+        ),
+        _portfolio_replay(
+            rows, strategy="tp5_challenger", generated_at=generated_at,
+            path_rows=portfolio_path_rows, cohort="calendar_observed_all_signals",
+            priority_scores=priority_scores,
+            strategy_name_override="tp5_episodic_priority_same_bar",
+        ),
+    )
     return ResearchAnalyticsReport(
         generated_at=generated_at,
         baseline=baseline,
@@ -1848,6 +1920,8 @@ def build_research_analytics(
         prospective_regime_drift=prospective_regime_drift,
         prospective_portfolios=prospective_portfolios,
         calendar_throughput=calendar_throughput,
+        token_regime=token_regime,
+        regime_portfolios=regime_portfolios,
         oos_freeze_at=oos_freeze_at,
         min_rank_sample=min_rank_sample,
     )
@@ -2012,6 +2086,30 @@ def research_strategy_sweeps_csv(report: ResearchAnalyticsReport) -> bytes:
                 f"{portfolio.entered / CALENDAR_MONTH_DAYS:.6f}",
                 "" if not portfolio.signals else f"{portfolio.entered / portfolio.signals:.6f}",
             ])
+    return output.getvalue().encode("utf-8")
+
+
+def research_token_regime_csv(report: ResearchAnalyticsReport) -> bytes:
+    output = io.StringIO(newline="")
+    writer = csv.writer(output)
+    writer.writerow([
+        "episode_id", "symbol", "confirmed_at", "behavior_class",
+        "paired_4h_returns", "history_days", "btc_correlation", "btc_beta",
+        "market_r2", "isolated_pump_count", "isolated_pump_rate_pct",
+        "positive_spike_concentration_pct", "episodic_score",
+    ])
+    for item in report.token_regime.profiles:
+        writer.writerow([
+            item.episode_id, item.symbol, item.confirmed_at.isoformat(), item.behavior_class,
+            item.paired_returns, f"{item.history_days:.6f}",
+            "" if item.btc_correlation is None else f"{item.btc_correlation:.8f}",
+            "" if item.btc_beta is None else f"{item.btc_beta:.8f}",
+            "" if item.market_r2 is None else f"{item.market_r2:.8f}",
+            item.isolated_pump_count,
+            _csv_pct(item.isolated_pump_rate),
+            _csv_pct(item.positive_spike_concentration),
+            "" if item.episodic_score is None else f"{item.episodic_score:.8f}",
+        ])
     return output.getvalue().encode("utf-8")
 
 

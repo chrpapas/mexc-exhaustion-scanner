@@ -185,6 +185,13 @@ class Database:
             interval,
         )
 
+    async def earliest_candle_time(self, symbol: str, interval: str) -> datetime | None:
+        return await self.pool.fetchval(
+            "SELECT min(open_time) FROM candles WHERE symbol=$1 AND interval=$2",
+            symbol,
+            interval,
+        )
+
     async def upsert_candles(self, candles: list[Candle]) -> None:
         if not candles:
             return
@@ -810,6 +817,79 @@ class Database:
             """
         )
         return [dict(row) for row in rows]
+
+    async def research_regime_history_requirements(self, *, lookback_days: int) -> list[dict[str, Any]]:
+        """Return the earliest 4h history start required per research signal symbol.
+
+        The requirement is based on each symbol's oldest public confirmed-short
+        signal. BTC is included as the common market benchmark.
+        """
+        rows = await self.pool.fetch(
+            """
+            WITH public_signals AS (
+                SELECT symbol, confirmed_at
+                FROM research_signal_features
+                WHERE risk_tier IN ('standard', 'high_risk')
+            ), requirements AS (
+                SELECT
+                    symbol,
+                    min(confirmed_at) - ($1::int * interval '1 day') AS required_start
+                FROM public_signals
+                GROUP BY symbol
+                UNION ALL
+                SELECT
+                    'BTC_USDT' AS symbol,
+                    min(confirmed_at) - ($1::int * interval '1 day') AS required_start
+                FROM public_signals
+            )
+            SELECT symbol, min(required_start) AS required_start
+            FROM requirements
+            WHERE required_start IS NOT NULL
+            GROUP BY symbol
+            ORDER BY symbol
+            """,
+            lookback_days,
+        )
+        return [dict(row) for row in rows]
+
+    async def research_regime_history_rows(
+        self,
+        *,
+        lookback_days: int,
+        statement_timeout_seconds: int,
+    ) -> list[dict[str, Any]]:
+        """Return paired completed 4h token/BTC closes strictly before each signal.
+
+        This is the source for v1.3.7 token-behaviour research. The time predicate
+        is deliberately signal-relative to avoid post-signal/look-ahead leakage.
+        """
+        query = """
+            SELECT
+                f.episode_id, f.symbol, f.confirmed_at, c.open_time,
+                c.close AS token_close, btc.close AS btc_close
+            FROM research_signal_features f
+            JOIN candles c
+              ON c.symbol = f.symbol
+             AND c.interval = 'Hour4'
+             AND c.open_time >= f.confirmed_at - ($1::int * interval '1 day')
+             AND c.open_time + interval '4 hours' <= f.confirmed_at
+            JOIN candles btc
+              ON btc.symbol = 'BTC_USDT'
+             AND btc.interval = 'Hour4'
+             AND btc.open_time = c.open_time
+             AND btc.open_time + interval '4 hours' <= f.confirmed_at
+            WHERE f.risk_tier IN ('standard', 'high_risk')
+            ORDER BY f.episode_id ASC, c.open_time ASC
+        """
+        async with self.pool.acquire() as conn:
+            async with conn.transaction():
+                await conn.execute(
+                    "SELECT set_config('statement_timeout', $1, true)",
+                    f"{statement_timeout_seconds}s",
+                )
+                rows = await conn.fetch(query, lookback_days)
+        return [dict(row) for row in rows]
+
 
     async def research_portfolio_path_rows(
         self,
