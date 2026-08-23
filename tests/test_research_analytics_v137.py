@@ -161,3 +161,48 @@ def test_v137_notifier_adds_token_behavior_card_and_regime_csv_attachment():
             titles.extend(embed.get("title") for embed in payload.get("embeds", []))
     assert "🧬 Token Behaviour • Regime Dependency" in titles
     assert any(name.startswith("research-token-regime-") for name in attachment_names)
+
+
+def test_v139_token_behavior_card_reports_capital_time_efficiency_metrics():
+    import asyncio
+    import json
+
+    from app.notifier import DiscordNotifier
+    from tests.test_notifier import _FakeClient
+
+    rows, history = _six_signal_fixture()
+    generated_at = datetime(2026, 8, 20, tzinfo=UTC)
+    report = build_research_analytics(
+        rows,
+        generated_at=generated_at,
+        regime_history_rows=history,
+    )
+    notifier = DiscordNotifier(
+        "https://discord.invalid/signals",
+        performance_webhook_url="https://discord.invalid/stats",
+    )
+    fake = _FakeClient()
+    notifier._client = fake
+
+    assert asyncio.run(notifier.send_research_analytics(report))
+    token_behavior_text = ""
+    for _, payload in fake.posts:
+        bodies = []
+        if "data" in payload:
+            raw = (payload.get("data") or {}).get("payload_json")
+            if raw:
+                bodies.append(json.loads(raw))
+        else:
+            bodies.append(payload)
+        for body in bodies:
+            for embed in body.get("embeds", []):
+                if embed.get("title") == "🧬 Token Behaviour • Regime Dependency":
+                    token_behavior_text = "\n".join(
+                        field.get("value", "") for field in embed.get("fields", [])
+                    )
+
+    assert "slot-days **" in token_behavior_text
+    assert "return/slot-day **" in token_behavior_text
+    assert "releases/day **" in token_behavior_text
+    assert "idle capacity **" in token_behavior_text
+    assert "avg/p95 exposure **" in token_behavior_text

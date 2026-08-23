@@ -11,7 +11,12 @@ import httpx
 from app.models import RunSignal
 from app.signal_ledger import SignalLedger, SignalLedgerItem
 from app.signal_ledger_table import LedgerTableImage
-from app.research_analytics import ResearchAnalyticsReport, FeatureSliceSummary, ExitHorizonSummary
+from app.research_analytics import (
+    ResearchAnalyticsReport,
+    FeatureSliceSummary,
+    ExitHorizonSummary,
+    TP5_CHALLENGER_MAX_SLOTS,
+)
 from app.performance import (
     HorizonSummary,
     HorizonSurvivalSummary,
@@ -549,9 +554,22 @@ class DiscordNotifier:
                 f"cap miss {item.missed_capacity} • median hold {self._hours(item.median_holding_hours)}"
             )
 
-        regime_portfolio_lines = [regime_portfolio_line(report.calendar_throughput.tp5)] + [
-            regime_portfolio_line(item) for item in report.regime_portfolios
-        ]
+        def regime_efficiency_line(item) -> str:
+            calendar_days = report.calendar_throughput.history_span_days
+            releases_per_day = (item.closed / calendar_days) if calendar_days > 0 else None
+            total_slot_days = TP5_CHALLENGER_MAX_SLOTS * calendar_days
+            used_capacity = (item.slot_days / total_slot_days) if total_slot_days > 0 else None
+            idle_capacity = (max(0.0, min(1.0, 1.0 - used_capacity)) if used_capacity is not None else None)
+            return (
+                f"**{item.strategy}** • slot-days **{item.slot_days:.2f}** • "
+                f"return/slot-day **{self._signed_percent(item.return_per_slot_day)}** • "
+                f"releases/day **{releases_per_day:.2f}** • idle capacity **{self._percent(idle_capacity)}** • "
+                f"avg/p95 exposure **{self._percent(item.avg_exposure_pct)}/{self._percent(item.p95_exposure_pct)}**"
+            )
+
+        regime_portfolio_items = [report.calendar_throughput.tp5, *report.regime_portfolios]
+        regime_portfolio_lines = [regime_portfolio_line(item) for item in regime_portfolio_items]
+        regime_efficiency_lines = [regime_efficiency_line(item) for item in regime_portfolio_items]
 
         def slice_lines(items: tuple[FeatureSliceSummary, ...], icon: str) -> str:
             if not items:
@@ -942,9 +960,14 @@ class DiscordNotifier:
                     "value": "\n\n".join(regime_portfolio_lines),
                     "inline": False,
                 },
+                {
+                    "name": "Capital-time efficiency • same calendar stream",
+                    "value": "\n".join(regime_efficiency_lines),
+                    "inline": False,
+                },
             ],
             "footer": {
-                "text": "No scanner or trader rule is changed. Priority only reorders signals sharing the same confirmation timestamp."
+                "text": "No scanner or trader rule is changed. Idle = unused share of 6 TP5 slots over observed calendar time; priority only reorders same-timestamp signals."
             },
         }
 

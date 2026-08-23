@@ -1,8 +1,8 @@
-MEXC Exhaustion Scanner + Multi-Slot Futures Trader v1.3.8
+MEXC Exhaustion Scanner + Multi-Slot Futures Trader v1.3.9
 
-Deploy the entire project/ZIP together. v1.3.8 is a RESEARCH-ONLY token-behaviour release; TP5 trader execution is unchanged from v1.3.6.
+Deploy the entire project/ZIP together. v1.3.9 is a RESEARCH-ONLY token-behaviour release; TP5 trader execution is unchanged from v1.3.6.
 
-v1.3.8 also hotfixes research-path SQL timeouts on larger datasets. The one-off analytics command no longer aborts if the optional path catch-up times out; it reports from the paths already persisted.
+v1.3.9 retains the v1.3.8 research-path SQL timeout hotfix on larger datasets. The one-off analytics command no longer aborts if the optional path catch-up times out; it reports from the paths already persisted.
 
 Frozen TP5_V1 paper strategy (unchanged):
 - STANDARD + HIGH_RISK; EXTREME excluded
@@ -19,11 +19,12 @@ TRADER_EXECUTION_STRATEGY=tp5_v1
 TRADER_PAPER_RUN_ID=tp5_v1
 PAPER_STARTING_EQUITY_USDT=2000
 
-Token-behaviour research in v1.3.8:
+Token-behaviour research in v1.3.9:
 - 90d of completed pre-signal 4h token/BTC history
 - no post-signal/look-ahead data in classification
 - REGIME_FOLLOWER / MIXED / EPISODIC / INSUFFICIENT research labels
 - TP5-All vs no-regime-followers vs episodic-only vs same-bar episodic-priority shadow replays
+- capital-time metrics: slot-days, return/slot-day, releases/day, time-based idle capacity, avg/p95 exposure
 - no scanner/trader rule changes
 - no new DB migration
 
