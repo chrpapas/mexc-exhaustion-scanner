@@ -1,6 +1,7 @@
-# Trader deployment — v1.3.7
+# Trader deployment — v1.3.8
 
-v1.3.7 keeps the **paper trader** on the frozen `TP5_V1` execution strategy from v1.3.6. This release adds research-only token behaviour / regime-dependency analytics; execution semantics are unchanged.
+v1.3.8 keeps the **paper trader** on the frozen `TP5_V1` execution strategy from v1.3.6. This release adds research-only token behaviour / regime-dependency analytics; execution semantics are unchanged.
+It also contains a research-only path-sync timeout hotfix; no trader execution code or settings are changed.
 
 ## Frozen TP5_V1 execution
 
@@ -95,7 +96,7 @@ Migration `015_tp5_trader_runs.sql` is applied automatically at startup. It adds
 
 ## Research
 
-v1.3.7 adds a research-only token behaviour classifier while leaving TP5 execution frozen. It uses 90 days of completed pre-signal 4h token/BTC history and periodically backfills the required history for stored research signal symbols.
+v1.3.8 adds a research-only token behaviour classifier while leaving TP5 execution frozen. It uses 90 days of completed pre-signal 4h token/BTC history and periodically backfills the required history for stored research signal symbols.
 
 Keep:
 
@@ -114,4 +115,4 @@ python -m app.research_analytics_now
 python -m app.signal_ledger_now
 ```
 
-The research report attaches `research-token-regime-YYYY-MM-DD.csv`. No new database migration is required in v1.3.7.
+The research report attaches `research-token-regime-YYYY-MM-DD.csv`. No new database migration is required in v1.3.8.

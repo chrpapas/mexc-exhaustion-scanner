@@ -39,11 +39,18 @@ async def main() -> None:
         # Opportunistically catch up one bounded research batch using only rows
         # already present in PostgreSQL. This preserves the v1.2.6 no-extra-MEXC-call rule.
         await db.sync_research_signal_snapshots()
-        await db.sync_research_signal_paths(
-            batch_rows=settings.research_path_batch_rows,
-            horizon_hours=settings.research_path_horizon_hours,
-            statement_timeout_seconds=settings.research_db_timeout_seconds,
-        )
+        try:
+            await db.sync_research_signal_paths(
+                batch_rows=settings.research_path_batch_rows,
+                horizon_hours=settings.research_path_horizon_hours,
+                statement_timeout_seconds=settings.research_db_timeout_seconds,
+            )
+        except Exception:
+            # Path catch-up is opportunistic research maintenance. A timeout must not
+            # suppress an otherwise valid on-demand report from already persisted data.
+            logging.exception(
+                "Research path catch-up failed; continuing with currently persisted paths"
+            )
 
         rows = await db.research_analytics_rows()
         try:

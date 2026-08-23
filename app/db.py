@@ -569,7 +569,7 @@ class Database:
         timeout prevents this optional backfill from competing with scanner hot paths.
         """
         query = """
-            WITH bounds AS (
+            WITH progress AS (
                 SELECT
                     st.episode_id,
                     st.symbol,
@@ -586,6 +586,31 @@ class Database:
                     WHERE episode_id = st.episode_id
                 ) rp ON true
             ),
+            bounds AS MATERIALIZED (
+                SELECT p.*
+                FROM progress p
+                WHERE p.last_recorded_close < LEAST(
+                    now(),
+                    p.confirmed_at + ($2::double precision * interval '1 hour')
+                )
+                  AND EXISTS (
+                    SELECT 1
+                    FROM candles c0
+                    WHERE c0.symbol = p.symbol
+                      AND c0.interval = 'Min15'
+                      -- Keep the indexed open_time column bare on the left side.
+                      AND c0.open_time > p.last_recorded_close - interval '15 minutes'
+                      AND c0.open_time > p.confirmed_at - interval '15 minutes'
+                      AND c0.open_time <= now() - interval '15 minutes'
+                      AND c0.open_time <= p.confirmed_at
+                          + ($2::double precision * interval '1 hour')
+                          - interval '15 minutes'
+                  )
+                ORDER BY p.last_recorded_close ASC, p.confirmed_at ASC, p.episode_id ASC
+                -- Bound the expensive candle join before the final LIMIT. With the
+                -- default 2,000-row batch this examines at most eight episodes.
+                LIMIT GREATEST(1, LEAST(32, CEIL($1::numeric / 256.0)::integer))
+            ),
             candidates AS (
                 SELECT
                     b.episode_id,
@@ -597,19 +622,26 @@ class Database:
                     (b.entry_price - c.high) / b.entry_price AS adverse_return_pct,
                     btc.close AS btc_close
                 FROM bounds b
-                JOIN candles c
-                  ON c.symbol = b.symbol
-                 AND c.interval = 'Min15'
-                 AND c.open_time + interval '15 minutes' > b.last_recorded_close
-                 AND c.open_time + interval '15 minutes' > b.confirmed_at
-                 AND c.open_time + interval '15 minutes' <= now()
-                 AND c.open_time + interval '15 minutes' <=
-                     b.confirmed_at + ($2::double precision * interval '1 hour')
+                JOIN LATERAL (
+                    SELECT c.*
+                    FROM candles c
+                    WHERE c.symbol = b.symbol
+                      AND c.interval = 'Min15'
+                      AND c.open_time > b.last_recorded_close - interval '15 minutes'
+                      AND c.open_time > b.confirmed_at - interval '15 minutes'
+                      AND c.open_time <= now() - interval '15 minutes'
+                      AND c.open_time <= b.confirmed_at
+                          + ($2::double precision * interval '1 hour')
+                          - interval '15 minutes'
+                    ORDER BY c.open_time ASC
+                    LIMIT $1
+                ) c ON true
                 LEFT JOIN candles btc
                   ON btc.symbol = 'BTC_USDT'
                  AND btc.interval = 'Min15'
                  AND btc.open_time = c.open_time
-                ORDER BY b.confirmed_at ASC, c.open_time ASC
+                ORDER BY b.last_recorded_close ASC, b.confirmed_at ASC,
+                         b.episode_id ASC, c.open_time ASC
                 LIMIT $1
             ),
             inserted AS (

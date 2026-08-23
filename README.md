@@ -1,6 +1,8 @@
-# MEXC Exhaustion Scanner + Multi-Slot Futures Trader v1.3.7
+# MEXC Exhaustion Scanner + Multi-Slot Futures Trader v1.3.8
 
 Research-only token-behaviour release. **TP5_V1 execution is unchanged from v1.3.6.** The new work tests the original niche hypothesis: isolated/episodic pumps may be better short-exhaustion candidates than tokens whose normal price action is mostly explained by the broader crypto regime.
+
+**v1.3.8 hotfix:** the bounded 15m research-path catch-up now limits the episode set before sorting/joining candles and uses index-friendly `open_time` predicates. The on-demand analytics command also continues from already persisted paths if this optional catch-up hits its local PostgreSQL statement timeout.
 
 - **Frozen trader unchanged:** 6 generic STANDARD/HIGH_RISK slots, 5% of current equity each, 30% aggregate cap, 1x cross, immediate entry, one open position per symbol, full +5% exit. EXTREME_RISK remains excluded.
 - **90-day pre-signal behaviour profile:** research uses completed 4h token/BTC candles strictly before each signal; no post-signal candles enter the classifier.
@@ -8,10 +10,10 @@ Research-only token-behaviour release. **TP5_V1 execution is unchanged from v1.3
 - **Frozen discovery calibration:** the components are converted to empirical ranks using only the pre-freeze discovery cohort (`2026-08-21 21:29 UTC`). TP5 outcomes are not used to set the behaviour buckets. The resulting score is split into `REGIME_FOLLOWER`, `MIXED`, and `EPISODIC`; incomplete histories remain `INSUFFICIENT`.
 - **Shadow portfolio comparison:** the report now shows TP5-All against `tp5_no_regime_followers`, `tp5_episodic_only`, and `tp5_episodic_priority_same_bar`. The priority variant only reorders signals sharing the same confirmation timestamp; it never replaces an already-open position.
 - **Conservative handling of new coins:** the `no_regime_followers` variant rejects only confidently classified regime followers. `INSUFFICIENT` history is still accepted so newly listed pumpers are not automatically excluded.
-- **Historical coverage fix:** v1.3.6 could seed a symbol with four days of 4h candles during the wide scan and then fail to backfill the older 120-day window. v1.3.7 checks the earliest candle and fills the missing left edge.
+- **Historical coverage fix:** v1.3.6 could seed a symbol with four days of 4h candles during the wide scan and then fail to backfill the older 120-day window. v1.3.8 checks the earliest candle and fills the missing left edge.
 - **Research-history backfill:** while research logging is enabled, the scanner periodically ensures the 90-day pre-signal 4h history exists for every stored public signal symbol plus BTC. `RESEARCH_REGIME_HISTORY_POLL_SECONDS` defaults to 21600 (6h).
 - **New Discord/CSV output:** `Token Behaviour • Regime Dependency` plus `research-token-regime-YYYY-MM-DD.csv`.
-- **No schema migration:** v1.3.7 uses the existing `candles` and research tables. Migration `015_tp5_trader_runs.sql` remains the latest migration.
+- **No schema migration:** v1.3.8 uses the existing `candles` and research tables. Migration `015_tp5_trader_runs.sql` remains the latest migration.
 
 The paper-run isolation, configurable `$2,000` default starting equity, and fail-closed live-account handling from v1.3.6 are unchanged. The legacy `tier_v1` path remains only for rollback/persisted compatibility.
 

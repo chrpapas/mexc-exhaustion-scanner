@@ -68,6 +68,7 @@ tests/test_research_analytics_v134.py
 tests/test_research_analytics_v135.py
 tests/test_research_analytics_v137.py
 tests/test_research_v126.py
+tests/test_research_v138.py
 tests/test_signal_ledger.py
 tests/test_signals.py
 tests/test_trader_config.py
