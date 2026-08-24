@@ -140,8 +140,9 @@ class DiscordNotifier:
         """Send the compact subscriber-facing strategy board.
 
         The audience-facing board exposes only the three retained observed approaches:
-        TP5 for frequent STANDARD + HIGH_RISK trading, TP20-or-4D for HIGH_RISK
-        swing trading, and a fixed 7-day hold for STANDARD signals. Exploratory
+        TP5 for frequent STANDARD + HIGH_RISK trading, open-ended TP20 for HIGH_RISK
+        swing trading, and a fixed 7-day hold for STANDARD signals. Headline account
+        run-rates replay the recommended sizing/capacity chronologically; exploratory
         strategy research remains internal.
         """
         if not self._performance_webhook_url:
@@ -186,18 +187,47 @@ class DiscordNotifier:
             )
 
         def risk_line(strategy) -> str:
+            worst_adverse = (
+                f"-{self._percent(strategy.worst_adverse)}"
+                if strategy.worst_adverse is not None else "n/a"
+            )
             return (
                 f"Breaches before exit/7D mark: -50% **{strategy.breach_50}** • "
                 f"-100% **{strategy.breach_100}** • -200% **{strategy.breach_200}** • "
-                f"-300% **{strategy.breach_300}** • worst adverse **-{self._percent(strategy.worst_adverse)}**"
+                f"-300% **{strategy.breach_300}** • worst adverse **{worst_adverse}**"
             )
+
+        def signed_money(value: object) -> str:
+            if value is None:
+                return "n/a"
+            number = float(value)
+            sign = "+" if number >= 0 else "-"
+            return f"{sign}${abs(number):,.0f}"
+
+        def account_run_rate_line(label: str, summary) -> str:
+            if summary is None:
+                return f"**{label}:** unavailable"
+            return (
+                f"**{label}:** observed account **{self._signed_percent(summary.observed_account_return)}** over **{summary.span_days:.2f}d** "
+                f"→ **{self._signed_percent(summary.thirty_day_equivalent_return)} 30D eq.** "
+                f"({signed_money(summary.thirty_day_pnl_per_10k)} / $10k) • "
+                f"entered **{summary.entered}** • open **{summary.open_positions}** • "
+                f"capacity misses **{summary.missed_capacity}** • avg/peak exposure "
+                f"**{self._percent(summary.avg_exposure_pct)} / {self._percent(summary.peak_exposure_pct)}**"
+            )
+
+        account_comparison_value = "\n".join((
+            account_run_rate_line("TP5", report.tp5_account_run_rate),
+            account_run_rate_line("TP20", report.tp20_account_run_rate),
+            account_run_rate_line("7D", report.standard_7d_account_run_rate),
+        ))
 
         if tp5 is not None:
             tp5_value = (
                 f"**Rule:** STANDARD + HIGH RISK • full close at **+5%**; no forced timeout\n"
                 f"7D normalized **{tp5.sample}** • target hits **{tp5.target_hits}** • open at 7D **{tp5.unresolved_at_7d}** • "
                 f"profitable mark **{tp5.wins}/{tp5.sample} ({self._percent(tp5.positive_rate)})**\n"
-                f"Σ **{self._signed_percent(tp5.sum_return)}** • avg/signal **{self._signed_percent(tp5.avg_return)}** • "
+                f"Σ signal **{self._signed_percent(tp5.sum_return)}** • avg/signal **{self._signed_percent(tp5.avg_return)}** • "
                 f"median **{self._signed_percent(tp5.median_return)}** • best/worst **{self._signed_percent(tp5.best_return)} / {self._signed_percent(tp5.worst_return)}**\n"
                 f"Avg / median capital time to exit-or-mark **{self._hours(tp5.avg_effective_holding_hours)} / {self._hours(tp5.median_effective_holding_hours)}**\n"
                 f"{risk_line(tp5)}\n"
@@ -211,7 +241,7 @@ class DiscordNotifier:
                 f"**Rule:** HIGH_RISK only • full close at **+20%**; otherwise **stay open**\n"
                 f"7D normalized **{tp20.sample}** • TP20 hits by 7D **{tp20.target_hits}** • open at 7D **{tp20.unresolved_at_7d}** • "
                 f"profitable mark **{tp20.wins}/{tp20.sample} ({self._percent(tp20.positive_rate)})**\n"
-                f"Σ **{self._signed_percent(tp20.sum_return)}** • avg/signal **{self._signed_percent(tp20.avg_return)}** • "
+                f"Σ signal **{self._signed_percent(tp20.sum_return)}** • avg/signal **{self._signed_percent(tp20.avg_return)}** • "
                 f"median **{self._signed_percent(tp20.median_return)}** • best/worst **{self._signed_percent(tp20.best_return)} / {self._signed_percent(tp20.worst_return)}**\n"
                 f"Avg / median capital time to exit-or-mark **{self._hours(tp20.avg_effective_holding_hours)} / {self._hours(tp20.median_effective_holding_hours)}**\n"
                 f"{risk_line(tp20)}\n"
@@ -225,7 +255,7 @@ class DiscordNotifier:
                 f"**Rule:** STANDARD only • short at confirmation and close exactly at **7 days**\n"
                 f"7D normalized **{swing.sample}** • wins **{swing.wins}** • losses **{swing.losses}** • "
                 f"win rate **{self._percent(swing.positive_rate)}**\n"
-                f"Σ **{self._signed_percent(swing.sum_return)}** • avg/signal **{self._signed_percent(swing.avg_return)}** • "
+                f"Σ signal **{self._signed_percent(swing.sum_return)}** • avg/signal **{self._signed_percent(swing.avg_return)}** • "
                 f"median **{self._signed_percent(swing.median_return)}** • best/worst **{self._signed_percent(swing.best_return)} / {self._signed_percent(swing.worst_return)}**\n"
                 f"Capital time **7.00d fixed**\n"
                 f"{risk_line(swing)}\n"
@@ -244,6 +274,11 @@ class DiscordNotifier:
             ),
             "color": 0x5865F2,
             "fields": [
+                {
+                    "name": "💰 Account-Level Return • Recommended Sizing",
+                    "value": account_comparison_value,
+                    "inline": False,
+                },
                 {
                     "name": "⚡ TP5 Frequent",
                     "value": tp5_value,
@@ -265,7 +300,7 @@ class DiscordNotifier:
                         "**TP5:** fastest recycling and the only exposure setup already portfolio-tested.\n"
                         "**TP20:** larger target, but unresolved HIGH_RISK positions can remain open beyond day 7 and carry the widest tail risk.\n"
                         "**7D Swing:** fixed holding period and STANDARD-only exposure; compare its larger raw moves against seven days of capital lock-up.\n"
-                        "Compare **Σ together with avg/signal and sample n** because each strategy has different tier eligibility."
+                        "Use **account return / 30D equivalent** for the practical strategy comparison; Σ signal is supporting opportunity data only."
                     ),
                     "inline": False,
                 },
@@ -280,10 +315,10 @@ class DiscordNotifier:
             ],
             "footer": {
                 "text": (
-                    "Apples-to-apples convention: every headline outcome uses the same 168h observation window. "
-                    "TP5/TP20 lock their target when hit; otherwise they are marked at day 7. "
-                    "The actual TP20 rule has no day-7 exit. Σ is arithmetic equal-notional signal return, not account return. "
-                    "TP20/7D sizing is a risk-based suggestion, not a validated optimum; caps apply account-wide and should not be blindly stacked on the same signal."
+                    "Account replay uses the same observed calendar, chronological signals, recommended slot caps, and 0.08% fee per fill; open positions are MTM at report time. "
+                    "30D eq. is a linear run-rate from the observed span, not an observed 30-day result or forecast; funding/slippage are not modeled. "
+                    "The 168h signal table remains normalized for path comparison; TP20 itself has no day-7 exit. Σ signal is not account return. "
+                    "TP20/7D sizing is risk-based, not a validated optimum; caps apply account-wide and should not be blindly stacked."
                 )
             },
         }

@@ -6,6 +6,8 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 PUBLIC_PERFORMANCE_RISK_TIERS = frozenset({"standard", "high_risk"})
+SHADOW_FEE_PER_FILL = 0.0008
+MONTHLY_RUN_RATE_DAYS = 30.0
 
 def short_return(entry_price: float, exit_price: float) -> float:
     if entry_price <= 0 or exit_price <= 0:
@@ -272,6 +274,42 @@ class ExposureRecommendation:
 
 
 @dataclass(frozen=True, slots=True)
+class AccountRunRateSummary:
+    """Chronological account replay under one subscriber strategy configuration.
+
+    Returns include the configured shadow fill fee on entry and on realized/marked
+    exit. Open positions are marked to the report timestamp. The 30-day figure is
+    a linear equivalent run-rate from the observed calendar span, not a forecast
+    or a claim of an observed 30-day result.
+    """
+
+    strategy: str
+    start_at: datetime | None
+    end_at: datetime
+    span_days: float
+    eligible_signals: int
+    entered: int
+    closed: int
+    open_positions: int
+    unmarked_open_positions: int
+    missed_capacity: int
+    missed_same_symbol: int
+    observed_account_return: float | None
+    thirty_day_equivalent_return: float | None
+    thirty_day_pnl_per_10k: float | None
+    avg_exposure_pct: float | None
+    peak_exposure_pct: float | None
+    slot_days: float
+    fee_per_fill: float = SHADOW_FEE_PER_FILL
+
+    def as_dict(self) -> dict[str, Any]:
+        data = {name: getattr(self, name) for name in self.__dataclass_fields__}
+        data["start_at"] = self.start_at.isoformat() if self.start_at else None
+        data["end_at"] = self.end_at.isoformat()
+        return data
+
+
+@dataclass(frozen=True, slots=True)
 class PerformanceSummary:
     report_date: date
     confirmed_today: int
@@ -314,6 +352,9 @@ class PerformanceSummary:
     tp5_exposure: ExposureRecommendation = ExposureRecommendation(0.05, 6, 0.30, "portfolio-tested frozen TP5 configuration")
     tp20_exposure: ExposureRecommendation = ExposureRecommendation(0.02, 5, 0.10, "risk-based suggestion from observed HIGH_RISK adverse paths")
     standard_7d_exposure: ExposureRecommendation = ExposureRecommendation(0.03, 5, 0.15, "risk-based suggestion for fixed 7-day STANDARD holds")
+    tp5_account_run_rate: AccountRunRateSummary | None = None
+    tp20_account_run_rate: AccountRunRateSummary | None = None
+    standard_7d_account_run_rate: AccountRunRateSummary | None = None
 
     @property
     def matured_total(self) -> int:
@@ -410,6 +451,9 @@ class PerformanceSummary:
             "tp5_exposure": self.tp5_exposure.as_dict(),
             "tp20_exposure": self.tp20_exposure.as_dict(),
             "standard_7d_exposure": self.standard_7d_exposure.as_dict(),
+            "tp5_account_run_rate": self.tp5_account_run_rate.as_dict() if self.tp5_account_run_rate else None,
+            "tp20_account_run_rate": self.tp20_account_run_rate.as_dict() if self.tp20_account_run_rate else None,
+            "standard_7d_account_run_rate": self.standard_7d_account_run_rate.as_dict() if self.standard_7d_account_run_rate else None,
         }
 
 
@@ -954,6 +998,152 @@ def build_performance_summary(
         target_return=None,
     )
 
+    # Subscriber account replay. Unlike the 7D signal-normalization table above,
+    # this follows each strategy's actual exit rule through the common report
+    # timestamp and respects its suggested slot sizing/capacity. This is the
+    # basis for the 30-day equivalent run-rate shown publicly.
+    account_start_at = min(
+        (row["confirmed_at"] for row in rows if row.get("confirmed_at") is not None and row["confirmed_at"] <= now_utc),
+        default=None,
+    )
+
+    def account_run_rate(
+        *,
+        strategy: str,
+        risk_tiers: set[str],
+        exposure: ExposureRecommendation,
+    ) -> AccountRunRateSummary:
+        ordered = sorted(
+            [row for row in rows if row.get("confirmed_at") is not None and row["confirmed_at"] <= now_utc],
+            key=lambda row: row["confirmed_at"],
+        )
+        span_days = (
+            max(0.0, (now_utc - account_start_at).total_seconds() / 86400.0)
+            if account_start_at is not None else 0.0
+        )
+        equity = 1.0
+        positions: list[dict[str, Any]] = []
+        holds_hours: list[float] = []
+        eligible_signals = entered = closed = missed_capacity = missed_same_symbol = 0
+        max_open = 0
+
+        def known_exit(row: dict[str, Any]) -> tuple[datetime | None, float | None]:
+            confirmed = row["confirmed_at"]
+            if strategy == "tp5":
+                target = earliest_event(row, "target_5_at")
+                if target is not None and target <= now_utc:
+                    return target, 0.05
+                return None, None
+            if strategy == "tp20":
+                target = earliest_event(row, "target_20_path_at", "target_20_at")
+                if target is not None and target <= now_utc:
+                    return target, 0.20
+                return None, None
+            if strategy == "standard_7d":
+                exit_at = confirmed + timedelta(hours=168)
+                if exit_at <= now_utc and row.get("return_168h_pct") is not None:
+                    return exit_at, float(row["return_168h_pct"])
+                return None, None
+            raise ValueError(f"unsupported account replay strategy: {strategy}")
+
+        def close_due(cutoff: datetime) -> None:
+            nonlocal equity, closed
+            due = sorted(
+                [pos for pos in positions if pos["exit_at"] is not None and pos["exit_at"] <= cutoff],
+                key=lambda pos: pos["exit_at"],
+            )
+            for pos in due:
+                equity += pos["notional"] * (float(pos["exit_return"]) - SHADOW_FEE_PER_FILL)
+                holds_hours.append(max(0.0, (pos["exit_at"] - pos["entry_at"]).total_seconds() / 3600.0))
+                positions.remove(pos)
+                closed += 1
+
+        for row in ordered:
+            entry_at = row["confirmed_at"]
+            close_due(entry_at)
+            tier = str(row.get("risk_tier") or "standard")
+            if tier not in risk_tiers:
+                continue
+            eligible_signals += 1
+            symbol = str(row.get("symbol") or "")
+            if any(pos["symbol"] == symbol for pos in positions):
+                missed_same_symbol += 1
+                continue
+            if len(positions) >= exposure.max_slots:
+                missed_capacity += 1
+                continue
+
+            exit_at, exit_return = known_exit(row)
+            notional = max(0.0, equity) * exposure.per_trade_pct
+            equity -= notional * SHADOW_FEE_PER_FILL
+            positions.append({
+                "symbol": symbol,
+                "entry_at": entry_at,
+                "notional": notional,
+                "exit_at": exit_at,
+                "exit_return": exit_return,
+                "mark_return": row.get("current_return_pct"),
+            })
+            entered += 1
+            max_open = max(max_open, len(positions))
+
+        close_due(now_utc)
+
+        marked_equity = equity
+        unmarked = 0
+        for pos in positions:
+            holds_hours.append(max(0.0, (now_utc - pos["entry_at"]).total_seconds() / 3600.0))
+            mark = pos["mark_return"]
+            if mark is None:
+                unmarked += 1
+                continue
+            # Include a hypothetical closing fee so the MTM account return is
+            # comparable with already-realized positions.
+            marked_equity += pos["notional"] * (float(mark) - SHADOW_FEE_PER_FILL)
+
+        slot_days = sum(holds_hours) / 24.0
+        avg_exposure = (
+            slot_days * exposure.per_trade_pct / span_days
+            if span_days > 0 else None
+        )
+        observed_return = None if unmarked else (marked_equity - 1.0)
+        run_rate = (
+            observed_return * MONTHLY_RUN_RATE_DAYS / span_days
+            if observed_return is not None and span_days > 0 else None
+        )
+        return AccountRunRateSummary(
+            strategy=strategy,
+            start_at=account_start_at,
+            end_at=now_utc,
+            span_days=span_days,
+            eligible_signals=eligible_signals,
+            entered=entered,
+            closed=closed,
+            open_positions=len(positions),
+            unmarked_open_positions=unmarked,
+            missed_capacity=missed_capacity,
+            missed_same_symbol=missed_same_symbol,
+            observed_account_return=observed_return,
+            thirty_day_equivalent_return=run_rate,
+            thirty_day_pnl_per_10k=(run_rate * 10000.0) if run_rate is not None else None,
+            avg_exposure_pct=avg_exposure,
+            peak_exposure_pct=max_open * exposure.per_trade_pct,
+            slot_days=slot_days,
+        )
+
+    tp5_exposure = ExposureRecommendation(0.05, 6, 0.30, "portfolio-tested frozen TP5 configuration")
+    tp20_exposure = ExposureRecommendation(0.02, 5, 0.10, "risk-based suggestion from observed HIGH_RISK adverse paths")
+    standard_7d_exposure = ExposureRecommendation(0.03, 5, 0.15, "risk-based suggestion for fixed 7-day STANDARD holds")
+    tp5_account_run_rate = account_run_rate(
+        strategy="tp5", risk_tiers={"standard", "high_risk"}, exposure=tp5_exposure
+    )
+    tp20_account_run_rate = account_run_rate(
+        strategy="tp20", risk_tiers={"high_risk"}, exposure=tp20_exposure
+    )
+    standard_7d_account_run_rate = account_run_rate(
+        strategy="standard_7d", risk_tiers={"standard"}, exposure=standard_7d_exposure
+    )
+
     return PerformanceSummary(
         report_date=report_date,
         confirmed_today=confirmed_today,
@@ -993,4 +1183,10 @@ def build_performance_summary(
         tp5_7d_comparison=tp5_7d_comparison,
         tp20_7d_comparison=tp20_7d_comparison,
         standard_7d_comparison=standard_7d_comparison,
+        tp5_exposure=tp5_exposure,
+        tp20_exposure=tp20_exposure,
+        standard_7d_exposure=standard_7d_exposure,
+        tp5_account_run_rate=tp5_account_run_rate,
+        tp20_account_run_rate=tp20_account_run_rate,
+        standard_7d_account_run_rate=standard_7d_account_run_rate,
     )

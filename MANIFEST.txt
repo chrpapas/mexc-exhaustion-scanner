@@ -57,6 +57,7 @@ tests/test_cleanup_v1313.py
 tests/test_cleanup_v1314.py
 tests/test_cleanup_v1315.py
 tests/test_cleanup_v1316.py
+tests/test_cleanup_v1317.py
 tests/test_indicators.py
 tests/test_mexc_parsers.py
 tests/test_mexc_trade.py

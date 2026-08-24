@@ -1,8 +1,18 @@
-# MEXC Exhaustion Scanner + Multi-Slot Futures Trader v1.3.16
+# MEXC Exhaustion Scanner + Multi-Slot Futures Trader v1.3.17
 
 Reporting release. **TP5_V1 trader execution remains frozen and unchanged.**
 
-Reporting release. **TP5_V1 trader execution remains frozen and unchanged.**
+## v1.3.17 — account-level 30-day equivalent run-rate
+
+- **Account return is now the headline comparison:** each subscriber strategy is replayed chronologically with its recommended per-trade sizing, slot cap, one-symbol collision rule, and 0.08% shadow fee per fill.
+- **Same observed calendar:** TP5, TP20 No Timeout, and STANDARD 7D all replay from the same first public signal through the report timestamp.
+- **Actual exit semantics:** TP5 exits at +5%; TP20 exits only at +20% and otherwise remains open; STANDARD 7D exits exactly at 168h. Open positions are marked to current market at report time.
+- **30-Day Equivalent Run-Rate:** linearly scales observed account return to 30 days and shows an equivalent P&L per $10k. It is explicitly labeled an extrapolated run-rate, not an observed 30-day result or forecast.
+- **Capacity is included:** report shows entered trades, currently open positions, capacity misses, and average/peak account exposure under the suggested configuration.
+- **Raw signal Σ is demoted:** the normalized 168h TP5/TP20/7D table remains as supporting path evidence and is labeled `Σ signal`, preventing raw opportunity sums from being confused with account return.
+- **Fresh TP20 MTM beyond day 7:** on-demand and scheduled reports refresh current marks for old HIGH_RISK signals because TP20 has no timeout. If an open position cannot be marked, account/run-rate output is withheld instead of guessed.
+- **Cost caveat:** run-rate includes the 0.08%/fill shadow fee but does not model funding or slippage.
+- **No schema migration:** migration `015_tp5_trader_runs.sql` remains latest.
 
 ## v1.3.16 — normalized three-strategy subscriber comparison
 

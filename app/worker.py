@@ -1392,6 +1392,14 @@ class ScannerWorker:
         )
 
         rows = await self.db.performance_rows()
+        # The subscriber account replay includes open-ended TP20 positions, so
+        # refresh MTM for all historical public signals from the worker's latest
+        # ticker snapshot, not only rows younger than seven days.
+        for row in rows:
+            ticker = self.latest_tickers.get(str(row.get("symbol") or ""))
+            if ticker is None:
+                continue
+            row["current_return_pct"] = short_return(float(row["entry_price"]), ticker.last_price)
         report = build_performance_summary(
             rows,
             now_utc=now,

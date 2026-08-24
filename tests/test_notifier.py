@@ -17,6 +17,7 @@ from app.performance import (
     HighRiskTp20PublicSummary,
     Standard7dPublicSummary,
     Normalized7dStrategySummary,
+    AccountRunRateSummary,
 )
 
 
@@ -177,6 +178,18 @@ def _report() -> PerformanceSummary:
             avg_effective_holding_hours=168.0, median_effective_holding_hours=168.0,
             breach_50=1, breach_100=0, breach_200=0, breach_300=0, worst_adverse=0.65,
         ),
+        tp5_account_run_rate=AccountRunRateSummary(
+            "tp5", datetime(2026, 8, 1, tzinfo=UTC), datetime(2026, 8, 12, tzinfo=UTC),
+            11.0, 20, 18, 16, 2, 0, 1, 1, 0.084, 0.2291, 2291.0, 0.12, 0.30, 26.4,
+        ),
+        tp20_account_run_rate=AccountRunRateSummary(
+            "tp20", datetime(2026, 8, 1, tzinfo=UTC), datetime(2026, 8, 12, tzinfo=UTC),
+            11.0, 10, 8, 5, 3, 0, 2, 0, 0.031, 0.0845, 845.0, 0.07, 0.10, 38.5,
+        ),
+        standard_7d_account_run_rate=AccountRunRateSummary(
+            "standard_7d", datetime(2026, 8, 1, tzinfo=UTC), datetime(2026, 8, 12, tzinfo=UTC),
+            11.0, 10, 6, 3, 3, 0, 4, 0, 0.102, 0.2782, 2782.0, 0.14, 0.15, 51.3,
+        ),
     )
 
 
@@ -209,6 +222,11 @@ def test_performance_report_uses_dedicated_stats_webhook_and_embeds():
         field["name"] + " " + field["value"] for field in embed.get("fields", [])
     )
     assert "Strategy Comparison" in all_text
+    assert "Account-Level Return" in all_text
+    assert "30D eq." in all_text
+    assert "+22.91% 30D eq." in all_text
+    assert "+$2,291 / $10k" in all_text
+    assert "avg/peak exposure" in all_text
     assert "TP5 Frequent" in all_text
     assert "7D Swing" in all_text
     assert "STANDARD + HIGH RISK" in all_text
@@ -216,7 +234,7 @@ def test_performance_report_uses_dedicated_stats_webhook_and_embeds():
     assert "+20%" in all_text
     assert "No Timeout" in all_text
     assert "TP20 hits by 7D **3**" in all_text
-    assert "Σ **+72.00%**" in all_text
+    assert "Σ signal **+72.00%**" in all_text
     assert "-100% **1**" in all_text
     assert "TP1-10" not in all_text
     assert "TP2-6" not in all_text
@@ -225,9 +243,9 @@ def test_performance_report_uses_dedicated_stats_webhook_and_embeds():
     assert "EXTREME_RISK signals are not published" in all_text
     assert "target hits **12**" in all_text
     assert "profitable mark **12/12 (100.00%)**" in all_text
-    assert "Σ **+60.00%**" in all_text
+    assert "Σ signal **+60.00%**" in all_text
     assert "wins **4** • losses **1**" in all_text
-    assert "Σ **+150.00%**" in all_text
+    assert "Σ signal **+150.00%**" in all_text
     assert "Suggested account: **5.00% / trade**" in all_text
     assert "Suggested account: **2.00% / trade**" in all_text
     assert "Suggested account: **3.00% / trade**" in all_text

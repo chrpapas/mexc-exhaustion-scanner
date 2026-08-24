@@ -45,8 +45,9 @@ async def main() -> None:
             tickers = await mexc.get_tickers()
             current_prices = {ticker.symbol: ticker.last_price for ticker in tickers}
             for row in rows:
-                if row.get("return_168h_pct") is not None:
-                    continue
+                # Refresh every public signal, including >7d HIGH_RISK rows.
+                # TP20 No Timeout can remain economically open long after the
+                # normalized 7-day comparison mark.
                 price = current_prices.get(str(row["symbol"]))
                 if price is None:
                     continue
