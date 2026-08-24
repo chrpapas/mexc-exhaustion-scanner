@@ -102,8 +102,17 @@ def _age_hours(item: SignalLedgerItem, effective_at) -> float:
 def _breach_text(outcome: LedgerStrategyOutcome) -> str:
     deepest = outcome.deepest_breach_before_effective_pct
     if outcome.state in {"target_hit", "closed_win", "closed_loss"}:
-        return "pre none" if deepest is None else f"pre -{deepest}%"
-    return "so far none" if deepest is None else f"so far -{deepest}%"
+        return "no breach before exit" if deepest is None else f"⚠ pre-target/exit -{deepest}%"
+    return "no breach so far" if deepest is None else f"⚠ so far -{deepest}%"
+
+
+@dataclass(frozen=True, slots=True)
+class _StrategyCell:
+    main_text: str
+    detail_text: str
+    fill: tuple[int, int, int]
+    main_color: tuple[int, int, int]
+    detail_color: tuple[int, int, int]
 
 
 def _strategy_cell(
@@ -111,38 +120,67 @@ def _strategy_cell(
     outcome: LedgerStrategyOutcome,
     *,
     target_pct: int | None = None,
-) -> tuple[str, tuple[int, int, int], tuple[int, int, int]]:
+) -> _StrategyCell:
     if not outcome.eligible:
-        return "N/A\nnot eligible", _NEUTRAL, _MUTED
+        return _StrategyCell("N/A", "not eligible", _NEUTRAL, _MUTED, _MUTED)
 
     breach = _breach_text(outcome)
     has_breach = outcome.deepest_breach_before_effective_pct is not None
+    detail_color = _RED_TEXT if has_breach else _MUTED
 
+    # Primary color communicates STRATEGY STATUS only. A breach is a secondary
+    # warning and must never repaint a winning target/exit red.
     if outcome.state == "target_hit":
         target = f"+{target_pct}%" if target_pct is not None else "TARGET"
-        text = f"HIT {target}\n{_elapsed(outcome.target_hours)} • {breach}"
-        return text, (_RED if has_breach else _GREEN), (_RED_TEXT if has_breach else _GREEN_TEXT)
+        main = f"HIT {target} • {_elapsed(outcome.target_hours)}"
+        return _StrategyCell(main, breach, _GREEN, _GREEN_TEXT, detail_color)
 
     if outcome.state in {"closed_win", "closed_loss"}:
-        text = f"CLOSED 7D {_pct(outcome.return_pct)}\n{breach}"
-        if has_breach:
-            return text, _RED, _RED_TEXT
+        main = f"CLOSED 7D {_pct(outcome.return_pct)}"
         if outcome.return_pct is not None and outcome.return_pct > 0:
-            return text, _GREEN, _GREEN_TEXT
-        return text, _AMBER, _AMBER_TEXT
+            return _StrategyCell(main, breach, _GREEN, _GREEN_TEXT, detail_color)
+        return _StrategyCell(main, breach, _RED, _RED_TEXT, detail_color)
 
     if outcome.state in {"open", "tracking"}:
         age = _elapsed(_age_hours(item, outcome.effective_at)) if outcome.effective_at else "—"
         prefix = "OPEN" if outcome.state == "open" else "TRACKING"
-        text = f"{prefix} {_pct(outcome.return_pct)}\n{age} • {breach}"
-        if has_breach:
-            return text, _RED, _RED_TEXT
+        main = f"{prefix} {_pct(outcome.return_pct)} • {age}"
         if outcome.return_pct is not None and outcome.return_pct > 0:
-            return text, _BLUE, _BLUE_TEXT
-        return text, _AMBER, _AMBER_TEXT
+            return _StrategyCell(main, breach, _BLUE, _BLUE_TEXT, detail_color)
+        # An underwater OPEN trade is not a realized loss. Amber prevents the
+        # subscriber from reading it as a failed TP5/TP20 strategy outcome.
+        return _StrategyCell(main, breach, _AMBER, _AMBER_TEXT, detail_color)
 
-    return outcome.state, _NEUTRAL, _MUTED
+    return _StrategyCell(outcome.state, breach, _NEUTRAL, _MUTED, detail_color)
 
+
+def _draw_strategy_cell(
+    draw: ImageDraw.ImageDraw,
+    box: tuple[int, int, int, int],
+    cell: _StrategyCell,
+    *,
+    main_font,
+    detail_font,
+) -> None:
+    x0, y0, x1, y1 = box
+    draw.rectangle(box, fill=cell.fill, outline=_GRID, width=1)
+    max_width = max(10, x1 - x0 - 12)
+    main = _fit_text(draw, cell.main_text, main_font, max_width)
+    detail = _fit_text(draw, cell.detail_text, detail_font, max_width)
+
+    main_box = draw.textbbox((0, 0), main, font=main_font)
+    detail_box = draw.textbbox((0, 0), detail, font=detail_font)
+    main_h = max(1, main_box[3] - main_box[1])
+    detail_h = max(1, detail_box[3] - detail_box[1])
+    spacing = 6
+    total_h = main_h + spacing + detail_h
+    y = y0 + (y1 - y0 - total_h) / 2
+
+    main_w = main_box[2] - main_box[0]
+    detail_w = detail_box[2] - detail_box[0]
+    draw.text((x0 + (x1 - x0 - main_w) / 2, y), main, fill=cell.main_color, font=main_font)
+    y += main_h + spacing
+    draw.text((x0 + (x1 - x0 - detail_w) / 2, y), detail, fill=cell.detail_color, font=detail_font)
 
 def _fit_text(draw: ImageDraw.ImageDraw, text: str, font, max_width: int) -> str:
     if draw.textbbox((0, 0), text, font=font)[2] <= max_width:
@@ -234,26 +272,32 @@ def _render_page(
         tp5 = _strategy_cell(item, item.tp5_strategy, target_pct=5)
         tp20 = _strategy_cell(item, item.tp20_strategy, target_pct=20)
         swing = _strategy_cell(item, item.standard_7d_strategy)
-        values: list[tuple[str, tuple[int, int, int], tuple[int, int, int], object, str]] = [
+        plain_values: list[tuple[str, tuple[int, int, int], tuple[int, int, int], object, str]] = [
             (item.symbol.replace("_USDT", ""), _NEUTRAL, _TEXT, cell_bold, "left"),
             (signal_text, _NEUTRAL, _MUTED, cell_font, "center"),
             (_price(item.signal_price), _NEUTRAL, _TEXT, cell_font, "center"),
-            (*tp5, cell_bold, "center"),
-            (*tp20, cell_bold, "center"),
-            (*swing, cell_bold, "center"),
         ]
 
         x = margin
-        for (_, col_w), (text, fill, color, font, align) in zip(_COLUMNS, values):
+        for (_, col_w), (text, fill, color, font, align) in zip(_COLUMNS[:3], plain_values):
             _draw_cell(draw, (x, y, x + col_w, y + row_h), text, fill=fill, color=color, font=font, align=align)
+            x += col_w
+        for (_, col_w), strategy_cell in zip(_COLUMNS[3:], (tp5, tp20, swing)):
+            _draw_strategy_cell(
+                draw,
+                (x, y, x + col_w, y + row_h),
+                strategy_cell,
+                main_font=cell_bold,
+                detail_font=_font(11, bold=True),
+            )
             x += col_w
         y += row_h
 
     footer_1 = (
-        "pre -X% = deepest adverse threshold (-50/-100/-200/-300) reached before that strategy exited. "
-        "OPEN/TRACKING uses the current mark."
+        "Green = completed win/target. Amber/blue = still open. Red primary = closed loss only. "
+        "Red ⚠ text = deepest adverse breach carried before target/exit."
     )
-    footer_2 = "TP20 applies only to HIGH RISK; 7D Swing applies only to STANDARD. Exact threshold-by-threshold flags are in the CSV."
+    footer_2 = "OPEN/TRACKING uses current MTM; a red breach warning does not mean the strategy lost. Exact threshold flags are in the CSV."
     draw.text((margin + 4, y + 12), footer_1, fill=_MUTED, font=foot_font)
     draw.text((margin + 4, y + 34), footer_2, fill=_MUTED, font=foot_font)
 

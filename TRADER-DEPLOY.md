@@ -1,6 +1,6 @@
-# Trader deployment — v1.3.18
+# Trader deployment — v1.3.19
 
-v1.3.18 keeps the **paper trader** on the frozen `TP5_V1` execution strategy. EXTREME_RISK remains suppressed before signal creation. Public Discord now compares TP5 Frequent, HIGH_RISK TP20 No Timeout, and STANDARD-only 7D Swing on one normalized 168-hour observation window. Trader execution semantics are unchanged.
+v1.3.19 keeps the **paper trader** on the frozen `TP5_V1` execution strategy. EXTREME_RISK remains suppressed before signal creation. Public Discord now compares TP5 Frequent, HIGH_RISK TP20 No Timeout, and STANDARD-only 7D Swing on one normalized 168-hour observation window. Trader execution semantics are unchanged.
 
 ## Frozen TP5_V1 execution
 
@@ -95,7 +95,7 @@ Migration `015_tp5_trader_runs.sql` is applied automatically at startup. It adds
 
 ## Research / reporting
 
-v1.3.18 keeps the account-level run-rate comparison and makes the signal ledger strategy-aware, including breach-before-target/exit flags for TP5, TP20 No Timeout, and STANDARD 7D.
+v1.3.19 keeps the strategy-aware ledger but separates primary outcome color from breach warnings: completed targets/wins stay green, open positions are amber/blue, and only realized closed losses use a red primary cell. Breaches remain visible as secondary red warnings.
 
 Run:
 
@@ -121,4 +121,4 @@ Suggested exposure shown to subscribers:
 
 The Research Validation Discord board no longer republishes an independent TP20/4D table. It shows evidence health, the frozen TP5 portfolio monitor, and the separate prospective TP5 tracker. Historical TP1/TP2/hybrid/EntryGate/token-behaviour/feature-sweep calculations remain internal.
 
-No new database migration is required in v1.3.18.
+No new database migration is required in v1.3.19.

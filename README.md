@@ -1,8 +1,12 @@
-# MEXC Exhaustion Scanner + Multi-Slot Futures Trader v1.3.18
+# MEXC Exhaustion Scanner + Multi-Slot Futures Trader v1.3.19
 
 Reporting release. **TP5_V1 trader execution remains frozen and unchanged.**
 
-## v1.3.18 — strategy-aware ledger + pre-exit breach audit
+## v1.3.19 — unambiguous ledger status vs breach warnings
+
+- Primary cell color now represents strategy status only: green = completed target/win, amber/blue = open, red = closed loss.
+- Pre-target/pre-exit breaches are rendered as a separate red warning line and never repaint a winning TP5/TP20 outcome red.
+
 
 - **Ledger now mirrors the three selected subscriber strategies:** TP5 Frequent, HIGH_RISK TP20 No Timeout, and STANDARD-only 7D Swing.
 - **Per-row strategy outcome:** the PNG ledger shows target hit/open/7D close, current or realized strategy return, and elapsed holding time. Ineligible combinations are explicitly `N/A` rather than silently omitted.
