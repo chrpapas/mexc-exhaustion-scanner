@@ -2,13 +2,11 @@ from __future__ import annotations
 
 import io
 from dataclasses import dataclass
-from datetime import datetime, timedelta
-from typing import Iterable
 from zoneinfo import ZoneInfo
 
 from PIL import Image, ImageDraw, ImageFont
 
-from app.signal_ledger import SignalLedger, SignalLedgerItem
+from app.signal_ledger import LedgerStrategyOutcome, SignalLedger, SignalLedgerItem
 
 
 @dataclass(frozen=True, slots=True)
@@ -26,15 +24,16 @@ _RISK_META = {
     "high_risk": ("HIGH RISK", (139, 105, 20)),
 }
 
-# Designed for Discord desktop/mobile preview. Cells deliberately favor scanability
-# over verbose detail; the CSV remains the source for exact/raw values.
+# Subscriber ledger mirrors the three selected strategies. Strategy cells contain
+# their own pre-target/pre-exit breach state so a later raw breach cannot be mistaken
+# for risk that was actually carried by a strategy after it had already exited.
 _COLUMNS = (
-    ("STATUS", 150),
-    ("TOKEN", 190),
-    ("SIGNAL", 180),
-    ("ENTRY", 150),
-    ("TP5", 190),
-    ("7D RAW", 210),
+    ("TOKEN", 165),
+    ("SIGNAL", 160),
+    ("ENTRY", 145),
+    ("TP5 FREQUENT", 245),
+    ("TP20 NO TIMEOUT", 255),
+    ("7D SWING", 245),
 )
 
 _BG = (20, 22, 28)
@@ -47,7 +46,6 @@ _GREEN_TEXT = (205, 244, 220)
 _AMBER = (106, 76, 23)
 _AMBER_TEXT = (255, 231, 174)
 _RED = (112, 39, 45)
-_RED_DEEP = (83, 29, 35)
 _RED_TEXT = (255, 211, 214)
 _BLUE = (41, 61, 92)
 _BLUE_TEXT = (204, 223, 255)
@@ -66,7 +64,7 @@ def _font(size: int, *, bold: bool = False):
             continue
     try:
         return ImageFont.load_default(size=size)
-    except TypeError:  # pragma: no cover - older Pillow fallback
+    except TypeError:  # pragma: no cover
         return ImageFont.load_default()
 
 
@@ -97,66 +95,53 @@ def _elapsed(hours: float | None) -> str:
     return f"{hours / 24:.2f}d"
 
 
-def _status(item: SignalLedgerItem) -> tuple[str, tuple[int, int, int], tuple[int, int, int]]:
-    if item.target_5_at is not None:
-        return "TP5 HIT", _GREEN, _GREEN_TEXT
-    seven_day = next((h for h in item.horizons if h.hours == 168), None)
-    if seven_day is not None and seven_day.return_pct is not None:
-        if seven_day.return_pct > 0:
-            return "7D +", _GREEN, _GREEN_TEXT
-        return "7D -", _AMBER, _AMBER_TEXT
-    return "TRACKING", _BLUE, _BLUE_TEXT
+def _age_hours(item: SignalLedgerItem, effective_at) -> float:
+    return max(0.0, (effective_at - item.confirmed_at).total_seconds() / 3600.0)
 
 
-def _breach_before(item: SignalLedgerItem, hours: int, threshold: int = 100) -> bool:
-    cutoff = item.confirmed_at + timedelta(hours=hours)
-    for breach in item.breaches:
-        if breach.adverse_limit_pct == threshold:
-            return breach.occurred_at is not None and breach.occurred_at <= cutoff
-    return False
+def _breach_text(outcome: LedgerStrategyOutcome) -> str:
+    deepest = outcome.deepest_breach_before_effective_pct
+    if outcome.state in {"target_hit", "closed_win", "closed_loss"}:
+        return "pre none" if deepest is None else f"pre -{deepest}%"
+    return "so far none" if deepest is None else f"so far -{deepest}%"
 
 
-def _cell_for_horizon(item: SignalLedgerItem, hours: int) -> tuple[str, tuple[int, int, int], tuple[int, int, int]]:
-    horizon = next(h for h in item.horizons if h.hours == hours)
-    if horizon.return_pct is None:
-        return "pending", _BLUE, _BLUE_TEXT
-    text = f"{_price(horizon.price)}\n{_pct(horizon.return_pct)}"
-    if _breach_before(item, hours, 100):
-        return text, _RED, _RED_TEXT
-    if horizon.return_pct > 0:
-        return text, _GREEN, _GREEN_TEXT
-    return text, _AMBER, _AMBER_TEXT
+def _strategy_cell(
+    item: SignalLedgerItem,
+    outcome: LedgerStrategyOutcome,
+    *,
+    target_pct: int | None = None,
+) -> tuple[str, tuple[int, int, int], tuple[int, int, int]]:
+    if not outcome.eligible:
+        return "N/A\nnot eligible", _NEUTRAL, _MUTED
 
+    breach = _breach_text(outcome)
+    has_breach = outcome.deepest_breach_before_effective_pct is not None
 
-def _cell_for_target_5(item: SignalLedgerItem) -> tuple[str, tuple[int, int, int], tuple[int, int, int]]:
-    if item.target_5_at is not None:
-        race = item.target_5_before_100_breach
-        mae = item.path_mae_before_target_5
-        mae_text = "" if mae is None else f"\npre {mae * 100:.1f}%"
-        if race is not False:
-            return f"HIT {_elapsed(item.time_to_target_5_hours)}{mae_text}", _GREEN, _GREEN_TEXT
-        return f"late {_elapsed(item.time_to_target_5_hours)}{mae_text}", _RED, _RED_TEXT
-    if item.first_100_breach_at is not None:
-        return "BREACH\nfirst", _RED, _RED_TEXT
-    return "pending", _BLUE, _BLUE_TEXT
+    if outcome.state == "target_hit":
+        target = f"+{target_pct}%" if target_pct is not None else "TARGET"
+        text = f"HIT {target}\n{_elapsed(outcome.target_hours)} • {breach}"
+        return text, (_RED if has_breach else _GREEN), (_RED_TEXT if has_breach else _GREEN_TEXT)
 
+    if outcome.state in {"closed_win", "closed_loss"}:
+        text = f"CLOSED 7D {_pct(outcome.return_pct)}\n{breach}"
+        if has_breach:
+            return text, _RED, _RED_TEXT
+        if outcome.return_pct is not None and outcome.return_pct > 0:
+            return text, _GREEN, _GREEN_TEXT
+        return text, _AMBER, _AMBER_TEXT
 
-def _cell_for_target(item: SignalLedgerItem) -> tuple[str, tuple[int, int, int], tuple[int, int, int]]:
-    if item.target_20_at is not None:
-        if item.first_100_breach_at is None or item.target_20_at < item.first_100_breach_at:
-            return f"HIT\n{_elapsed(item.time_to_target_20_hours)}", _GREEN, _GREEN_TEXT
-        return f"late\n{_elapsed(item.time_to_target_20_hours)}", _RED, _RED_TEXT
-    if item.first_100_breach_at is not None:
-        return "BREACH\nfirst", _RED, _RED_TEXT
-    return "pending", _BLUE, _BLUE_TEXT
+    if outcome.state in {"open", "tracking"}:
+        age = _elapsed(_age_hours(item, outcome.effective_at)) if outcome.effective_at else "—"
+        prefix = "OPEN" if outcome.state == "open" else "TRACKING"
+        text = f"{prefix} {_pct(outcome.return_pct)}\n{age} • {breach}"
+        if has_breach:
+            return text, _RED, _RED_TEXT
+        if outcome.return_pct is not None and outcome.return_pct > 0:
+            return text, _BLUE, _BLUE_TEXT
+        return text, _AMBER, _AMBER_TEXT
 
-
-def _cell_for_breach(item: SignalLedgerItem, threshold: int) -> tuple[str, tuple[int, int, int], tuple[int, int, int]]:
-    breach = next(b for b in item.breaches if b.adverse_limit_pct == threshold)
-    if breach.occurred_at is None:
-        return "—", _NEUTRAL, _MUTED
-    intensity = {100: _RED, 200: (105, 38, 48), 300: (91, 32, 48), 400: (66, 26, 38)}[threshold]
-    return _elapsed(breach.hours_after_signal), intensity, _RED_TEXT
+    return outcome.state, _NEUTRAL, _MUTED
 
 
 def _fit_text(draw: ImageDraw.ImageDraw, text: str, font, max_width: int) -> str:
@@ -194,10 +179,7 @@ def _draw_cell(
     for line, h in zip(rendered, line_heights):
         bbox = draw.textbbox((0, 0), line, font=font)
         width = bbox[2] - bbox[0]
-        if align == "left":
-            x = x0 + 7
-        else:
-            x = x0 + (x1 - x0 - width) / 2
+        x = x0 + 7 if align == "left" else x0 + (x1 - x0 - width) / 2
         draw.text((x, y), line, fill=color, font=font)
         y += h + spacing
 
@@ -214,28 +196,28 @@ def _render_page(
     tz = ZoneInfo(timezone_name)
     table_width = sum(width for _, width in _COLUMNS)
     margin = 20
-    title_h = 64
+    title_h = 70
     header_h = 48
-    row_h = 60
-    footer_h = 44
+    row_h = 68
+    footer_h = 72
     width = table_width + margin * 2
     height = margin * 2 + title_h + header_h + row_h * len(items) + footer_h
 
     image = Image.new("RGB", (width, height), _BG)
     draw = ImageDraw.Draw(image)
     title_font = _font(25, bold=True)
-    subtitle_font = _font(15)
-    head_font = _font(14, bold=True)
+    subtitle_font = _font(14)
+    head_font = _font(13, bold=True)
     cell_font = _font(13)
     cell_bold = _font(13, bold=True)
-    foot_font = _font(13)
+    foot_font = _font(12)
 
     draw.rounded_rectangle((margin, margin, width - margin, margin + title_h - 4), radius=12, fill=_HEADER)
     draw.rectangle((margin, margin, margin + 8, margin + title_h - 4), fill=accent)
-    draw.text((margin + 20, margin + 9), f"{label} • SIGNAL OUTCOME TABLE", fill=_TEXT, font=title_font)
+    draw.text((margin + 20, margin + 9), f"{label} • STRATEGY LEDGER", fill=_TEXT, font=title_font)
     draw.text(
-        (margin + 20, margin + 38),
-        f"Page {page}/{total_pages} • newest first • green=profitable • amber=negative/safe • red=breach • blue=pending",
+        (margin + 20, margin + 40),
+        f"Page {page}/{total_pages} • newest first • each strategy cell shows breach carried before its target/exit",
         fill=_MUTED,
         font=subtitle_font,
     )
@@ -248,17 +230,17 @@ def _render_page(
     y += header_h
 
     for item in items:
-        status_text, status_fill, status_text_color = _status(item)
-        target5_text, target5_fill, target5_text_color = _cell_for_target_5(item)
         signal_text = item.confirmed_at.astimezone(tz).strftime("%d %b\n%H:%M")
-        seven_text, seven_fill, seven_color = _cell_for_horizon(item, 168)
+        tp5 = _strategy_cell(item, item.tp5_strategy, target_pct=5)
+        tp20 = _strategy_cell(item, item.tp20_strategy, target_pct=20)
+        swing = _strategy_cell(item, item.standard_7d_strategy)
         values: list[tuple[str, tuple[int, int, int], tuple[int, int, int], object, str]] = [
-            (status_text, status_fill, status_text_color, cell_bold, "center"),
             (item.symbol.replace("_USDT", ""), _NEUTRAL, _TEXT, cell_bold, "left"),
             (signal_text, _NEUTRAL, _MUTED, cell_font, "center"),
             (_price(item.signal_price), _NEUTRAL, _TEXT, cell_font, "center"),
-            (target5_text, target5_fill, target5_text_color, cell_bold, "center"),
-            (seven_text, seven_fill, seven_color, cell_font, "center"),
+            (*tp5, cell_bold, "center"),
+            (*tp20, cell_bold, "center"),
+            (*swing, cell_bold, "center"),
         ]
 
         x = margin
@@ -267,11 +249,13 @@ def _render_page(
             x += col_w
         y += row_h
 
-    footer = (
-        "TP5 shows hit time and pre-hit adverse excursion. 7D RAW is the fixed-horizon short return; "
-        "the 7D Swing strategy is intended for STANDARD signals only. Full historical detail remains in the CSV."
+    footer_1 = (
+        "pre -X% = deepest adverse threshold (-50/-100/-200/-300) reached before that strategy exited. "
+        "OPEN/TRACKING uses the current mark."
     )
-    draw.text((margin + 4, y + 13), footer, fill=_MUTED, font=foot_font)
+    footer_2 = "TP20 applies only to HIGH RISK; 7D Swing applies only to STANDARD. Exact threshold-by-threshold flags are in the CSV."
+    draw.text((margin + 4, y + 12), footer_1, fill=_MUTED, font=foot_font)
+    draw.text((margin + 4, y + 34), footer_2, fill=_MUTED, font=foot_font)
 
     out = io.BytesIO()
     image.save(out, format="PNG", optimize=True)

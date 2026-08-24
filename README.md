@@ -1,6 +1,18 @@
-# MEXC Exhaustion Scanner + Multi-Slot Futures Trader v1.3.17
+# MEXC Exhaustion Scanner + Multi-Slot Futures Trader v1.3.18
 
 Reporting release. **TP5_V1 trader execution remains frozen and unchanged.**
+
+## v1.3.18 — strategy-aware ledger + pre-exit breach audit
+
+- **Ledger now mirrors the three selected subscriber strategies:** TP5 Frequent, HIGH_RISK TP20 No Timeout, and STANDARD-only 7D Swing.
+- **Per-row strategy outcome:** the PNG ledger shows target hit/open/7D close, current or realized strategy return, and elapsed holding time. Ineligible combinations are explicitly `N/A` rather than silently omitted.
+- **Breach-before-exit is strategy-specific:** each strategy cell reports the deepest -50/-100/-200/-300 adverse threshold reached **before that strategy's target/exit**. Open/tracking trades show the deepest breach observed so far. Later breaches after an earlier TP5/TP20 exit do not count against that strategy.
+- **CSV is strategy-first:** explicit TP5, TP20, and 7D status/return fields plus threshold-by-threshold breach-before-target/exit flags are placed before the retained raw audit fields.
+- **15m -50% breach data is now exposed by `performance_rows()`:** the ledger and Strategy Comparison use the same research path source for -50/-100/-200/-300 timestamps.
+- **Worst-adverse reporting fixed:** `path_mae_before_target_20` and `path_mae_7d` are now returned, allowing TP20 and 7D normalized comparison cards to populate worst adverse excursion instead of `n/a` when path data exists.
+- **Frozen trader unchanged:** TP5_V1 execution remains byte-identical to v1.3.17.
+- **No schema migration:** migration `015_tp5_trader_runs.sql` remains latest.
+
 
 ## v1.3.17 — account-level 30-day equivalent run-rate
 

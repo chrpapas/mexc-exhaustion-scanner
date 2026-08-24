@@ -3,7 +3,7 @@ from __future__ import annotations
 import csv
 import io
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Iterable
 
 PUBLIC_LEDGER_RISK_TIERS = frozenset({"standard", "high_risk"})
@@ -16,11 +16,14 @@ HORIZONS: tuple[tuple[int, str], ...] = (
     (168, "7D"),
 )
 
-BREACHES: tuple[tuple[int, str], ...] = (
-    (100, "isolated_100_breach_at"),
-    (200, "adverse_200_breach_at"),
-    (300, "adverse_300_breach_at"),
-    (400, "cross_400_breach_at"),
+# Public subscriber risk thresholds. -400% is retained in the raw CSV/history but
+# the current strategy comparison/report is standardized on -50/-100/-200/-300.
+BREACHES: tuple[tuple[int, tuple[str, ...]], ...] = (
+    (50, ("adverse_50_at",)),
+    (100, ("adverse_100_at", "isolated_100_breach_at")),
+    (200, ("adverse_200_path_at", "adverse_200_breach_at")),
+    (300, ("adverse_300_path_at", "adverse_300_breach_at")),
+    (400, ("adverse_400_path_at", "cross_400_breach_at")),
 )
 
 
@@ -40,12 +43,29 @@ class LedgerBreach:
 
 
 @dataclass(frozen=True, slots=True)
+class LedgerStrategyOutcome:
+    strategy: str
+    eligible: bool
+    state: str
+    effective_at: datetime | None
+    return_pct: float | None
+    target_at: datetime | None
+    target_hours: float | None
+    deepest_breach_before_effective_pct: int | None
+    breach_50_before_effective: bool
+    breach_100_before_effective: bool
+    breach_200_before_effective: bool
+    breach_300_before_effective: bool
+
+
+@dataclass(frozen=True, slots=True)
 class SignalLedgerItem:
     episode_id: int
     symbol: str
     risk_tier: str
     confirmed_at: datetime
     signal_price: float
+    observed_at: datetime
     target_5_at: datetime | None
     time_to_target_5_hours: float | None
     path_mae_before_target_5: float | None
@@ -68,6 +88,28 @@ class SignalLedgerItem:
             if breach.adverse_limit_pct == 100:
                 return breach.occurred_at
         return None
+
+    def breach_at(self, threshold: int) -> datetime | None:
+        for breach in self.breaches:
+            if breach.adverse_limit_pct == threshold:
+                return breach.occurred_at
+        return None
+
+    def breach_before(self, threshold: int, cutoff: datetime | None) -> bool:
+        event_at = self.breach_at(threshold)
+        return event_at is not None and cutoff is not None and event_at <= cutoff
+
+    def deepest_breach_before(self, cutoff: datetime | None, *, max_threshold: int = 300) -> int | None:
+        if cutoff is None:
+            return None
+        values = [
+            breach.adverse_limit_pct
+            for breach in self.breaches
+            if breach.adverse_limit_pct <= max_threshold
+            and breach.occurred_at is not None
+            and breach.occurred_at <= cutoff
+        ]
+        return max(values) if values else None
 
     @property
     def target_5_before_100_breach(self) -> bool | None:
@@ -117,6 +159,107 @@ class SignalLedgerItem:
             return "profitable_below_target"
         return "safe_negative"
 
+    def _strategy_outcome(
+        self,
+        *,
+        strategy: str,
+        eligible: bool,
+        target_at: datetime | None,
+        target_return: float | None,
+        fixed_horizon_hours: int | None = None,
+    ) -> LedgerStrategyOutcome:
+        if not eligible:
+            return LedgerStrategyOutcome(
+                strategy=strategy,
+                eligible=False,
+                state="not_eligible",
+                effective_at=None,
+                return_pct=None,
+                target_at=None,
+                target_hours=None,
+                deepest_breach_before_effective_pct=None,
+                breach_50_before_effective=False,
+                breach_100_before_effective=False,
+                breach_200_before_effective=False,
+                breach_300_before_effective=False,
+            )
+
+        effective_at: datetime
+        outcome_return: float | None
+        state: str
+        actual_target_at: datetime | None = None
+        target_hours: float | None = None
+
+        if fixed_horizon_hours is not None:
+            horizon_at = self.confirmed_at + timedelta(hours=fixed_horizon_hours)
+            horizon = next((h for h in self.horizons if h.hours == fixed_horizon_hours), None)
+            if horizon is not None and horizon.return_pct is not None and self.observed_at >= horizon_at:
+                effective_at = horizon_at
+                outcome_return = horizon.return_pct
+                state = "closed_win" if outcome_return > 0 else "closed_loss"
+            else:
+                effective_at = min(self.observed_at, horizon_at)
+                outcome_return = self.current_return_pct
+                state = "tracking"
+        elif target_at is not None and target_return is not None and target_at <= self.observed_at:
+            effective_at = target_at
+            outcome_return = target_return
+            actual_target_at = target_at
+            target_hours = _elapsed_hours(self.confirmed_at, target_at)
+            state = "target_hit"
+        else:
+            effective_at = self.observed_at
+            outcome_return = self.current_return_pct
+            state = "open"
+
+        flags = {
+            threshold: self.breach_before(threshold, effective_at)
+            for threshold in (50, 100, 200, 300)
+        }
+        deepest = max((threshold for threshold, hit in flags.items() if hit), default=None)
+        return LedgerStrategyOutcome(
+            strategy=strategy,
+            eligible=True,
+            state=state,
+            effective_at=effective_at,
+            return_pct=outcome_return,
+            target_at=actual_target_at,
+            target_hours=target_hours,
+            deepest_breach_before_effective_pct=deepest,
+            breach_50_before_effective=flags[50],
+            breach_100_before_effective=flags[100],
+            breach_200_before_effective=flags[200],
+            breach_300_before_effective=flags[300],
+        )
+
+    @property
+    def tp5_strategy(self) -> LedgerStrategyOutcome:
+        return self._strategy_outcome(
+            strategy="tp5_frequent",
+            eligible=True,
+            target_at=self.target_5_at,
+            target_return=0.05,
+        )
+
+    @property
+    def tp20_strategy(self) -> LedgerStrategyOutcome:
+        return self._strategy_outcome(
+            strategy="tp20_high_no_timeout",
+            eligible=self.risk_tier == "high_risk",
+            target_at=self.target_20_at,
+            target_return=0.20,
+        )
+
+    @property
+    def standard_7d_strategy(self) -> LedgerStrategyOutcome:
+        return self._strategy_outcome(
+            strategy="standard_7d",
+            eligible=self.risk_tier == "standard",
+            target_at=None,
+            target_return=None,
+            fixed_horizon_hours=168,
+        )
+
 
 @dataclass(frozen=True, slots=True)
 class SignalLedger:
@@ -153,6 +296,11 @@ def _elapsed_hours(start: datetime, end: datetime | None) -> float | None:
     return max(0.0, (end - start).total_seconds() / 3600.0)
 
 
+def _earliest(row: dict[str, Any], *keys: str) -> datetime | None:
+    values = [row.get(key) for key in keys if row.get(key) is not None]
+    return min(values) if values else None
+
+
 def build_signal_ledger(rows: Iterable[dict[str, Any]], *, generated_at: datetime) -> SignalLedger:
     items: list[SignalLedgerItem] = []
     for row in rows:
@@ -162,7 +310,7 @@ def build_signal_ledger(rows: Iterable[dict[str, Any]], *, generated_at: datetim
         entry = float(row["entry_price"])
         confirmed_at = row["confirmed_at"]
         target_5_at = row.get("target_5_at")
-        target_at = row.get("target_20_at")
+        target_at = _earliest(row, "target_20_path_at", "target_20_at")
 
         horizons: list[LedgerHorizon] = []
         for hours, label in HORIZONS:
@@ -171,8 +319,8 @@ def build_signal_ledger(rows: Iterable[dict[str, Any]], *, generated_at: datetim
             horizons.append(LedgerHorizon(hours, label, ret, _horizon_price(entry, ret)))
 
         breaches: list[LedgerBreach] = []
-        for threshold, key in BREACHES:
-            occurred_at = row.get(key)
+        for threshold, keys in BREACHES:
+            occurred_at = _earliest(row, *keys)
             breaches.append(
                 LedgerBreach(
                     adverse_limit_pct=threshold,
@@ -189,6 +337,7 @@ def build_signal_ledger(rows: Iterable[dict[str, Any]], *, generated_at: datetim
                 risk_tier=risk_tier,
                 confirmed_at=confirmed_at,
                 signal_price=entry,
+                observed_at=generated_at,
                 target_5_at=target_5_at,
                 time_to_target_5_hours=_elapsed_hours(confirmed_at, target_5_at),
                 path_mae_before_target_5=(
@@ -209,6 +358,10 @@ def build_signal_ledger(rows: Iterable[dict[str, Any]], *, generated_at: datetim
     return SignalLedger(generated_at=generated_at, items=tuple(items))
 
 
+def _flag(value: bool) -> str:
+    return "yes" if value else "no"
+
+
 def signal_ledger_csv(ledger: SignalLedger) -> bytes:
     output = io.StringIO(newline="")
     writer = csv.writer(output)
@@ -218,15 +371,38 @@ def signal_ledger_csv(ledger: SignalLedger) -> bytes:
         "risk_tier",
         "signal_time_utc",
         "signal_price",
+        # Current subscriber strategies first.
+        "tp5_status",
+        "tp5_return_or_mark_pct",
+        "tp5_target_at_utc",
+        "tp5_time_to_target_hours",
+        "tp5_deepest_breach_before_target_or_mark_pct",
+        "tp5_breach_50_before_target_or_mark",
+        "tp5_breach_100_before_target_or_mark",
+        "tp5_breach_200_before_target_or_mark",
+        "tp5_breach_300_before_target_or_mark",
+        "tp20_status",
+        "tp20_return_or_mark_pct",
+        "tp20_target_at_utc",
+        "tp20_time_to_target_hours",
+        "tp20_deepest_breach_before_target_or_mark_pct",
+        "tp20_breach_50_before_target_or_mark",
+        "tp20_breach_100_before_target_or_mark",
+        "tp20_breach_200_before_target_or_mark",
+        "tp20_breach_300_before_target_or_mark",
+        "standard_7d_status",
+        "standard_7d_return_or_mark_pct",
+        "standard_7d_deepest_breach_before_exit_or_mark_pct",
+        "standard_7d_breach_50_before_exit_or_mark",
+        "standard_7d_breach_100_before_exit_or_mark",
+        "standard_7d_breach_200_before_exit_or_mark",
+        "standard_7d_breach_300_before_exit_or_mark",
+        # Raw/audit fields retained after the strategy view.
         "headline_status",
-        "target_5_at_utc",
-        "time_to_target_5_hours",
+        "current_return_pct",
         "mae_before_target_5_pct",
         "mae_before_target_5_at_utc",
         "target_5_before_100_breach",
-        "target_20_at_utc",
-        "time_to_target_20_hours",
-        "current_return_pct",
         "price_1d",
         "return_1d_pct",
         "price_2d",
@@ -235,6 +411,8 @@ def signal_ledger_csv(ledger: SignalLedger) -> bytes:
         "return_3d_pct",
         "price_7d",
         "return_7d_pct",
+        "breach_50_at_utc",
+        "breach_50_hours",
         "breach_100_at_utc",
         "breach_100_hours",
         "breach_200_at_utc",
@@ -248,21 +426,47 @@ def signal_ledger_csv(ledger: SignalLedger) -> bytes:
     for item in ledger.items:
         horizons = {h.hours: h for h in item.horizons}
         breaches = {b.adverse_limit_pct: b for b in item.breaches}
+        tp5 = item.tp5_strategy
+        tp20 = item.tp20_strategy
+        swing = item.standard_7d_strategy
+
+        def strategy_values(outcome: LedgerStrategyOutcome, *, include_target: bool) -> list[Any]:
+            if not outcome.eligible:
+                if include_target:
+                    return ["not_eligible", "", "", "", "", "", "", "", ""]
+                return ["not_eligible", "", "", "", "", "", ""]
+            base: list[Any] = [
+                outcome.state,
+                outcome.return_pct if outcome.return_pct is not None else "",
+            ]
+            if include_target:
+                base.extend([
+                    outcome.target_at.isoformat() if outcome.target_at else "",
+                    outcome.target_hours if outcome.target_hours is not None else "",
+                ])
+            base.extend([
+                outcome.deepest_breach_before_effective_pct or "",
+                _flag(outcome.breach_50_before_effective),
+                _flag(outcome.breach_100_before_effective),
+                _flag(outcome.breach_200_before_effective),
+                _flag(outcome.breach_300_before_effective),
+            ])
+            return base
+
         writer.writerow([
             item.episode_id,
             item.symbol,
             item.risk_tier,
             item.confirmed_at.isoformat(),
             item.signal_price,
+            *strategy_values(tp5, include_target=True),
+            *strategy_values(tp20, include_target=True),
+            *strategy_values(swing, include_target=False),
             item.headline_status,
-            item.target_5_at.isoformat() if item.target_5_at else "",
-            item.time_to_target_5_hours if item.time_to_target_5_hours is not None else "",
+            item.current_return_pct if item.current_return_pct is not None else "",
             item.path_mae_before_target_5 if item.path_mae_before_target_5 is not None else "",
             item.path_mae_before_target_5_at.isoformat() if item.path_mae_before_target_5_at else "",
             item.target_5_before_100_breach if item.target_5_before_100_breach is not None else "",
-            item.target_20_at.isoformat() if item.target_20_at else "",
-            item.time_to_target_20_hours if item.time_to_target_20_hours is not None else "",
-            item.current_return_pct if item.current_return_pct is not None else "",
             horizons[24].price if horizons[24].price is not None else "",
             horizons[24].return_pct if horizons[24].return_pct is not None else "",
             horizons[48].price if horizons[48].price is not None else "",
@@ -271,6 +475,8 @@ def signal_ledger_csv(ledger: SignalLedger) -> bytes:
             horizons[72].return_pct if horizons[72].return_pct is not None else "",
             horizons[168].price if horizons[168].price is not None else "",
             horizons[168].return_pct if horizons[168].return_pct is not None else "",
+            breaches[50].occurred_at.isoformat() if breaches[50].occurred_at else "",
+            breaches[50].hours_after_signal if breaches[50].hours_after_signal is not None else "",
             breaches[100].occurred_at.isoformat() if breaches[100].occurred_at else "",
             breaches[100].hours_after_signal if breaches[100].hours_after_signal is not None else "",
             breaches[200].occurred_at.isoformat() if breaches[200].occurred_at else "",

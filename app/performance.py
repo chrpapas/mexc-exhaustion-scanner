@@ -941,8 +941,8 @@ def build_performance_summary(
             event_times = {
                 50: earliest_event(row, "adverse_50_at"),
                 100: earliest_event(row, "adverse_100_at", "isolated_100_breach_at"),
-                200: earliest_event(row, "adverse_200_breach_at"),
-                300: earliest_event(row, "adverse_300_breach_at"),
+                200: earliest_event(row, "adverse_200_path_at", "adverse_200_breach_at"),
+                300: earliest_event(row, "adverse_300_path_at", "adverse_300_breach_at"),
             }
             for threshold, event_at in event_times.items():
                 # Count same-candle target/breach as a breach for conservative

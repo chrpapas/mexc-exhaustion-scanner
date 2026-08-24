@@ -363,65 +363,76 @@ class DiscordNotifier:
             "standard": len(ledger.by_risk("standard")),
             "high_risk": len(ledger.by_risk("high_risk")),
         }
-        target5_before_100 = sum(item.target_5_before_100_breach is True for item in ledger.items)
-        target5_hits = sum(item.target_5_at is not None for item in ledger.items)
-        target5_mae = [
-            -item.path_mae_before_target_5
-            for item in ledger.items
-            if item.path_mae_before_target_5 is not None
-        ]
-        standard_7d = []
-        for item in ledger.by_risk("standard"):
-            horizon = next((h for h in item.horizons if h.hours == 168), None)
-            if horizon is not None and horizon.return_pct is not None:
-                standard_7d.append(horizon.return_pct)
-        standard_7d_positive = (
-            sum(value > 0 for value in standard_7d) / len(standard_7d)
-            if standard_7d else None
-        )
-        standard_7d_avg = statistics.fmean(standard_7d) if standard_7d else None
-        standard_7d_median = statistics.median(standard_7d) if standard_7d else None
+
+        tp5_outcomes = [item.tp5_strategy for item in ledger.items]
+        tp20_outcomes = [item.tp20_strategy for item in ledger.items if item.tp20_strategy.eligible]
+        swing_outcomes = [item.standard_7d_strategy for item in ledger.items if item.standard_7d_strategy.eligible]
+
+        def breach_line(outcomes) -> str:
+            return (
+                f"-50% **{sum(o.breach_50_before_effective for o in outcomes)}** • "
+                f"-100% **{sum(o.breach_100_before_effective for o in outcomes)}** • "
+                f"-200% **{sum(o.breach_200_before_effective for o in outcomes)}** • "
+                f"-300% **{sum(o.breach_300_before_effective for o in outcomes)}**"
+            )
+
+        tp5_hits = sum(o.state == "target_hit" for o in tp5_outcomes)
+        tp5_open = sum(o.state == "open" for o in tp5_outcomes)
+        tp20_hits = sum(o.state == "target_hit" for o in tp20_outcomes)
+        tp20_open = sum(o.state == "open" for o in tp20_outcomes)
+        swing_closed = [o for o in swing_outcomes if o.state in {"closed_win", "closed_loss"}]
+        swing_wins = sum(o.state == "closed_win" for o in swing_closed)
+        swing_tracking = sum(o.state == "tracking" for o in swing_outcomes)
 
         summary = {
-            "title": "📒 Exhaustion Scanner • Signal Outcome Table",
+            "title": "📒 Exhaustion Scanner • Strategy Ledger",
             "description": (
                 f"Updated **{display_time.strftime('%d %b %Y • %H:%M %Z')}**\n"
-                "Compact audit table for the two retained strategies • full raw ledger attached as CSV"
+                "Per-signal audit for TP5 Frequent, TP20 High Risk No Timeout, and STANDARD 7D Swing • full strategy flags attached as CSV"
             ),
             "color": 0x5865F2,
             "fields": [
                 {
                     "name": "📦 Signals",
                     "value": (
-                        f"**{ledger.total}** total • "
+                        f"**{ledger.total}** public signals • "
                         f"🟢 STANDARD **{risk_counts['standard']}** • "
                         f"🟡 HIGH **{risk_counts['high_risk']}**"
                     ),
                     "inline": False,
                 },
                 {
-                    "name": "⚡ TP5 Frequent",
+                    "name": "⚡ TP5 Frequent • STANDARD + HIGH",
                     "value": (
-                        f"+5% hit **{target5_hits}/{ledger.total}** • "
-                        f"before -100% **{target5_before_100}**"
-                        + (
-                            f" • median pre-hit adverse **{self._percent(statistics.median(target5_mae))}**"
-                            if target5_mae else ""
-                        )
+                        f"Target hit **{tp5_hits}/{len(tp5_outcomes)}** • still open **{tp5_open}**\n"
+                        f"Breach before target/current mark: {breach_line(tp5_outcomes)}"
+                    ),
+                    "inline": False,
+                },
+                {
+                    "name": "🔥 TP20 High Risk • No Timeout",
+                    "value": (
+                        f"Eligible **{len(tp20_outcomes)}** • target hit **{tp20_hits}** • still open **{tp20_open}**\n"
+                        f"Breach before target/current mark: {breach_line(tp20_outcomes)}"
                     ),
                     "inline": False,
                 },
                 {
                     "name": "🗓️ 7D Swing • STANDARD only",
                     "value": (
-                        f"Matured **{len(standard_7d)}** • profitable **{self._percent(standard_7d_positive)}** • "
-                        f"avg **{self._signed_percent(standard_7d_avg)}** • median **{self._signed_percent(standard_7d_median)}**"
+                        f"Eligible **{len(swing_outcomes)}** • closed **{len(swing_closed)}** • "
+                        f"wins **{swing_wins}** • tracking **{swing_tracking}**\n"
+                        f"Breach before 7D exit/current mark: {breach_line(swing_outcomes)}"
                     ),
                     "inline": False,
                 },
                 {
-                    "name": "Table scope",
-                    "value": "Visible columns are TP5 and 7D raw outcome only. EXTREME_RISK is excluded.",
+                    "name": "How to read the table",
+                    "value": (
+                        "Each strategy cell shows its own outcome and deepest adverse threshold carried before that strategy's target/exit. "
+                        "`pre -100%` means -100% occurred before exit; `so far -50%` means an open/tracking trade has crossed -50% so far. "
+                        "TP20 is HIGH-only; 7D Swing is STANDARD-only."
+                    ),
                     "inline": False,
                 },
             ],
@@ -454,7 +465,7 @@ class DiscordNotifier:
             for index, table in enumerate(table_images or (), start=1):
                 embed = {
                     "title": f"{table.risk_label} • Signal Outcomes",
-                    "description": f"Page **{table.page}/{table.total_pages}** • exact values available in CSV",
+                    "description": f"Page **{table.page}/{table.total_pages}** • strategy outcome + pre-target/pre-exit breach • exact flags in CSV",
                     "color": {
                         "standard": 0x57F287,
                         "high_risk": 0xFEE75C,
