@@ -244,8 +244,10 @@ class SignalLedgerItem:
     @property
     def tp20_strategy(self) -> LedgerStrategyOutcome:
         return self._strategy_outcome(
-            strategy="tp20_high_no_timeout",
-            eligible=self.risk_tier == "high_risk",
+            strategy="tp20_no_timeout",
+            # The ledger is an evidence surface, not a recommendation gate.
+            # Show the +20% no-timeout path for every published STANDARD/HIGH_RISK signal.
+            eligible=True,
             target_at=self.target_20_at,
             target_return=0.20,
         )
@@ -253,8 +255,10 @@ class SignalLedgerItem:
     @property
     def standard_7d_strategy(self) -> LedgerStrategyOutcome:
         return self._strategy_outcome(
-            strategy="standard_7d",
-            eligible=self.risk_tier == "standard",
+            strategy="7d_hold_observed",
+            # Ledger evidence is shown for every published signal; the public
+            # 7D Swing recommendation remains STANDARD-only.
+            eligible=True,
             target_at=None,
             target_return=None,
             fixed_horizon_hours=168,

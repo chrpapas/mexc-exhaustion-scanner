@@ -1,6 +1,15 @@
-# MEXC Exhaustion Scanner + Multi-Slot Futures Trader v1.3.19
+# MEXC Exhaustion Scanner + Multi-Slot Futures Trader v1.3.20
 
 Reporting release. **TP5_V1 trader execution remains frozen and unchanged.**
+
+
+## v1.3.20 — ledger is fully observational across tiers
+
+- **TP20 ledger is observational, not recommendation-gated:** STANDARD and HIGH_RISK rows both show the +20% no-timeout outcome/path, including target time, live MTM if unresolved, and -50/-100/-200/-300 breaches before target/current mark.
+- **Subscriber strategy remains unchanged:** the public/account-level TP20 recommendation and replay remain HIGH_RISK-only; this change only prevents STANDARD TP20 evidence from being hidden as `N/A` in the ledger.
+- **7D evidence is observational too:** HIGH_RISK rows also show the 7-day hold outcome/path in the ledger; the public 7D Swing recommendation and account replay remain STANDARD-only.
+- **Frozen TP5_V1 trader execution unchanged.**
+- **No schema migration:** migration `015_tp5_trader_runs.sql` remains latest.
 
 ## v1.3.19 — unambiguous ledger status vs breach warnings
 

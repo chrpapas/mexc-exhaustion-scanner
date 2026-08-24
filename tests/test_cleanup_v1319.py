@@ -80,3 +80,59 @@ def test_red_primary_is_reserved_for_realized_7d_loss():
     cell = _strategy_cell(ledger.items[0], ledger.items[0].standard_7d_strategy)
     assert cell.fill == _RED
     assert cell.main_text == "CLOSED 7D -20.0%"
+
+
+def test_standard_signal_tp20_is_observed_not_na_in_ledger():
+    confirmed = datetime(2026, 8, 10, 12, 0, tzinfo=UTC)
+    ledger = build_signal_ledger(
+        [
+            _row(
+                4,
+                tier="standard",
+                current_return_pct=0.08,
+                target_20_at=confirmed + timedelta(hours=36),
+                adverse_50_at=confirmed + timedelta(hours=12),
+            )
+        ],
+        generated_at=confirmed + timedelta(days=3),
+    )
+    item = ledger.items[0]
+    outcome = item.tp20_strategy
+    assert outcome.eligible is True
+    assert outcome.state == "target_hit"
+    assert outcome.return_pct == 0.20
+    assert outcome.deepest_breach_before_effective_pct == 50
+    cell = _strategy_cell(item, outcome, target_pct=20)
+    assert cell.fill == _GREEN
+    assert cell.main_text.startswith("HIT +20%")
+    assert "-50%" in cell.detail_text
+
+    from app.signal_ledger import signal_ledger_csv
+    csv_text = signal_ledger_csv(ledger).decode("utf-8")
+    row = csv_text.splitlines()[1]
+    assert ",target_hit,0.2," in row
+    assert ",not_eligible," not in row
+
+
+def test_high_risk_7d_is_observed_not_na_in_ledger():
+    confirmed = datetime(2026, 8, 10, 12, 0, tzinfo=UTC)
+    ledger = build_signal_ledger(
+        [
+            _row(
+                5,
+                tier="high_risk",
+                return_168h_pct=-0.12,
+                adverse_50_at=confirmed + timedelta(hours=20),
+            )
+        ],
+        generated_at=confirmed + timedelta(days=8),
+    )
+    item = ledger.items[0]
+    outcome = item.standard_7d_strategy
+    assert outcome.eligible is True
+    assert outcome.state == "closed_loss"
+    assert outcome.return_pct == -0.12
+    assert outcome.breach_50_before_effective is True
+    cell = _strategy_cell(item, outcome)
+    assert cell.fill == _RED
+    assert cell.main_text == "CLOSED 7D -12.0%"

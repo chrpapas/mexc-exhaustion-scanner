@@ -73,12 +73,16 @@ def test_ledger_strategy_outcomes_use_strategy_specific_breach_cutoffs():
     assert std.tp5_strategy.breach_100_before_effective is False
     assert std.standard_7d_strategy.state == "closed_win"
     assert std.standard_7d_strategy.deepest_breach_before_effective_pct == 100
-    assert std.tp20_strategy.eligible is False
+    # Ledger evidence is shown for TP20 on STANDARD too, even though the
+    # subscriber TP20 portfolio recommendation remains HIGH_RISK-only.
+    assert std.tp20_strategy.eligible is True
+    assert std.tp20_strategy.state == "open"
 
     assert high.tp20_strategy.state == "target_hit"
     assert high.tp20_strategy.deepest_breach_before_effective_pct == 100
     assert high.tp20_strategy.breach_200_before_effective is False
-    assert high.standard_7d_strategy.eligible is False
+    assert high.standard_7d_strategy.eligible is True
+    assert high.standard_7d_strategy.state == "tracking"
 
 
 def test_open_no_timeout_strategy_reports_breaches_so_far():
