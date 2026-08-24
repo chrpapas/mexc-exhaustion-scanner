@@ -16,6 +16,7 @@ from app.performance import (
     TP5PublicSummary,
     HighRiskTp20PublicSummary,
     Standard7dPublicSummary,
+    Normalized7dStrategySummary,
 )
 
 
@@ -156,6 +157,26 @@ def _report() -> PerformanceSummary:
         tp5_public=TP5PublicSummary(12, 12, 1.0, 2.0, 6.0, 0.07, 0, 0.05, 0.60),
         high_risk_tp20_public=HighRiskTp20PublicSummary(27, 12, 12/27, 18, 9, 18/27, 0.0635, 0.08, 1.7145, 0.20, -0.4669, 65.76),
         standard_7d_public=Standard7dPublicSummary(5, 0.8, 0.30, 0.28, 4, 1, 1.50, 0.70, -0.20),
+        comparison_start_at=datetime(2026, 8, 1, 10, 0, tzinfo=UTC),
+        comparison_end_at=datetime(2026, 8, 5, 10, 0, tzinfo=UTC),
+        tp5_7d_comparison=Normalized7dStrategySummary(
+            sample=12, target_hits=12, unresolved_at_7d=0, wins=12, losses=0, positive_rate=1.0,
+            avg_return=0.05, median_return=0.05, sum_return=0.60, best_return=0.05, worst_return=0.05,
+            avg_effective_holding_hours=4.0, median_effective_holding_hours=2.0,
+            breach_50=1, breach_100=0, breach_200=0, breach_300=0, worst_adverse=0.31,
+        ),
+        tp20_7d_comparison=Normalized7dStrategySummary(
+            sample=6, target_hits=3, unresolved_at_7d=3, wins=5, losses=1, positive_rate=5/6,
+            avg_return=0.12, median_return=0.15, sum_return=0.72, best_return=0.20, worst_return=-0.10,
+            avg_effective_holding_hours=96.0, median_effective_holding_hours=120.0,
+            breach_50=2, breach_100=1, breach_200=0, breach_300=0, worst_adverse=1.25,
+        ),
+        standard_7d_comparison=Normalized7dStrategySummary(
+            sample=5, target_hits=0, unresolved_at_7d=0, wins=4, losses=1, positive_rate=0.8,
+            avg_return=0.30, median_return=0.28, sum_return=1.50, best_return=0.70, worst_return=-0.20,
+            avg_effective_holding_hours=168.0, median_effective_holding_hours=168.0,
+            breach_50=1, breach_100=0, breach_200=0, breach_300=0, worst_adverse=0.65,
+        ),
     )
 
 
@@ -187,24 +208,30 @@ def test_performance_report_uses_dedicated_stats_webhook_and_embeds():
     all_text = embed.get("title", "") + "\n" + embed.get("description", "") + "\n" + "\n".join(
         field["name"] + " " + field["value"] for field in embed.get("fields", [])
     )
-    assert "Strategy Results" in all_text
+    assert "Strategy Comparison" in all_text
     assert "TP5 Frequent" in all_text
     assert "7D Swing" in all_text
     assert "STANDARD + HIGH RISK" in all_text
     assert "TP20 High Risk" in all_text
     assert "+20%" in all_text
-    assert "wins **18** • losses **9**" in all_text
-    assert "Σ realized **+171.45%**" in all_text
+    assert "No Timeout" in all_text
+    assert "TP20 hits by 7D **3**" in all_text
+    assert "Σ **+72.00%**" in all_text
+    assert "-100% **1**" in all_text
     assert "TP1-10" not in all_text
     assert "TP2-6" not in all_text
     assert "TP2-10" not in all_text
     assert "EntryGate" not in all_text
     assert "EXTREME_RISK signals are not published" in all_text
-    assert "wins **12**" in all_text
-    assert "win rate **100.00%**" in all_text
-    assert "Σ gross captured **+60.00%**" in all_text
+    assert "target hits **12**" in all_text
+    assert "profitable mark **12/12 (100.00%)**" in all_text
+    assert "Σ **+60.00%**" in all_text
     assert "wins **4** • losses **1**" in all_text
-    assert "Σ raw **+150.00%**" in all_text
+    assert "Σ **+150.00%**" in all_text
+    assert "Suggested account: **5.00% / trade**" in all_text
+    assert "Suggested account: **2.00% / trade**" in all_text
+    assert "Suggested account: **3.00% / trade**" in all_text
+    assert "every headline return is valued exactly **168h after entry**" in all_text
 
 
 def test_performance_webhook_falls_back_to_signal_webhook_for_backward_compatibility():

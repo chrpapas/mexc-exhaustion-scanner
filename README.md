@@ -1,6 +1,19 @@
-# MEXC Exhaustion Scanner + Multi-Slot Futures Trader v1.3.15
+# MEXC Exhaustion Scanner + Multi-Slot Futures Trader v1.3.16
 
 Reporting release. **TP5_V1 trader execution remains frozen and unchanged.**
+
+Reporting release. **TP5_V1 trader execution remains frozen and unchanged.**
+
+## v1.3.16 — normalized three-strategy subscriber comparison
+
+- **One canonical public Strategy Comparison board:** TP5 Frequent, TP20 High Risk No Timeout, and STANDARD 7D Swing.
+- **Apples-to-apples 168h valuation:** every headline strategy return is valued exactly 7 days after signal confirmation. TP5/TP20 lock +5%/+20% when hit before 168h; otherwise the still-open trade is marked at its 7-day return. This convention is comparison-only and does **not** add a timeout to TP20.
+- **Comparable performance metrics:** sample n, target hits/open-at-7d, profitable marks, arithmetic Σ equal-notional signal return, average/median per signal, best/worst, and effective capital time.
+- **Comparable path risk:** -50%, -100%, -200%, and -300% adverse breaches are counted only while the strategy is still exposed, plus worst observed adverse excursion before target/7-day mark.
+- **Suggested subscriber exposure:** TP5 5% × 6 / 30% cap (the frozen portfolio-tested setup); TP20 2% × 5 / 10% cap; STANDARD 7D 3% × 5 / 15% cap. TP20/7D sizing is clearly labeled risk-based rather than return-optimal or validated.
+- **Research Discord no longer duplicates strategy rules:** it keeps evidence health + the frozen TP5 prospective monitor and points subscribers to Strategy Comparison for TP5/TP20/7D selection.
+- **EXTREME_RISK remains suppressed** before episode/signal creation and never reaches public alerts.
+- **No schema migration:** migration `015_tp5_trader_runs.sql` remains latest.
 
 ## v1.3.15 — add HIGH_RISK TP20-or-4D public strategy
 

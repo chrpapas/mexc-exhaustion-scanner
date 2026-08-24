@@ -155,50 +155,92 @@ class DiscordNotifier:
             if display_time is not None
             else report.report_date.strftime("%d %b %Y")
         )
-        tp5 = report.tp5_public
-        high = report.high_risk_tp20_public
-        swing = report.standard_7d_public
+        tp5 = report.tp5_7d_comparison
+        tp20 = report.tp20_7d_comparison
+        swing = report.standard_7d_comparison
 
-        tp5_value = (
-            f"**Rule:** full close at **+5%** • STANDARD + HIGH RISK\n"
-            f"7d-evaluable **{tp5.matured_7d}** • wins **{tp5.hits_7d}** • "
-            f"no TP5 by 7d **{tp5.no_tp5_by_7d}** • win rate **{self._percent(tp5.hit_rate_7d)}**\n"
-            f"Avg gross captured **{self._signed_percent(tp5.avg_gross_captured_return)}** • "
-            f"Σ gross captured **{self._signed_percent(tp5.sum_gross_captured_return)}**\n"
-            f"Median / p75 time **{self._hours(tp5.median_time_hours)} / {self._hours(tp5.p75_time_hours)}**"
-        )
-        if tp5.median_pre_hit_adverse is not None:
-            tp5_value += f" • median pre-hit adverse **-{self._percent(tp5.median_pre_hit_adverse)}**"
+        def comparison_range_text() -> str:
+            if report.comparison_start_at is None or report.comparison_end_at is None:
+                return "No complete common 7-day cohort yet."
+            start_at = report.comparison_start_at
+            end_at = report.comparison_end_at
+            if timezone_name:
+                tz = ZoneInfo(timezone_name)
+                start_at = start_at.astimezone(tz)
+                end_at = end_at.astimezone(tz)
+            return (
+                f"Signal cohort **{start_at.strftime('%d %b %Y')} → {end_at.strftime('%d %b %Y')}** • "
+                "every headline return is valued exactly **168h after entry**."
+            )
 
-        if high.sample:
-            high_value = (
-                f"**Rule:** HIGH_RISK only • full close at **+20%**, otherwise exit at **4 days**\n"
-                f"Paired mature **{high.sample}** • wins **{high.wins}** • losses **{high.losses}** • "
-                f"win rate **{self._percent(high.positive_rate)}**\n"
-                f"TP20 hit **{high.target_hits}/{high.sample} ({self._percent(high.target_hit_rate)})** • "
-                f"avg hold **{self._hours(high.avg_holding_hours)}**\n"
-                f"Avg realized **{self._signed_percent(high.avg_return)}** • median **{self._signed_percent(high.median_return)}** • "
-                f"Σ realized **{self._signed_percent(high.sum_return)}**\n"
-                f"Best / worst **{self._signed_percent(high.best_return)} / {self._signed_percent(high.worst_return)}**"
+        def exposure_line(rec, *, tested: bool) -> str:
+            stress_100 = rec.per_trade_pct
+            stress_200 = rec.per_trade_pct * 2.0
+            basis = "portfolio-tested" if tested else "risk-based suggestion"
+            return (
+                f"Suggested account: **{self._percent(rec.per_trade_pct)} / trade** • "
+                f"max **{rec.max_slots}** positions • **{self._percent(rec.max_account_exposure_pct)}** total cap • 1× "
+                f"({basis})\n"
+                f"1-position stress: +100% adverse ≈ **-{self._percent(stress_100)} equity** • "
+                f"+200% ≈ **-{self._percent(stress_200)}**"
+            )
+
+        def risk_line(strategy) -> str:
+            return (
+                f"Breaches before exit/7D mark: -50% **{strategy.breach_50}** • "
+                f"-100% **{strategy.breach_100}** • -200% **{strategy.breach_200}** • "
+                f"-300% **{strategy.breach_300}** • worst adverse **-{self._percent(strategy.worst_adverse)}**"
+            )
+
+        if tp5 is not None:
+            tp5_value = (
+                f"**Rule:** STANDARD + HIGH RISK • full close at **+5%**; no forced timeout\n"
+                f"7D normalized **{tp5.sample}** • target hits **{tp5.target_hits}** • open at 7D **{tp5.unresolved_at_7d}** • "
+                f"profitable mark **{tp5.wins}/{tp5.sample} ({self._percent(tp5.positive_rate)})**\n"
+                f"Σ **{self._signed_percent(tp5.sum_return)}** • avg/signal **{self._signed_percent(tp5.avg_return)}** • "
+                f"median **{self._signed_percent(tp5.median_return)}** • best/worst **{self._signed_percent(tp5.best_return)} / {self._signed_percent(tp5.worst_return)}**\n"
+                f"Avg / median capital time to exit-or-mark **{self._hours(tp5.avg_effective_holding_hours)} / {self._hours(tp5.median_effective_holding_hours)}**\n"
+                f"{risk_line(tp5)}\n"
+                f"{exposure_line(report.tp5_exposure, tested=True)}"
             )
         else:
-            high_value = "Paired HIGH_RISK TP20-or-4D cohort is still maturing."
+            tp5_value = "No complete 7-day comparison cohort yet."
 
-        swing_value = (
-            f"**Rule:** short at confirmation and hold **7 days** • STANDARD only\n"
-            f"Matured **{swing.matured_7d}** • wins **{swing.wins_7d}** • losses **{swing.losses_7d}** • "
-            f"win rate **{self._percent(swing.positive_rate)}**\n"
-            f"Avg raw **{self._signed_percent(swing.avg_return)}** • median **{self._signed_percent(swing.median_return)}** • "
-            f"Σ raw **{self._signed_percent(swing.sum_return)}**\n"
-            f"Best / worst **{self._signed_percent(swing.best_return)} / {self._signed_percent(swing.worst_return)}**"
-        )
+        if tp20 is not None:
+            tp20_value = (
+                f"**Rule:** HIGH_RISK only • full close at **+20%**; otherwise **stay open**\n"
+                f"7D normalized **{tp20.sample}** • TP20 hits by 7D **{tp20.target_hits}** • open at 7D **{tp20.unresolved_at_7d}** • "
+                f"profitable mark **{tp20.wins}/{tp20.sample} ({self._percent(tp20.positive_rate)})**\n"
+                f"Σ **{self._signed_percent(tp20.sum_return)}** • avg/signal **{self._signed_percent(tp20.avg_return)}** • "
+                f"median **{self._signed_percent(tp20.median_return)}** • best/worst **{self._signed_percent(tp20.best_return)} / {self._signed_percent(tp20.worst_return)}**\n"
+                f"Avg / median capital time to exit-or-mark **{self._hours(tp20.avg_effective_holding_hours)} / {self._hours(tp20.median_effective_holding_hours)}**\n"
+                f"{risk_line(tp20)}\n"
+                f"{exposure_line(report.tp20_exposure, tested=False)}"
+            )
+        else:
+            tp20_value = "No complete HIGH_RISK 7-day comparison cohort yet."
+
+        if swing is not None:
+            swing_value = (
+                f"**Rule:** STANDARD only • short at confirmation and close exactly at **7 days**\n"
+                f"7D normalized **{swing.sample}** • wins **{swing.wins}** • losses **{swing.losses}** • "
+                f"win rate **{self._percent(swing.positive_rate)}**\n"
+                f"Σ **{self._signed_percent(swing.sum_return)}** • avg/signal **{self._signed_percent(swing.avg_return)}** • "
+                f"median **{self._signed_percent(swing.median_return)}** • best/worst **{self._signed_percent(swing.best_return)} / {self._signed_percent(swing.worst_return)}**\n"
+                f"Capital time **7.00d fixed**\n"
+                f"{risk_line(swing)}\n"
+                f"{exposure_line(report.standard_7d_exposure, tested=False)}"
+            )
+        else:
+            swing_value = "No complete STANDARD 7-day comparison cohort yet."
 
         board = {
-            "title": "📊 Exhaustion Scanner • Strategy Results",
+            "title": "📊 Exhaustion Scanner • Strategy Comparison",
             "description": (
                 f"**{self._pretty_label(label)}**\n"
                 f"Updated **{as_of_text}**\n\n"
-                "Three retained observed approaches • EXTREME_RISK signals are not published."
+                f"{comparison_range_text()}\n"
+                "Equal-notional signal returns • EXTREME_RISK signals are not published."
             ),
             "color": 0x5865F2,
             "fields": [
@@ -208,8 +250,8 @@ class DiscordNotifier:
                     "inline": False,
                 },
                 {
-                    "name": "🔥 TP20 High Risk • +20% or 4D",
-                    "value": high_value,
+                    "name": "🔥 TP20 High Risk • No Timeout",
+                    "value": tp20_value,
                     "inline": False,
                 },
                 {
@@ -218,19 +260,19 @@ class DiscordNotifier:
                     "inline": False,
                 },
                 {
-                    "name": "Choose by trading cadence",
+                    "name": "How to choose",
                     "value": (
-                        "**TP5:** highest-frequency option; typically hours.\n"
-                        "**TP20 High Risk:** HIGH_RISK-only swing; typically days and materially wider downside paths.\n"
-                        "**7D Swing:** STANDARD-only, lowest-frequency option with a full 7-day hold.\n"
-                        "These are historical/shadow results, not a guarantee of future performance."
+                        "**TP5:** fastest recycling and the only exposure setup already portfolio-tested.\n"
+                        "**TP20:** larger target, but unresolved HIGH_RISK positions can remain open beyond day 7 and carry the widest tail risk.\n"
+                        "**7D Swing:** fixed holding period and STANDARD-only exposure; compare its larger raw moves against seven days of capital lock-up.\n"
+                        "Compare **Σ together with avg/signal and sample n** because each strategy has different tier eligibility."
                     ),
                     "inline": False,
                 },
                 {
                     "name": "Today",
                     "value": (
-                        f"Confirmed signals **{report.confirmed_today}** • "
+                        f"Confirmed public signals **{report.confirmed_today}** • "
                         f"currently tracking **{report.open_count}**"
                     ),
                     "inline": False,
@@ -238,10 +280,10 @@ class DiscordNotifier:
             ],
             "footer": {
                 "text": (
-                    "Σ is the arithmetic sum of equal-notional signal returns, not account return. "
-                    "TP5 Σ is gross target capture before fees; TP20 Σ is realized +20%-or-4D signal return; "
-                    "7D Σ is raw STANDARD 7-day return. "
-                    "No-TP5-by-7d is not a forced strategy loss."
+                    "Apples-to-apples convention: every headline outcome uses the same 168h observation window. "
+                    "TP5/TP20 lock their target when hit; otherwise they are marked at day 7. "
+                    "The actual TP20 rule has no day-7 exit. Σ is arithmetic equal-notional signal return, not account return. "
+                    "TP20/7D sizing is a risk-based suggestion, not a validated optimum; caps apply account-wide and should not be blindly stacked on the same signal."
                 )
             },
         }
@@ -424,8 +466,9 @@ class DiscordNotifier:
         """Send the compact research validation board.
 
         The analytics engine still retains historical exploratory studies, but the
-        visible report is limited to the three retained strategies plus prospective
-        TP5 validation so the audience can actually read it.
+        visible research report is intentionally limited to evidence health and
+        prospective TP5 validation. The public Strategy Comparison owns the three
+        subscriber-facing strategy choices so Discord never shows conflicting rules.
         """
         if not self._performance_webhook_url:
             return False
@@ -438,21 +481,6 @@ class DiscordNotifier:
         calendar = report.calendar_throughput
         live_tp5 = report.prospective_tp5_live
 
-        high_tp20_4d = next(
-            (item for item in report.high_risk_timeout_sweep if item.timeout_hours == 96 and item.sample),
-            None,
-        )
-
-        standard_7d = next(
-            (
-                item for item in report.standard_exit_sweep
-                if item.horizon_hours == 168
-                and item.cohort_horizon_hours == 168
-                and item.sample
-            ),
-            None,
-        )
-
         tp5_entries_per_day = (
             calendar.tp5.entered / calendar.history_span_days
             if calendar.history_span_days > 0 else None
@@ -462,42 +490,11 @@ class DiscordNotifier:
             if calendar.history_span_days > 0 else None
         )
 
-        if standard_7d is None:
-            standard_7d_value = "Complete STANDARD 7-day cohort is still maturing."
-        else:
-            standard_wins = round(standard_7d.sample * standard_7d.positive_rate) if standard_7d.positive_rate is not None else 0
-            standard_sum = standard_7d.avg_return * standard_7d.sample if standard_7d.avg_return is not None else None
-            standard_7d_value = (
-                f"**Rule:** confirmed short → hold **7 days** • STANDARD only\n"
-                f"Matured **{standard_7d.sample}** • wins **{standard_wins}** • losses **{standard_7d.sample - standard_wins}** • "
-                f"win rate **{self._percent(standard_7d.positive_rate)}**\n"
-                f"Avg raw **{self._signed_percent(standard_7d.avg_return)}** • "
-                f"median **{self._signed_percent(standard_7d.median_return)}** • "
-                f"Σ raw **{self._signed_percent(standard_sum)}**\n"
-                f"Best / worst **{self._signed_percent(standard_7d.best_return)} / {self._signed_percent(standard_7d.worst_return)}**"
-            )
-
-        if high_tp20_4d is None:
-            high_tp20_value = "Paired HIGH_RISK TP20-or-4D cohort is still maturing."
-        else:
-            high_tp20_value = (
-                f"**Rule:** HIGH_RISK only • full close at **+20%**, otherwise exit at **4 days**\n"
-                f"Paired mature **{high_tp20_4d.sample}** • wins **{high_tp20_4d.wins}** • losses **{high_tp20_4d.losses}** • "
-                f"win rate **{self._percent(high_tp20_4d.positive_rate)}**\n"
-                f"TP20 hit **{high_tp20_4d.target_hits}/{high_tp20_4d.sample} ({self._percent(high_tp20_4d.target_hit_rate)})** • "
-                f"avg hold **{self._hours(high_tp20_4d.avg_holding_hours)}**\n"
-                f"Avg realized **{self._signed_percent(high_tp20_4d.avg_strategy_return)}** • "
-                f"median **{self._signed_percent(high_tp20_4d.median_strategy_return)}** • "
-                f"Σ realized **{self._signed_percent(high_tp20_4d.sum_strategy_return)}**\n"
-                f"Best / worst **{self._signed_percent(high_tp20_4d.best_strategy_return)} / "
-                f"{self._signed_percent(high_tp20_4d.worst_strategy_return)}**"
-            )
-
         strategy_board = {
             "title": "🔬 Exhaustion Scanner • Strategy Validation",
             "description": (
                 f"Updated **{display_time.strftime('%d %b %Y • %H:%M %Z')}**\n"
-                "Only the three retained observed strategies are shown. Exploratory alternatives remain internal."
+                "Exploratory variants remain internal. Subscriber strategy selection lives in the normalized **Strategy Comparison** report."
             ),
             "color": 0x5865F2,
             "fields": [
@@ -510,46 +507,29 @@ class DiscordNotifier:
                     "inline": False,
                 },
                 {
-                    "name": "⚡ TP5 Frequent • STANDARD + HIGH",
+                    "name": "⚡ TP5 Frequent • Frozen portfolio monitor",
                     "value": (
-                        f"**Rule:** full close at **+5%** • 6×5% research portfolio / 30% cap\n"
-                        f"7d-evaluable **{tp5.sample}** • wins **{tp5.hits}** • no TP5 by 7d **{tp5.sample - tp5.hits}** • "
-                        f"win rate **{self._percent(tp5.hit_rate)}**\n"
-                        f"Avg gross captured **{self._signed_percent((tp5.hits * 0.05 / tp5.sample) if tp5.sample else None)}** • "
-                        f"Σ gross **{self._signed_percent(tp5.hits * 0.05)}** • "
+                        f"7d-evaluable **{tp5.sample}** • TP5 hits **{tp5.hits}/{tp5.sample} ({self._percent(tp5.hit_rate)})** • "
                         f"median / p75 **{self._hours(tp5.median_time_hours)} / {self._hours(tp5.p75_time_hours)}**\n"
                         f"Median pre-hit adverse **-{self._percent(tp5.median_adverse_before_target)}** • "
                         f"worst **-{self._percent(tp5.worst_adverse_before_target)}**\n"
                         f"Observed {calendar.history_span_days:.2f}d portfolio return **{self._signed_percent(calendar.tp5.marked_return)}** • "
-                        f"MTM DD **{'-' + self._percent(calendar.tp5.max_mtm_drawdown) if calendar.tp5.max_mtm_drawdown is not None else 'n/a'}**\n"
-                        f"Entered **{calendar.tp5.entered}/{calendar.tp5.signals}** • "
+                        f"MTM DD **{'-' + self._percent(calendar.tp5.max_mtm_drawdown) if calendar.tp5.max_mtm_drawdown is not None else 'n/a'}** • "
                         f"entries/day **{tp5_entries_per_day:.2f}** • releases/day **{tp5_releases_per_day:.2f}**"
                     ),
                     "inline": False,
                 },
                 {
-                    "name": "🔥 TP20 High Risk • +20% or 4D",
-                    "value": high_tp20_value,
-                    "inline": False,
-                },
-                {
-                    "name": "🗓️ 7D Swing • STANDARD",
-                    "value": standard_7d_value,
-                    "inline": False,
-                },
-                {
-                    "name": "Interpretation",
+                    "name": "Subscriber report",
                     "value": (
-                        "**TP5** is the leading tested high-throughput portfolio. "
-                        "**TP20 High Risk** is the retained aggressive swing rule for HIGH_RISK signals. "
-                        "**7D Swing** is the strongest observed fixed-horizon result for STANDARD signals. "
-                        "TP20/7D signal returns are not the same thing as TP5 portfolio return."
+                        "Use **Strategy Comparison** for **TP5 Frequent**, **TP20 High Risk • No Timeout**, and **7D Swing • STANDARD**. "
+                        "That board uses one common 168h valuation convention, breach counts, and suggested account exposure."
                     ),
                     "inline": False,
                 },
             ],
             "footer": {
-                "text": "EXTREME_RISK is excluded. TP1/TP2/hybrids/EntryGate/feature sweeps are intentionally hidden from Discord."
+                "text": "EXTREME_RISK is excluded. TP1/TP2/hybrids/EntryGate/feature sweeps remain internal and are intentionally not published."
             },
         }
 

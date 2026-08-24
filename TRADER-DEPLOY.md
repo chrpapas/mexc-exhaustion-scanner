@@ -1,6 +1,6 @@
-# Trader deployment — v1.3.15
+# Trader deployment — v1.3.16
 
-v1.3.15 keeps the **paper trader** on the frozen `TP5_V1` execution strategy. EXTREME_RISK remains suppressed before signal creation. Public Discord reporting is limited to TP5 Frequent, HIGH_RISK TP20-or-4D, and STANDARD-only 7D Swing. Trader execution semantics are unchanged.
+v1.3.16 keeps the **paper trader** on the frozen `TP5_V1` execution strategy. EXTREME_RISK remains suppressed before signal creation. Public Discord now compares TP5 Frequent, HIGH_RISK TP20 No Timeout, and STANDARD-only 7D Swing on one normalized 168-hour observation window. Trader execution semantics are unchanged.
 
 ## Frozen TP5_V1 execution
 
@@ -95,19 +95,28 @@ Migration `015_tp5_trader_runs.sql` is applied automatically at startup. It adds
 
 ## Research / reporting
 
-v1.3.15 keeps the historical research engine but publishes only the three retained strategies while the frozen TP5 strategy gathers forward evidence.
+v1.3.16 separates subscriber strategy selection from internal research.
 
 Run:
 
 ```bash
+python -m app.report_now
 python -m app.research_analytics_now
 python -m app.signal_ledger_now
 ```
 
-Visible research Discord now contains only:
-- **Strategy Validation:** TP5 Frequent, HIGH_RISK TP20-or-4D, and STANDARD-only 7D Swing.
-- **Prospective TP5 Monitor:** post-freeze hit/wait/fail tracking plus true-30d replay status.
+`python -m app.report_now` publishes the canonical **Strategy Comparison**:
+- **TP5 Frequent:** STANDARD + HIGH_RISK, +5% target, no forced timeout.
+- **TP20 High Risk:** HIGH_RISK only, +20% target, no forced timeout.
+- **7D Swing:** STANDARD only, fixed seven-day exit.
 
-TP1, TP2, hybrid exits, EntryGate, token-behaviour and feature-sweep calculations remain historical/internal and are not published to Discord. The research command attaches only the raw signal dataset CSV.
+For apples-to-apples headline performance, all three are valued on the same 168-hour horizon. A target strategy contributes its locked target return when hit before day 7; otherwise it contributes its day-7 mark-to-market. The report also shows breach counts while the strategy is exposed, worst adverse excursion, and suggested account exposure.
 
-No new database migration is required in v1.3.15.
+Suggested exposure shown to subscribers:
+- TP5: **5% per trade × 6 / 30% account cap** — portfolio-tested frozen setup.
+- TP20: **2% per trade × 5 / 10% account cap** — risk-based suggestion because HIGH_RISK positions can remain unresolved and experience much wider adverse paths.
+- STANDARD 7D: **3% per trade × 5 / 15% account cap** — risk-based suggestion for fixed week-long capital occupancy.
+
+The Research Validation Discord board no longer republishes an independent TP20/4D table. It shows evidence health, the frozen TP5 portfolio monitor, and the separate prospective TP5 tracker. Historical TP1/TP2/hybrid/EntryGate/token-behaviour/feature-sweep calculations remain internal.
+
+No new database migration is required in v1.3.16.

@@ -222,6 +222,56 @@ class Standard7dPublicSummary:
 
 
 @dataclass(frozen=True, slots=True)
+class Normalized7dStrategySummary:
+    """Equal-horizon strategy mark used for subscriber comparisons.
+
+    Every included signal is valued exactly 168 hours after confirmation.
+    Target strategies lock their target return when it is reached before the
+    168h mark; otherwise the raw 168h signal return is used as mark-to-market.
+    This is a comparison convention only and does not force a live timeout.
+    """
+
+    sample: int
+    target_hits: int
+    unresolved_at_7d: int
+    wins: int
+    losses: int
+    positive_rate: float | None
+    avg_return: float | None
+    median_return: float | None
+    sum_return: float | None
+    best_return: float | None
+    worst_return: float | None
+    avg_effective_holding_hours: float | None
+    median_effective_holding_hours: float | None
+    breach_50: int
+    breach_100: int
+    breach_200: int
+    breach_300: int
+    worst_adverse: float | None
+
+    @property
+    def target_hit_rate(self) -> float | None:
+        return (self.target_hits / self.sample) if self.sample else None
+
+    def as_dict(self) -> dict[str, Any]:
+        data = {name: getattr(self, name) for name in self.__dataclass_fields__}
+        data["target_hit_rate"] = self.target_hit_rate
+        return data
+
+
+@dataclass(frozen=True, slots=True)
+class ExposureRecommendation:
+    per_trade_pct: float
+    max_slots: int
+    max_account_exposure_pct: float
+    basis: str
+
+    def as_dict(self) -> dict[str, Any]:
+        return {name: getattr(self, name) for name in self.__dataclass_fields__}
+
+
+@dataclass(frozen=True, slots=True)
 class PerformanceSummary:
     report_date: date
     confirmed_today: int
@@ -256,6 +306,14 @@ class PerformanceSummary:
     tp5_public: TP5PublicSummary = TP5PublicSummary(0, 0, None, None, None, None)
     high_risk_tp20_public: HighRiskTp20PublicSummary = HighRiskTp20PublicSummary(0, 0, None, 0, 0, None, None, None, None, None, None, None)
     standard_7d_public: Standard7dPublicSummary = Standard7dPublicSummary(0, None, None, None)
+    comparison_start_at: datetime | None = None
+    comparison_end_at: datetime | None = None
+    tp5_7d_comparison: Normalized7dStrategySummary | None = None
+    tp20_7d_comparison: Normalized7dStrategySummary | None = None
+    standard_7d_comparison: Normalized7dStrategySummary | None = None
+    tp5_exposure: ExposureRecommendation = ExposureRecommendation(0.05, 6, 0.30, "portfolio-tested frozen TP5 configuration")
+    tp20_exposure: ExposureRecommendation = ExposureRecommendation(0.02, 5, 0.10, "risk-based suggestion from observed HIGH_RISK adverse paths")
+    standard_7d_exposure: ExposureRecommendation = ExposureRecommendation(0.03, 5, 0.15, "risk-based suggestion for fixed 7-day STANDARD holds")
 
     @property
     def matured_total(self) -> int:
@@ -344,6 +402,14 @@ class PerformanceSummary:
             "tp5_public": self.tp5_public.as_dict(),
             "high_risk_tp20_public": self.high_risk_tp20_public.as_dict(),
             "standard_7d_public": self.standard_7d_public.as_dict(),
+            "comparison_start_at": self.comparison_start_at.isoformat() if self.comparison_start_at else None,
+            "comparison_end_at": self.comparison_end_at.isoformat() if self.comparison_end_at else None,
+            "tp5_7d_comparison": self.tp5_7d_comparison.as_dict() if self.tp5_7d_comparison else None,
+            "tp20_7d_comparison": self.tp20_7d_comparison.as_dict() if self.tp20_7d_comparison else None,
+            "standard_7d_comparison": self.standard_7d_comparison.as_dict() if self.standard_7d_comparison else None,
+            "tp5_exposure": self.tp5_exposure.as_dict(),
+            "tp20_exposure": self.tp20_exposure.as_dict(),
+            "standard_7d_exposure": self.standard_7d_exposure.as_dict(),
         }
 
 
@@ -771,6 +837,123 @@ def build_performance_summary(
         worst_return=min(standard_7d_values) if standard_7d_values else None,
     )
 
+    # Subscriber strategy comparison: value every strategy on the exact same
+    # 168-hour observation horizon. Target strategies lock the target if hit
+    # before 7d; otherwise they remain open and are marked at the 7d price.
+    # This creates comparable Σ/average/win-rate statistics without changing
+    # the actual TP5 or open-ended TP20 exit rules.
+    comparison_start_at = min(
+        (row["confirmed_at"] for row in matured_7d),
+        default=None,
+    )
+    comparison_end_at = max(
+        (row["confirmed_at"] for row in matured_7d),
+        default=None,
+    )
+
+    def earliest_event(row: dict[str, Any], *keys: str) -> datetime | None:
+        values = [row.get(key) for key in keys if row.get(key) is not None]
+        return min(values) if values else None
+
+    def normalized_7d_strategy(
+        group: list[dict[str, Any]],
+        *,
+        target_return: float | None,
+        target_keys: tuple[str, ...] = (),
+        target_mae_key: str | None = None,
+    ) -> Normalized7dStrategySummary:
+        outcomes: list[float] = []
+        holding_hours: list[float] = []
+        adverse_magnitudes: list[float] = []
+        target_hits = 0
+        breaches = {50: 0, 100: 0, 200: 0, 300: 0}
+
+        for row in group:
+            confirmed = row["confirmed_at"]
+            horizon_at = confirmed + timedelta(hours=168)
+            target_at = earliest_event(row, *target_keys) if target_keys else None
+            target_hit = (
+                target_return is not None
+                and target_at is not None
+                and target_at <= horizon_at
+            )
+            if target_hit:
+                target_hits += 1
+                outcome = float(target_return)
+                effective_exit = target_at
+                if target_mae_key and row.get(target_mae_key) is not None:
+                    adverse_magnitudes.append(abs(float(row[target_mae_key])))
+            else:
+                outcome = float(row["return_168h_pct"])
+                effective_exit = horizon_at
+                if row.get("path_mae_7d") is not None:
+                    adverse_magnitudes.append(abs(float(row["path_mae_7d"])))
+
+            outcomes.append(outcome)
+            holding_hours.append(
+                max(0.0, min(168.0, (effective_exit - confirmed).total_seconds() / 3600.0))
+            )
+
+            event_times = {
+                50: earliest_event(row, "adverse_50_at"),
+                100: earliest_event(row, "adverse_100_at", "isolated_100_breach_at"),
+                200: earliest_event(row, "adverse_200_breach_at"),
+                300: earliest_event(row, "adverse_300_breach_at"),
+            }
+            for threshold, event_at in event_times.items():
+                # Count same-candle target/breach as a breach for conservative
+                # subscriber risk reporting. Later breaches after an early target
+                # exit are irrelevant to that strategy and are not counted.
+                if event_at is not None and event_at <= effective_exit:
+                    breaches[threshold] += 1
+
+        wins = sum(value > 0 for value in outcomes)
+        return Normalized7dStrategySummary(
+            sample=len(outcomes),
+            target_hits=target_hits,
+            unresolved_at_7d=(len(outcomes) - target_hits) if target_return is not None else 0,
+            wins=wins,
+            losses=len(outcomes) - wins,
+            positive_rate=rate([value > 0 for value in outcomes]),
+            avg_return=average(outcomes),
+            median_return=percentile(outcomes, 0.50),
+            sum_return=sum(outcomes) if outcomes else None,
+            best_return=max(outcomes) if outcomes else None,
+            worst_return=min(outcomes) if outcomes else None,
+            avg_effective_holding_hours=average(holding_hours),
+            median_effective_holding_hours=percentile(holding_hours, 0.50),
+            breach_50=breaches[50],
+            breach_100=breaches[100],
+            breach_200=breaches[200],
+            breach_300=breaches[300],
+            worst_adverse=max(adverse_magnitudes) if adverse_magnitudes else None,
+        )
+
+    standard_matured_7d = [
+        row for row in matured_7d
+        if str(row.get("risk_tier") or "standard") == "standard"
+    ]
+    high_matured_7d = [
+        row for row in matured_7d
+        if str(row.get("risk_tier") or "standard") == "high_risk"
+    ]
+    tp5_7d_comparison = normalized_7d_strategy(
+        matured_7d,
+        target_return=0.05,
+        target_keys=("target_5_at",),
+        target_mae_key="path_mae_before_target_5",
+    )
+    tp20_7d_comparison = normalized_7d_strategy(
+        high_matured_7d,
+        target_return=0.20,
+        target_keys=("target_20_path_at", "target_20_at"),
+        target_mae_key="path_mae_before_target_20",
+    )
+    standard_7d_comparison = normalized_7d_strategy(
+        standard_matured_7d,
+        target_return=None,
+    )
+
     return PerformanceSummary(
         report_date=report_date,
         confirmed_today=confirmed_today,
@@ -805,4 +988,9 @@ def build_performance_summary(
         tp5_public=tp5_public,
         high_risk_tp20_public=high_risk_tp20_public,
         standard_7d_public=standard_7d_public,
+        comparison_start_at=comparison_start_at,
+        comparison_end_at=comparison_end_at,
+        tp5_7d_comparison=tp5_7d_comparison,
+        tp20_7d_comparison=tp20_7d_comparison,
+        standard_7d_comparison=standard_7d_comparison,
     )
