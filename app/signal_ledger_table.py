@@ -29,20 +29,12 @@ _RISK_META = {
 # Designed for Discord desktop/mobile preview. Cells deliberately favor scanability
 # over verbose detail; the CSV remains the source for exact/raw values.
 _COLUMNS = (
-    ("STATUS", 130),
-    ("TOKEN", 175),
-    ("SIGNAL", 175),
-    ("ENTRY", 130),
-    ("+5%", 135),
-    ("+20%", 135),
-    ("1D", 165),
-    ("2D", 165),
-    ("3D", 165),
-    ("7D", 165),
-    ("-100", 105),
-    ("-200", 105),
-    ("-300", 105),
-    ("-400", 105),
+    ("STATUS", 150),
+    ("TOKEN", 190),
+    ("SIGNAL", 180),
+    ("ENTRY", 150),
+    ("TP5", 190),
+    ("7D RAW", 210),
 )
 
 _BG = (20, 22, 28)
@@ -106,16 +98,14 @@ def _elapsed(hours: float | None) -> str:
 
 
 def _status(item: SignalLedgerItem) -> tuple[str, tuple[int, int, int], tuple[int, int, int]]:
-    status = item.headline_status
-    if status in {"target_hit", "target_then_breach"}:
-        return "TARGET", _GREEN, _GREEN_TEXT
-    if status == "profitable_below_target":
-        return "PROFIT", _GREEN, _GREEN_TEXT
-    if status.startswith("breach_"):
-        return "BREACH", _RED_DEEP, _RED_TEXT
-    if status == "safe_negative":
-        return "NEGATIVE", _AMBER, _AMBER_TEXT
-    return "PENDING", _BLUE, _BLUE_TEXT
+    if item.target_5_at is not None:
+        return "TP5 HIT", _GREEN, _GREEN_TEXT
+    seven_day = next((h for h in item.horizons if h.hours == 168), None)
+    if seven_day is not None and seven_day.return_pct is not None:
+        if seven_day.return_pct > 0:
+            return "7D +", _GREEN, _GREEN_TEXT
+        return "7D -", _AMBER, _AMBER_TEXT
+    return "TRACKING", _BLUE, _BLUE_TEXT
 
 
 def _breach_before(item: SignalLedgerItem, hours: int, threshold: int = 100) -> bool:
@@ -260,22 +250,16 @@ def _render_page(
     for item in items:
         status_text, status_fill, status_text_color = _status(item)
         target5_text, target5_fill, target5_text_color = _cell_for_target_5(item)
-        target_text, target_fill, target_text_color = _cell_for_target(item)
         signal_text = item.confirmed_at.astimezone(tz).strftime("%d %b\n%H:%M")
+        seven_text, seven_fill, seven_color = _cell_for_horizon(item, 168)
         values: list[tuple[str, tuple[int, int, int], tuple[int, int, int], object, str]] = [
             (status_text, status_fill, status_text_color, cell_bold, "center"),
             (item.symbol.replace("_USDT", ""), _NEUTRAL, _TEXT, cell_bold, "left"),
             (signal_text, _NEUTRAL, _MUTED, cell_font, "center"),
             (_price(item.signal_price), _NEUTRAL, _TEXT, cell_font, "center"),
             (target5_text, target5_fill, target5_text_color, cell_bold, "center"),
-            (target_text, target_fill, target_text_color, cell_bold, "center"),
+            (seven_text, seven_fill, seven_color, cell_font, "center"),
         ]
-        for hours in (24, 48, 72, 168):
-            text, fill, color = _cell_for_horizon(item, hours)
-            values.append((text, fill, color, cell_font, "center"))
-        for threshold in (100, 200, 300, 400):
-            text, fill, color = _cell_for_breach(item, threshold)
-            values.append((text, fill, color, cell_font, "center"))
 
         x = margin
         for (_, col_w), (text, fill, color, font, align) in zip(_COLUMNS, values):
@@ -284,9 +268,8 @@ def _render_page(
         y += row_h
 
     footer = (
-        "+5% shows hit time and pre-hit adverse excursion when available. Each horizon cell = price / short return. "
-        "Breach columns show first elapsed time from signal. "
-        "Exact timestamps/raw values are in the attached CSV."
+        "TP5 shows hit time and pre-hit adverse excursion. 7D RAW is the fixed-horizon short return; "
+        "the 7D Swing strategy is intended for STANDARD signals only. Full historical detail remains in the CSV."
     )
     draw.text((margin + 4, y + 13), footer, fill=_MUTED, font=foot_font)
 

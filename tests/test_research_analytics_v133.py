@@ -173,9 +173,12 @@ def test_v133_notifier_reports_four_way_replay_and_prospective_freeze():
         "\n".join(field.get("name", "") + " " + field.get("value", "") for field in embed.get("fields", []))
         for embed in embeds
     )
-    assert "EntryGate-v1" in text
-    assert "Post-freeze score buckets" in text
-    assert "15m close-marked portfolio risk" in text
-    assert "entrygate_v1__tp5_challenger_6x5pct" in text
+    assert "Strategy Validation" in text
+    assert "TP5 Frequent" in text
+    assert "7D Swing" in text
+    assert "TP5 • Prospective Monitor" in text
+    assert "EntryGate-v1" not in text
+    assert "Post-freeze score buckets" not in text
+    assert "entrygate_v1__tp5_challenger_6x5pct" not in text
     for embed in embeds:
         notifier._validate_discord_embed(embed)

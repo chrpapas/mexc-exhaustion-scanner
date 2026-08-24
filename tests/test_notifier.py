@@ -13,6 +13,8 @@ from app.performance import (
     StrategyThresholdSummary,
     SurvivalModelSummary,
     WeeklyRiskSummary,
+    TP5PublicSummary,
+    Standard7dPublicSummary,
 )
 
 
@@ -51,6 +53,25 @@ class _FakeClient:
 
     async def aclose(self):
         return None
+
+
+def test_extreme_risk_confirmed_short_is_never_sent_to_discord():
+    from app.models import RunSignal
+
+    notifier = DiscordNotifier("https://discord.invalid/signals")
+    fake = _FakeClient()
+    notifier._client = fake
+    signal = RunSignal(
+        symbol="EXTREME_USDT",
+        signaled_at=datetime(2026, 8, 12, 12, 0, tzinfo=UTC),
+        level="confirmed_short",
+        score=10,
+        features={"risk_tier": "extreme_risk"},
+        reasons=["synthetic"],
+        episode_id=1,
+    )
+    asyncio.run(notifier.send_signal(signal))
+    assert fake.posts == []
 
 
 def _horizon(hours: int, value: float) -> HorizonSummary:
@@ -131,6 +152,8 @@ def _report() -> PerformanceSummary:
         best_return_7d=0.60,
         worst_symbol_7d="WORST_USDT",
         worst_return_7d=-0.30,
+        tp5_public=TP5PublicSummary(12, 12, 1.0, 2.0, 6.0, 0.07),
+        standard_7d_public=Standard7dPublicSummary(5, 0.8, 0.30, 0.28),
     )
 
 
@@ -152,35 +175,25 @@ def test_performance_report_uses_dedicated_stats_webhook_and_embeds():
     )
 
     assert sent
-    assert len(fake.posts) == 4
-    assert all(url == "https://discord.invalid/stats" for url, _ in fake.posts)
-    assert all(payload["username"] == "Exhaustion Scanner • Stats" for _, payload in fake.posts)
-    assert all(len(payload["embeds"]) == 1 for _, payload in fake.posts)
+    assert len(fake.posts) == 1
+    assert fake.posts[0][0] == "https://discord.invalid/stats"
+    payload = fake.posts[0][1]
+    assert payload["username"] == "Exhaustion Scanner • Stats"
+    assert len(payload["embeds"]) == 1
 
-    embeds = [payload["embeds"][0] for _, payload in fake.posts]
-    all_text = "\n".join(
-        [embed.get("title", "") + "\n" + embed.get("description", "")
-         + "\n" + "\n".join(field["name"] + " " + field["value"] for field in embed.get("fields", []))
-         for embed in embeds]
+    embed = payload["embeds"][0]
+    all_text = embed.get("title", "") + "\n" + embed.get("description", "") + "\n" + "\n".join(
+        field["name"] + " " + field["value"] for field in embed.get("fields", [])
     )
-    assert "Performance Board" in all_text
-    assert "STANDARD Signal Outcomes" in all_text
-    assert "HIGH RISK Signal Outcomes" in all_text
-    assert "EXTREME RISK" not in all_text
-    assert "-100% adverse" in all_text
-    assert "-200% adverse" in all_text
-    assert "-300% adverse" in all_text
-    assert "-400% adverse" in all_text
-    assert "20%-sized acct equiv" not in all_text
-    assert "+20% before breach" not in all_text
-    assert "+20% Target Race • Horizon Independent" in all_text
-    assert "1D Outcomes" in all_text
-    assert "Not profitable" in all_text
-    assert "Adverse crossed before horizon" in all_text
-    assert "avg t" in all_text
-    assert "Avg raw" in all_text
-    assert "Σ raw" in all_text
-    assert "How to Read the Signal Outcomes" in all_text
+    assert "Strategy Results" in all_text
+    assert "TP5 Frequent" in all_text
+    assert "7D Swing" in all_text
+    assert "STANDARD + HIGH RISK" in all_text
+    assert "+20%" not in all_text
+    assert "TP1" not in all_text
+    assert "TP2" not in all_text
+    assert "EntryGate" not in all_text
+    assert "EXTREME_RISK signals are not published" in all_text
 
 
 def test_performance_webhook_falls_back_to_signal_webhook_for_backward_compatibility():
@@ -203,7 +216,7 @@ def test_performance_cards_respect_discord_embed_limits():
     sent = asyncio.run(notifier.send_performance_report(_report()))
 
     assert sent
-    assert len(fake.posts) == 4
+    assert len(fake.posts) == 1
     for _, payload in fake.posts:
         assert len(payload["embeds"]) == 1
         embed = payload["embeds"][0]

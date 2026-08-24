@@ -706,6 +706,18 @@ class ScannerWorker:
                     high_risk_evaluated += 1
                 else:
                     extreme_risk_evaluated += 1
+                    # v1.3.13 cleanup: EXTREME_RISK is no longer a signal tier.
+                    # We still classify/count it for operational diagnostics, but
+                    # it never enters the episode state machine, signal table,
+                    # shadow-trade ledger, trader queue, or Discord notifications.
+                    if symbol in self.settings.diagnostic_symbols:
+                        LOGGER.info(
+                            "Signal diagnostic %s: suppressed_extreme_risk amount24=%.2f spread=%s",
+                            symbol,
+                            features.amount_24h or 0.0,
+                            features.spread_pct,
+                        )
+                    return
 
                 latest = completed_15m[-1]
                 previous = completed_15m[-2]

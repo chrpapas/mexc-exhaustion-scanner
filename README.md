@@ -1,23 +1,21 @@
-# MEXC Exhaustion Scanner + Multi-Slot Futures Trader v1.3.12
+# MEXC Exhaustion Scanner + Multi-Slot Futures Trader v1.3.13
 
-Research-only token-behaviour release. **TP5_V1 execution is unchanged from v1.3.6.** The new work tests the original niche hypothesis: isolated/episodic pumps may be better short-exhaustion candidates than tokens whose normal price action is mostly explained by the broader crypto regime.
+Cleanup release. **TP5_V1 trader execution remains frozen and unchanged from v1.3.6.**
 
-**v1.3.12 research reporting:** adds two behaviour-dependent exit challengers on the frozen **6×5% / 30%** TP5 book. **Hybrid-1** keeps EPISODIC + MIXED at TP5 and exits REGIME_FOLLOWER at TP2. **Hybrid-2** keeps EPISODIC at TP5 and exits MIXED + REGIME_FOLLOWER at TP2. `INSUFFICIENT` histories default to TP5. The prior TP2/TP1 capacity experiments remain as research controls; no scanner or trader execution rule changes.
+## v1.3.13 — signal/report cleanup
 
-**v1.3.8 hotfix:** the bounded 15m research-path catch-up now limits the episode set before sorting/joining candles and uses index-friendly `open_time` predicates. The on-demand analytics command also continues from already persisted paths if this optional catch-up hits its local PostgreSQL statement timeout.
+- **EXTREME_RISK is no longer a signal tier:** contracts classified EXTREME are suppressed before the episode state machine. They do not create watch/confirmed signals, shadow trades, trader-queue entries, or Discord alerts. Historical EXTREME rows remain untouched.
+- **Audience-facing strategy board:** Discord now shows only the two leading observed approaches:
+  - **TP5 Frequent:** STANDARD + HIGH_RISK, full +5% exit.
+  - **7D Swing:** STANDARD only, fixed 7-day hold.
+- **Important interpretation:** TP5 is the leading tested high-throughput portfolio. The 7-day result is the strongest observed fixed-horizon result for STANDARD signals; it is not a universal HIGH_RISK rule and its raw signal returns are not a portfolio simulation.
+- **Compact research Discord:** the visible on-demand research report is reduced to Strategy Validation + Prospective TP5 Monitor. TP1/TP2/hybrids/EntryGate/token-behaviour/feature sweeps remain in code/history but are intentionally hidden from Discord.
+- **Compact signal ledger:** visible PNG tables show TP5 and 7D raw outcome only; the attached CSV retains the detailed historical audit fields.
+- **No schema migration:** migration `015_tp5_trader_runs.sql` remains latest.
 
-- **Frozen trader unchanged:** 6 generic STANDARD/HIGH_RISK slots, 5% of current equity each, 30% aggregate cap, 1x cross, immediate entry, one open position per symbol, full +5% exit. EXTREME_RISK remains excluded.
-- **90-day pre-signal behaviour profile:** research uses completed 4h token/BTC candles strictly before each signal; no post-signal candles enter the classifier.
-- **Three unsupervised components:** positive BTC explanatory power (`market_r2`), concentration of positive movement in the five largest 4h gains, and frequency of isolated 4h pumps of at least +5% that outperform BTC by at least 4 percentage points.
-- **Frozen discovery calibration:** the components are converted to empirical ranks using only the pre-freeze discovery cohort (`2026-08-21 21:29 UTC`). TP5 outcomes are not used to set the behaviour buckets. The resulting score is split into `REGIME_FOLLOWER`, `MIXED`, and `EPISODIC`; incomplete histories remain `INSUFFICIENT`.
-- **Shadow portfolio comparison:** the report shows TP5-All against `tp5_no_regime_followers`, `tp5_episodic_only`, and `tp5_episodic_priority_same_bar`, plus **Hybrid-1** (`EPISODIC/MIXED→TP5`, `REGIME_FOLLOWER→TP2`) and **Hybrid-2** (`EPISODIC→TP5`, `MIXED/REGIME_FOLLOWER→TP2`). Hybrids keep 6 slots × 5% / 30% cap and alter only the full-profit exit target by behaviour class.
-- **Conservative handling of new coins:** the `no_regime_followers` variant rejects only confidently classified regime followers. `INSUFFICIENT` history is still accepted so newly listed pumpers are not automatically excluded.
-- **Historical coverage fix:** v1.3.6 could seed a symbol with four days of 4h candles during the wide scan and then fail to backfill the older 120-day window. v1.3.8 checks the earliest candle and fills the missing left edge.
-- **Research-history backfill:** while research logging is enabled, the scanner periodically ensures the 90-day pre-signal 4h history exists for every stored public signal symbol plus BTC. `RESEARCH_REGIME_HISTORY_POLL_SECONDS` defaults to 21600 (6h).
-- **New Discord/CSV output:** `Token Behaviour • Regime Dependency` plus `research-token-regime-YYYY-MM-DD.csv`.
-- **No schema migration:** v1.3.12 reuses the +2%/+5% target timestamps derived from existing stored 15m research paths. Migration `015_tp5_trader_runs.sql` remains the latest migration.
+Frozen TP5_V1 execution remains: 6 generic STANDARD/HIGH_RISK slots, 5% current equity each, 30% aggregate exposure, 1× cross, immediate entry, one open position per symbol, full close at +5%, 0.08% paper fee per fill.
 
-The paper-run isolation, configurable `$2,000` default starting equity, and fail-closed live-account handling from v1.3.6 are unchanged. The legacy `tier_v1` path remains only for rollback/persisted compatibility.
+The previous exploratory research calculations are retained so historical work is not lost, but they no longer dominate the Discord output while the frozen strategy gathers forward paper evidence.
 
 ## v1.3.5 — calendar throughput research
 

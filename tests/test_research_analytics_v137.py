@@ -159,8 +159,9 @@ def test_v137_notifier_adds_token_behavior_card_and_regime_csv_attachment():
             attachment_names.extend(value[0] for value in files.values())
         else:
             titles.extend(embed.get("title") for embed in payload.get("embeds", []))
-    assert "🧬 Token Behaviour • Regime Dependency" in titles
-    assert any(name.startswith("research-token-regime-") for name in attachment_names)
+    assert "🧬 Token Behaviour • Regime Dependency" not in titles
+    assert "🔬 Exhaustion Scanner • Strategy Validation" in titles
+    assert not any(name.startswith("research-token-regime-") for name in attachment_names)
 
 
 def test_v139_token_behavior_card_reports_capital_time_efficiency_metrics():
@@ -201,8 +202,13 @@ def test_v139_token_behavior_card_reports_capital_time_efficiency_metrics():
                         field.get("value", "") for field in embed.get("fields", [])
                     )
 
-    assert "slot-days **" in token_behavior_text
-    assert "return/slot-day **" in token_behavior_text
-    assert "releases/day **" in token_behavior_text
-    assert "idle capacity **" in token_behavior_text
-    assert "avg/p95 exposure **" in token_behavior_text
+    assert token_behavior_text == ""
+    published_text = "\n".join(
+        embed.get("title", "") + " " + " ".join(field.get("name", "") + " " + field.get("value", "") for field in embed.get("fields", []))
+        for _, payload in fake.posts
+        for body in ([json.loads((payload.get("data") or {}).get("payload_json"))] if "data" in payload and (payload.get("data") or {}).get("payload_json") else [payload])
+        for embed in body.get("embeds", [])
+    )
+    assert "TP5 Frequent" in published_text
+    assert "slot-days **" not in published_text
+    assert "idle capacity **" not in published_text

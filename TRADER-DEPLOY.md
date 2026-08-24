@@ -1,7 +1,6 @@
-# Trader deployment — v1.3.12
+# Trader deployment — v1.3.13
 
-v1.3.12 keeps the **paper trader** on the frozen `TP5_V1` execution strategy from v1.3.6. This release adds research-only behaviour-dependent Hybrid-1 and Hybrid-2 exit replays on the same 6×5% / 30% book; execution semantics are unchanged.
-It also contains a research-only path-sync timeout hotfix; no trader execution code or settings are changed.
+v1.3.13 keeps the **paper trader** on the frozen `TP5_V1` execution strategy from v1.3.6. This is a scanner/report cleanup release: EXTREME_RISK is suppressed before signal creation, and Discord reporting is reduced to TP5 Frequent plus STANDARD-only 7D Swing. Trader execution semantics are unchanged.
 
 ## Frozen TP5_V1 execution
 
@@ -94,27 +93,21 @@ Prefer an IP-bound API key and ensure no unmanaged/manual Futures positions exis
 
 Migration `015_tp5_trader_runs.sql` is applied automatically at startup. It adds trader run tracking plus the persisted `tp5_full` exit strategy and `profit_5` maturity contract. Previous migrations remain required and valid.
 
-## Research
+## Research / reporting
 
-v1.3.12 retains the research-only token behaviour classifier while leaving TP5 execution frozen. It uses 90 days of completed pre-signal 4h token/BTC history and periodically backfills the required history for stored research signal symbols.
+v1.3.13 keeps the historical research engine but deliberately simplifies what is published to Discord while the frozen strategy gathers forward evidence.
 
-Keep:
-
-```text
-RESEARCH_LOGGING_ENABLED=true
-RESEARCH_PATH_HORIZON_HOURS=336
-RESEARCH_REGIME_HISTORY_POLL_SECONDS=21600
-```
-
-The on-demand board compares TP5-All with: excluding only confident regime followers, episodic-only signals, and same-confirmation-bar episodic priority. Newly listed/insufficient-history coins are not rejected by the conservative no-regime-followers variant.
-
-Run reports with:
+Run:
 
 ```bash
 python -m app.research_analytics_now
 python -m app.signal_ledger_now
 ```
 
-The Token Behaviour card also reports capital-time efficiency for all four TP5 shadow books: slot-days, return/slot-day, releases/day, time-based idle capacity across six slots, and average/p95 exposure.
+Visible research Discord now contains only:
+- **Strategy Validation:** TP5 Frequent and STANDARD-only 7D Swing.
+- **Prospective TP5 Monitor:** post-freeze hit/wait/fail tracking plus true-30d replay status.
 
-The research report attaches `research-token-regime-YYYY-MM-DD.csv`. No new database migration is required in v1.3.12.
+TP1, TP2, hybrid exits, EntryGate, token-behaviour and feature-sweep calculations remain historical/internal and are not published to Discord. The research command attaches only the raw signal dataset CSV.
+
+No new database migration is required in v1.3.13.

@@ -11,12 +11,7 @@ import httpx
 from app.models import RunSignal
 from app.signal_ledger import SignalLedger, SignalLedgerItem
 from app.signal_ledger_table import LedgerTableImage
-from app.research_analytics import (
-    ResearchAnalyticsReport,
-    FeatureSliceSummary,
-    ExitHorizonSummary,
-    TP5_CHALLENGER_MAX_SLOTS,
-)
+from app.research_analytics import ResearchAnalyticsReport
 from app.performance import (
     HorizonSummary,
     HorizonSurvivalSummary,
@@ -63,6 +58,9 @@ class DiscordNotifier:
         run_score = features.get("run_score", signal.score)
         exhaustion_score = features.get("exhaustion_score")
         risk_tier = str(features.get("risk_tier") or "standard")
+        if risk_tier == "extreme_risk":
+            LOGGER.info("Discord signal suppressed for EXTREME_RISK %s", signal.symbol)
+            return
         risk_warning = features.get("execution_risk_warning")
         title = f"🚨 **{signal.symbol} — CONFIRMED SHORT**"
 
@@ -139,6 +137,13 @@ class DiscordNotifier:
         as_of: datetime | None = None,
         timezone_name: str | None = None,
     ) -> bool:
+        """Send the compact subscriber-facing strategy board.
+
+        v1.3.13 deliberately exposes only the two leading observed approaches:
+        TP5 for frequent trading across STANDARD + HIGH_RISK signals, and a
+        fixed 7-day hold for STANDARD signals. Exploratory strategy research
+        remains internal and is not mixed into the audience-facing board.
+        """
         if not self._performance_webhook_url:
             return False
 
@@ -150,166 +155,82 @@ class DiscordNotifier:
             if display_time is not None
             else report.report_date.strftime("%d %b %Y")
         )
+        tp5 = report.tp5_public
+        swing = report.standard_7d_public
 
-        overview = {
-            "title": "📊 Exhaustion Scanner • Performance Board",
+        tp5_value = (
+            f"**Rule:** full close at **+5%** • STANDARD + HIGH RISK\n"
+            f"7d-matured signals **{tp5.matured_7d}** • TP5 hit **{tp5.hits_7d}/{tp5.matured_7d} "
+            f"({self._percent(tp5.hit_rate_7d)})**\n"
+            f"Median / p75 time **{self._hours(tp5.median_time_hours)} / {self._hours(tp5.p75_time_hours)}**"
+        )
+        if tp5.median_pre_hit_adverse is not None:
+            tp5_value += f" • median pre-hit adverse **-{self._percent(tp5.median_pre_hit_adverse)}**"
+
+        swing_value = (
+            f"**Rule:** short at confirmation and hold **7 days** • STANDARD only\n"
+            f"Matured signals **{swing.matured_7d}** • profitable at 7d **{self._percent(swing.positive_rate)}**\n"
+            f"Avg raw return **{self._signed_percent(swing.avg_return)}** • "
+            f"median **{self._signed_percent(swing.median_return)}**"
+        )
+
+        board = {
+            "title": "📊 Exhaustion Scanner • Strategy Results",
             "description": (
                 f"**{self._pretty_label(label)}**\n"
                 f"Updated **{as_of_text}**\n\n"
-                "Confirmed-short signals only • STANDARD + HIGH only • Positive return = profitable short"
+                "Two leading observed approaches only • EXTREME_RISK signals are not published."
             ),
             "color": 0x5865F2,
             "fields": [
                 {
-                    "name": "⚡ Activity",
-                    "value": (
-                        f"**{report.confirmed_today}** confirmed today\n"
-                        f"**{report.open_count}** still tracking to 7d"
-                    ),
-                    "inline": True,
+                    "name": "⚡ TP5 Frequent",
+                    "value": tp5_value,
+                    "inline": False,
                 },
                 {
-                    "name": "📈 Open Signals",
-                    "value": (
-                        f"Avg MTM **{self._signed_percent(report.open_avg_return)}**\n"
-                        f"Combined **{self._signed_percent(report.open_sum_return)}**"
-                    ),
-                    "inline": True,
+                    "name": "🗓️ 7D Swing • STANDARD",
+                    "value": swing_value,
+                    "inline": False,
                 },
                 {
-                    "name": "🎯 Raw Results — STANDARD + HIGH",
-                    "value": "\n".join(
-                        self._raw_horizon_line(h)
-                        for h in self._horizons(report)
+                    "name": "Choose by trading cadence",
+                    "value": (
+                        "**TP5:** more frequent turnover and shorter holds.\n"
+                        "**7D Swing:** fewer STANDARD-only entries and much longer holding time, "
+                        "with larger observed raw moves.\n"
+                        "These are historical/shadow results, not a guarantee of future performance."
                     ),
                     "inline": False,
                 },
                 {
-                    "name": "⏱️ Average Return Path",
+                    "name": "Today",
                     "value": (
-                        f"1h **{self._signed_percent(report.avg_return_1h)}**  •  "
-                        f"4h **{self._signed_percent(report.avg_return_4h)}**  •  "
-                        f"12h **{self._signed_percent(report.avg_return_12h)}**\n"
-                        f"1d **{self._signed_percent(report.avg_return_24h)}**  •  "
-                        f"2d **{self._signed_percent(report.avg_return_48h)}**  •  "
-                        f"3d **{self._signed_percent(report.avg_return_72h)}**  •  "
-                        f"7d **{self._signed_percent(report.avg_return_168h)}**"
+                        f"Confirmed signals **{report.confirmed_today}** • "
+                        f"currently tracking **{report.open_count}**"
                     ),
                     "inline": False,
                 },
             ],
             "footer": {
-                "text": "Raw signal analytics — no take-profit, stop-loss, leverage or position-sizing rule assumed."
+                "text": (
+                    "TP5 hit statistics use 7d-matured signals. 7D Swing metrics are raw STANDARD signal returns; "
+                    "they are not a portfolio-return simulation."
+                )
             },
         }
 
-        if report.avg_mfe_7d is not None or report.avg_mae_7d is not None:
-            overview["fields"].append(
-                {
-                    "name": "🌊 7-Day Excursion • Fully Matured Only",
-                    "value": (
-                        f"Avg favorable move (MFE) **{self._signed_percent(report.avg_mfe_7d)}**  •  "
-                        f"Avg adverse move (MAE) **{self._signed_percent(report.avg_mae_7d)}**"
-                    ),
-                    "inline": False,
-                }
-            )
-        if report.best_symbol_7d or report.worst_symbol_7d:
-            overview["fields"].append(
-                {
-                    "name": "🏆 7-Day Extremes",
-                    "value": (
-                        f"Best: **{report.best_symbol_7d or 'n/a'}** {self._signed_percent(report.best_return_7d)}\n"
-                        f"Worst: **{report.worst_symbol_7d or 'n/a'}** {self._signed_percent(report.worst_return_7d)}"
-                    ),
-                    "inline": False,
-                }
-            )
-
-        standard = self._risk_embed(
-            title="🟢 STANDARD Signal Outcomes",
-            color=0x57F287,
-            matrix=report.standard_strategy_matrix,
-            weekly=report.standard_weekly,
-        )
-        high = self._risk_embed(
-            title="🟡 HIGH RISK Signal Outcomes",
-            color=0xFEE75C,
-            matrix=report.high_strategy_matrix,
-            weekly=report.high_weekly,
-        )
-        methodology = {
-            "title": "🧭 How to Read the Signal Outcomes",
-            "description": (
-                "This board describes historical signal behavior. It does **not** prescribe a stop-loss, "
-                "holding period, leverage, position size, or portfolio strategy."
-            ),
-            "color": 0x99AAB5,
-            "fields": [
-                {
-                    "name": "🎯 +20% target race",
-                    "value": (
-                        "For each adverse threshold, **Target-first rate** uses only resolved target-vs-breach "
-                        "outcomes. Pending signals stay pending. Same-15m-candle target/breach is conservatively "
-                        "breach-first. Average time is measured only for target-first observations."
-                    ),
-                    "inline": False,
-                },
-                {
-                    "name": "⏱️ 1D / 2D / 3D / 7D outcomes",
-                    "value": (
-                        "Every signal that reached the exact horizon contributes its raw short return to **Avg raw** "
-                        "and **Σ raw** — including negative returns and signals that crossed adverse thresholds. "
-                        "Profitable rate simply means return > 0 at that horizon."
-                    ),
-                    "inline": False,
-                },
-                {
-                    "name": "💥 Adverse thresholds",
-                    "value": (
-                        "**-100%** = price reaches 2× entry • **-200%** = 3× • **-300%** = 4× • **-400%** = 5×. "
-                        "Counts show whether that excursion occurred before the horizon; they are path observations, "
-                        "not assumed exits."
-                    ),
-                    "inline": False,
-                },
-                {
-                    "name": "Σ raw returns",
-                    "value": (
-                        "Arithmetic sum of the matured signal returns at that horizon. It is **not portfolio return**, "
-                        "because signals may overlap and position sizing is not modeled."
-                    ),
-                    "inline": False,
-                },
-                {
-                    "name": "Audience scope",
-                    "value": "Only **STANDARD** and **HIGH RISK** signals are included in the public performance and ledger datasets.",
-                    "inline": False,
-                },
-            ],
-            "footer": {"text": "No fees, slippage, funding, leverage or overlapping-position portfolio effects included."},
-        }
-
-        # Each card is sent separately so every embed has its own Discord text budget.
-        embeds = (overview, standard, high, methodology)
         try:
-            for index, embed in enumerate(embeds, start=1):
-                self._validate_discord_embed(embed)
-                payload = {
+            self._validate_discord_embed(board)
+            response = await self._client.post(
+                self._performance_webhook_url,
+                json={
                     "username": "Exhaustion Scanner • Stats",
-                    "embeds": [embed],
+                    "embeds": [board],
                     "allowed_mentions": {"parse": []},
-                }
-                response = await self._client.post(self._performance_webhook_url, json=payload)
-                if response.status_code >= 400:
-                    LOGGER.error(
-                        "Discord performance card %d/%d rejected status=%s body=%s",
-                        index,
-                        len(embeds),
-                        response.status_code,
-                        response.text[:2000],
-                    )
-                response.raise_for_status()
+                },
+            )
+            response.raise_for_status()
             return True
         except (httpx.HTTPError, ValueError):
             LOGGER.exception("Discord performance report failed")
@@ -346,18 +267,23 @@ class DiscordNotifier:
             for item in ledger.items
             if item.path_mae_before_target_5 is not None
         ]
-        target_before_100 = sum(item.target_before_100_breach is True for item in ledger.items)
-        breach_before_target = sum(
-            item.target_before_100_breach is False and item.first_100_breach_at is not None
-            for item in ledger.items
+        standard_7d = []
+        for item in ledger.by_risk("standard"):
+            horizon = next((h for h in item.horizons if h.hours == 168), None)
+            if horizon is not None and horizon.return_pct is not None:
+                standard_7d.append(horizon.return_pct)
+        standard_7d_positive = (
+            sum(value > 0 for value in standard_7d) / len(standard_7d)
+            if standard_7d else None
         )
-        pending_target_race = ledger.total - target_before_100 - breach_before_target
+        standard_7d_avg = statistics.fmean(standard_7d) if standard_7d else None
+        standard_7d_median = statistics.median(standard_7d) if standard_7d else None
 
         summary = {
             "title": "📒 Exhaustion Scanner • Signal Outcome Table",
             "description": (
                 f"Updated **{display_time.strftime('%d %b %Y • %H:%M %Z')}**\n"
-                "Compact visual tables below • newest signals first • full raw ledger attached as CSV"
+                "Compact audit table for the two retained strategies • full raw ledger attached as CSV"
             ),
             "color": 0x5865F2,
             "fields": [
@@ -371,7 +297,7 @@ class DiscordNotifier:
                     "inline": False,
                 },
                 {
-                    "name": "⚡ TP5 research race",
+                    "name": "⚡ TP5 Frequent",
                     "value": (
                         f"+5% hit **{target5_hits}/{ledger.total}** • "
                         f"before -100% **{target5_before_100}**"
@@ -383,30 +309,16 @@ class DiscordNotifier:
                     "inline": False,
                 },
                 {
-                    "name": "🎯 +20% vs -100%",
+                    "name": "🗓️ 7D Swing • STANDARD only",
                     "value": (
-                        f"Target first **{target_before_100}** • "
-                        f"breach first **{breach_before_target}** • "
-                        f"pending **{pending_target_race}**"
+                        f"Matured **{len(standard_7d)}** • profitable **{self._percent(standard_7d_positive)}** • "
+                        f"avg **{self._signed_percent(standard_7d_avg)}** • median **{self._signed_percent(standard_7d_median)}**"
                     ),
                     "inline": False,
                 },
                 {
-                    "name": "💥 Observed adverse breaches",
-                    "value": (
-                        f"-100% **{ledger.count_breach(100)}** • "
-                        f"-200% **{ledger.count_breach(200)}** • "
-                        f"-300% **{ledger.count_breach(300)}** • "
-                        f"-400% **{ledger.count_breach(400)}**"
-                    ),
-                    "inline": False,
-                },
-                {
-                    "name": "Table colors",
-                    "value": (
-                        "🟢 profitable/target • 🟠 negative but no -100% breach • "
-                        "🔴 liquidation-type breach • 🔵 pending"
-                    ),
+                    "name": "Table scope",
+                    "value": "Visible columns are TP5 and 7D raw outcome only. EXTREME_RISK is excluded.",
                     "inline": False,
                 },
             ],
@@ -483,7 +395,13 @@ class DiscordNotifier:
         as_of: datetime | None = None,
         timezone_name: str = "Europe/Zurich",
     ) -> bool:
-        """Send an on-demand research-only strategy diagnostic board."""
+        """Send the compact research validation board.
+
+        The analytics engine still retains the historical exploratory studies, but
+        v1.3.13 intentionally stops publishing them to Discord. The visible report
+        is limited to the two leading observed approaches plus prospective TP5
+        validation so the audience can actually read it.
+        """
         if not self._performance_webhook_url:
             return False
 
@@ -491,588 +409,165 @@ class DiscordNotifier:
         display_time = (as_of or report.generated_at).astimezone(tz)
         b = report.baseline
         completeness_7d = (b.complete_paths_7d / b.matured_7d) if b.matured_7d else None
-        completeness_14d = (b.complete_paths_14d / b.total_signals) if b.total_signals else None
-
-        target_lines = [
-            f"**+{target.target_pct}%** hit **{self._percent(target.hit_rate)}** "
-            f"({target.hits}/{target.sample}) • median **{self._hours(target.median_time_hours)}** "
-            f"• p75 **{self._hours(target.p75_time_hours)}**"
-            for target in report.target_sweep
-        ]
-
         tp5 = report.tp5_risk
-        tp5_race_lines = [
-            f"**-{item.adverse_threshold_pct}%**: TP5 first **{item.target_first}/{item.sample}** "
-            f"({self._percent(item.target_first_rate)}) • adverse first **{item.adverse_first}**"
-            + (f" • same 15m candle **{item.same_candle}**" if item.same_candle else "")
-            + (f" • unresolved **{item.unresolved}**" if item.unresolved else "")
-            for item in tp5.adverse_races
-        ]
-
-        def portfolio_line(item) -> str:
-            gate_text = (
-                f" • gate eligible **{item.eligible_signals}/{item.signals}**"
-                if item.filtered_entry_gate else ""
-            )
-            strategy_filter_text = (
-                f" • behavior filtered **{item.filtered_strategy}**"
-                if getattr(item, "filtered_strategy", 0) else ""
-            )
-            mtm = (
-                f" • MTM DD **-{self._percent(item.max_mtm_drawdown)}**"
-                if item.max_mtm_drawdown is not None else " • MTM DD n/a"
-            )
-            ratio = (
-                f" • R/DD **{item.return_over_max_drawdown:.2f}x**"
-                if item.return_over_max_drawdown is not None else ""
-            )
-            return (
-                f"**{item.strategy}** • signals {item.signals}{gate_text}{strategy_filter_text} • entered **{item.entered}** • "
-                f"return **{self._signed_percent(item.marked_return)}**{mtm}{ratio}\n"
-                f"max slots **{item.max_open_positions}** • max exp **{self._percent(item.max_observed_exposure_pct)}** • "
-                f"avg/p95 exp {self._percent(item.avg_exposure_pct)}/{self._percent(item.p95_exposure_pct)} • "
-                f"max losers **{item.max_simultaneous_losers}**\n"
-                f"capacity miss {item.missed_capacity} • same-symbol {item.missed_same_symbol} • "
-                f"median hold **{self._hours(item.median_holding_hours)}** • slot-days **{item.slot_days:.2f}** • "
-                f"return/slot-day **{self._signed_percent(item.return_per_slot_day)}**"
-            )
-
-        regime = report.token_regime
-        behavior_lines = []
-        for item in regime.buckets:
-            behavior_lines.append(
-                f"**{item.behavior_class}** • n={item.signals} • TP5 "
-                f"{item.tp5_hits}/{item.signals} ({self._percent(item.tp5_hit_rate)}) • "
-                f"median/p75 {self._hours(item.median_tp5_hours)}/{self._hours(item.p75_tp5_hours)} • "
-                f"MAE med/p75 {self._percent(item.median_pre_tp5_adverse)}/{self._percent(item.p75_pre_tp5_adverse)}"
-            )
-        def regime_portfolio_line(item) -> str:
-            return (
-                f"**{item.strategy}** • entered {item.entered}/{item.signals} • "
-                f"return **{self._signed_percent(item.marked_return)}** • "
-                f"DD **-{self._percent(item.max_mtm_drawdown)}** • "
-                f"cap miss {item.missed_capacity} • median hold {self._hours(item.median_holding_hours)}"
-            )
-
-        def regime_efficiency_line(item) -> str:
-            calendar_days = report.calendar_throughput.history_span_days
-            releases_per_day = (item.closed / calendar_days) if calendar_days > 0 else None
-            total_slot_days = TP5_CHALLENGER_MAX_SLOTS * calendar_days
-            used_capacity = (item.slot_days / total_slot_days) if total_slot_days > 0 else None
-            idle_capacity = (max(0.0, min(1.0, 1.0 - used_capacity)) if used_capacity is not None else None)
-            return (
-                f"**{item.strategy}** • slot-days **{item.slot_days:.2f}** • "
-                f"return/slot-day **{self._signed_percent(item.return_per_slot_day)}** • "
-                f"releases/day **{releases_per_day:.2f}** • idle capacity **{self._percent(idle_capacity)}** • "
-                f"avg/p95 exposure **{self._percent(item.avg_exposure_pct)}/{self._percent(item.p95_exposure_pct)}**"
-            )
-
-        regime_portfolio_items = [report.calendar_throughput.tp5, *report.regime_portfolios]
-        regime_portfolio_lines = [regime_portfolio_line(item) for item in regime_portfolio_items]
-        regime_efficiency_lines = [regime_efficiency_line(item) for item in regime_portfolio_items]
-        hybrid_portfolio_lines = [regime_portfolio_line(item) for item in report.hybrid_portfolios]
-        hybrid_efficiency_lines = [regime_efficiency_line(item) for item in report.hybrid_portfolios]
-
-        def slice_lines(items: tuple[FeatureSliceSummary, ...], icon: str) -> str:
-            if not items:
-                return "Not enough matured observations yet."
-            return "\n".join(
-                f"{icon} **{item.feature_label} — {item.bucket}** • n={item.sample} • "
-                f"target lift {self._signed_percent(item.target_lift_pp)} • "
-                f"7d positive lift {self._signed_percent(item.positive_lift_pp)} • "
-                f"avg-return lift {self._signed_percent(item.avg_return_lift_pp)}"
-                for item in items
-            )
-
-        def standard_exit_line(item: ExitHorizonSummary) -> str:
-            return (
-                f"**{item.horizon_hours // 24}d** n={item.sample} • avg **{self._signed_percent(item.avg_return)}** • "
-                f"median **{self._signed_percent(item.median_return)}** • positive **{self._percent(item.positive_rate)}** • "
-                f"avg/day **{self._signed_percent(item.avg_return_per_day)}**"
-            )
-
-        standard_early_lines = [
-            standard_exit_line(item)
-            for item in report.standard_exit_sweep
-            if item.cohort_horizon_hours == 168 and item.sample
-        ]
-        standard_extended_lines = [
-            standard_exit_line(item)
-            for item in report.standard_exit_sweep
-            if item.cohort_horizon_hours == 336 and item.sample
-        ]
-        risky_lines = [
-            (
-                f"**TP20 or {item.timeout_hours // 24}d** n={item.sample} • "
-                + (
-                    f"TP **{self._percent(item.target_hit_rate)}** • avg **{self._signed_percent(item.avg_strategy_return)}** • "
-                    f"worst **{self._signed_percent(item.worst_strategy_return)}** • hold **{self._hours(item.avg_holding_hours)}** • "
-                    f"slot/day **{self._signed_percent(item.return_per_slot_day)}**"
-                    if item.sample
-                    else "cohort not mature / complete yet"
-                )
-            )
-            for item in report.high_risk_timeout_sweep
-        ]
-        all_stop = [item for item in report.stop_survival if item.risk_tier == "all"]
-        stop_lines = [
-            f"**-{item.stop_pct}%** would kill **{item.winners_killed}/{item.winners_with_path}** eventual +20% winners "
-            f"({self._percent(item.kill_rate)})"
-            for item in all_stop
-        ]
-        score_lines = [
-            f"**{item.score_name.replace('_', ' ').title()} {item.bucket}** • n={item.sample} • "
-            f"TP20 {self._percent(item.target_20_rate_7d)} • 7d+ {self._percent(item.positive_7d_rate)} • "
-            f"avg {self._signed_percent(item.avg_return_7d)}"
-            for item in report.score_buckets
-        ]
-        top_interactions = report.ranked_interactions[:4]
-        interaction_lines = [
-            f"🧬 **{item.interaction}** — {item.bucket} • n={item.sample} • "
-            f"rank lift {self._signed_percent(item.rank_score)}"
-            for item in top_interactions
-        ]
-        delayed_lines = [
-            f"**+{item.delay_minutes}m** n={item.sample} • TP20 {self._percent(item.target_20_rate_7d)} • "
-            f"avg7d {self._signed_percent(item.avg_return_7d)} • median adverse -{self._percent(item.median_adverse_7d)}"
-            for item in report.delayed_entries
-            if item.sample
-        ]
-        cohort_lines = [
-            f"**{item.cohort.replace('_', ' ').title()}** • signals **{item.signals}** • complete7d **{item.complete_7d}** • "
-            f"TP5 **{item.tp5_hits}/{item.complete_7d}** ({self._percent(item.tp5_hit_rate)}) • "
-            f"gate eligible **{item.entrygate_eligible}/{item.signals}** ({self._percent(item.entrygate_eligible_rate)})"
-            + (f" • worst pre-TP5 **-{self._percent(item.worst_pre_tp5_adverse)}**" if item.complete_7d else "")
-            for item in report.prospective_cohorts
-        ]
-        post_freeze_score_lines = [
-            f"**{item.score_name.replace('_', ' ').title()} {item.bucket}** • n={item.sample} • "
-            f"TP20 {self._percent(item.target_20_rate_7d)} • 7d+ {self._percent(item.positive_7d_rate)} • "
-            f"avg {self._signed_percent(item.avg_return_7d)}"
-            for item in report.prospective_score_buckets
-            if item.cohort == "post_freeze" and item.sample
-        ]
-
-        live_tp5 = report.prospective_tp5_live
-        gate_monitor = report.prospective_gate_acceptance
-
-        def regime_value(item, value) -> str:
-            if value is None:
-                return "n/a"
-            if item.feature == "amount_24h":
-                return f"{value / 1_000_000:.2f}m"
-            if item.feature == "return_24h":
-                return self._signed_percent(value)
-            return f"{value:.2f}"
-
-        regime_lines = [
-            (
-                f"**{item.feature_label}** • med {regime_value(item, item.discovery_median)} → "
-                f"{regime_value(item, item.post_freeze_median)} • "
-                f"post below/IQR/above **{self._percent(item.post_below_discovery_p25_rate)} / "
-                f"{self._percent(item.post_inside_discovery_iqr_rate)} / "
-                f"{self._percent(item.post_above_discovery_p75_rate)}**"
-            )
-            for item in report.prospective_regime_drift
-            if item.post_freeze_sample
-        ]
-
-        portfolio_names = {
-            "current_live_5standard_1high": "Current",
-            "tp5_challenger_6x5pct": "TP5",
-            "tp2_challenger_6x5pct": "TP2-6",
-            "tp2_challenger_10x5pct": "TP2-10",
-            "tp1_challenger_10x5pct": "TP1-10",
-            "hybrid1_ep_mix_tp5_regime_tp2": "Hybrid-1",
-            "hybrid2_ep_tp5_mix_regime_tp2": "Hybrid-2",
-            "entrygate_v1__current_live_5standard_1high": "Gate + current",
-            "entrygate_v1__tp5_challenger_6x5pct": "Gate + TP5",
-        }
-        prospective_portfolio_lines = [
-            (
-                f"**{portfolio_names.get(item.strategy, item.strategy)}** • entered {item.entered}/{item.signals} • "
-                f"return {self._signed_percent(item.marked_return)} • DD "
-                f"{'-' + self._percent(item.max_mtm_drawdown) if item.max_mtm_drawdown is not None else 'n/a'} • "
-                f"R/DD {f'{item.return_over_max_drawdown:.2f}x' if item.return_over_max_drawdown is not None else 'n/a'}"
-            )
-            for item in report.prospective_portfolios
-            if item.signals
-        ]
-
         calendar = report.calendar_throughput
+        live_tp5 = report.prospective_tp5_live
 
-        def throughput_line(item) -> str:
-            utilization = (item.entered / item.signals) if item.signals else None
-            entries_per_day = (item.entered / calendar.history_span_days) if calendar.history_span_days > 0 else None
-            releases_per_day = (item.closed / calendar.history_span_days) if calendar.history_span_days > 0 else None
-            return (
-                f"**{portfolio_names.get(item.strategy, item.strategy)}** • entered **{item.entered}/{item.signals}** "
-                f"({self._percent(utilization)}) • closed **{item.closed}** • open **{item.open_positions}**\n"
-                f"capacity miss **{item.missed_capacity}** • same-symbol **{item.missed_same_symbol}** • "
-                f"entries/day **{entries_per_day:.2f}** • releases/day **{releases_per_day:.2f}**\n"
-                f"return **{self._signed_percent(item.marked_return)}** • MTM DD "
-                f"**{'-' + self._percent(item.max_mtm_drawdown) if item.max_mtm_drawdown is not None else 'n/a'}** • "
-                f"median hold **{self._hours(item.median_holding_hours)}**"
-            )
+        standard_7d = next(
+            (
+                item for item in report.standard_exit_sweep
+                if item.horizon_hours == 168
+                and item.cohort_horizon_hours == 168
+                and item.sample
+            ),
+            None,
+        )
 
-        if all(item is not None for item in (calendar.latest_30d_current, calendar.latest_30d_tp5, calendar.latest_30d_tp2, calendar.latest_30d_tp2_10, calendar.latest_30d_tp1_10)):
-            monthly_lines = [
-                (
-                    f"**{portfolio_names.get(item.strategy, item.strategy)}** • signals {item.signals} • "
-                    f"entered **{item.entered}** • utilization **{self._percent(item.entered / item.signals if item.signals else None)}** • "
-                    f"30d return **{self._signed_percent(item.marked_return)}** • DD "
-                    f"**{'-' + self._percent(item.max_mtm_drawdown) if item.max_mtm_drawdown is not None else 'n/a'}**"
-                )
-                for item in (calendar.latest_30d_current, calendar.latest_30d_tp5, calendar.latest_30d_tp2, calendar.latest_30d_tp2_10, calendar.latest_30d_tp1_10)
-            ]
-            monthly_value = "\n".join(monthly_lines)
+        tp5_entries_per_day = (
+            calendar.tp5.entered / calendar.history_span_days
+            if calendar.history_span_days > 0 else None
+        )
+        tp5_releases_per_day = (
+            calendar.tp5.closed / calendar.history_span_days
+            if calendar.history_span_days > 0 else None
+        )
+
+        if standard_7d is None:
+            standard_7d_value = "Complete STANDARD 7-day cohort is still maturing."
         else:
-            monthly_value = (
-                f"Not available yet: observed history **{calendar.history_span_days:.2f}d**; "
-                f"need **{calendar.days_until_30d:.2f}d** more for the first true 30-day empty-book replay. "
-                "No short-window return is extrapolated."
+            standard_7d_value = (
+                f"**Rule:** confirmed short → hold **7 days** • STANDARD only\n"
+                f"Matured **{standard_7d.sample}** • profitable **{self._percent(standard_7d.positive_rate)}**\n"
+                f"Avg raw **{self._signed_percent(standard_7d.avg_return)}** • "
+                f"median **{self._signed_percent(standard_7d.median_return)}**"
             )
 
-        overview = {
-            "title": "🔬 Exhaustion Scanner • Research Analytics",
+        strategy_board = {
+            "title": "🔬 Exhaustion Scanner • Strategy Validation",
             "description": (
                 f"Updated **{display_time.strftime('%d %b %Y • %H:%M %Z')}**\n"
-                "Research-only diagnostics from frozen signal features + stored 15m post-signal paths."
+                "Only the two leading observed approaches are shown. Exploratory alternatives remain internal."
             ),
             "color": 0x5865F2,
             "fields": [
                 {
-                    "name": "📦 Sample & path completeness",
+                    "name": "📦 Evidence base",
                     "value": (
-                        f"Signals **{b.total_signals}** • 7d matured **{b.matured_7d}**\n"
-                        f"Complete 7d paths **{b.complete_paths_7d}** ({self._percent(completeness_7d)}) • "
-                        f"complete 14d paths **{b.complete_paths_14d}** ({self._percent(completeness_14d)})\n"
-                        f"Feature ranking minimum **n={report.min_rank_sample}**."
+                        f"Signals **{b.total_signals}** • 7d matured **{b.matured_7d}** • "
+                        f"complete paths **{b.complete_paths_7d}/{b.matured_7d} ({self._percent(completeness_7d)})**"
                     ),
                     "inline": False,
                 },
                 {
-                    "name": "🎯 Current 7d baseline",
+                    "name": "⚡ TP5 Frequent • STANDARD + HIGH",
                     "value": (
-                        f"+20% **{self._percent(b.target_20_rate_7d)}** • positive **{self._percent(b.positive_7d_rate)}**\n"
-                        f"Avg **{self._signed_percent(b.avg_return_7d)}** • median **{self._signed_percent(b.median_return_7d)}** • "
-                        f"median time to +20% **{self._hours(b.median_time_to_20_hours)}**"
+                        f"**Rule:** full close at **+5%** • 6×5% research portfolio / 30% cap\n"
+                        f"Matured TP5 **{tp5.hits}/{tp5.sample} ({self._percent(tp5.hit_rate)})** • "
+                        f"median / p75 **{self._hours(tp5.median_time_hours)} / {self._hours(tp5.p75_time_hours)}**\n"
+                        f"Median pre-hit adverse **-{self._percent(tp5.median_adverse_before_target)}** • "
+                        f"worst **-{self._percent(tp5.worst_adverse_before_target)}**\n"
+                        f"Observed {calendar.history_span_days:.2f}d portfolio return **{self._signed_percent(calendar.tp5.marked_return)}** • "
+                        f"MTM DD **{'-' + self._percent(calendar.tp5.max_mtm_drawdown) if calendar.tp5.max_mtm_drawdown is not None else 'n/a'}**\n"
+                        f"Entered **{calendar.tp5.entered}/{calendar.tp5.signals}** • "
+                        f"entries/day **{tp5_entries_per_day:.2f}** • releases/day **{tp5_releases_per_day:.2f}**"
                     ),
                     "inline": False,
                 },
                 {
-                    "name": "🌊 Fully observed 7d path",
-                    "value": (
-                        f"Median MFE **{self._signed_percent(b.median_mfe_7d)}** • adverse **-{self._percent(b.median_adverse_7d)}**\n"
-                        f"Adverse before +20% **-{self._percent(b.median_adverse_before_20)}** • "
-                        f"MFE timing **{self._hours(b.median_time_to_mfe_hours)}** • worst timing **{self._hours(b.median_time_to_mae_hours)}**"
-                    ),
-                    "inline": False,
-                },
-            ],
-            "footer": {"text": "Shadow research only: no scanner or trader rule is changed by this report."},
-        }
-        targets = {
-            "title": "🎚️ Profit-Target Sweep • 7-Day Paths",
-            "description": "Favorable excursions from the original confirmed-short entry; complete 7-day paths only.",
-            "color": 0x57F287,
-            "fields": [{"name": "Target hit rate & speed", "value": "\n".join(target_lines) or "No complete paths yet.", "inline": False}],
-        }
-        tp5_challenger = {
-            "title": "⚡ TP5 Challenger • Frozen Shadow Portfolio",
-            "description": (
-                "Research only. Paired complete-7d signal cohort. Challenger is frozen at "
-                "6 generic slots × 5% equity, 30% cap, 1×, immediate entry, full +5% exit, "
-                "one open position per symbol. Fees: 0.08% per fill."
-            ),
-            "color": 0x2ECC71,
-            "fields": [
-                {
-                    "name": "Pre-TP5 path risk",
-                    "value": (
-                        f"+5% hit **{tp5.hits}/{tp5.sample}** ({self._percent(tp5.hit_rate)}) • "
-                        f"median **{self._hours(tp5.median_time_hours)}** • p75 **{self._hours(tp5.p75_time_hours)}**\n"
-                        f"Pre-hit adverse: median **-{self._percent(tp5.median_adverse_before_target)}** • "
-                        f"p75 **-{self._percent(tp5.p75_adverse_before_target)}** • "
-                        f"worst **-{self._percent(tp5.worst_adverse_before_target)}**"
-                    ),
+                    "name": "🗓️ 7D Swing • STANDARD",
+                    "value": standard_7d_value,
                     "inline": False,
                 },
                 {
-                    "name": "+5% race vs adverse move",
-                    "value": "\n".join(tp5_race_lines) or "No complete paths yet.",
-                    "inline": False,
-                },
-                {
-                    "name": "15m close-marked portfolio risk",
+                    "name": "Interpretation",
                     "value": (
-                        f"Max MTM drawdown **-{self._percent(report.portfolio_tp5.max_mtm_drawdown)}** • "
-                        f"worst equity **{self._signed_percent(report.portfolio_tp5.worst_mtm_return)}** • "
-                        f"max unrealized loss **-{self._percent(report.portfolio_tp5.max_unrealized_loss)}**\n"
-                        f"Avg/p95 exposure **{self._percent(report.portfolio_tp5.avg_exposure_pct)} / "
-                        f"{self._percent(report.portfolio_tp5.p95_exposure_pct)}** • "
-                        f"avg slots **{report.portfolio_tp5.avg_open_positions:.2f}** • "
-                        f"max losers **{report.portfolio_tp5.max_simultaneous_losers}** • "
-                        f"recovery **{self._hours(report.portfolio_tp5.drawdown_recovery_hours)}** "
-                        if report.portfolio_tp5.avg_open_positions is not None else "MTM path marks unavailable."
+                        "**TP5** is the leading tested high-throughput portfolio. "
+                        "**7D Swing** is the strongest observed fixed-horizon result for STANDARD signals, "
+                        "but it has a smaller matured sample and its raw returns are not a portfolio simulation."
                     ),
                     "inline": False,
                 },
             ],
             "footer": {
-                "text": "No live trader rules are changed. Same-candle TP/adverse races are intentionally reported as ambiguous."
+                "text": "EXTREME_RISK is excluded. TP1/TP2/hybrids/EntryGate/feature sweeps are intentionally hidden from Discord."
             },
         }
-        strategy_lab = {
-            "title": "🏁 Champion vs challenger • Four-Way Paired Portfolio",
+
+        if calendar.latest_30d_tp5 is not None:
+            thirty_day = (
+                f"True 30d TP5 replay: return **{self._signed_percent(calendar.latest_30d_tp5.marked_return)}** • "
+                f"DD **{'-' + self._percent(calendar.latest_30d_tp5.max_mtm_drawdown) if calendar.latest_30d_tp5.max_mtm_drawdown is not None else 'n/a'}**"
+            )
+        else:
+            thirty_day = (
+                f"First true 30d empty-book replay not available yet • observed **{calendar.history_span_days:.2f}d** • "
+                f"need **{calendar.days_until_30d:.2f}d** more."
+            )
+
+        prospective = {
+            "title": "📡 TP5 • Prospective Monitor",
             "description": (
-                "Four frozen research portfolios on the same complete-7d cohort. EntryGate-v1 accepts "
-                "Entry Quality ≥4 and Continuation Risk ≤6. Live execution is unchanged."
-            ),
-            "color": 0xE67E22,
-            "fields": [
-                {
-                    "name": "Champion vs TP5",
-                    "value": "\n\n".join([
-                        portfolio_line(report.portfolio_current),
-                        portfolio_line(report.portfolio_tp5),
-                    ]),
-                    "inline": False,
-                },
-                {
-                    "name": "EntryGate-v1 challengers",
-                    "value": "\n\n".join([
-                        portfolio_line(report.portfolio_entrygate_current),
-                        portfolio_line(report.portfolio_entrygate_tp5),
-                    ]),
-                    "inline": False,
-                },
-                {
-                    "name": "Prospective freeze • discovery vs post-freeze",
-                    "value": (
-                        f"Frozen **{report.oos_freeze_at.astimezone(tz).strftime('%d %b %Y • %H:%M %Z')}**; "
-                        "cohort assignment uses signal confirmation time.\n" +
-                        "\n".join(cohort_lines)
-                    ),
-                    "inline": False,
-                },
-                {
-                    "name": "Post-freeze score buckets",
-                    "value": "\n".join(post_freeze_score_lines) or "No post-freeze complete-7d observations yet.",
-                    "inline": False,
-                },
-            ],
-            "footer": {
-                "text": "EntryGate-v1 and TP5 remain shadow-only. Do not retune frozen thresholds on the prospective cohort."
-            },
-        }
-        prospective_monitor = {
-            "title": "📡 Prospective Monitor • Post-Freeze",
-            "description": (
-                "Fast shadow monitoring after the frozen 21 Aug 2026 research cutoff. TP5 hits can resolve "
-                "before 7d maturity; paired portfolio comparisons still require complete 7d paths."
+                f"Frozen **{report.oos_freeze_at.astimezone(tz).strftime('%d %b %Y • %H:%M %Z')}**. "
+                "This is the real forward-validation stream; no retuning from these observations."
             ),
             "color": 0x1ABC9C,
             "fields": [
                 {
-                    "name": "⚡ TP5 live tracker • no 7d wait",
+                    "name": "Post-freeze TP5 tracker",
                     "value": (
                         f"Signals **{live_tp5.signals}** • hit **{live_tp5.hits}** • waiting **{live_tp5.waiting}** • "
                         f"failed after complete 7d **{live_tp5.failed}**\n"
                         f"Resolved hit rate **{self._percent(live_tp5.resolved_hit_rate)}** • "
-                        f"median/p75 hit **{self._hours(live_tp5.median_hit_hours)} / {self._hours(live_tp5.p75_hit_hours)}**\n"
+                        f"median / p75 **{self._hours(live_tp5.median_hit_hours)} / {self._hours(live_tp5.p75_hit_hours)}**\n"
                         f"Worst pre-hit adverse **-{self._percent(live_tp5.worst_pre_hit_adverse)}** • "
-                        f"worst waiting close-mark adverse **-{self._percent(live_tp5.worst_waiting_close_adverse)}** • "
                         f"oldest waiting **{self._hours(live_tp5.oldest_waiting_hours)}**"
                     ),
                     "inline": False,
                 },
                 {
-                    "name": "🚦 EntryGate-v1 acceptance",
-                    "value": (
-                        f"Post-freeze eligible **{gate_monitor.eligible}/{gate_monitor.signals}** "
-                        f"({self._percent(gate_monitor.eligible_rate)}) • "
-                        f"latest {gate_monitor.rolling_signals}/{gate_monitor.rolling_window} signals: "
-                        f"**{gate_monitor.rolling_eligible}** eligible "
-                        f"({self._percent(gate_monitor.rolling_eligible_rate)})"
-                    ),
-                    "inline": False,
-                },
-                {
-                    "name": "🌡️ Regime drift • discovery median → post-freeze",
-                    "value": "\n".join(regime_lines) or "No post-freeze signals yet; frozen discovery distributions remain the reference.",
-                    "inline": False,
-                },
-                {
-                    "name": "🏁 Post-freeze paired portfolios • complete 7d only",
-                    "value": "\n".join(prospective_portfolio_lines) or "No post-freeze complete-7d observations yet.",
+                    "name": "30-day validation",
+                    "value": thirty_day,
                     "inline": False,
                 },
             ],
-            "footer": {
-                "text": "Fast TP5 monitoring is descriptive; strategy selection remains based on frozen prospective comparisons."
-            },
-        }
-        calendar_throughput = {
-            "title": "♻️ Calendar Throughput • TP5 vs Fast-TP",
-            "description": (
-                "Same incoming signal stream, chronological slot occupancy, fees and equity recycling. "
-                "Unlike the paired 7d board, this includes immature/open signals so burst congestion is visible."
-            ),
-            "color": 0xF1C40F,
-            "fields": [
-                {
-                    "name": f"Observed calendar • controls • {calendar.history_span_days:.2f}d",
-                    "value": "\n\n".join([
-                        throughput_line(calendar.current),
-                        throughput_line(calendar.tp5),
-                        throughput_line(calendar.tp2),
-                    ]) if calendar.current.signals else "No observed signals yet.",
-                    "inline": False,
-                },
-                {
-                    "name": "⚡ Fast-TP challengers • 10×5% / 50% cap",
-                    "value": "\n\n".join([
-                        throughput_line(calendar.tp2_10),
-                        throughput_line(calendar.tp1_10),
-                    ]) if calendar.current.signals else "No observed signals yet.",
-                    "inline": False,
-                },
-                {
-                    "name": "📅 Latest true 30-day replay",
-                    "value": monthly_value,
-                    "inline": False,
-                },
-            ],
-            "footer": {
-                "text": "30d windows start with equal equity and an empty book; report actual calendar return, never short-window annualization."
-            },
-        }
-        token_behavior = {
-            "title": "🧬 Token Behaviour • Regime Dependency",
-            "description": (
-                f"Research only. Uses {regime.lookback_days}d of completed pre-signal 4h token/BTC history. "
-                "Episodicness combines low BTC explanatory power, concentration in a few positive spikes, "
-                "and isolated +5% 4h pumps outperforming BTC. Cutoffs are calibrated on the frozen discovery cohort only."
-            ),
-            "color": 0x3498DB,
-            "fields": [
-                {
-                    "name": "History coverage",
-                    "value": (
-                        f"Profiled **{regime.profiled_signals}** • insufficient **{regime.insufficient_signals}** • "
-                        f"discovery reference **{regime.discovery_profiled_signals}** • "
-                        f"minimum paired 4h returns **{regime.minimum_paired_returns}**"
-                    ),
-                    "inline": False,
-                },
-                {
-                    "name": "Behaviour buckets • TP5 path",
-                    "value": "\n".join(behavior_lines) or "History backfill/profile coverage is not ready yet.",
-                    "inline": False,
-                },
-                {
-                    "name": "TP5-6 shadow portfolios • same calendar stream",
-                    "value": "\n\n".join(regime_portfolio_lines),
-                    "inline": False,
-                },
-                {
-                    "name": "Hybrid exits • same 6×5% / 30% cap",
-                    "value": "\n\n".join(hybrid_portfolio_lines),
-                    "inline": False,
-                },
-                {
-                    "name": "Capital-time efficiency • baseline / filters",
-                    "value": "\n".join(regime_efficiency_lines),
-                    "inline": False,
-                },
-                {
-                    "name": "Capital-time efficiency • hybrids",
-                    "value": "\n".join(hybrid_efficiency_lines),
-                    "inline": False,
-                },
-            ],
-            "footer": {
-                "text": "No scanner or trader rule is changed. Hybrids keep 6×5% / 30% sizing; insufficient-history signals default to TP5."
-            },
+            "footer": {"text": "Fast TP5 monitoring is descriptive until the forward cohort fully matures."},
         }
 
-        exits = {
-            "title": "🧭 Exit Research • Standard vs High Risk",
-            "description": "Paired-cohort exits: Standard 1–7d uses one complete-7d cohort; High Risk 1–10d uses one fully mature/evaluable 10d cohort. 14d remains separate until mature.",
-            "color": 0x3498DB,
-            "fields": [
-                {"name": "STANDARD paired cohort • 1–7d", "value": "\n".join(standard_early_lines) or "Complete paired 7d cohort is still maturing.", "inline": False},
-                {"name": "STANDARD paired cohort • 8–14d", "value": "\n".join(standard_extended_lines) or "Complete paired 14d cohort is still maturing.", "inline": False},
-                {"name": "HIGH RISK • paired TP20 + timeout", "value": "\n".join(risky_lines) or "No fully mature timeout cohorts yet.", "inline": False},
-            ],
-        }
-        survival = {
-            "title": "🛡️ Winner Survival • Hypothetical Stops",
-            "description": "Among observed signals that eventually reached +20% within 7d, how many would an adverse stop have killed first?",
-            "color": 0xED4245,
-            "fields": [{"name": "All public tiers", "value": "\n".join(stop_lines) or "Not enough path data yet.", "inline": False}],
-        }
-        entry = {
-            "title": "🧠 Entry Research • Shadow Only",
-            "description": "Candidate quality/continuation scores are frozen hypotheses; interactions and delayed entries are exploratory.",
-            "color": 0x9B59B6,
-            "fields": [
-                {"name": "Shadow score buckets", "value": "\n".join(score_lines) or "No matured observations yet.", "inline": False},
-                {"name": "Strongest interactions", "value": "\n".join(interaction_lines) or "Not enough interaction sample yet.", "inline": False},
-                {"name": "Delayed-entry simulation • paired cohort", "value": "\n".join(delayed_lines) or "Common complete delayed-entry cohort is still maturing.", "inline": False},
-            ],
-        }
-        features = {
-            "title": "🧪 Feature Lift • Candidate Filters",
-            "description": "Univariate tertile/boolean slices versus the all-signal 7d baseline; exploratory, not causal.",
-            "color": 0xFEE75C,
-            "fields": [
-                {"name": "⬆️ Strongest observed slices", "value": slice_lines(report.best_slices, "🟢"), "inline": False},
-                {"name": "⬇️ Weakest observed slices", "value": slice_lines(report.worst_slices, "🔴"), "inline": False},
-            ],
-        }
-
-        embeds = (overview, targets, tp5_challenger, strategy_lab, prospective_monitor, calendar_throughput, token_behavior, exits, survival, entry, features)
+        embeds = (strategy_board, prospective)
         try:
             for embed in embeds:
                 self._validate_discord_embed(embed)
+
             payload = {
                 "username": "Exhaustion Scanner • Research",
-                "embeds": [overview],
+                "embeds": [strategy_board],
                 "allowed_mentions": {"parse": []},
             }
-            files: dict[str, tuple[str, bytes, str]] = {}
-            attachments = [
-                (feature_csv, f"research-feature-lift-{display_time.strftime('%Y-%m-%d')}.csv"),
-                (dataset_csv, f"research-signal-dataset-{display_time.strftime('%Y-%m-%d')}.csv"),
-                (strategy_csv, f"research-strategy-sweeps-{display_time.strftime('%Y-%m-%d')}.csv"),
-                (entry_csv, f"research-entry-analysis-{display_time.strftime('%Y-%m-%d')}.csv"),
-                (regime_csv, f"research-token-regime-{display_time.strftime('%Y-%m-%d')}.csv"),
-            ]
-            for index, (content, filename) in enumerate(attachments):
-                if content is not None:
-                    files[f"files[{index}]"] = (filename, content, "text/csv")
-            if files:
+            if dataset_csv is not None:
                 response = await self._client.post(
                     self._performance_webhook_url,
                     data={"payload_json": json.dumps(payload)},
-                    files=files,
+                    files={
+                        "files[0]": (
+                            f"research-signal-dataset-{display_time.strftime('%Y-%m-%d')}.csv",
+                            dataset_csv,
+                            "text/csv",
+                        )
+                    },
                 )
             else:
                 response = await self._client.post(self._performance_webhook_url, json=payload)
             response.raise_for_status()
 
-            for embed in embeds[1:]:
-                response = await self._client.post(
-                    self._performance_webhook_url,
-                    json={
-                        "username": "Exhaustion Scanner • Research",
-                        "embeds": [embed],
-                        "allowed_mentions": {"parse": []},
-                    },
-                )
-                response.raise_for_status()
+            response = await self._client.post(
+                self._performance_webhook_url,
+                json={
+                    "username": "Exhaustion Scanner • Research",
+                    "embeds": [prospective],
+                    "allowed_mentions": {"parse": []},
+                },
+            )
+            response.raise_for_status()
             return True
         except (httpx.HTTPError, ValueError):
             LOGGER.exception("Discord research analytics failed")

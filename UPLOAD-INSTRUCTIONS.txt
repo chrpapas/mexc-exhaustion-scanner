@@ -1,65 +1,35 @@
-MEXC Exhaustion Scanner + Multi-Slot Futures Trader v1.3.12
+MEXC Exhaustion Scanner + Multi-Slot Futures Trader v1.3.13
 
-Deploy the entire project/ZIP together. v1.3.12 is a RESEARCH-ONLY behaviour-dependent exit comparison release; TP5 trader execution is unchanged from v1.3.6.
+Deploy the entire project/ZIP together. v1.3.13 is a CLEANUP release; frozen TP5 trader execution is unchanged from v1.3.6.
 
-v1.3.12 retains the v1.3.8 research-path SQL timeout hotfix on larger datasets. The one-off analytics command no longer aborts if the optional path catch-up times out; it reports from the paths already persisted.
+Key changes:
+- EXTREME_RISK is hard-suppressed before scanner episode/signal creation.
+- Discord performance shows only TP5 Frequent and STANDARD-only 7D Swing.
+- On-demand research Discord is reduced to Strategy Validation + Prospective TP5 Monitor.
+- Visible ledger PNGs show TP5 + 7D raw only; full CSV remains detailed.
+- No new DB migration. Latest remains 015_tp5_trader_runs.sql.
 
-Frozen TP5_V1 paper strategy (unchanged):
-- STANDARD + HIGH_RISK; EXTREME excluded
+Frozen TP5_V1 paper strategy:
+- STANDARD + HIGH_RISK only
 - 6 generic slots
-- 5% of current equity per slot
-- 30% aggregate exposure cap
+- 5% current equity per slot
+- 30% aggregate cap
 - 1x cross
 - immediate entry; one open position per symbol
 - full exit at +5% favorable short return
-- no conventional tight stop; adverse telemetry retained
 
-Clean paper run (unchanged):
+Keep:
 TRADER_EXECUTION_STRATEGY=tp5_v1
 TRADER_PAPER_RUN_ID=tp5_v1
 PAPER_STARTING_EQUITY_USDT=2000
+TRADER_ALLOWED_RISK_TIERS=STANDARD,HIGH_RISK
 
-Token-behaviour and hybrid-exit research in v1.3.12:
-- 90d of completed pre-signal 4h token/BTC history
-- no post-signal/look-ahead data in classification
-- REGIME_FOLLOWER / MIXED / EPISODIC / INSUFFICIENT research labels
-- TP5-All vs no-regime-followers vs episodic-only vs same-bar episodic-priority shadow replays
-- Hybrid-1: EPISODIC + MIXED use TP5; REGIME_FOLLOWER uses TP2
-- Hybrid-2: EPISODIC uses TP5; MIXED + REGIME_FOLLOWER use TP2
-- both hybrids retain 6×5% slots / 30% cap; INSUFFICIENT defaults to TP5
-- capital-time metrics: slot-days, return/slot-day, releases/day, time-based idle capacity, avg/p95 exposure
-- no scanner/trader rule changes
-- no new DB migration
-
-The scanner automatically backfills missing 4h left-edge history for stored research signal symbols. Keep:
-RESEARCH_LOGGING_ENABLED=true
-RESEARCH_PATH_HORIZON_HOURS=336
-RESEARCH_REGIME_HISTORY_POLL_SECONDS=21600
-
-On-demand research report:
+Reports:
+python -m app.report_now
 python -m app.research_analytics_now
+python -m app.signal_ledger_now
 
-The Discord report includes a Token Behaviour • Regime Dependency card and attaches:
-research-token-regime-YYYY-MM-DD.csv
-
-If the behaviour card initially reports insufficient history, check scanner logs for:
-Research regime-history sync complete
-and rerun the on-demand research command after coverage exists.
-
-Live mode later still ignores PAPER_STARTING_EQUITY_USDT and reads actual MEXC Futures USDT equity/available balance. Before any live switch run:
-python -m app.trader_preflight
-
-Verification before deployment:
+Verification:
 pytest -q
 python scripts/verify_project.py
-python -m app.trader_status   # after deployment, from Render Shell
-
-Latest migration remains 015_tp5_trader_runs.sql.
-
-Fast-TP shadow portfolio comparison:
-- TP5-6 control: +5% full exit, 6 × 5% slots, 30% max exposure.
-- TP2-6 bridge baseline: +2% full exit, 6 × 5% slots, 30% max exposure.
-- TP2-10 challenger: +2% full exit, 10 × 5% slots, 50% max exposure.
-- TP1-10 challenger: +1% full exit, 10 × 5% slots, 50% max exposure.
-- Same fee assumption, immediate entry, one open position per symbol, and chronological replay semantics.
-- Research-only: none of these variants changes trader execution.
+python -m app.trader_status

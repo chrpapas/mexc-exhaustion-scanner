@@ -171,6 +171,30 @@ class WeeklyRiskSummary:
 
 
 @dataclass(frozen=True, slots=True)
+class TP5PublicSummary:
+    matured_7d: int
+    hits_7d: int
+    hit_rate_7d: float | None
+    median_time_hours: float | None
+    p75_time_hours: float | None
+    median_pre_hit_adverse: float | None
+
+    def as_dict(self) -> dict[str, Any]:
+        return {name: getattr(self, name) for name in self.__dataclass_fields__}
+
+
+@dataclass(frozen=True, slots=True)
+class Standard7dPublicSummary:
+    matured_7d: int
+    positive_rate: float | None
+    avg_return: float | None
+    median_return: float | None
+
+    def as_dict(self) -> dict[str, Any]:
+        return {name: getattr(self, name) for name in self.__dataclass_fields__}
+
+
+@dataclass(frozen=True, slots=True)
 class PerformanceSummary:
     report_date: date
     confirmed_today: int
@@ -202,6 +226,8 @@ class PerformanceSummary:
     best_return_7d: float | None
     worst_symbol_7d: str | None
     worst_return_7d: float | None
+    tp5_public: TP5PublicSummary = TP5PublicSummary(0, 0, None, None, None, None)
+    standard_7d_public: Standard7dPublicSummary = Standard7dPublicSummary(0, None, None, None)
 
     @property
     def matured_total(self) -> int:
@@ -287,6 +313,8 @@ class PerformanceSummary:
             "best_return_7d": self.best_return_7d,
             "worst_symbol_7d": self.worst_symbol_7d,
             "worst_return_7d": self.worst_return_7d,
+            "tp5_public": self.tp5_public.as_dict(),
+            "standard_7d_public": self.standard_7d_public.as_dict(),
         }
 
 
@@ -311,6 +339,18 @@ def build_performance_summary(
 
     def rate(flags: list[bool]) -> float | None:
         return sum(flags) / len(flags) if flags else None
+
+    def percentile(values: list[float], q: float) -> float | None:
+        if not values:
+            return None
+        ordered = sorted(values)
+        if len(ordered) == 1:
+            return ordered[0]
+        pos = (len(ordered) - 1) * q
+        lo = int(pos)
+        hi = min(lo + 1, len(ordered) - 1)
+        frac = pos - lo
+        return ordered[lo] * (1.0 - frac) + ordered[hi] * frac
 
     # Subscriber-facing performance deliberately excludes EXTREME risk.
     # Extreme signals remain stored by the scanner for internal research, but
@@ -599,6 +639,38 @@ def build_performance_summary(
     best = max(matured_7d, key=lambda row: float(row["return_168h_pct"]), default=None)
     worst = min(matured_7d, key=lambda row: float(row["return_168h_pct"]), default=None)
 
+    tp5_times: list[float] = []
+    tp5_adverse: list[float] = []
+    tp5_hits = 0
+    for row in matured_7d:
+        target = row.get("target_5_at")
+        if target is None or target > row["confirmed_at"] + timedelta(hours=168):
+            continue
+        tp5_hits += 1
+        tp5_times.append((target - row["confirmed_at"]).total_seconds() / 3600.0)
+        adverse = row.get("path_mae_before_target_5")
+        if adverse is not None:
+            tp5_adverse.append(abs(float(adverse)))
+    tp5_public = TP5PublicSummary(
+        matured_7d=len(matured_7d),
+        hits_7d=tp5_hits,
+        hit_rate_7d=(tp5_hits / len(matured_7d)) if matured_7d else None,
+        median_time_hours=percentile(tp5_times, 0.50),
+        p75_time_hours=percentile(tp5_times, 0.75),
+        median_pre_hit_adverse=percentile(tp5_adverse, 0.50),
+    )
+    standard_7d_values = [
+        float(row["return_168h_pct"])
+        for row in matured_7d
+        if str(row.get("risk_tier") or "standard") == "standard"
+    ]
+    standard_7d_public = Standard7dPublicSummary(
+        matured_7d=len(standard_7d_values),
+        positive_rate=rate([value > 0 for value in standard_7d_values]),
+        avg_return=average(standard_7d_values),
+        median_return=percentile(standard_7d_values, 0.50),
+    )
+
     return PerformanceSummary(
         report_date=report_date,
         confirmed_today=confirmed_today,
@@ -630,4 +702,6 @@ def build_performance_summary(
         best_return_7d=float(best["return_168h_pct"]) if best is not None else None,
         worst_symbol_7d=str(worst["symbol"]) if worst is not None else None,
         worst_return_7d=float(worst["return_168h_pct"]) if worst is not None else None,
+        tp5_public=tp5_public,
+        standard_7d_public=standard_7d_public,
     )

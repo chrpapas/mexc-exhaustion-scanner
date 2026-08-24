@@ -45,7 +45,7 @@ def test_illiquid_contract_is_still_scored_but_flagged_high_risk() -> None:
     assert not risk.execution_eligible
 
 
-def test_cashcat_like_tiny_runner_remains_visible_as_extreme_risk() -> None:
+def test_cashcat_like_tiny_runner_is_classified_extreme_for_scanner_suppression() -> None:
     original = full_features()
     features = RunFeatures(
         **{
@@ -63,6 +63,7 @@ def test_cashcat_like_tiny_runner_remains_visible_as_extreme_risk() -> None:
     assert risk.tier == "extreme_risk"
     assert not risk.execution_eligible
     assert risk.warning is not None
+    assert "suppressed" in risk.warning.lower()
 
 
 def test_standard_liquidity_is_execution_eligible() -> None:

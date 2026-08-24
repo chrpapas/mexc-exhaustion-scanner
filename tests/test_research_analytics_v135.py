@@ -117,8 +117,9 @@ def test_v135_notifier_adds_calendar_throughput_board_without_short_window_proje
         "\n".join(field.get("name", "") + " " + field.get("value", "") for field in embed.get("fields", []))
         for embed in embeds
     )
-    assert "Calendar Throughput" in text
-    assert "No short-window return is extrapolated" in text
+    assert "Strategy Validation" in text
+    assert "Observed" in text
+    assert "First true 30d empty-book replay not available yet" in text
     assert "entries/day" in text
     for embed in embeds:
         notifier._validate_discord_embed(embed)

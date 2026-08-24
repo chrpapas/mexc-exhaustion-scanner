@@ -53,6 +53,7 @@ migrations/015_tp5_trader_runs.sql
 pyproject.toml
 render.yaml
 scripts/verify_project.py
+tests/test_cleanup_v1313.py
 tests/test_indicators.py
 tests/test_mexc_parsers.py
 tests/test_mexc_trade.py

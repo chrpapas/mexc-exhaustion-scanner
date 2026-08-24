@@ -168,9 +168,10 @@ def test_v134_notifier_adds_prospective_monitor_embed():
         "\n".join(field.get("name", "") + " " + field.get("value", "") for field in embed.get("fields", []))
         for embed in embeds
     )
-    assert "Prospective Monitor" in text
-    assert "TP5 live tracker" in text
-    assert "EntryGate-v1 acceptance" in text
-    assert "Regime drift" in text
+    assert "TP5 • Prospective Monitor" in text
+    assert "Post-freeze TP5 tracker" in text
+    assert "30-day validation" in text
+    assert "EntryGate-v1 acceptance" not in text
+    assert "Regime drift" not in text
     for embed in embeds:
         notifier._validate_discord_embed(embed)

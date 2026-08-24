@@ -147,7 +147,7 @@ def classify_execution_risk(
     return ExecutionRisk(
         tier="extreme_risk",
         execution_eligible=False,
-        warning="EXTREME EXECUTION RISK — analytics only; do not auto-trade",
+        warning="EXTREME EXECUTION RISK — suppressed by scanner",
         reasons=tuple(reasons),
     )
 
