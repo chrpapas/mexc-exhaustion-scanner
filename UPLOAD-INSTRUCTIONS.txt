@@ -1,10 +1,10 @@
-MEXC Exhaustion Scanner + Multi-Slot Futures Trader v1.3.13
+MEXC Exhaustion Scanner + Multi-Slot Futures Trader v1.3.14
 
-Deploy the entire project/ZIP together. v1.3.13 is a CLEANUP release; frozen TP5 trader execution is unchanged from v1.3.6.
+Deploy the entire project/ZIP together. v1.3.14 is a CLEANUP release; frozen TP5 trader execution is unchanged from v1.3.6.
 
 Key changes:
 - EXTREME_RISK is hard-suppressed before scanner episode/signal creation.
-- Discord performance shows only TP5 Frequent and STANDARD-only 7D Swing.
+- Discord performance shows only TP5 Frequent and STANDARD-only 7D Swing, now with W/L, win rate, average/median, Σ and best/worst metrics.
 - On-demand research Discord is reduced to Strategy Validation + Prospective TP5 Monitor.
 - Visible ledger PNGs show TP5 + 7D raw only; full CSV remains detailed.
 - No new DB migration. Latest remains 015_tp5_trader_runs.sql.

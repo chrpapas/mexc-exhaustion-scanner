@@ -152,8 +152,8 @@ def _report() -> PerformanceSummary:
         best_return_7d=0.60,
         worst_symbol_7d="WORST_USDT",
         worst_return_7d=-0.30,
-        tp5_public=TP5PublicSummary(12, 12, 1.0, 2.0, 6.0, 0.07),
-        standard_7d_public=Standard7dPublicSummary(5, 0.8, 0.30, 0.28),
+        tp5_public=TP5PublicSummary(12, 12, 1.0, 2.0, 6.0, 0.07, 0, 0.05, 0.60),
+        standard_7d_public=Standard7dPublicSummary(5, 0.8, 0.30, 0.28, 4, 1, 1.50, 0.70, -0.20),
     )
 
 
@@ -194,6 +194,11 @@ def test_performance_report_uses_dedicated_stats_webhook_and_embeds():
     assert "TP2" not in all_text
     assert "EntryGate" not in all_text
     assert "EXTREME_RISK signals are not published" in all_text
+    assert "wins **12**" in all_text
+    assert "win rate **100.00%**" in all_text
+    assert "Σ gross captured **+60.00%**" in all_text
+    assert "wins **4** • losses **1**" in all_text
+    assert "Σ raw **+150.00%**" in all_text
 
 
 def test_performance_webhook_falls_back_to_signal_webhook_for_backward_compatibility():

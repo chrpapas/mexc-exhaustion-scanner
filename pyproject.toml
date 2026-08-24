@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mexc-exhaustion-scanner"
-version = "1.3.13"
+version = "1.3.14"
 description = "MEXC exhaustion scanner with frozen TP5 trader and compact TP5/7D strategy reporting"
 requires-python = ">=3.12,<3.15"
 dependencies = [

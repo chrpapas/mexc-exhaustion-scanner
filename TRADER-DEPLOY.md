@@ -1,6 +1,6 @@
-# Trader deployment — v1.3.13
+# Trader deployment — v1.3.14
 
-v1.3.13 keeps the **paper trader** on the frozen `TP5_V1` execution strategy from v1.3.6. This is a scanner/report cleanup release: EXTREME_RISK is suppressed before signal creation, and Discord reporting is reduced to TP5 Frequent plus STANDARD-only 7D Swing. Trader execution semantics are unchanged.
+v1.3.14 keeps the **paper trader** on the frozen `TP5_V1` execution strategy from v1.3.6. This is a scanner/report cleanup release: EXTREME_RISK remains suppressed before signal creation, and Discord reporting is limited to TP5 Frequent plus STANDARD-only 7D Swing with explicit W/L, win-rate, average/median, and Σ metrics. Trader execution semantics are unchanged. Trader execution semantics are unchanged.
 
 ## Frozen TP5_V1 execution
 
@@ -95,7 +95,7 @@ Migration `015_tp5_trader_runs.sql` is applied automatically at startup. It adds
 
 ## Research / reporting
 
-v1.3.13 keeps the historical research engine but deliberately simplifies what is published to Discord while the frozen strategy gathers forward evidence.
+v1.3.14 keeps the historical research engine but deliberately simplifies what is published to Discord while the frozen strategy gathers forward evidence.
 
 Run:
 
@@ -110,4 +110,4 @@ Visible research Discord now contains only:
 
 TP1, TP2, hybrid exits, EntryGate, token-behaviour and feature-sweep calculations remain historical/internal and are not published to Discord. The research command attaches only the raw signal dataset CSV.
 
-No new database migration is required in v1.3.13.
+No new database migration is required in v1.3.14.

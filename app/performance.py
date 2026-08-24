@@ -178,6 +178,9 @@ class TP5PublicSummary:
     median_time_hours: float | None
     p75_time_hours: float | None
     median_pre_hit_adverse: float | None
+    no_tp5_by_7d: int = 0
+    avg_gross_captured_return: float | None = None
+    sum_gross_captured_return: float | None = None
 
     def as_dict(self) -> dict[str, Any]:
         return {name: getattr(self, name) for name in self.__dataclass_fields__}
@@ -189,6 +192,11 @@ class Standard7dPublicSummary:
     positive_rate: float | None
     avg_return: float | None
     median_return: float | None
+    wins_7d: int = 0
+    losses_7d: int = 0
+    sum_return: float | None = None
+    best_return: float | None = None
+    worst_return: float | None = None
 
     def as_dict(self) -> dict[str, Any]:
         return {name: getattr(self, name) for name in self.__dataclass_fields__}
@@ -658,17 +666,26 @@ def build_performance_summary(
         median_time_hours=percentile(tp5_times, 0.50),
         p75_time_hours=percentile(tp5_times, 0.75),
         median_pre_hit_adverse=percentile(tp5_adverse, 0.50),
+        no_tp5_by_7d=len(matured_7d) - tp5_hits,
+        avg_gross_captured_return=(tp5_hits * 0.05 / len(matured_7d)) if matured_7d else None,
+        sum_gross_captured_return=(tp5_hits * 0.05) if matured_7d else None,
     )
     standard_7d_values = [
         float(row["return_168h_pct"])
         for row in matured_7d
         if str(row.get("risk_tier") or "standard") == "standard"
     ]
+    standard_7d_wins = sum(value > 0 for value in standard_7d_values)
     standard_7d_public = Standard7dPublicSummary(
         matured_7d=len(standard_7d_values),
         positive_rate=rate([value > 0 for value in standard_7d_values]),
         avg_return=average(standard_7d_values),
         median_return=percentile(standard_7d_values, 0.50),
+        wins_7d=standard_7d_wins,
+        losses_7d=len(standard_7d_values) - standard_7d_wins,
+        sum_return=sum(standard_7d_values) if standard_7d_values else None,
+        best_return=max(standard_7d_values) if standard_7d_values else None,
+        worst_return=min(standard_7d_values) if standard_7d_values else None,
     )
 
     return PerformanceSummary(

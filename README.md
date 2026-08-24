@@ -1,14 +1,15 @@
-# MEXC Exhaustion Scanner + Multi-Slot Futures Trader v1.3.13
+# MEXC Exhaustion Scanner + Multi-Slot Futures Trader v1.3.14
 
 Cleanup release. **TP5_V1 trader execution remains frozen and unchanged from v1.3.6.**
 
-## v1.3.13 — signal/report cleanup
+## v1.3.14 — strategy-results metrics cleanup
 
 - **EXTREME_RISK is no longer a signal tier:** contracts classified EXTREME are suppressed before the episode state machine. They do not create watch/confirmed signals, shadow trades, trader-queue entries, or Discord alerts. Historical EXTREME rows remain untouched.
-- **Audience-facing strategy board:** Discord now shows only the two leading observed approaches:
+- **Audience-facing strategy board:** Discord still shows only the two leading observed approaches, now with explicit wins/losses, win rate, average, median, arithmetic Σ, and best/worst where meaningful:
   - **TP5 Frequent:** STANDARD + HIGH_RISK, full +5% exit.
   - **7D Swing:** STANDARD only, fixed 7-day hold.
 - **Important interpretation:** TP5 is the leading tested high-throughput portfolio. The 7-day result is the strongest observed fixed-horizon result for STANDARD signals; it is not a universal HIGH_RISK rule and its raw signal returns are not a portfolio simulation.
+- **Metric semantics:** TP5 `no TP5 by 7d` is not treated as a forced loss because TP5 has no 7-day timeout. TP5 Σ is gross +5% target capture before fees; 7D Swing Σ is the arithmetic sum of raw equal-notional STANDARD 7-day returns. Neither Σ is account return.
 - **Compact research Discord:** the visible on-demand research report is reduced to Strategy Validation + Prospective TP5 Monitor. TP1/TP2/hybrids/EntryGate/token-behaviour/feature sweeps remain in code/history but are intentionally hidden from Discord.
 - **Compact signal ledger:** visible PNG tables show TP5 and 7D raw outcome only; the attached CSV retains the detailed historical audit fields.
 - **No schema migration:** migration `015_tp5_trader_runs.sql` remains latest.

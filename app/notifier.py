@@ -139,7 +139,7 @@ class DiscordNotifier:
     ) -> bool:
         """Send the compact subscriber-facing strategy board.
 
-        v1.3.13 deliberately exposes only the two leading observed approaches:
+        v1.3.14 deliberately exposes only the two leading observed approaches, with decision-grade win/sum metrics:
         TP5 for frequent trading across STANDARD + HIGH_RISK signals, and a
         fixed 7-day hold for STANDARD signals. Exploratory strategy research
         remains internal and is not mixed into the audience-facing board.
@@ -160,8 +160,10 @@ class DiscordNotifier:
 
         tp5_value = (
             f"**Rule:** full close at **+5%** • STANDARD + HIGH RISK\n"
-            f"7d-matured signals **{tp5.matured_7d}** • TP5 hit **{tp5.hits_7d}/{tp5.matured_7d} "
-            f"({self._percent(tp5.hit_rate_7d)})**\n"
+            f"7d-evaluable **{tp5.matured_7d}** • wins **{tp5.hits_7d}** • "
+            f"no TP5 by 7d **{tp5.no_tp5_by_7d}** • win rate **{self._percent(tp5.hit_rate_7d)}**\n"
+            f"Avg gross captured **{self._signed_percent(tp5.avg_gross_captured_return)}** • "
+            f"Σ gross captured **{self._signed_percent(tp5.sum_gross_captured_return)}**\n"
             f"Median / p75 time **{self._hours(tp5.median_time_hours)} / {self._hours(tp5.p75_time_hours)}**"
         )
         if tp5.median_pre_hit_adverse is not None:
@@ -169,9 +171,11 @@ class DiscordNotifier:
 
         swing_value = (
             f"**Rule:** short at confirmation and hold **7 days** • STANDARD only\n"
-            f"Matured signals **{swing.matured_7d}** • profitable at 7d **{self._percent(swing.positive_rate)}**\n"
-            f"Avg raw return **{self._signed_percent(swing.avg_return)}** • "
-            f"median **{self._signed_percent(swing.median_return)}**"
+            f"Matured **{swing.matured_7d}** • wins **{swing.wins_7d}** • losses **{swing.losses_7d}** • "
+            f"win rate **{self._percent(swing.positive_rate)}**\n"
+            f"Avg raw **{self._signed_percent(swing.avg_return)}** • median **{self._signed_percent(swing.median_return)}** • "
+            f"Σ raw **{self._signed_percent(swing.sum_return)}**\n"
+            f"Best / worst **{self._signed_percent(swing.best_return)} / {self._signed_percent(swing.worst_return)}**"
         )
 
         board = {
@@ -214,8 +218,9 @@ class DiscordNotifier:
             ],
             "footer": {
                 "text": (
-                    "TP5 hit statistics use 7d-matured signals. 7D Swing metrics are raw STANDARD signal returns; "
-                    "they are not a portfolio-return simulation."
+                    "Σ is the arithmetic sum of equal-notional signal returns, not account return. "
+                    "TP5 Σ is gross target capture before fees; 7D Σ is raw STANDARD 7-day return. "
+                    "No-TP5-by-7d is not a forced strategy loss."
                 )
             },
         }
@@ -398,7 +403,7 @@ class DiscordNotifier:
         """Send the compact research validation board.
 
         The analytics engine still retains the historical exploratory studies, but
-        v1.3.13 intentionally stops publishing them to Discord. The visible report
+        v1.3.14 intentionally stops publishing them to Discord. The visible report
         is limited to the two leading observed approaches plus prospective TP5
         validation so the audience can actually read it.
         """
@@ -435,11 +440,16 @@ class DiscordNotifier:
         if standard_7d is None:
             standard_7d_value = "Complete STANDARD 7-day cohort is still maturing."
         else:
+            standard_wins = round(standard_7d.sample * standard_7d.positive_rate) if standard_7d.positive_rate is not None else 0
+            standard_sum = standard_7d.avg_return * standard_7d.sample if standard_7d.avg_return is not None else None
             standard_7d_value = (
                 f"**Rule:** confirmed short → hold **7 days** • STANDARD only\n"
-                f"Matured **{standard_7d.sample}** • profitable **{self._percent(standard_7d.positive_rate)}**\n"
+                f"Matured **{standard_7d.sample}** • wins **{standard_wins}** • losses **{standard_7d.sample - standard_wins}** • "
+                f"win rate **{self._percent(standard_7d.positive_rate)}**\n"
                 f"Avg raw **{self._signed_percent(standard_7d.avg_return)}** • "
-                f"median **{self._signed_percent(standard_7d.median_return)}**"
+                f"median **{self._signed_percent(standard_7d.median_return)}** • "
+                f"Σ raw **{self._signed_percent(standard_sum)}**\n"
+                f"Best / worst **{self._signed_percent(standard_7d.best_return)} / {self._signed_percent(standard_7d.worst_return)}**"
             )
 
         strategy_board = {
@@ -462,7 +472,10 @@ class DiscordNotifier:
                     "name": "⚡ TP5 Frequent • STANDARD + HIGH",
                     "value": (
                         f"**Rule:** full close at **+5%** • 6×5% research portfolio / 30% cap\n"
-                        f"Matured TP5 **{tp5.hits}/{tp5.sample} ({self._percent(tp5.hit_rate)})** • "
+                        f"7d-evaluable **{tp5.sample}** • wins **{tp5.hits}** • no TP5 by 7d **{tp5.sample - tp5.hits}** • "
+                        f"win rate **{self._percent(tp5.hit_rate)}**\n"
+                        f"Avg gross captured **{self._signed_percent((tp5.hits * 0.05 / tp5.sample) if tp5.sample else None)}** • "
+                        f"Σ gross **{self._signed_percent(tp5.hits * 0.05)}** • "
                         f"median / p75 **{self._hours(tp5.median_time_hours)} / {self._hours(tp5.p75_time_hours)}**\n"
                         f"Median pre-hit adverse **-{self._percent(tp5.median_adverse_before_target)}** • "
                         f"worst **-{self._percent(tp5.worst_adverse_before_target)}**\n"
