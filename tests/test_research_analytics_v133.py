@@ -175,6 +175,7 @@ def test_v133_notifier_reports_four_way_replay_and_prospective_freeze():
     )
     assert "Strategy Validation" in text
     assert "TP5 Frequent" in text
+    assert "TP20 High Risk" in text
     assert "7D Swing" in text
     assert "TP5 • Prospective Monitor" in text
     assert "EntryGate-v1" not in text

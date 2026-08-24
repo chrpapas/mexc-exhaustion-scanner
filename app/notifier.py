@@ -139,10 +139,10 @@ class DiscordNotifier:
     ) -> bool:
         """Send the compact subscriber-facing strategy board.
 
-        v1.3.14 deliberately exposes only the two leading observed approaches, with decision-grade win/sum metrics:
-        TP5 for frequent trading across STANDARD + HIGH_RISK signals, and a
-        fixed 7-day hold for STANDARD signals. Exploratory strategy research
-        remains internal and is not mixed into the audience-facing board.
+        The audience-facing board exposes only the three retained observed approaches:
+        TP5 for frequent STANDARD + HIGH_RISK trading, TP20-or-4D for HIGH_RISK
+        swing trading, and a fixed 7-day hold for STANDARD signals. Exploratory
+        strategy research remains internal.
         """
         if not self._performance_webhook_url:
             return False
@@ -156,6 +156,7 @@ class DiscordNotifier:
             else report.report_date.strftime("%d %b %Y")
         )
         tp5 = report.tp5_public
+        high = report.high_risk_tp20_public
         swing = report.standard_7d_public
 
         tp5_value = (
@@ -168,6 +169,20 @@ class DiscordNotifier:
         )
         if tp5.median_pre_hit_adverse is not None:
             tp5_value += f" • median pre-hit adverse **-{self._percent(tp5.median_pre_hit_adverse)}**"
+
+        if high.sample:
+            high_value = (
+                f"**Rule:** HIGH_RISK only • full close at **+20%**, otherwise exit at **4 days**\n"
+                f"Paired mature **{high.sample}** • wins **{high.wins}** • losses **{high.losses}** • "
+                f"win rate **{self._percent(high.positive_rate)}**\n"
+                f"TP20 hit **{high.target_hits}/{high.sample} ({self._percent(high.target_hit_rate)})** • "
+                f"avg hold **{self._hours(high.avg_holding_hours)}**\n"
+                f"Avg realized **{self._signed_percent(high.avg_return)}** • median **{self._signed_percent(high.median_return)}** • "
+                f"Σ realized **{self._signed_percent(high.sum_return)}**\n"
+                f"Best / worst **{self._signed_percent(high.best_return)} / {self._signed_percent(high.worst_return)}**"
+            )
+        else:
+            high_value = "Paired HIGH_RISK TP20-or-4D cohort is still maturing."
 
         swing_value = (
             f"**Rule:** short at confirmation and hold **7 days** • STANDARD only\n"
@@ -183,13 +198,18 @@ class DiscordNotifier:
             "description": (
                 f"**{self._pretty_label(label)}**\n"
                 f"Updated **{as_of_text}**\n\n"
-                "Two leading observed approaches only • EXTREME_RISK signals are not published."
+                "Three retained observed approaches • EXTREME_RISK signals are not published."
             ),
             "color": 0x5865F2,
             "fields": [
                 {
                     "name": "⚡ TP5 Frequent",
                     "value": tp5_value,
+                    "inline": False,
+                },
+                {
+                    "name": "🔥 TP20 High Risk • +20% or 4D",
+                    "value": high_value,
                     "inline": False,
                 },
                 {
@@ -200,9 +220,9 @@ class DiscordNotifier:
                 {
                     "name": "Choose by trading cadence",
                     "value": (
-                        "**TP5:** more frequent turnover and shorter holds.\n"
-                        "**7D Swing:** fewer STANDARD-only entries and much longer holding time, "
-                        "with larger observed raw moves.\n"
+                        "**TP5:** highest-frequency option; typically hours.\n"
+                        "**TP20 High Risk:** HIGH_RISK-only swing; typically days and materially wider downside paths.\n"
+                        "**7D Swing:** STANDARD-only, lowest-frequency option with a full 7-day hold.\n"
                         "These are historical/shadow results, not a guarantee of future performance."
                     ),
                     "inline": False,
@@ -219,7 +239,8 @@ class DiscordNotifier:
             "footer": {
                 "text": (
                     "Σ is the arithmetic sum of equal-notional signal returns, not account return. "
-                    "TP5 Σ is gross target capture before fees; 7D Σ is raw STANDARD 7-day return. "
+                    "TP5 Σ is gross target capture before fees; TP20 Σ is realized +20%-or-4D signal return; "
+                    "7D Σ is raw STANDARD 7-day return. "
                     "No-TP5-by-7d is not a forced strategy loss."
                 )
             },
@@ -402,10 +423,9 @@ class DiscordNotifier:
     ) -> bool:
         """Send the compact research validation board.
 
-        The analytics engine still retains the historical exploratory studies, but
-        v1.3.14 intentionally stops publishing them to Discord. The visible report
-        is limited to the two leading observed approaches plus prospective TP5
-        validation so the audience can actually read it.
+        The analytics engine still retains historical exploratory studies, but the
+        visible report is limited to the three retained strategies plus prospective
+        TP5 validation so the audience can actually read it.
         """
         if not self._performance_webhook_url:
             return False
@@ -417,6 +437,11 @@ class DiscordNotifier:
         tp5 = report.tp5_risk
         calendar = report.calendar_throughput
         live_tp5 = report.prospective_tp5_live
+
+        high_tp20_4d = next(
+            (item for item in report.high_risk_timeout_sweep if item.timeout_hours == 96 and item.sample),
+            None,
+        )
 
         standard_7d = next(
             (
@@ -452,11 +477,27 @@ class DiscordNotifier:
                 f"Best / worst **{self._signed_percent(standard_7d.best_return)} / {self._signed_percent(standard_7d.worst_return)}**"
             )
 
+        if high_tp20_4d is None:
+            high_tp20_value = "Paired HIGH_RISK TP20-or-4D cohort is still maturing."
+        else:
+            high_tp20_value = (
+                f"**Rule:** HIGH_RISK only • full close at **+20%**, otherwise exit at **4 days**\n"
+                f"Paired mature **{high_tp20_4d.sample}** • wins **{high_tp20_4d.wins}** • losses **{high_tp20_4d.losses}** • "
+                f"win rate **{self._percent(high_tp20_4d.positive_rate)}**\n"
+                f"TP20 hit **{high_tp20_4d.target_hits}/{high_tp20_4d.sample} ({self._percent(high_tp20_4d.target_hit_rate)})** • "
+                f"avg hold **{self._hours(high_tp20_4d.avg_holding_hours)}**\n"
+                f"Avg realized **{self._signed_percent(high_tp20_4d.avg_strategy_return)}** • "
+                f"median **{self._signed_percent(high_tp20_4d.median_strategy_return)}** • "
+                f"Σ realized **{self._signed_percent(high_tp20_4d.sum_strategy_return)}**\n"
+                f"Best / worst **{self._signed_percent(high_tp20_4d.best_strategy_return)} / "
+                f"{self._signed_percent(high_tp20_4d.worst_strategy_return)}**"
+            )
+
         strategy_board = {
             "title": "🔬 Exhaustion Scanner • Strategy Validation",
             "description": (
                 f"Updated **{display_time.strftime('%d %b %Y • %H:%M %Z')}**\n"
-                "Only the two leading observed approaches are shown. Exploratory alternatives remain internal."
+                "Only the three retained observed strategies are shown. Exploratory alternatives remain internal."
             ),
             "color": 0x5865F2,
             "fields": [
@@ -487,6 +528,11 @@ class DiscordNotifier:
                     "inline": False,
                 },
                 {
+                    "name": "🔥 TP20 High Risk • +20% or 4D",
+                    "value": high_tp20_value,
+                    "inline": False,
+                },
+                {
                     "name": "🗓️ 7D Swing • STANDARD",
                     "value": standard_7d_value,
                     "inline": False,
@@ -495,8 +541,9 @@ class DiscordNotifier:
                     "name": "Interpretation",
                     "value": (
                         "**TP5** is the leading tested high-throughput portfolio. "
-                        "**7D Swing** is the strongest observed fixed-horizon result for STANDARD signals, "
-                        "but it has a smaller matured sample and its raw returns are not a portfolio simulation."
+                        "**TP20 High Risk** is the retained aggressive swing rule for HIGH_RISK signals. "
+                        "**7D Swing** is the strongest observed fixed-horizon result for STANDARD signals. "
+                        "TP20/7D signal returns are not the same thing as TP5 portfolio return."
                     ),
                     "inline": False,
                 },

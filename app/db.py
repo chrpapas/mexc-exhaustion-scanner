@@ -1242,10 +1242,11 @@ class Database:
     async def performance_rows(self) -> list[dict[str, Any]]:
         rows = await self.pool.fetch(
             """
-            WITH tp5_target AS (
+            WITH path_targets AS (
                 SELECT
                     episode_id,
-                    min(candle_close_at) FILTER (WHERE favorable_return_pct >= 0.05) AS target_5_at
+                    min(candle_close_at) FILTER (WHERE favorable_return_pct >= 0.05) AS target_5_at,
+                    min(candle_close_at) FILTER (WHERE favorable_return_pct >= 0.20) AS target_20_path_at
                 FROM research_signal_path_15m
                 GROUP BY episode_id
             ),
@@ -1253,6 +1254,7 @@ class Database:
                 SELECT
                     p.episode_id,
                     t.target_5_at,
+                    t.target_20_path_at,
                     min(p.adverse_return_pct) FILTER (
                         WHERE t.target_5_at IS NOT NULL
                           AND p.candle_close_at < t.target_5_at
@@ -1263,10 +1265,36 @@ class Database:
                     ) FILTER (
                         WHERE t.target_5_at IS NOT NULL
                           AND p.candle_close_at < t.target_5_at
-                    ))[1] AS path_mae_before_target_5_at
+                    ))[1] AS path_mae_before_target_5_at,
+                    max(p.candle_close_at) AS path_last_at,
+                    count(*) FILTER (
+                        WHERE p.candle_close_at <= stp.confirmed_at + interval '240 hours'
+                    )::integer AS path_rows_10d,
+                    (array_agg(p.close_return_pct ORDER BY p.candle_close_at DESC) FILTER (
+                        WHERE p.candle_close_at <= stp.confirmed_at + interval '24 hours'
+                    ))[1] AS path_return_24h,
+                    (array_agg(p.close_return_pct ORDER BY p.candle_close_at DESC) FILTER (
+                        WHERE p.candle_close_at <= stp.confirmed_at + interval '48 hours'
+                    ))[1] AS path_return_48h,
+                    (array_agg(p.close_return_pct ORDER BY p.candle_close_at DESC) FILTER (
+                        WHERE p.candle_close_at <= stp.confirmed_at + interval '72 hours'
+                    ))[1] AS path_return_72h,
+                    (array_agg(p.close_return_pct ORDER BY p.candle_close_at DESC) FILTER (
+                        WHERE p.candle_close_at <= stp.confirmed_at + interval '96 hours'
+                    ))[1] AS path_return_96h,
+                    (array_agg(p.close_return_pct ORDER BY p.candle_close_at DESC) FILTER (
+                        WHERE p.candle_close_at <= stp.confirmed_at + interval '120 hours'
+                    ))[1] AS path_return_120h,
+                    (array_agg(p.close_return_pct ORDER BY p.candle_close_at DESC) FILTER (
+                        WHERE p.candle_close_at <= stp.confirmed_at + interval '168 hours'
+                    ))[1] AS path_return_168h,
+                    (array_agg(p.close_return_pct ORDER BY p.candle_close_at DESC) FILTER (
+                        WHERE p.candle_close_at <= stp.confirmed_at + interval '240 hours'
+                    ))[1] AS path_return_240h
                 FROM research_signal_path_15m p
-                LEFT JOIN tp5_target t ON t.episode_id = p.episode_id
-                GROUP BY p.episode_id, t.target_5_at
+                JOIN shadow_trades stp ON stp.episode_id = p.episode_id
+                LEFT JOIN path_targets t ON t.episode_id = p.episode_id
+                GROUP BY p.episode_id, t.target_5_at, t.target_20_path_at, stp.confirmed_at
             )
             SELECT st.episode_id, st.symbol, st.confirmed_at, st.entry_price, st.risk_tier,
                    st.current_return_pct, st.mfe_pct, st.mae_pct,
@@ -1275,7 +1303,10 @@ class Database:
                    st.matured_at, st.matured_48h_at, st.matured_72h_at, st.matured_168h_at,
                    st.first_profit_at, st.target_20_at, st.isolated_100_breach_at,
                    st.adverse_200_breach_at, st.adverse_300_breach_at, st.cross_400_breach_at,
-                   tp.target_5_at, tp.path_mae_before_target_5, tp.path_mae_before_target_5_at
+                   tp.target_5_at, tp.path_mae_before_target_5, tp.path_mae_before_target_5_at,
+                   tp.target_20_path_at, tp.path_last_at, tp.path_rows_10d,
+                   tp.path_return_24h, tp.path_return_48h, tp.path_return_72h,
+                   tp.path_return_96h, tp.path_return_120h, tp.path_return_168h, tp.path_return_240h
             FROM shadow_trades st
             LEFT JOIN tp5_path tp ON tp.episode_id = st.episode_id
             ORDER BY st.confirmed_at ASC

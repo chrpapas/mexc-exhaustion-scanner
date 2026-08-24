@@ -187,6 +187,25 @@ class TP5PublicSummary:
 
 
 @dataclass(frozen=True, slots=True)
+class HighRiskTp20PublicSummary:
+    sample: int
+    target_hits: int
+    target_hit_rate: float | None
+    wins: int
+    losses: int
+    positive_rate: float | None
+    avg_return: float | None
+    median_return: float | None
+    sum_return: float | None
+    best_return: float | None
+    worst_return: float | None
+    avg_holding_hours: float | None
+
+    def as_dict(self) -> dict[str, Any]:
+        return {name: getattr(self, name) for name in self.__dataclass_fields__}
+
+
+@dataclass(frozen=True, slots=True)
 class Standard7dPublicSummary:
     matured_7d: int
     positive_rate: float | None
@@ -235,6 +254,7 @@ class PerformanceSummary:
     worst_symbol_7d: str | None
     worst_return_7d: float | None
     tp5_public: TP5PublicSummary = TP5PublicSummary(0, 0, None, None, None, None)
+    high_risk_tp20_public: HighRiskTp20PublicSummary = HighRiskTp20PublicSummary(0, 0, None, 0, 0, None, None, None, None, None, None, None)
     standard_7d_public: Standard7dPublicSummary = Standard7dPublicSummary(0, None, None, None)
 
     @property
@@ -322,6 +342,7 @@ class PerformanceSummary:
             "worst_symbol_7d": self.worst_symbol_7d,
             "worst_return_7d": self.worst_return_7d,
             "tp5_public": self.tp5_public.as_dict(),
+            "high_risk_tp20_public": self.high_risk_tp20_public.as_dict(),
             "standard_7d_public": self.standard_7d_public.as_dict(),
         }
 
@@ -670,6 +691,68 @@ def build_performance_summary(
         avg_gross_captured_return=(tp5_hits * 0.05 / len(matured_7d)) if matured_7d else None,
         sum_gross_captured_return=(tp5_hits * 0.05) if matured_7d else None,
     )
+    # Public HIGH_RISK strategy: +20% target or 4-day timeout.
+    # Keep the same strict paired 10-day research cohort used to identify the
+    # 4-day timeout as the strongest observed HIGH_RISK variant. This avoids
+    # changing the denominator as shorter horizons mature.
+    high_paired_10d: list[dict[str, Any]] = []
+    for row in rows:
+        if str(row.get("risk_tier") or "standard") != "high_risk":
+            continue
+        confirmed = row.get("confirmed_at")
+        path_last = row.get("path_last_at")
+        path_rows_10d = row.get("path_rows_10d")
+        if confirmed is None or path_last is None or path_rows_10d is None:
+            continue
+        if path_last < confirmed + timedelta(hours=240) - timedelta(minutes=15):
+            continue
+        if int(path_rows_10d) < 941:  # ceil(240h * 4 bars/h * 98%)
+            continue
+        paired_keys = (
+            "path_return_24h", "path_return_48h", "path_return_72h",
+            "path_return_96h", "path_return_120h", "path_return_168h",
+            "path_return_240h",
+        )
+        if any(row.get(key) is None for key in paired_keys):
+            continue
+        high_paired_10d.append(row)
+
+    high_outcomes: list[float] = []
+    high_holding_hours: list[float] = []
+    high_target_hits = 0
+    for row in high_paired_10d:
+        confirmed = row["confirmed_at"]
+        candidates = [
+            value for value in (row.get("target_20_path_at"), row.get("target_20_at"))
+            if value is not None
+        ]
+        target_at = min(candidates) if candidates else None
+        if target_at is not None and target_at <= confirmed + timedelta(hours=96):
+            high_outcomes.append(0.20)
+            high_holding_hours.append(
+                min(96.0, (target_at - confirmed).total_seconds() / 3600.0)
+            )
+            high_target_hits += 1
+        else:
+            high_outcomes.append(float(row["path_return_96h"]))
+            high_holding_hours.append(96.0)
+
+    high_wins = sum(value > 0 for value in high_outcomes)
+    high_risk_tp20_public = HighRiskTp20PublicSummary(
+        sample=len(high_outcomes),
+        target_hits=high_target_hits,
+        target_hit_rate=(high_target_hits / len(high_outcomes)) if high_outcomes else None,
+        wins=high_wins,
+        losses=len(high_outcomes) - high_wins,
+        positive_rate=rate([value > 0 for value in high_outcomes]),
+        avg_return=average(high_outcomes),
+        median_return=percentile(high_outcomes, 0.50),
+        sum_return=sum(high_outcomes) if high_outcomes else None,
+        best_return=max(high_outcomes) if high_outcomes else None,
+        worst_return=min(high_outcomes) if high_outcomes else None,
+        avg_holding_hours=average(high_holding_hours),
+    )
+
     standard_7d_values = [
         float(row["return_168h_pct"])
         for row in matured_7d
@@ -720,5 +803,6 @@ def build_performance_summary(
         worst_symbol_7d=str(worst["symbol"]) if worst is not None else None,
         worst_return_7d=float(worst["return_168h_pct"]) if worst is not None else None,
         tp5_public=tp5_public,
+        high_risk_tp20_public=high_risk_tp20_public,
         standard_7d_public=standard_7d_public,
     )

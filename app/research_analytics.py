@@ -161,6 +161,10 @@ class HighRiskTimeoutSummary:
     worst_strategy_return: float | None
     avg_holding_hours: float | None
     return_per_slot_day: float | None
+    wins: int = 0
+    losses: int = 0
+    sum_strategy_return: float | None = None
+    best_strategy_return: float | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -838,6 +842,10 @@ def _build_high_risk_timeout_sweep(
                 worst_strategy_return=min(outcomes) if outcomes else None,
                 avg_holding_hours=_mean(holding_hours),
                 return_per_slot_day=(sum(outcomes) / total_slot_days) if total_slot_days > 0 else None,
+                wins=sum(value > 0 for value in outcomes),
+                losses=sum(value <= 0 for value in outcomes),
+                sum_strategy_return=sum(outcomes) if outcomes else None,
+                best_strategy_return=max(outcomes) if outcomes else None,
             )
         )
     return tuple(result)
@@ -2064,7 +2072,8 @@ def research_strategy_sweeps_csv(report: ResearchAnalyticsReport) -> bytes:
             _csv_pct(item.avg_strategy_return), _csv_pct(item.median_strategy_return),
             _csv_pct(item.target_hit_rate), _csv_pct(item.worst_strategy_return),
             "" if item.avg_holding_hours is None else f"{item.avg_holding_hours:.6f}",
-            _csv_pct(item.return_per_slot_day), "", "", "", "", "", "",
+            _csv_pct(item.return_per_slot_day), item.wins, item.losses,
+            _csv_pct(item.sum_strategy_return), _csv_pct(item.best_strategy_return), "", "",
         ])
     for item in report.stop_survival:
         writer.writerow([

@@ -14,6 +14,7 @@ from app.performance import (
     SurvivalModelSummary,
     WeeklyRiskSummary,
     TP5PublicSummary,
+    HighRiskTp20PublicSummary,
     Standard7dPublicSummary,
 )
 
@@ -153,6 +154,7 @@ def _report() -> PerformanceSummary:
         worst_symbol_7d="WORST_USDT",
         worst_return_7d=-0.30,
         tp5_public=TP5PublicSummary(12, 12, 1.0, 2.0, 6.0, 0.07, 0, 0.05, 0.60),
+        high_risk_tp20_public=HighRiskTp20PublicSummary(27, 12, 12/27, 18, 9, 18/27, 0.0635, 0.08, 1.7145, 0.20, -0.4669, 65.76),
         standard_7d_public=Standard7dPublicSummary(5, 0.8, 0.30, 0.28, 4, 1, 1.50, 0.70, -0.20),
     )
 
@@ -189,9 +191,13 @@ def test_performance_report_uses_dedicated_stats_webhook_and_embeds():
     assert "TP5 Frequent" in all_text
     assert "7D Swing" in all_text
     assert "STANDARD + HIGH RISK" in all_text
-    assert "+20%" not in all_text
-    assert "TP1" not in all_text
-    assert "TP2" not in all_text
+    assert "TP20 High Risk" in all_text
+    assert "+20%" in all_text
+    assert "wins **18** • losses **9**" in all_text
+    assert "Σ realized **+171.45%**" in all_text
+    assert "TP1-10" not in all_text
+    assert "TP2-6" not in all_text
+    assert "TP2-10" not in all_text
     assert "EntryGate" not in all_text
     assert "EXTREME_RISK signals are not published" in all_text
     assert "wins **12**" in all_text

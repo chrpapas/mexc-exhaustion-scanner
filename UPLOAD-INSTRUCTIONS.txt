@@ -1,15 +1,17 @@
-MEXC Exhaustion Scanner + Multi-Slot Futures Trader v1.3.14
+MEXC Exhaustion Scanner + Multi-Slot Futures Trader v1.3.15
 
-Deploy the entire project/ZIP together. v1.3.14 is a CLEANUP release; frozen TP5 trader execution is unchanged from v1.3.6.
+Deploy the entire project/ZIP together. v1.3.15 is a REPORTING release; frozen TP5 trader execution is unchanged.
 
-Key changes:
-- EXTREME_RISK is hard-suppressed before scanner episode/signal creation.
-- Discord performance shows only TP5 Frequent and STANDARD-only 7D Swing, now with W/L, win rate, average/median, Σ and best/worst metrics.
-- On-demand research Discord is reduced to Strategy Validation + Prospective TP5 Monitor.
-- Visible ledger PNGs show TP5 + 7D raw only; full CSV remains detailed.
-- No new DB migration. Latest remains 015_tp5_trader_runs.sql.
+Public Discord strategy choices:
+- TP5 Frequent: STANDARD + HIGH_RISK, full +5% exit.
+- TP20 High Risk: HIGH_RISK only, +20% target or 4-day timeout. Metrics use the strict paired 10-day cohort used in research.
+- 7D Swing: STANDARD only, fixed 7-day hold.
 
-Frozen TP5_V1 paper strategy:
+All three show decision-grade W/L and return metrics where meaningful. EXTREME_RISK remains hard-suppressed. Exploratory TP1/TP2/hybrids/EntryGate/token-regime/feature sweeps remain internal.
+
+No new DB migration. Latest remains 015_tp5_trader_runs.sql.
+
+Frozen TP5_V1 paper strategy remains:
 - STANDARD + HIGH_RISK only
 - 6 generic slots
 - 5% current equity per slot
@@ -17,12 +19,6 @@ Frozen TP5_V1 paper strategy:
 - 1x cross
 - immediate entry; one open position per symbol
 - full exit at +5% favorable short return
-
-Keep:
-TRADER_EXECUTION_STRATEGY=tp5_v1
-TRADER_PAPER_RUN_ID=tp5_v1
-PAPER_STARTING_EQUITY_USDT=2000
-TRADER_ALLOWED_RISK_TIERS=STANDARD,HIGH_RISK
 
 Reports:
 python -m app.report_now
