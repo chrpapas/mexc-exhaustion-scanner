@@ -62,6 +62,8 @@ tests/test_report_now.py
 tests/test_research_analytics_v127.py
 tests/test_research_analytics_v128.py
 tests/test_research_analytics_v129.py
+tests/test_research_analytics_v1310.py
+tests/test_research_analytics_v1311.py
 tests/test_research_analytics_v132.py
 tests/test_research_analytics_v133.py
 tests/test_research_analytics_v134.py

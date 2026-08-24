@@ -678,6 +678,9 @@ class DiscordNotifier:
         portfolio_names = {
             "current_live_5standard_1high": "Current",
             "tp5_challenger_6x5pct": "TP5",
+            "tp2_challenger_6x5pct": "TP2-6",
+            "tp2_challenger_10x5pct": "TP2-10",
+            "tp1_challenger_10x5pct": "TP1-10",
             "entrygate_v1__current_live_5standard_1high": "Gate + current",
             "entrygate_v1__tp5_challenger_6x5pct": "Gate + TP5",
         }
@@ -708,7 +711,7 @@ class DiscordNotifier:
                 f"median hold **{self._hours(item.median_holding_hours)}**"
             )
 
-        if calendar.latest_30d_current is not None and calendar.latest_30d_tp5 is not None:
+        if all(item is not None for item in (calendar.latest_30d_current, calendar.latest_30d_tp5, calendar.latest_30d_tp2, calendar.latest_30d_tp2_10, calendar.latest_30d_tp1_10)):
             monthly_lines = [
                 (
                     f"**{portfolio_names.get(item.strategy, item.strategy)}** • signals {item.signals} • "
@@ -716,7 +719,7 @@ class DiscordNotifier:
                     f"30d return **{self._signed_percent(item.marked_return)}** • DD "
                     f"**{'-' + self._percent(item.max_mtm_drawdown) if item.max_mtm_drawdown is not None else 'n/a'}**"
                 )
-                for item in (calendar.latest_30d_current, calendar.latest_30d_tp5)
+                for item in (calendar.latest_30d_current, calendar.latest_30d_tp5, calendar.latest_30d_tp2, calendar.latest_30d_tp2_10, calendar.latest_30d_tp1_10)
             ]
             monthly_value = "\n".join(monthly_lines)
         else:
@@ -907,7 +910,7 @@ class DiscordNotifier:
             },
         }
         calendar_throughput = {
-            "title": "♻️ Calendar Throughput • Current vs TP5",
+            "title": "♻️ Calendar Throughput • TP5 vs Fast-TP",
             "description": (
                 "Same incoming signal stream, chronological slot occupancy, fees and equity recycling. "
                 "Unlike the paired 7d board, this includes immature/open signals so burst congestion is visible."
@@ -915,10 +918,19 @@ class DiscordNotifier:
             "color": 0xF1C40F,
             "fields": [
                 {
-                    "name": f"Observed calendar window • {calendar.history_span_days:.2f}d",
+                    "name": f"Observed calendar • controls • {calendar.history_span_days:.2f}d",
                     "value": "\n\n".join([
                         throughput_line(calendar.current),
                         throughput_line(calendar.tp5),
+                        throughput_line(calendar.tp2),
+                    ]) if calendar.current.signals else "No observed signals yet.",
+                    "inline": False,
+                },
+                {
+                    "name": "⚡ Fast-TP challengers • 10×5% / 50% cap",
+                    "value": "\n\n".join([
+                        throughput_line(calendar.tp2_10),
+                        throughput_line(calendar.tp1_10),
                     ]) if calendar.current.signals else "No observed signals yet.",
                     "inline": False,
                 },

@@ -19,7 +19,7 @@ from app.token_regime import (
 )
 
 PUBLIC_RESEARCH_RISK_TIERS = frozenset({"standard", "high_risk"})
-TARGET_LEVELS_PCT: tuple[int, ...] = (5, 10, 15, 20, 25, 30, 40)
+TARGET_LEVELS_PCT: tuple[int, ...] = (1, 2, 5, 10, 15, 20, 25, 30, 40)
 STANDARD_EXIT_HORIZONS_HOURS: tuple[int, ...] = (24, 48, 72, 96, 120, 144, 168, 192, 240, 288, 336)
 HIGH_RISK_TIMEOUT_HOURS: tuple[int, ...] = (24, 48, 72, 96, 120, 168, 240, 336)
 STOP_THRESHOLDS_PCT: tuple[int, ...] = (10, 20, 30, 50, 75, 100)
@@ -31,6 +31,9 @@ CURRENT_SLOT_PCT = CURRENT_TOTAL_EXPOSURE_PCT / 6.0
 TP5_CHALLENGER_SLOT_PCT = 0.05
 TP5_CHALLENGER_MAX_SLOTS = 6
 TP5_CHALLENGER_TOTAL_EXPOSURE_PCT = TP5_CHALLENGER_SLOT_PCT * TP5_CHALLENGER_MAX_SLOTS
+FAST_TP_CHALLENGER_SLOT_PCT = 0.05
+FAST_TP_CHALLENGER_MAX_SLOTS = 10
+FAST_TP_CHALLENGER_TOTAL_EXPOSURE_PCT = FAST_TP_CHALLENGER_SLOT_PCT * FAST_TP_CHALLENGER_MAX_SLOTS
 RESEARCH_OOS_FREEZE_AT = datetime(2026, 8, 21, 21, 29, tzinfo=UTC)
 ENTRY_GATE_V1_MIN_QUALITY = 4
 ENTRY_GATE_V1_MAX_CONTINUATION = 6
@@ -332,8 +335,14 @@ class CalendarThroughputComparison:
     history_span_days: float
     current: PortfolioReplaySummary
     tp5: PortfolioReplaySummary
+    tp2: PortfolioReplaySummary
+    tp2_10: PortfolioReplaySummary
+    tp1_10: PortfolioReplaySummary
     latest_30d_current: PortfolioReplaySummary | None
     latest_30d_tp5: PortfolioReplaySummary | None
+    latest_30d_tp2: PortfolioReplaySummary | None
+    latest_30d_tp2_10: PortfolioReplaySummary | None
+    latest_30d_tp1_10: PortfolioReplaySummary | None
     latest_30d_start: datetime | None
     days_until_30d: float
 
@@ -1094,10 +1103,11 @@ def _known_exit(
     confirmed = row.get("confirmed_at")
     if confirmed is None:
         return None, None
-    if strategy == "tp5_challenger":
-        target = row.get("target_5_at")
+    if strategy in {"tp5_challenger", "tp2_challenger", "tp2_10_challenger", "tp1_10_challenger"}:
+        target_pct = {"tp5_challenger": 5, "tp2_challenger": 2, "tp2_10_challenger": 2, "tp1_10_challenger": 1}[strategy]
+        target = row.get(f"target_{target_pct}_at")
         if target is not None and target <= generated_at:
-            return target, 0.05
+            return target, target_pct / 100.0
         return None, None
 
     tier = str(row.get("risk_tier") or "standard")
@@ -1299,11 +1309,20 @@ def _portfolio_replay(
         return confirmed_at, -score
 
     ordered = sorted(candidates, key=order_key)
-    if strategy == "tp5_challenger":
-        position_fraction = TP5_CHALLENGER_SLOT_PCT
-        max_total = TP5_CHALLENGER_MAX_SLOTS
+    if strategy in {"tp5_challenger", "tp2_challenger", "tp2_10_challenger", "tp1_10_challenger"}:
+        if strategy in {"tp2_10_challenger", "tp1_10_challenger"}:
+            position_fraction = FAST_TP_CHALLENGER_SLOT_PCT
+            max_total = FAST_TP_CHALLENGER_MAX_SLOTS
+        else:
+            position_fraction = TP5_CHALLENGER_SLOT_PCT
+            max_total = TP5_CHALLENGER_MAX_SLOTS
         max_standard = max_high = None
-        base_name = "tp5_challenger_6x5pct"
+        base_name = {
+            "tp5_challenger": "tp5_challenger_6x5pct",
+            "tp2_challenger": "tp2_challenger_6x5pct",
+            "tp2_10_challenger": "tp2_challenger_10x5pct",
+            "tp1_10_challenger": "tp1_challenger_10x5pct",
+        }[strategy]
     else:
         position_fraction = CURRENT_SLOT_PCT
         max_total = 6
@@ -1360,7 +1379,7 @@ def _portfolio_replay(
         if len(positions) >= max_total:
             missed_capacity += 1
             continue
-        if strategy != "tp5_challenger":
+        if strategy not in {"tp5_challenger", "tp2_challenger", "tp2_10_challenger", "tp1_10_challenger"}:
             if tier == "standard" and sum(pos["tier"] == "standard" for pos in positions) >= int(max_standard or 0):
                 missed_capacity += 1
                 continue
@@ -1484,10 +1503,25 @@ def _calendar_throughput_comparison(
         observed, strategy="tp5_challenger", generated_at=generated_at, path_rows=path_rows,
         cohort="calendar_observed_all_signals",
     )
+    tp2 = _portfolio_replay(
+        observed, strategy="tp2_challenger", generated_at=generated_at, path_rows=path_rows,
+        cohort="calendar_observed_all_signals",
+    )
+    tp2_10 = _portfolio_replay(
+        observed, strategy="tp2_10_challenger", generated_at=generated_at, path_rows=path_rows,
+        cohort="calendar_observed_all_signals",
+    )
+    tp1_10 = _portfolio_replay(
+        observed, strategy="tp1_10_challenger", generated_at=generated_at, path_rows=path_rows,
+        cohort="calendar_observed_all_signals",
+    )
 
     latest_start: datetime | None = None
     latest_current: PortfolioReplaySummary | None = None
     latest_tp5: PortfolioReplaySummary | None = None
+    latest_tp2: PortfolioReplaySummary | None = None
+    latest_tp2_10: PortfolioReplaySummary | None = None
+    latest_tp1_10: PortfolioReplaySummary | None = None
     if history_start is not None and history_span_days >= CALENDAR_MONTH_DAYS:
         latest_start = generated_at - timedelta(days=CALENDAR_MONTH_DAYS)
         latest_rows = [
@@ -1505,6 +1539,18 @@ def _calendar_throughput_comparison(
             latest_rows, strategy="tp5_challenger", generated_at=generated_at, path_rows=path_rows,
             cohort="calendar_latest_30d_empty_book",
         )
+        latest_tp2 = _portfolio_replay(
+            latest_rows, strategy="tp2_challenger", generated_at=generated_at, path_rows=path_rows,
+            cohort="calendar_latest_30d_empty_book",
+        )
+        latest_tp2_10 = _portfolio_replay(
+            latest_rows, strategy="tp2_10_challenger", generated_at=generated_at, path_rows=path_rows,
+            cohort="calendar_latest_30d_empty_book",
+        )
+        latest_tp1_10 = _portfolio_replay(
+            latest_rows, strategy="tp1_10_challenger", generated_at=generated_at, path_rows=path_rows,
+            cohort="calendar_latest_30d_empty_book",
+        )
 
     return CalendarThroughputComparison(
         history_start=history_start,
@@ -1512,8 +1558,14 @@ def _calendar_throughput_comparison(
         history_span_days=history_span_days,
         current=current,
         tp5=tp5,
+        tp2=tp2,
+        tp2_10=tp2_10,
+        tp1_10=tp1_10,
         latest_30d_current=latest_current,
         latest_30d_tp5=latest_tp5,
+        latest_30d_tp2=latest_tp2,
+        latest_30d_tp2_10=latest_tp2_10,
+        latest_30d_tp1_10=latest_tp1_10,
         latest_30d_start=latest_start,
         days_until_30d=max(0.0, CALENDAR_MONTH_DAYS - history_span_days),
     )
@@ -2063,7 +2115,7 @@ def research_strategy_sweeps_csv(report: ResearchAnalyticsReport) -> bytes:
         ])
 
     calendar = report.calendar_throughput
-    for portfolio in (calendar.current, calendar.tp5):
+    for portfolio in (calendar.current, calendar.tp5, calendar.tp2, calendar.tp2_10, calendar.tp1_10):
         writer.writerow([
             "calendar_throughput_observed", portfolio.strategy, portfolio.cohort, portfolio.signals,
             portfolio.entered, portfolio.closed, portfolio.open_positions, portfolio.missed_capacity,
@@ -2074,8 +2126,8 @@ def research_strategy_sweeps_csv(report: ResearchAnalyticsReport) -> bytes:
             "" if not calendar.history_span_days else f"{portfolio.entered / calendar.history_span_days:.6f}",
             "" if not portfolio.signals else f"{portfolio.entered / portfolio.signals:.6f}",
         ])
-    if calendar.latest_30d_current is not None and calendar.latest_30d_tp5 is not None:
-        for portfolio in (calendar.latest_30d_current, calendar.latest_30d_tp5):
+    if all(item is not None for item in (calendar.latest_30d_current, calendar.latest_30d_tp5, calendar.latest_30d_tp2, calendar.latest_30d_tp2_10, calendar.latest_30d_tp1_10)):
+        for portfolio in (calendar.latest_30d_current, calendar.latest_30d_tp5, calendar.latest_30d_tp2, calendar.latest_30d_tp2_10, calendar.latest_30d_tp1_10):
             writer.writerow([
                 "calendar_latest_30d_empty_book", portfolio.strategy, portfolio.cohort, portfolio.signals,
                 portfolio.entered, portfolio.closed, portfolio.open_positions, portfolio.missed_capacity,

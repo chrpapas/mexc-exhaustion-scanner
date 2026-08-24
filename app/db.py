@@ -806,6 +806,8 @@ class Database:
                     min(p.candle_close_at) FILTER (WHERE p.adverse_return_pct <= -0.50) AS adverse_50_at,
                     min(p.candle_close_at) FILTER (WHERE p.adverse_return_pct <= -0.75) AS adverse_75_at,
                     min(p.candle_close_at) FILTER (WHERE p.adverse_return_pct <= -1.00) AS adverse_100_at,
+                    min(p.candle_close_at) FILTER (WHERE p.favorable_return_pct >= 0.01) AS target_1_at,
+                    min(p.candle_close_at) FILTER (WHERE p.favorable_return_pct >= 0.02) AS target_2_at,
                     t.target_5_path_at AS target_5_at,
                     min(p.candle_close_at) FILTER (WHERE p.favorable_return_pct >= 0.10) AS target_10_at,
                     min(p.candle_close_at) FILTER (WHERE p.favorable_return_pct >= 0.15) AS target_15_at,
@@ -839,7 +841,7 @@ class Database:
                 ps.path_return_288h, ps.path_return_336h, ps.path_latest_return,
                 ps.adverse_10_at, ps.adverse_20_at, ps.adverse_30_at,
                 ps.adverse_50_at, ps.adverse_75_at, ps.adverse_100_at,
-                ps.target_5_at, ps.target_10_at, ps.target_15_at, ps.target_20_path_at,
+                ps.target_1_at, ps.target_2_at, ps.target_5_at, ps.target_10_at, ps.target_15_at, ps.target_20_path_at,
                 ps.target_25_at, ps.target_30_at, ps.target_40_at
             FROM research_signal_features_enriched f
             LEFT JOIN shadow_trades st ON st.episode_id = f.episode_id

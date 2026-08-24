@@ -1,8 +1,8 @@
-MEXC Exhaustion Scanner + Multi-Slot Futures Trader v1.3.9
+MEXC Exhaustion Scanner + Multi-Slot Futures Trader v1.3.11
 
-Deploy the entire project/ZIP together. v1.3.9 is a RESEARCH-ONLY token-behaviour release; TP5 trader execution is unchanged from v1.3.6.
+Deploy the entire project/ZIP together. v1.3.11 is a RESEARCH-ONLY fast-target/high-capacity comparison release; TP5 trader execution is unchanged from v1.3.6.
 
-v1.3.9 retains the v1.3.8 research-path SQL timeout hotfix on larger datasets. The one-off analytics command no longer aborts if the optional path catch-up times out; it reports from the paths already persisted.
+v1.3.11 retains the v1.3.8 research-path SQL timeout hotfix on larger datasets. The one-off analytics command no longer aborts if the optional path catch-up times out; it reports from the paths already persisted.
 
 Frozen TP5_V1 paper strategy (unchanged):
 - STANDARD + HIGH_RISK; EXTREME excluded
@@ -19,7 +19,7 @@ TRADER_EXECUTION_STRATEGY=tp5_v1
 TRADER_PAPER_RUN_ID=tp5_v1
 PAPER_STARTING_EQUITY_USDT=2000
 
-Token-behaviour research in v1.3.9:
+Token-behaviour and fast-TP research in v1.3.11:
 - 90d of completed pre-signal 4h token/BTC history
 - no post-signal/look-ahead data in classification
 - REGIME_FOLLOWER / MIXED / EPISODIC / INSUFFICIENT research labels
@@ -52,3 +52,11 @@ python scripts/verify_project.py
 python -m app.trader_status   # after deployment, from Render Shell
 
 Latest migration remains 015_tp5_trader_runs.sql.
+
+Fast-TP shadow portfolio comparison:
+- TP5-6 control: +5% full exit, 6 × 5% slots, 30% max exposure.
+- TP2-6 bridge baseline: +2% full exit, 6 × 5% slots, 30% max exposure.
+- TP2-10 challenger: +2% full exit, 10 × 5% slots, 50% max exposure.
+- TP1-10 challenger: +1% full exit, 10 × 5% slots, 50% max exposure.
+- Same fee assumption, immediate entry, one open position per symbol, and chronological replay semantics.
+- Research-only: none of these variants changes trader execution.
