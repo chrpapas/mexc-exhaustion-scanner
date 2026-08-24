@@ -12,6 +12,7 @@ from app.json_utils import json_object
 from app.token_regime import (
     EPISODIC_CLASS,
     INSUFFICIENT_CLASS,
+    MIXED_CLASS,
     REGIME_FOLLOWER_CLASS,
     REGIME_LOOKBACK_DAYS,
     TokenRegimeResearchSummary,
@@ -384,6 +385,7 @@ class ResearchAnalyticsReport:
     calendar_throughput: CalendarThroughputComparison
     token_regime: TokenRegimeResearchSummary
     regime_portfolios: tuple[PortfolioReplaySummary, ...]
+    hybrid_portfolios: tuple[PortfolioReplaySummary, ...]
     oos_freeze_at: datetime
     min_rank_sample: int
 
@@ -1098,13 +1100,13 @@ def _latest_observed_return(row: dict[str, Any]) -> float | None:
 
 
 def _known_exit(
-    row: dict[str, Any], *, strategy: str, generated_at: datetime
+    row: dict[str, Any], *, strategy: str, generated_at: datetime, target_pct_override: int | None = None
 ) -> tuple[datetime | None, float | None]:
     confirmed = row.get("confirmed_at")
     if confirmed is None:
         return None, None
     if strategy in {"tp5_challenger", "tp2_challenger", "tp2_10_challenger", "tp1_10_challenger"}:
-        target_pct = {"tp5_challenger": 5, "tp2_challenger": 2, "tp2_10_challenger": 2, "tp1_10_challenger": 1}[strategy]
+        target_pct = target_pct_override if target_pct_override is not None else {"tp5_challenger": 5, "tp2_challenger": 2, "tp2_10_challenger": 2, "tp1_10_challenger": 1}[strategy]
         target = row.get(f"target_{target_pct}_at")
         if target is not None and target <= generated_at:
             return target, target_pct / 100.0
@@ -1294,6 +1296,7 @@ def _portfolio_replay(
     eligible_episode_ids: set[int] | None = None,
     strategy_name_override: str | None = None,
     priority_scores: dict[int, float] | None = None,
+    target_pct_by_episode: dict[int, int] | None = None,
 ) -> PortfolioReplaySummary:
     candidates = [
         row for row in rows
@@ -1387,7 +1390,12 @@ def _portfolio_replay(
                 missed_capacity += 1
                 continue
 
-        exit_at, exit_return = _known_exit(row, strategy=strategy, generated_at=generated_at)
+        target_override = None
+        if target_pct_by_episode is not None and episode_id is not None:
+            target_override = target_pct_by_episode.get(int(episode_id))
+        exit_at, exit_return = _known_exit(
+            row, strategy=strategy, generated_at=generated_at, target_pct_override=target_override
+        )
         pre_fee_equity = equity
         notional = max(0.0, pre_fee_equity) * position_fraction
         equity -= notional * SHADOW_FEE_PER_FILL
@@ -1937,6 +1945,32 @@ def build_research_analytics(
             strategy_name_override="tp5_episodic_priority_same_bar",
         ),
     )
+    # Hybrid exits keep the frozen TP5-6 sizing/capacity rules and vary only the
+    # full-profit target by the pre-signal token behaviour class. Unclassified /
+    # insufficient-history episodes deliberately default to TP5 rather than being
+    # silently assigned the faster exit.
+    hybrid_1_targets = {
+        item.episode_id: (2 if item.behavior_class == REGIME_FOLLOWER_CLASS else 5)
+        for item in token_regime.profiles
+    }
+    hybrid_2_targets = {
+        item.episode_id: (2 if item.behavior_class in {MIXED_CLASS, REGIME_FOLLOWER_CLASS} else 5)
+        for item in token_regime.profiles
+    }
+    hybrid_portfolios = (
+        _portfolio_replay(
+            rows, strategy="tp5_challenger", generated_at=generated_at,
+            path_rows=portfolio_path_rows, cohort="calendar_observed_all_signals",
+            target_pct_by_episode=hybrid_1_targets,
+            strategy_name_override="hybrid1_ep_mix_tp5_regime_tp2",
+        ),
+        _portfolio_replay(
+            rows, strategy="tp5_challenger", generated_at=generated_at,
+            path_rows=portfolio_path_rows, cohort="calendar_observed_all_signals",
+            target_pct_by_episode=hybrid_2_targets,
+            strategy_name_override="hybrid2_ep_tp5_mix_regime_tp2",
+        ),
+    )
     return ResearchAnalyticsReport(
         generated_at=generated_at,
         baseline=baseline,
@@ -1974,6 +2008,7 @@ def build_research_analytics(
         calendar_throughput=calendar_throughput,
         token_regime=token_regime,
         regime_portfolios=regime_portfolios,
+        hybrid_portfolios=hybrid_portfolios,
         oos_freeze_at=oos_freeze_at,
         min_rank_sample=min_rank_sample,
     )
@@ -2115,6 +2150,17 @@ def research_strategy_sweeps_csv(report: ResearchAnalyticsReport) -> bytes:
         ])
 
     calendar = report.calendar_throughput
+    for portfolio in report.hybrid_portfolios:
+        writer.writerow([
+            "token_regime_hybrid_portfolio", portfolio.strategy, portfolio.cohort, portfolio.signals,
+            portfolio.entered, portfolio.closed, portfolio.open_positions, portfolio.missed_capacity,
+            portfolio.missed_same_symbol, _csv_pct(portfolio.marked_return),
+            _csv_pct(portfolio.max_mtm_drawdown), _csv_pct(portfolio.avg_exposure_pct),
+            _csv_pct(portfolio.p95_exposure_pct),
+            "" if portfolio.slot_days is None else f"{portfolio.slot_days:.6f}",
+            _csv_pct(portfolio.return_per_slot_day),
+            "" if not calendar.history_span_days else f"{portfolio.closed / calendar.history_span_days:.6f}",
+        ])
     for portfolio in (calendar.current, calendar.tp5, calendar.tp2, calendar.tp2_10, calendar.tp1_10):
         writer.writerow([
             "calendar_throughput_observed", portfolio.strategy, portfolio.cohort, portfolio.signals,

@@ -570,6 +570,8 @@ class DiscordNotifier:
         regime_portfolio_items = [report.calendar_throughput.tp5, *report.regime_portfolios]
         regime_portfolio_lines = [regime_portfolio_line(item) for item in regime_portfolio_items]
         regime_efficiency_lines = [regime_efficiency_line(item) for item in regime_portfolio_items]
+        hybrid_portfolio_lines = [regime_portfolio_line(item) for item in report.hybrid_portfolios]
+        hybrid_efficiency_lines = [regime_efficiency_line(item) for item in report.hybrid_portfolios]
 
         def slice_lines(items: tuple[FeatureSliceSummary, ...], icon: str) -> str:
             if not items:
@@ -681,6 +683,8 @@ class DiscordNotifier:
             "tp2_challenger_6x5pct": "TP2-6",
             "tp2_challenger_10x5pct": "TP2-10",
             "tp1_challenger_10x5pct": "TP1-10",
+            "hybrid1_ep_mix_tp5_regime_tp2": "Hybrid-1",
+            "hybrid2_ep_tp5_mix_regime_tp2": "Hybrid-2",
             "entrygate_v1__current_live_5standard_1high": "Gate + current",
             "entrygate_v1__tp5_challenger_6x5pct": "Gate + TP5",
         }
@@ -973,13 +977,23 @@ class DiscordNotifier:
                     "inline": False,
                 },
                 {
-                    "name": "Capital-time efficiency • same calendar stream",
+                    "name": "Hybrid exits • same 6×5% / 30% cap",
+                    "value": "\n\n".join(hybrid_portfolio_lines),
+                    "inline": False,
+                },
+                {
+                    "name": "Capital-time efficiency • baseline / filters",
                     "value": "\n".join(regime_efficiency_lines),
+                    "inline": False,
+                },
+                {
+                    "name": "Capital-time efficiency • hybrids",
+                    "value": "\n".join(hybrid_efficiency_lines),
                     "inline": False,
                 },
             ],
             "footer": {
-                "text": "No scanner or trader rule is changed. Idle = unused share of 6 TP5 slots over observed calendar time; priority only reorders same-timestamp signals."
+                "text": "No scanner or trader rule is changed. Hybrids keep 6×5% / 30% sizing; insufficient-history signals default to TP5."
             },
         }
 

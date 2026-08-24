@@ -1,8 +1,8 @@
-# MEXC Exhaustion Scanner + Multi-Slot Futures Trader v1.3.11
+# MEXC Exhaustion Scanner + Multi-Slot Futures Trader v1.3.12
 
 Research-only token-behaviour release. **TP5_V1 execution is unchanged from v1.3.6.** The new work tests the original niche hypothesis: isolated/episodic pumps may be better short-exhaustion candidates than tokens whose normal price action is mostly explained by the broader crypto regime.
 
-**v1.3.11 research reporting:** adds fast-target/high-capacity shadow challengers alongside the frozen TP5 control: **TP2-10** (full +2% exit, 10 generic slots × 5% equity, 50% cap) and **TP1-10** (full +1% exit with the same 10×5% / 50% cap). The prior TP2-6 replay is retained as a bridge baseline. Calendar throughput and future true-30d replay compare return, drawdown, holding time, slot-days, exposure, releases and capacity misses on the same signal stream. No scanner or trader execution rule changes.
+**v1.3.12 research reporting:** adds two behaviour-dependent exit challengers on the frozen **6×5% / 30%** TP5 book. **Hybrid-1** keeps EPISODIC + MIXED at TP5 and exits REGIME_FOLLOWER at TP2. **Hybrid-2** keeps EPISODIC at TP5 and exits MIXED + REGIME_FOLLOWER at TP2. `INSUFFICIENT` histories default to TP5. The prior TP2/TP1 capacity experiments remain as research controls; no scanner or trader execution rule changes.
 
 **v1.3.8 hotfix:** the bounded 15m research-path catch-up now limits the episode set before sorting/joining candles and uses index-friendly `open_time` predicates. The on-demand analytics command also continues from already persisted paths if this optional catch-up hits its local PostgreSQL statement timeout.
 
@@ -10,12 +10,12 @@ Research-only token-behaviour release. **TP5_V1 execution is unchanged from v1.3
 - **90-day pre-signal behaviour profile:** research uses completed 4h token/BTC candles strictly before each signal; no post-signal candles enter the classifier.
 - **Three unsupervised components:** positive BTC explanatory power (`market_r2`), concentration of positive movement in the five largest 4h gains, and frequency of isolated 4h pumps of at least +5% that outperform BTC by at least 4 percentage points.
 - **Frozen discovery calibration:** the components are converted to empirical ranks using only the pre-freeze discovery cohort (`2026-08-21 21:29 UTC`). TP5 outcomes are not used to set the behaviour buckets. The resulting score is split into `REGIME_FOLLOWER`, `MIXED`, and `EPISODIC`; incomplete histories remain `INSUFFICIENT`.
-- **Shadow portfolio comparison:** the report now shows TP5-All against `tp5_no_regime_followers`, `tp5_episodic_only`, and `tp5_episodic_priority_same_bar`. The priority variant only reorders signals sharing the same confirmation timestamp; it never replaces an already-open position.
+- **Shadow portfolio comparison:** the report shows TP5-All against `tp5_no_regime_followers`, `tp5_episodic_only`, and `tp5_episodic_priority_same_bar`, plus **Hybrid-1** (`EPISODIC/MIXED→TP5`, `REGIME_FOLLOWER→TP2`) and **Hybrid-2** (`EPISODIC→TP5`, `MIXED/REGIME_FOLLOWER→TP2`). Hybrids keep 6 slots × 5% / 30% cap and alter only the full-profit exit target by behaviour class.
 - **Conservative handling of new coins:** the `no_regime_followers` variant rejects only confidently classified regime followers. `INSUFFICIENT` history is still accepted so newly listed pumpers are not automatically excluded.
 - **Historical coverage fix:** v1.3.6 could seed a symbol with four days of 4h candles during the wide scan and then fail to backfill the older 120-day window. v1.3.8 checks the earliest candle and fills the missing left edge.
 - **Research-history backfill:** while research logging is enabled, the scanner periodically ensures the 90-day pre-signal 4h history exists for every stored public signal symbol plus BTC. `RESEARCH_REGIME_HISTORY_POLL_SECONDS` defaults to 21600 (6h).
 - **New Discord/CSV output:** `Token Behaviour • Regime Dependency` plus `research-token-regime-YYYY-MM-DD.csv`.
-- **No schema migration:** v1.3.11 derives +1%/+2% target timestamps from the existing stored 15m research paths. Migration `015_tp5_trader_runs.sql` remains the latest migration.
+- **No schema migration:** v1.3.12 reuses the +2%/+5% target timestamps derived from existing stored 15m research paths. Migration `015_tp5_trader_runs.sql` remains the latest migration.
 
 The paper-run isolation, configurable `$2,000` default starting equity, and fail-closed live-account handling from v1.3.6 are unchanged. The legacy `tier_v1` path remains only for rollback/persisted compatibility.
 

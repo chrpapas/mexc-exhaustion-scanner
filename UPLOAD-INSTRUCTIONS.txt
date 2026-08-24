@@ -1,8 +1,8 @@
-MEXC Exhaustion Scanner + Multi-Slot Futures Trader v1.3.11
+MEXC Exhaustion Scanner + Multi-Slot Futures Trader v1.3.12
 
-Deploy the entire project/ZIP together. v1.3.11 is a RESEARCH-ONLY fast-target/high-capacity comparison release; TP5 trader execution is unchanged from v1.3.6.
+Deploy the entire project/ZIP together. v1.3.12 is a RESEARCH-ONLY behaviour-dependent exit comparison release; TP5 trader execution is unchanged from v1.3.6.
 
-v1.3.11 retains the v1.3.8 research-path SQL timeout hotfix on larger datasets. The one-off analytics command no longer aborts if the optional path catch-up times out; it reports from the paths already persisted.
+v1.3.12 retains the v1.3.8 research-path SQL timeout hotfix on larger datasets. The one-off analytics command no longer aborts if the optional path catch-up times out; it reports from the paths already persisted.
 
 Frozen TP5_V1 paper strategy (unchanged):
 - STANDARD + HIGH_RISK; EXTREME excluded
@@ -19,11 +19,14 @@ TRADER_EXECUTION_STRATEGY=tp5_v1
 TRADER_PAPER_RUN_ID=tp5_v1
 PAPER_STARTING_EQUITY_USDT=2000
 
-Token-behaviour and fast-TP research in v1.3.11:
+Token-behaviour and hybrid-exit research in v1.3.12:
 - 90d of completed pre-signal 4h token/BTC history
 - no post-signal/look-ahead data in classification
 - REGIME_FOLLOWER / MIXED / EPISODIC / INSUFFICIENT research labels
 - TP5-All vs no-regime-followers vs episodic-only vs same-bar episodic-priority shadow replays
+- Hybrid-1: EPISODIC + MIXED use TP5; REGIME_FOLLOWER uses TP2
+- Hybrid-2: EPISODIC uses TP5; MIXED + REGIME_FOLLOWER use TP2
+- both hybrids retain 6×5% slots / 30% cap; INSUFFICIENT defaults to TP5
 - capital-time metrics: slot-days, return/slot-day, releases/day, time-based idle capacity, avg/p95 exposure
 - no scanner/trader rule changes
 - no new DB migration
