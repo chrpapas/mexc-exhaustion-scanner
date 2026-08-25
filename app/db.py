@@ -1307,7 +1307,9 @@ class Database:
                     ))[1] AS path_return_168h,
                     (array_agg(p.close_return_pct ORDER BY p.candle_close_at DESC) FILTER (
                         WHERE p.candle_close_at <= stp.confirmed_at + interval '240 hours'
-                    ))[1] AS path_return_240h
+                    ))[1] AS path_return_240h,
+                    array_agg(p.candle_close_at ORDER BY p.candle_close_at ASC) AS path_times,
+                    array_agg(p.close_return_pct ORDER BY p.candle_close_at ASC) AS path_returns
                 FROM research_signal_path_15m p
                 JOIN shadow_trades stp ON stp.episode_id = p.episode_id
                 LEFT JOIN path_targets t ON t.episode_id = p.episode_id
@@ -1328,7 +1330,8 @@ class Database:
                    tp.adverse_200_path_at, tp.adverse_300_path_at, tp.adverse_400_path_at,
                    tp.path_last_at, tp.path_rows_10d,
                    tp.path_return_24h, tp.path_return_48h, tp.path_return_72h,
-                   tp.path_return_96h, tp.path_return_120h, tp.path_return_168h, tp.path_return_240h
+                   tp.path_return_96h, tp.path_return_120h, tp.path_return_168h, tp.path_return_240h,
+                   tp.path_times, tp.path_returns
             FROM shadow_trades st
             LEFT JOIN tp5_path tp ON tp.episode_id = st.episode_id
             ORDER BY st.confirmed_at ASC

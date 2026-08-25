@@ -139,11 +139,11 @@ class DiscordNotifier:
     ) -> bool:
         """Send the compact subscriber-facing strategy board.
 
-        The audience-facing board exposes only the three retained observed approaches:
-        TP5 for frequent STANDARD + HIGH_RISK trading, open-ended TP20 for HIGH_RISK
-        swing trading, and a fixed 7-day hold for STANDARD signals. Headline account
-        run-rates replay the recommended sizing/capacity chronologically; exploratory
-        strategy research remains internal.
+        The audience-facing board exposes only the two currently recommended approaches:
+        TP5 for frequent STANDARD + HIGH_RISK trading and a fixed 7-day hold for
+        STANDARD signals. TP20 remains observable in the ledger/research layer but is
+        not presented as a subscriber recommendation. Headline account run-rates replay
+        the suggested sizing/capacity chronologically; exploratory research remains internal.
         """
         if not self._performance_webhook_url:
             return False
@@ -157,7 +157,6 @@ class DiscordNotifier:
             else report.report_date.strftime("%d %b %Y")
         )
         tp5 = report.tp5_7d_comparison
-        tp20 = report.tp20_7d_comparison
         swing = report.standard_7d_comparison
 
         def comparison_range_text() -> str:
@@ -207,10 +206,19 @@ class DiscordNotifier:
         def account_run_rate_line(label: str, summary) -> str:
             if summary is None:
                 return f"**{label}:** unavailable"
+            dd_text = (
+                f"-{self._percent(summary.max_mtm_drawdown)}"
+                if summary.max_mtm_drawdown is not None else "n/a"
+            )
+            ratio_text = (
+                f"{summary.return_over_max_drawdown:.2f}×"
+                if summary.return_over_max_drawdown is not None else "n/a"
+            )
             return (
                 f"**{label}:** observed account **{self._signed_percent(summary.observed_account_return)}** over **{summary.span_days:.2f}d** "
                 f"→ **{self._signed_percent(summary.thirty_day_equivalent_return)} 30D eq.** "
-                f"({signed_money(summary.thirty_day_pnl_per_10k)} / $10k) • "
+                f"(30D eq. ≈ **{signed_money(summary.thirty_day_pnl_per_10k)} per $10k**) • "
+                f"max MTM DD **{dd_text}** • return/DD **{ratio_text}**\n"
                 f"entered **{summary.entered}** • open **{summary.open_positions}** • "
                 f"capacity misses **{summary.missed_capacity}** • avg/peak exposure "
                 f"**{self._percent(summary.avg_exposure_pct)} / {self._percent(summary.peak_exposure_pct)}**"
@@ -218,7 +226,6 @@ class DiscordNotifier:
 
         account_comparison_value = "\n".join((
             account_run_rate_line("TP5", report.tp5_account_run_rate),
-            account_run_rate_line("TP20", report.tp20_account_run_rate),
             account_run_rate_line("7D", report.standard_7d_account_run_rate),
         ))
 
@@ -235,20 +242,6 @@ class DiscordNotifier:
             )
         else:
             tp5_value = "No complete 7-day comparison cohort yet."
-
-        if tp20 is not None:
-            tp20_value = (
-                f"**Rule:** HIGH_RISK only • full close at **+20%**; otherwise **stay open**\n"
-                f"7D normalized **{tp20.sample}** • TP20 hits by 7D **{tp20.target_hits}** • open at 7D **{tp20.unresolved_at_7d}** • "
-                f"profitable mark **{tp20.wins}/{tp20.sample} ({self._percent(tp20.positive_rate)})**\n"
-                f"Σ signal **{self._signed_percent(tp20.sum_return)}** • avg/signal **{self._signed_percent(tp20.avg_return)}** • "
-                f"median **{self._signed_percent(tp20.median_return)}** • best/worst **{self._signed_percent(tp20.best_return)} / {self._signed_percent(tp20.worst_return)}**\n"
-                f"Avg / median capital time to exit-or-mark **{self._hours(tp20.avg_effective_holding_hours)} / {self._hours(tp20.median_effective_holding_hours)}**\n"
-                f"{risk_line(tp20)}\n"
-                f"{exposure_line(report.tp20_exposure, tested=False)}"
-            )
-        else:
-            tp20_value = "No complete HIGH_RISK 7-day comparison cohort yet."
 
         if swing is not None:
             swing_value = (
@@ -275,18 +268,13 @@ class DiscordNotifier:
             "color": 0x5865F2,
             "fields": [
                 {
-                    "name": "💰 Account-Level Return • Recommended Sizing",
+                    "name": "💰 Strategy Account Performance • Suggested Sizing",
                     "value": account_comparison_value,
                     "inline": False,
                 },
                 {
                     "name": "⚡ TP5 Frequent",
                     "value": tp5_value,
-                    "inline": False,
-                },
-                {
-                    "name": "🔥 TP20 High Risk • No Timeout",
-                    "value": tp20_value,
                     "inline": False,
                 },
                 {
@@ -297,10 +285,9 @@ class DiscordNotifier:
                 {
                     "name": "How to choose",
                     "value": (
-                        "**TP5:** fastest recycling and the only exposure setup already portfolio-tested.\n"
-                        "**TP20:** larger target, but unresolved HIGH_RISK positions can remain open beyond day 7 and carry the widest tail risk.\n"
-                        "**7D Swing:** fixed holding period and STANDARD-only exposure; compare its larger raw moves against seven days of capital lock-up.\n"
-                        "Use **account return / 30D equivalent** for the practical strategy comparison; Σ signal is supporting opportunity data only."
+                        "**TP5:** highest-turnover approach; fastest capital recycling and the only exposure setup already portfolio-tested.\n"
+                        "**7D Swing:** lower-frequency STANDARD-only alternative with larger individual signal moves and a fixed seven-day hold.\n"
+                        "Use **account return, max MTM drawdown, return/DD, and 30D equivalent** for the practical comparison; Σ signal is supporting opportunity data only."
                     ),
                     "inline": False,
                 },
@@ -315,10 +302,10 @@ class DiscordNotifier:
             ],
             "footer": {
                 "text": (
-                    "Account replay uses the same observed calendar, chronological signals, recommended slot caps, and 0.08% fee per fill; open positions are MTM at report time. "
+                    "Account replay uses the same observed calendar, chronological signals, suggested slot caps, and 0.08% fee per fill; open positions are MTM at report time. "
+                    "Max MTM DD uses the admitted portfolio's available 15m research marks plus exact entry/exit/report events. "
                     "30D eq. is a linear run-rate from the observed span, not an observed 30-day result or forecast; funding/slippage are not modeled. "
-                    "The 168h signal table remains normalized for path comparison; TP20 itself has no day-7 exit. Σ signal is not account return. "
-                    "TP20/7D sizing is risk-based, not a validated optimum; caps apply account-wide and should not be blindly stacked."
+                    "Σ signal is not account return. 7D sizing is risk-based, not a validated optimum. TP20 remains tracked in the ledger/research layer but is not currently a subscriber-recommended strategy."
                 )
             },
         }
@@ -388,7 +375,7 @@ class DiscordNotifier:
             "title": "📒 Exhaustion Scanner • Strategy Ledger",
             "description": (
                 f"Updated **{display_time.strftime('%d %b %Y • %H:%M %Z')}**\n"
-                "Per-signal audit for TP5 Frequent, TP20 High Risk No Timeout, and STANDARD 7D Swing • full strategy flags attached as CSV"
+                "Per-signal observational audit for TP5, TP20 No Timeout, and 7D Hold across every published signal • full strategy flags attached as CSV"
             ),
             "color": 0x5865F2,
             "fields": [
@@ -410,17 +397,17 @@ class DiscordNotifier:
                     "inline": False,
                 },
                 {
-                    "name": "🔥 TP20 High Risk • No Timeout",
+                    "name": "🔥 TP20 No Timeout • Observational",
                     "value": (
-                        f"Eligible **{len(tp20_outcomes)}** • target hit **{tp20_hits}** • still open **{tp20_open}**\n"
+                        f"Observed **{len(tp20_outcomes)}** • target hit **{tp20_hits}** • still open **{tp20_open}**\n"
                         f"Breach before target/current mark: {breach_line(tp20_outcomes)}"
                     ),
                     "inline": False,
                 },
                 {
-                    "name": "🗓️ 7D Swing • STANDARD only",
+                    "name": "🗓️ 7D Hold • Observational",
                     "value": (
-                        f"Eligible **{len(swing_outcomes)}** • closed **{len(swing_closed)}** • "
+                        f"Observed **{len(swing_outcomes)}** • closed **{len(swing_closed)}** • "
                         f"wins **{swing_wins}** • tracking **{swing_tracking}**\n"
                         f"Breach before 7D exit/current mark: {breach_line(swing_outcomes)}"
                     ),
@@ -431,7 +418,7 @@ class DiscordNotifier:
                     "value": (
                         "Each strategy cell shows its own outcome and deepest adverse threshold carried before that strategy's target/exit. "
                         "`pre -100%` means -100% occurred before exit; `so far -50%` means an open/tracking trade has crossed -50% so far. "
-                        "TP20 is HIGH-only; 7D Swing is STANDARD-only."
+                        "The ledger is observational: TP20 and 7D are shown for both STANDARD and HIGH_RISK. Subscriber recommendation filters are applied only in Strategy Comparison."
                     ),
                     "inline": False,
                 },
@@ -568,8 +555,8 @@ class DiscordNotifier:
                 {
                     "name": "Subscriber report",
                     "value": (
-                        "Use **Strategy Comparison** for **TP5 Frequent**, **TP20 High Risk • No Timeout**, and **7D Swing • STANDARD**. "
-                        "That board uses one common 168h valuation convention, breach counts, and suggested account exposure."
+                        "Use **Strategy Comparison** for the two current subscriber recommendations: **TP5 Frequent** and **7D Swing • STANDARD**. "
+                        "TP20 remains tracked in the Strategy Ledger/research layer, but is not currently recommended on the subscriber board."
                     ),
                     "inline": False,
                 },

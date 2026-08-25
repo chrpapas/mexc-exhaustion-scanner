@@ -300,6 +300,8 @@ class AccountRunRateSummary:
     avg_exposure_pct: float | None
     peak_exposure_pct: float | None
     slot_days: float
+    max_mtm_drawdown: float | None = None
+    return_over_max_drawdown: float | None = None
     fee_per_fill: float = SHADOW_FEE_PER_FILL
 
     def as_dict(self) -> dict[str, Any]:
@@ -801,7 +803,8 @@ def build_performance_summary(
         avg_gross_captured_return=(tp5_hits * 0.05 / len(matured_7d)) if matured_7d else None,
         sum_gross_captured_return=(tp5_hits * 0.05) if matured_7d else None,
     )
-    # Public HIGH_RISK strategy: +20% target or 4-day timeout.
+    # Retained historical HIGH_RISK TP20-or-4D summary for internal/backward
+    # compatibility. It is no longer a subscriber-recommended public strategy.
     # Keep the same strict paired 10-day research cohort used to identify the
     # 4-day timeout as the strongest observed HIGH_RISK variant. This avoids
     # changing the denominator as shorter horizons mature.
@@ -1023,6 +1026,7 @@ def build_performance_summary(
         )
         equity = 1.0
         positions: list[dict[str, Any]] = []
+        all_positions: list[dict[str, Any]] = []
         holds_hours: list[float] = []
         eligible_signals = entered = closed = missed_capacity = missed_same_symbol = 0
         max_open = 0
@@ -1076,14 +1080,25 @@ def build_performance_summary(
             exit_at, exit_return = known_exit(row)
             notional = max(0.0, equity) * exposure.per_trade_pct
             equity -= notional * SHADOW_FEE_PER_FILL
-            positions.append({
+            path_times = list(row.get("path_times") or ())
+            path_returns = list(row.get("path_returns") or ())
+            path_points = [
+                (ts, float(ret))
+                for ts, ret in zip(path_times, path_returns)
+                if ts is not None and ret is not None and entry_at <= ts <= now_utc
+            ]
+            position = {
+                "position_id": entered,
                 "symbol": symbol,
                 "entry_at": entry_at,
                 "notional": notional,
                 "exit_at": exit_at,
                 "exit_return": exit_return,
                 "mark_return": row.get("current_return_pct"),
-            })
+                "path_points": path_points,
+            }
+            positions.append(position)
+            all_positions.append(position)
             entered += 1
             max_open = max(max_open, len(positions))
 
@@ -1101,6 +1116,71 @@ def build_performance_summary(
             # comparable with already-realized positions.
             marked_equity += pos["notional"] * (float(mark) - SHADOW_FEE_PER_FILL)
 
+        # Reconstruct the marked account-equity path from the exact positions
+        # admitted by the chronological capacity replay. Research 15m closes are
+        # used when present, while entry/exit/report marks guarantee a defined
+        # sparse path for tests and older rows. Drawdown follows account MTM
+        # equity (paid fees + unrealized P&L); the report-time return separately
+        # includes a hypothetical closing fee for still-open positions.
+        event_times: set[datetime] = set()
+        if account_start_at is not None:
+            event_times.add(account_start_at)
+        event_times.add(now_utc)
+        for pos in all_positions:
+            event_times.add(pos["entry_at"])
+            if pos["exit_at"] is not None:
+                event_times.add(pos["exit_at"])
+            for ts, _ in pos["path_points"]:
+                cutoff = pos["exit_at"] or now_utc
+                if pos["entry_at"] <= ts <= cutoff:
+                    event_times.add(ts)
+
+        cash = 1.0
+        active_marks: dict[int, tuple[float, float]] = {}
+        peak_equity = 1.0
+        max_mtm_drawdown = 0.0
+        positions_by_entry: dict[datetime, list[dict[str, Any]]] = {}
+        positions_by_exit: dict[datetime, list[dict[str, Any]]] = {}
+        path_updates: dict[datetime, list[tuple[int, float, float]]] = {}
+        for pos in all_positions:
+            positions_by_entry.setdefault(pos["entry_at"], []).append(pos)
+            if pos["exit_at"] is not None:
+                positions_by_exit.setdefault(pos["exit_at"], []).append(pos)
+            cutoff = pos["exit_at"] or now_utc
+            for ts, ret in pos["path_points"]:
+                if pos["entry_at"] <= ts < cutoff:
+                    path_updates.setdefault(ts, []).append((pos["position_id"], pos["notional"], ret))
+            if pos["exit_at"] is None and pos["mark_return"] is not None:
+                path_updates.setdefault(now_utc, []).append(
+                    (pos["position_id"], pos["notional"], float(pos["mark_return"]))
+                )
+
+        for ts in sorted(event_times):
+            # The admission replay releases due positions before considering new
+            # entries at the same timestamp, so mirror that ordering here.
+            for pos in positions_by_exit.get(ts, ()):
+                active_marks.pop(pos["position_id"], None)
+                cash += pos["notional"] * (float(pos["exit_return"]) - SHADOW_FEE_PER_FILL)
+            for pos in positions_by_entry.get(ts, ()):
+                cash -= pos["notional"] * SHADOW_FEE_PER_FILL
+                active_marks[pos["position_id"]] = (pos["notional"], 0.0)
+            for position_id, notional, mark in path_updates.get(ts, ()):
+                if position_id in active_marks:
+                    active_marks[position_id] = (notional, mark)
+
+            # Account MTM drawdown uses paid fees plus live unrealized P&L; a
+            # future closing fee is not an account-equity loss until the exit.
+            path_equity = cash + sum(
+                notional * mark
+                for notional, mark in active_marks.values()
+            )
+            if peak_equity > 0:
+                max_mtm_drawdown = max(
+                    max_mtm_drawdown,
+                    max(0.0, (peak_equity - path_equity) / peak_equity),
+                )
+            peak_equity = max(peak_equity, path_equity)
+
         slot_days = sum(holds_hours) / 24.0
         avg_exposure = (
             slot_days * exposure.per_trade_pct / span_days
@@ -1110,6 +1190,10 @@ def build_performance_summary(
         run_rate = (
             observed_return * MONTHLY_RUN_RATE_DAYS / span_days
             if observed_return is not None and span_days > 0 else None
+        )
+        return_over_drawdown = (
+            observed_return / max_mtm_drawdown
+            if observed_return is not None and max_mtm_drawdown > 0 else None
         )
         return AccountRunRateSummary(
             strategy=strategy,
@@ -1128,6 +1212,8 @@ def build_performance_summary(
             thirty_day_pnl_per_10k=(run_rate * 10000.0) if run_rate is not None else None,
             avg_exposure_pct=avg_exposure,
             peak_exposure_pct=max_open * exposure.per_trade_pct,
+            max_mtm_drawdown=max_mtm_drawdown if event_times else None,
+            return_over_max_drawdown=return_over_drawdown,
             slot_days=slot_days,
         )
 

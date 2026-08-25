@@ -126,3 +126,30 @@ def test_account_return_is_withheld_if_an_open_position_cannot_be_marked():
     assert tp20.unmarked_open_positions == 1
     assert tp20.observed_account_return is None
     assert tp20.thirty_day_equivalent_return is None
+
+
+def test_account_run_rate_reports_mtm_drawdown_from_path_marks():
+    base = datetime(2026, 8, 1, tzinfo=UTC)
+    now = base + timedelta(days=2)
+    row = _row(
+        99,
+        base,
+        symbol="DD_USDT",
+        tier="standard",
+        current=0.05,
+        target5_h=None,
+    )
+    row["path_times"] = [
+        base + timedelta(hours=6),
+        base + timedelta(hours=12),
+        base + timedelta(hours=24),
+    ]
+    row["path_returns"] = [0.02, -0.40, 0.01]
+
+    report = build_performance_summary([row], now_utc=now, timezone_name="Europe/Zurich")
+    tp5 = report.tp5_account_run_rate
+    assert tp5 is not None
+    assert tp5.observed_account_return is not None and tp5.observed_account_return > 0
+    assert tp5.max_mtm_drawdown is not None and tp5.max_mtm_drawdown > 0.019
+    assert tp5.return_over_max_drawdown is not None
+    assert tp5.return_over_max_drawdown > 0

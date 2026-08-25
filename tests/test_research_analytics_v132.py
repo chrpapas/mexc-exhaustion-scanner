@@ -136,7 +136,7 @@ def test_research_notifier_emits_tp5_challenger_card_within_discord_limits():
     assert "Strategy Validation" in all_text
     assert "TP5 Frequent" in all_text
     assert "7D Swing" in all_text
-    assert "TP20 High Risk" in all_text
+    assert "TP20 remains tracked" in all_text
     assert "TP1-10" not in all_text
     assert "TP2-6" not in all_text
     assert "TP2-10" not in all_text

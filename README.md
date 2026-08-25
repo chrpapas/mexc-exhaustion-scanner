@@ -1,7 +1,18 @@
-# MEXC Exhaustion Scanner + Multi-Slot Futures Trader v1.3.20
+# MEXC Exhaustion Scanner + Multi-Slot Futures Trader v1.3.21
 
 Reporting release. **TP5_V1 trader execution remains frozen and unchanged.**
 
+
+
+## v1.3.21 — two recommended strategies + account drawdown
+
+- **Subscriber board simplified to two actionable choices:** TP5 Frequent and STANDARD 7D Swing. TP20 No Timeout is removed from the public recommendation/account-comparison card because its current observed account return is lower while capacity congestion and tail exposure are materially worse.
+- **TP20 is not deleted:** it remains fully calculated in the Strategy Ledger and research layer for both STANDARD and HIGH_RISK signals, including target timing, MTM, and breach-before-target evidence. It can be promoted again if forward evidence improves.
+- **Account risk added:** each recommended strategy now reports **max MTM drawdown** and **observed return / max drawdown** beside observed account return and 30-day equivalent run-rate.
+- **15-minute portfolio marks:** `performance_rows()` now returns the stored 15m signal path timestamps/returns so account drawdown is reconstructed from the exact trades admitted by chronological slot/capacity replay, plus exact entry/exit/report events.
+- **Clearer subscriber wording:** the headline is now `Strategy Account Performance • Suggested Sizing`, and the dollar illustration reads `30D eq. ≈ $X per $10k` so it cannot be mistaken for already-realized P&L.
+- **7D sizing remains explicitly risk-based; TP5 sizing remains the frozen portfolio-tested 5% × 6 / 30% cap.**
+- **Frozen TP5_V1 trader execution unchanged.** No schema migration; `015_tp5_trader_runs.sql` remains latest.
 
 ## v1.3.20 — ledger is fully observational across tiers
 
