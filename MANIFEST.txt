@@ -73,6 +73,7 @@ tests/test_research_analytics_v1310.py
 tests/test_research_analytics_v1311.py
 tests/test_research_analytics_v1312.py
 tests/test_research_analytics_v132.py
+tests/test_research_analytics_v1322.py
 tests/test_research_analytics_v133.py
 tests/test_research_analytics_v134.py
 tests/test_research_analytics_v135.py

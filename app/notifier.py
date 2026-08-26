@@ -513,6 +513,28 @@ class DiscordNotifier:
         tp5 = report.tp5_risk
         calendar = report.calendar_throughput
         live_tp5 = report.prospective_tp5_live
+        persistent = report.persistent_run_risk
+
+        def persistent_bucket(cohort: str, flag_name: str, flagged: bool):
+            return persistent.bucket(cohort, flag_name, flagged)
+
+        def breach_fraction(item) -> str:
+            if item is None or item.evaluable_120h <= 0:
+                return "0/0 (n/a)"
+            return (
+                f"{item.adverse_100_breaches}/{item.evaluable_120h} "
+                f"({self._percent(item.adverse_100_rate)})"
+            )
+
+        cal_long = persistent_bucket("calibration", "long_run_36h", True)
+        cal_short = persistent_bucket("calibration", "long_run_36h", False)
+        cal_strict = persistent_bucket("calibration", "persistent_run_36h_ema3", True)
+        cal_other = persistent_bucket("calibration", "persistent_run_36h_ema3", False)
+        fwd_long = persistent_bucket("prospective", "long_run_36h", True)
+        fwd_short = persistent_bucket("prospective", "long_run_36h", False)
+        fwd_strict = persistent_bucket("prospective", "persistent_run_36h_ema3", True)
+        fwd_other = persistent_bucket("prospective", "persistent_run_36h_ema3", False)
+        fwd_signals = (fwd_long.signals if fwd_long else 0) + (fwd_short.signals if fwd_short else 0)
 
         tp5_entries_per_day = (
             calendar.tp5.entered / calendar.history_span_days
@@ -549,6 +571,22 @@ class DiscordNotifier:
                         f"Observed {calendar.history_span_days:.2f}d portfolio return **{self._signed_percent(calendar.tp5.marked_return)}** • "
                         f"MTM DD **{'-' + self._percent(calendar.tp5.max_mtm_drawdown) if calendar.tp5.max_mtm_drawdown is not None else 'n/a'}** • "
                         f"entries/day **{tp5_entries_per_day:.2f}** • releases/day **{tp5_releases_per_day:.2f}**"
+                    ),
+                    "inline": False,
+                },
+                {
+                    "name": "🧭 Persistent-run continuation risk • research only",
+                    "value": (
+                        f"Frozen **{persistent.freeze_at.astimezone(tz).strftime('%d %b %Y • %H:%M %Z')}** • "
+                        f"evaluate -100% adverse within first **{persistent.observation_hours}h**; no execution filtering.\n"
+                        "Calibration frozen at selection time; non-breaches require a full 120h path: "
+                        f"run ≥{persistent.long_run_hours:.0f}h **{breach_fraction(cal_long)}** vs shorter **{breach_fraction(cal_short)}** • "
+                        f"strict ≥{persistent.long_run_hours:.0f}h + ≤{persistent.max_ema_distance_atr:.0f} ATR **{breach_fraction(cal_strict)}** "
+                        f"vs other **{breach_fraction(cal_other)}**.\n"
+                        f"Forward since freeze: signals **{fwd_signals}** • long flagged **{fwd_long.signals if fwd_long else 0}** • "
+                        f"strict flagged **{fwd_strict.signals if fwd_strict else 0}** • "
+                        f"120h breach long **{breach_fraction(fwd_long)}** vs shorter **{breach_fraction(fwd_short)}** • "
+                        f"strict **{breach_fraction(fwd_strict)}** vs other **{breach_fraction(fwd_other)}**"
                     ),
                     "inline": False,
                 },

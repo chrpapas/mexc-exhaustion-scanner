@@ -41,6 +41,17 @@ ENTRY_GATE_V1_MAX_CONTINUATION = 6
 PROSPECTIVE_GATE_ROLLING_WINDOW = 20
 CALENDAR_MONTH_DAYS = 30
 
+# Research-only persistent-pump continuation-risk candidate. These thresholds
+# were selected from the 26 Aug 2026 analysis and are frozen prospectively;
+# they MUST NOT affect subscriber strategy eligibility or TP5 execution.
+PERSISTENT_RUN_RISK_FREEZE_AT = datetime(2026, 8, 26, 13, 22, tzinfo=UTC)
+PERSISTENT_RUN_RISK_OBSERVATION_HOURS = 120
+PERSISTENT_RUN_LONG_HOURS = 36.0
+PERSISTENT_RUN_MAX_EMA_DISTANCE_ATR = 3.0
+PERSISTENT_RUN_RISK_NONBREACH_MATURITY_CUTOFF = (
+    PERSISTENT_RUN_RISK_FREEZE_AT - timedelta(hours=PERSISTENT_RUN_RISK_OBSERVATION_HOURS)
+)
+
 
 @dataclass(frozen=True, slots=True)
 class FeatureSpec:
@@ -353,6 +364,37 @@ class CalendarThroughputComparison:
 
 
 @dataclass(frozen=True, slots=True)
+class PersistentRunRiskBucketSummary:
+    cohort: str
+    flag_name: str
+    flagged: bool
+    signals: int
+    evaluable_120h: int
+    adverse_100_breaches: int
+    adverse_100_rate: float | None
+    tp5_before_adverse_100: int
+
+
+@dataclass(frozen=True, slots=True)
+class PersistentRunRiskResearchSummary:
+    freeze_at: datetime
+    nonbreach_maturity_cutoff: datetime
+    observation_hours: int
+    long_run_hours: float
+    max_ema_distance_atr: float
+    buckets: tuple[PersistentRunRiskBucketSummary, ...]
+
+    def bucket(self, cohort: str, flag_name: str, flagged: bool) -> PersistentRunRiskBucketSummary | None:
+        return next(
+            (
+                item for item in self.buckets
+                if item.cohort == cohort and item.flag_name == flag_name and item.flagged is flagged
+            ),
+            None,
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class CohortScoreBucketSummary:
     cohort: str
     score_name: str
@@ -390,6 +432,7 @@ class ResearchAnalyticsReport:
     token_regime: TokenRegimeResearchSummary
     regime_portfolios: tuple[PortfolioReplaySummary, ...]
     hybrid_portfolios: tuple[PortfolioReplaySummary, ...]
+    persistent_run_risk: PersistentRunRiskResearchSummary
     oos_freeze_at: datetime
     min_rank_sample: int
 
@@ -1587,6 +1630,121 @@ def _calendar_throughput_comparison(
     )
 
 
+def persistent_run_risk_flags(row: dict[str, Any]) -> tuple[bool | None, bool | None]:
+    """Return the frozen research-only long-run and strict continuation-risk flags.
+
+    Both inputs are available at signal time. Missing inputs remain unknown rather
+    than being silently treated as safe. The strict flag means a run lasted at
+    least 36h while price was no more than 3 ATR above the 4h EMA20 at signal time.
+    """
+    run_hours = _float(row.get("hours_run_to_breakdown"))
+    if run_hours is None:
+        return None, None
+    long_flag = run_hours >= PERSISTENT_RUN_LONG_HOURS
+    if not long_flag:
+        return False, False
+    ema_spec = FEATURE_BY_KEY["distance_above_ema20_atr_4h"]
+    ema_distance = _float(_feature_value(row, ema_spec))
+    strict_flag = None if ema_distance is None else ema_distance <= PERSISTENT_RUN_MAX_EMA_DISTANCE_ATR
+    return True, strict_flag
+
+
+def _adverse_100_within(
+    row: dict[str, Any], hours: int, *, as_of: datetime | None = None
+) -> bool:
+    confirmed = row.get("confirmed_at")
+    breached = row.get("adverse_100_at")
+    return bool(
+        isinstance(confirmed, datetime)
+        and isinstance(breached, datetime)
+        and breached <= confirmed + timedelta(hours=hours)
+        and (as_of is None or breached <= as_of)
+    )
+
+
+def _tp5_before_adverse_100(
+    row: dict[str, Any], hours: int, *, as_of: datetime | None = None
+) -> bool:
+    if not _adverse_100_within(row, hours, as_of=as_of):
+        return False
+    target = row.get("target_5_at")
+    breached = row.get("adverse_100_at")
+    return bool(isinstance(target, datetime) and isinstance(breached, datetime) and target < breached)
+
+
+def _persistent_run_risk_research(
+    rows: list[dict[str, Any]], *, generated_at: datetime
+) -> PersistentRunRiskResearchSummary:
+    observation = PERSISTENT_RUN_RISK_OBSERVATION_HOURS
+    # Freeze the retrospective evidence exactly as it was knowable when the
+    # candidate was selected. Early -100% events from younger signals count as
+    # resolved; non-breaches only count after a full 120h observation.
+    calibration = [
+        row for row in rows
+        if isinstance(row.get("confirmed_at"), datetime)
+        and row["confirmed_at"] <= PERSISTENT_RUN_RISK_FREEZE_AT
+    ]
+    prospective = [
+        row for row in rows
+        if isinstance(row.get("confirmed_at"), datetime)
+        and PERSISTENT_RUN_RISK_FREEZE_AT < row["confirmed_at"] <= generated_at
+    ]
+
+    result: list[PersistentRunRiskBucketSummary] = []
+    for cohort_name, cohort_rows, cohort_as_of in (
+        ("calibration", calibration, PERSISTENT_RUN_RISK_FREEZE_AT),
+        ("prospective", prospective, generated_at),
+    ):
+        for flag_name, flag_index in (("long_run_36h", 0), ("persistent_run_36h_ema3", 1)):
+            assignments: list[tuple[dict[str, Any], bool]] = []
+            for row in cohort_rows:
+                flags = persistent_run_risk_flags(row)
+                value = flags[flag_index]
+                if value is not None:
+                    assignments.append((row, value))
+            for flagged in (True, False):
+                group = [row for row, value in assignments if value is flagged]
+                # A breach is a resolved event even when the rest of the 120h path
+                # is incomplete. A non-breach only becomes evaluable once 120h of
+                # path is complete, preventing right-censoring bias.
+                evaluable = [
+                    row for row in group
+                    if _adverse_100_within(row, observation, as_of=cohort_as_of)
+                    or (
+                        isinstance(row.get("confirmed_at"), datetime)
+                        and row["confirmed_at"] + timedelta(hours=observation) <= cohort_as_of
+                        and _path_complete_for_hours(row, observation)
+                    )
+                ]
+                breaches = [
+                    row for row in evaluable
+                    if _adverse_100_within(row, observation, as_of=cohort_as_of)
+                ]
+                result.append(
+                    PersistentRunRiskBucketSummary(
+                        cohort=cohort_name,
+                        flag_name=flag_name,
+                        flagged=flagged,
+                        signals=len(group),
+                        evaluable_120h=len(evaluable),
+                        adverse_100_breaches=len(breaches),
+                        adverse_100_rate=(len(breaches) / len(evaluable)) if evaluable else None,
+                        tp5_before_adverse_100=sum(
+                            _tp5_before_adverse_100(row, observation, as_of=cohort_as_of)
+                            for row in breaches
+                        ),
+                    )
+                )
+    return PersistentRunRiskResearchSummary(
+        freeze_at=PERSISTENT_RUN_RISK_FREEZE_AT,
+        nonbreach_maturity_cutoff=PERSISTENT_RUN_RISK_NONBREACH_MATURITY_CUTOFF,
+        observation_hours=observation,
+        long_run_hours=PERSISTENT_RUN_LONG_HOURS,
+        max_ema_distance_atr=PERSISTENT_RUN_MAX_EMA_DISTANCE_ATR,
+        buckets=tuple(result),
+    )
+
+
 def _prospective_cohort_summary(
     rows: list[dict[str, Any]], *, cohort: str, freeze_at: datetime
 ) -> ProspectiveCohortSummary:
@@ -1965,6 +2123,7 @@ def build_research_analytics(
         item.episode_id: (2 if item.behavior_class in {MIXED_CLASS, REGIME_FOLLOWER_CLASS} else 5)
         for item in token_regime.profiles
     }
+    persistent_run_risk = _persistent_run_risk_research(rows, generated_at=generated_at)
     hybrid_portfolios = (
         _portfolio_replay(
             rows, strategy="tp5_challenger", generated_at=generated_at,
@@ -2017,6 +2176,7 @@ def build_research_analytics(
         token_regime=token_regime,
         regime_portfolios=regime_portfolios,
         hybrid_portfolios=hybrid_portfolios,
+        persistent_run_risk=persistent_run_risk,
         oos_freeze_at=oos_freeze_at,
         min_rank_sample=min_rank_sample,
     )
@@ -2283,6 +2443,8 @@ def research_signal_dataset_csv(rows: Iterable[dict[str, Any]]) -> bytes:
     score_fields = [
         "shadow_entry_quality_score", "shadow_continuation_risk_score",
         "entry_gate_v1_eligible", "prospective_cohort",
+        "persistent_run_long_flag", "persistent_run_strict_flag",
+        "persistent_run_risk_cohort",
     ]
     writer_fields = fixed + horizon_fields + target_fields + adverse_race_fields + feature_fields + score_fields
 
@@ -2303,11 +2465,18 @@ def research_signal_dataset_csv(rows: Iterable[dict[str, Any]]) -> bytes:
         flattened["shadow_entry_quality_score"] = quality
         flattened["shadow_continuation_risk_score"] = continuation
         flattened["entry_gate_v1_eligible"] = entry_gate_v1(row)
+        long_flag, strict_flag = persistent_run_risk_flags(row)
+        flattened["persistent_run_long_flag"] = long_flag
+        flattened["persistent_run_strict_flag"] = strict_flag
         confirmed = row.get("confirmed_at")
         flattened["prospective_cohort"] = (
             "post_freeze"
             if isinstance(confirmed, datetime) and confirmed > RESEARCH_OOS_FREEZE_AT
             else "discovery"
         )
+        if isinstance(confirmed, datetime) and confirmed > PERSISTENT_RUN_RISK_FREEZE_AT:
+            flattened["persistent_run_risk_cohort"] = "prospective"
+        else:
+            flattened["persistent_run_risk_cohort"] = "calibration"
         writer.writerow(flattened)
     return output.getvalue().encode("utf-8")

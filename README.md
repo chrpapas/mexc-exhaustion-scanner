@@ -1,8 +1,18 @@
-# MEXC Exhaustion Scanner + Multi-Slot Futures Trader v1.3.21
+# MEXC Exhaustion Scanner + Multi-Slot Futures Trader v1.3.22
 
 Reporting release. **TP5_V1 trader execution remains frozen and unchanged.**
 
 
+
+## v1.3.22 — research-only persistent-run continuation-risk flag
+
+- **New research-only flag; no execution change:** `hours_run_to_breakdown >= 36h` is tracked as `persistent_run_long_flag`. A stricter candidate, `>=36h` plus `distance_above_ema20_atr_4h <= 3`, is tracked as `persistent_run_strict_flag`. Neither affects signal publication, TP5 trader entry, sizing, targets, or subscriber strategy eligibility.
+- **True prospective freeze:** thresholds are frozen at **2026-08-26 13:22 UTC / 15:22 CEST**. The retrospective calibration is evaluated only with information knowable at that freeze; future signals are placed in a separate prospective cohort.
+- **Censor-safe -100% evaluation:** the research endpoint is a -100% adverse move within the first **120h**. An early breach resolves immediately; a non-breach is counted only after a full 120h path. This prevents young signals from being mislabeled safe.
+- **Frozen calibration reproduced:** long-run signals show **5/17 (29.41%)** -100% breaches versus **4/57 (7.02%)** for shorter runs; the strict flag shows **4/10 (40.00%)** versus **5/64 (7.81%)** for other evaluable signals. These are small-sample research statistics, not a validated filter.
+- **Research Discord tracking:** Strategy Validation now shows the frozen calibration and a forward tracker for long/strict flagged signals and their censor-safe 120h -100% breach rates.
+- **Dataset audit fields:** the daily research CSV includes `persistent_run_long_flag`, `persistent_run_strict_flag`, and `persistent_run_risk_cohort`.
+- **Frozen TP5_V1 trader unchanged.** No schema migration; `015_tp5_trader_runs.sql` remains latest.
 
 ## v1.3.21 — two recommended strategies + account drawdown
 
