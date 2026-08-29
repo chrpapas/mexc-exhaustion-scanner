@@ -1,6 +1,5 @@
 .gitignore
 .python-version
-MANIFEST.txt
 README.md
 README_v0.8.8.md
 TRADER-DEPLOY.md
@@ -51,6 +50,7 @@ migrations/012_multi_slot_live_trader.sql
 migrations/013_research_signal_paths.sql
 migrations/014_tier_exit_strategy.sql
 migrations/015_tp5_trader_runs.sql
+migrations/016_tp5_sl75_exit_strategy.sql
 pyproject.toml
 render.yaml
 scripts/verify_project.py
@@ -65,6 +65,7 @@ tests/test_db_research_aggregation_v1329.py
 tests/test_indicators.py
 tests/test_mexc_parsers.py
 tests/test_mexc_trade.py
+tests/test_migration_v1331.py
 tests/test_notifier.py
 tests/test_performance.py
 tests/test_report_now.py
@@ -85,6 +86,7 @@ tests/test_research_v126.py
 tests/test_research_v138.py
 tests/test_signal_ledger.py
 tests/test_signals.py
+tests/test_standard_scaling_v1330.py
 tests/test_strategy_validation_v1327.py
 tests/test_trader_config.py
 tests/test_trader_db.py

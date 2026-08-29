@@ -4,7 +4,7 @@ import csv
 import io
 import math
 import statistics
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from typing import Any, Iterable
 
@@ -38,6 +38,11 @@ TP5_CHALLENGER_TOTAL_EXPOSURE_PCT = TP5_CHALLENGER_SLOT_PCT * TP5_CHALLENGER_MAX
 FAST_TP_CHALLENGER_SLOT_PCT = 0.05
 FAST_TP_CHALLENGER_MAX_SLOTS = 10
 FAST_TP_CHALLENGER_TOTAL_EXPOSURE_PCT = FAST_TP_CHALLENGER_SLOT_PCT * FAST_TP_CHALLENGER_MAX_SLOTS
+STANDARD_TP5_SCALE_SLOT_PCT = 0.05
+STANDARD_TP5_SCALE_SLOT_PCT_75 = 0.075
+STANDARD_TP5_SCALE_SLOT_PCT_100 = 0.10
+STANDARD_TP5_SCALE_MAX_SLOTS = 10
+STANDARD_TP5_SCALE_TOTAL_EXPOSURE_PCT = STANDARD_TP5_SCALE_SLOT_PCT * STANDARD_TP5_SCALE_MAX_SLOTS
 RESEARCH_OOS_FREEZE_AT = datetime(2026, 8, 21, 21, 29, tzinfo=UTC)
 ENTRY_GATE_V1_MIN_QUALITY = 4
 ENTRY_GATE_V1_MAX_CONTINUATION = 6
@@ -466,6 +471,13 @@ class ResearchAnalyticsReport:
     portfolio_tp5: PortfolioReplaySummary
     portfolio_tp5_sl75: PortfolioReplaySummary
     portfolio_hold_7d: PortfolioReplaySummary
+    standard_tp5_validation: StrategyValidationSummary
+    standard_tp5_sl75_validation: StrategyValidationSummary
+    portfolio_standard_tp5_10: PortfolioReplaySummary
+    portfolio_standard_tp5_10x75: PortfolioReplaySummary
+    portfolio_standard_tp5_10x10: PortfolioReplaySummary
+    portfolio_standard_tp5_sl75_10: PortfolioReplaySummary
+    portfolio_standard_tp5_sl75_10x10: PortfolioReplaySummary
     portfolio_entrygate_current: PortfolioReplaySummary
     portfolio_entrygate_tp5: PortfolioReplaySummary
     prospective_cohorts: tuple[ProspectiveCohortSummary, ...]
@@ -473,6 +485,13 @@ class ResearchAnalyticsReport:
     prospective_tp5_live: ProspectiveTp5LiveSummary
     prospective_strategy_validations: tuple[StrategyValidationSummary, ...]
     prospective_strategy_portfolios: tuple[PortfolioReplaySummary, ...]
+    prospective_standard_tp5_validation: StrategyValidationSummary
+    prospective_standard_tp5_sl75_validation: StrategyValidationSummary
+    prospective_portfolio_standard_tp5_10: PortfolioReplaySummary
+    prospective_portfolio_standard_tp5_10x75: PortfolioReplaySummary
+    prospective_portfolio_standard_tp5_10x10: PortfolioReplaySummary
+    prospective_portfolio_standard_tp5_sl75_10: PortfolioReplaySummary
+    prospective_portfolio_standard_tp5_sl75_10x10: PortfolioReplaySummary
     prospective_gate_acceptance: ProspectiveGateAcceptanceSummary
     prospective_regime_drift: tuple[RegimeDriftSummary, ...]
     prospective_portfolios: tuple[PortfolioReplaySummary, ...]
@@ -1568,6 +1587,8 @@ def _portfolio_replay(
     strategy_name_override: str | None = None,
     priority_scores: dict[int, float] | None = None,
     target_pct_by_episode: dict[int, int] | None = None,
+    position_fraction_override: float | None = None,
+    max_total_override: int | None = None,
 ) -> PortfolioReplaySummary:
     candidates = [
         row for row in rows
@@ -1605,6 +1626,14 @@ def _portfolio_replay(
         max_standard = 5
         max_high = 1
         base_name = "current_live_5standard_1high"
+    if position_fraction_override is not None:
+        if position_fraction_override <= 0:
+            raise ValueError("position_fraction_override must be positive")
+        position_fraction = position_fraction_override
+    if max_total_override is not None:
+        if max_total_override <= 0:
+            raise ValueError("max_total_override must be positive")
+        max_total = max_total_override
     strategy_name = f"entrygate_v1__{base_name}" if use_entry_gate else base_name
     if strategy_name_override:
         strategy_name = strategy_name_override
@@ -2181,6 +2210,7 @@ def build_research_analytics(
 ) -> ResearchAnalyticsReport:
     rows = [dict(row) for row in raw_rows]
     rows = [row for row in rows if str(row.get("risk_tier") or "standard") in PUBLIC_RESEARCH_RISK_TIERS]
+    standard_rows = [row for row in rows if str(row.get("risk_tier") or "standard") == "standard"]
     matured = [row for row in rows if row.get("return_168h_pct") is not None]
     complete_paths_7d = [row for row in matured if _path_complete_7d(row)]
     complete_paths_14d = [row for row in rows if _path_complete_for_hours(row, 336)]
@@ -2276,6 +2306,7 @@ def build_research_analytics(
     )
     discovery_rows = [row for row in rows if row.get("confirmed_at") is not None and row["confirmed_at"] <= oos_freeze_at]
     post_freeze_rows = [row for row in rows if row.get("confirmed_at") is not None and row["confirmed_at"] > oos_freeze_at]
+    post_freeze_standard_rows = [row for row in post_freeze_rows if str(row.get("risk_tier") or "standard") == "standard"]
     prospective_cohorts = (
         _prospective_cohort_summary(discovery_rows, cohort="discovery", freeze_at=oos_freeze_at),
         _prospective_cohort_summary(post_freeze_rows, cohort="post_freeze", freeze_at=oos_freeze_at),
@@ -2305,6 +2336,53 @@ def build_research_analytics(
     )
     prospective_gate_acceptance = _prospective_gate_acceptance_summary(post_freeze_rows)
     prospective_regime_drift = _prospective_regime_drift(discovery_rows, post_freeze_rows)
+    prospective_standard_tp5_validation = replace(
+        _strategy_validation_summary(post_freeze_standard_rows, strategy="tp5_challenger", generated_at=generated_at),
+        strategy="standard_tp5_10x5",
+        label="STANDARD TP5 • 10×5%",
+        rule="STANDARD only • +5% target • no stop • no timeout • 10×5% / 50% cap",
+    )
+    prospective_standard_tp5_sl75_validation = replace(
+        _strategy_validation_summary(post_freeze_standard_rows, strategy="tp5_sl75_challenger", generated_at=generated_at),
+        strategy="standard_tp5_sl75_10x5",
+        label="STANDARD TP5 + SL75 • 10×5%",
+        rule="STANDARD only • +5% target • -75% catastrophic stop • no timeout • 10×5% / 50% cap",
+    )
+    prospective_portfolio_standard_tp5_10 = _portfolio_replay(
+        post_freeze_standard_rows, strategy="tp5_challenger", generated_at=generated_at,
+        path_rows=portfolio_path_rows, cohort="post_freeze_standard_only",
+        strategy_name_override="standard_tp5_10x5_50pct",
+        position_fraction_override=STANDARD_TP5_SCALE_SLOT_PCT,
+        max_total_override=STANDARD_TP5_SCALE_MAX_SLOTS,
+    )
+    prospective_portfolio_standard_tp5_10x75 = _portfolio_replay(
+        post_freeze_standard_rows, strategy="tp5_challenger", generated_at=generated_at,
+        path_rows=portfolio_path_rows, cohort="post_freeze_standard_only",
+        strategy_name_override="standard_tp5_10x7_5_75pct",
+        position_fraction_override=STANDARD_TP5_SCALE_SLOT_PCT_75,
+        max_total_override=STANDARD_TP5_SCALE_MAX_SLOTS,
+    )
+    prospective_portfolio_standard_tp5_10x10 = _portfolio_replay(
+        post_freeze_standard_rows, strategy="tp5_challenger", generated_at=generated_at,
+        path_rows=portfolio_path_rows, cohort="post_freeze_standard_only",
+        strategy_name_override="standard_tp5_10x10_100pct",
+        position_fraction_override=STANDARD_TP5_SCALE_SLOT_PCT_100,
+        max_total_override=STANDARD_TP5_SCALE_MAX_SLOTS,
+    )
+    prospective_portfolio_standard_tp5_sl75_10 = _portfolio_replay(
+        post_freeze_standard_rows, strategy="tp5_sl75_challenger", generated_at=generated_at,
+        path_rows=portfolio_path_rows, cohort="post_freeze_standard_only",
+        strategy_name_override="standard_tp5_sl75_10x5_50pct",
+        position_fraction_override=STANDARD_TP5_SCALE_SLOT_PCT,
+        max_total_override=STANDARD_TP5_SCALE_MAX_SLOTS,
+    )
+    prospective_portfolio_standard_tp5_sl75_10x10 = _portfolio_replay(
+        post_freeze_standard_rows, strategy="tp5_sl75_challenger", generated_at=generated_at,
+        path_rows=portfolio_path_rows, cohort="post_freeze_standard_only",
+        strategy_name_override="standard_tp5_sl75_10x10_100pct",
+        position_fraction_override=STANDARD_TP5_SCALE_SLOT_PCT_100,
+        max_total_override=STANDARD_TP5_SCALE_MAX_SLOTS,
+    )
     calendar_throughput = _calendar_throughput_comparison(
         rows, generated_at=generated_at, path_rows=portfolio_path_rows
     )
@@ -2425,6 +2503,53 @@ def build_research_analytics(
             rows, strategy="hold_7d", generated_at=generated_at,
             path_rows=portfolio_path_rows, cohort="observed_all_signals_open_until_exit",
         ),
+        standard_tp5_validation=replace(
+            _strategy_validation_summary(standard_rows, strategy="tp5_challenger", generated_at=generated_at),
+            strategy="standard_tp5_10x5",
+            label="STANDARD TP5 • 10×5%",
+            rule="STANDARD only • +5% target • no stop • no timeout • 10×5% / 50% cap",
+        ),
+        standard_tp5_sl75_validation=replace(
+            _strategy_validation_summary(standard_rows, strategy="tp5_sl75_challenger", generated_at=generated_at),
+            strategy="standard_tp5_sl75_10x5",
+            label="STANDARD TP5 + SL75 • 10×5%",
+            rule="STANDARD only • +5% target • -75% catastrophic stop • no timeout • 10×5% / 50% cap",
+        ),
+        portfolio_standard_tp5_10=_portfolio_replay(
+            standard_rows, strategy="tp5_challenger", generated_at=generated_at,
+            path_rows=portfolio_path_rows, cohort="observed_standard_only",
+            strategy_name_override="standard_tp5_10x5_50pct",
+            position_fraction_override=STANDARD_TP5_SCALE_SLOT_PCT,
+            max_total_override=STANDARD_TP5_SCALE_MAX_SLOTS,
+        ),
+        portfolio_standard_tp5_10x75=_portfolio_replay(
+            standard_rows, strategy="tp5_challenger", generated_at=generated_at,
+            path_rows=portfolio_path_rows, cohort="observed_standard_only",
+            strategy_name_override="standard_tp5_10x7_5_75pct",
+            position_fraction_override=STANDARD_TP5_SCALE_SLOT_PCT_75,
+            max_total_override=STANDARD_TP5_SCALE_MAX_SLOTS,
+        ),
+        portfolio_standard_tp5_10x10=_portfolio_replay(
+            standard_rows, strategy="tp5_challenger", generated_at=generated_at,
+            path_rows=portfolio_path_rows, cohort="observed_standard_only",
+            strategy_name_override="standard_tp5_10x10_100pct",
+            position_fraction_override=STANDARD_TP5_SCALE_SLOT_PCT_100,
+            max_total_override=STANDARD_TP5_SCALE_MAX_SLOTS,
+        ),
+        portfolio_standard_tp5_sl75_10=_portfolio_replay(
+            standard_rows, strategy="tp5_sl75_challenger", generated_at=generated_at,
+            path_rows=portfolio_path_rows, cohort="observed_standard_only",
+            strategy_name_override="standard_tp5_sl75_10x5_50pct",
+            position_fraction_override=STANDARD_TP5_SCALE_SLOT_PCT,
+            max_total_override=STANDARD_TP5_SCALE_MAX_SLOTS,
+        ),
+        portfolio_standard_tp5_sl75_10x10=_portfolio_replay(
+            standard_rows, strategy="tp5_sl75_challenger", generated_at=generated_at,
+            path_rows=portfolio_path_rows, cohort="observed_standard_only",
+            strategy_name_override="standard_tp5_sl75_10x10_100pct",
+            position_fraction_override=STANDARD_TP5_SCALE_SLOT_PCT_100,
+            max_total_override=STANDARD_TP5_SCALE_MAX_SLOTS,
+        ),
         portfolio_entrygate_current=_portfolio_replay(
             complete_paths_7d, strategy="current", generated_at=generated_at,
             path_rows=portfolio_path_rows, use_entry_gate=True,
@@ -2438,6 +2563,13 @@ def build_research_analytics(
         prospective_tp5_live=prospective_tp5_live,
         prospective_strategy_validations=prospective_strategy_validations,
         prospective_strategy_portfolios=prospective_strategy_portfolios,
+        prospective_standard_tp5_validation=prospective_standard_tp5_validation,
+        prospective_standard_tp5_sl75_validation=prospective_standard_tp5_sl75_validation,
+        prospective_portfolio_standard_tp5_10=prospective_portfolio_standard_tp5_10,
+        prospective_portfolio_standard_tp5_10x75=prospective_portfolio_standard_tp5_10x75,
+        prospective_portfolio_standard_tp5_10x10=prospective_portfolio_standard_tp5_10x10,
+        prospective_portfolio_standard_tp5_sl75_10=prospective_portfolio_standard_tp5_sl75_10,
+        prospective_portfolio_standard_tp5_sl75_10x10=prospective_portfolio_standard_tp5_sl75_10x10,
         prospective_gate_acceptance=prospective_gate_acceptance,
         prospective_regime_drift=prospective_regime_drift,
         prospective_portfolios=prospective_portfolios,
@@ -2711,11 +2843,15 @@ def research_entry_research_csv(report: ResearchAnalyticsReport) -> bytes:
 
 
 def research_strategy_validation_csv(report: ResearchAnalyticsReport) -> bytes:
-    """Compact machine-readable comparison of the three trader-facing strategies."""
+    """Compact machine-readable comparison of core strategies plus research challengers."""
     portfolios = {
         "tp5_challenger": report.portfolio_tp5,
         "tp5_sl75_challenger": report.portfolio_tp5_sl75,
         "hold_7d": report.portfolio_hold_7d,
+        "standard_tp5_10x5": report.portfolio_standard_tp5_10,
+        "standard_tp5_10x7_5": report.portfolio_standard_tp5_10x75,
+        "standard_tp5_10x10": report.portfolio_standard_tp5_10x10,
+        "standard_tp5_sl75_10x10": report.portfolio_standard_tp5_sl75_10x10,
     }
     output = io.StringIO(newline="")
     fields = [
@@ -2737,7 +2873,33 @@ def research_strategy_validation_csv(report: ResearchAnalyticsReport) -> bytes:
     ]
     writer = csv.DictWriter(output, fieldnames=fields)
     writer.writeheader()
-    for summary in report.strategy_validations:
+    standard_5 = report.standard_tp5_validation
+    standard_75 = replace(
+        report.standard_tp5_validation,
+        strategy="standard_tp5_10x7_5",
+        label="STANDARD TP5 • 10×7.5%",
+        rule="STANDARD only • +5% target • no stop • no timeout • 10×7.5% / 75% cap",
+    )
+    standard_10 = replace(
+        report.standard_tp5_validation,
+        strategy="standard_tp5_10x10",
+        label="STANDARD TP5 • 10×10%",
+        rule="STANDARD only • +5% target • no stop • no timeout • 10×10% / 100% cap",
+    )
+    standard_sl75_10 = replace(
+        report.standard_tp5_sl75_validation,
+        strategy="standard_tp5_sl75_10x10",
+        label="STANDARD TP5 + SL75 • 10×10%",
+        rule="STANDARD only • +5% target • -75% catastrophic stop • no timeout • 10×10% / 100% cap",
+    )
+    summaries = (
+        *report.strategy_validations,
+        standard_5,
+        standard_75,
+        standard_10,
+        standard_sl75_10,
+    )
+    for summary in summaries:
         portfolio = portfolios[summary.strategy]
         tails = {item.threshold_pct: item for item in summary.tail_ladder}
         row: dict[str, Any] = {

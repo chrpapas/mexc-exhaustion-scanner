@@ -1,8 +1,25 @@
-# MEXC Exhaustion Scanner + Multi-Slot Futures Trader v1.3.29
+# MEXC Exhaustion Scanner + Multi-Slot Futures Trader v1.3.31
 
 Execution + research release. **TP5_SL75_V1 is now the default trader strategy**, based on the v1.3.22 codebase.
 
-## v1.3.29 — research analytics timeout fix
+
+## v1.3.31 — TP5+SL75 schema constraint fix
+
+- Adds migration `016_tp5_sl75_exit_strategy.sql`.
+- Fixes PostgreSQL `trader_positions_exit_strategy_check` so the persisted exit strategy `tp5_sl75_full` is accepted.
+- Preserves every previously allowed exit strategy; no position data rewrite is required.
+- Trader/research strategy logic is otherwise unchanged from v1.3.30.
+
+## v1.3.30 — STANDARD-only scaling research challenger
+
+- **Research only; live trader unchanged:** the default remains `TP5_SL75_V1`, 6×5% / 30% across STANDARD + HIGH_RISK.
+- Adds a **STANDARD-only TP5 scaling curve** using the same chronological replay engine, fees, one-symbol rule and stored 15m MTM paths: **10×5% / 50%**, **10×7.5% / 75%**, and **10×10% / 100%**.
+- Adds a **10×10% + SL75 safety twin** so the research report can quantify whether catastrophic protection changes return or drawdown once HIGH_RISK is excluded.
+- Discord research now reports each scale point's MTM return, 30-day-equivalent run-rate, exact synchronized max drawdown, return/DD and capture rate, plus post-freeze versions.
+- `strategy-validation.csv` exports each scale point as a separate strategy row for LLM/human comparison.
+- No scanner entry rule, trader execution rule, database schema or Render live sizing changed.
+
+## v1.3.30 — research analytics timeout fix
 
 - **Fixed `research_analytics_rows()` timeout:** removed the legacy PostgreSQL query that repeatedly used ordered `array_agg()` over the growing 15m research-path table.
 - **Fixed the same scaling problem in `performance_rows()`:** `signal_ledger_now`, `report_now`, and scheduled performance reporting now use lightweight path reads plus Python aggregation instead of the old ordered-array SQL.

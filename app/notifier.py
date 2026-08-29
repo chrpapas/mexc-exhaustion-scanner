@@ -475,6 +475,12 @@ class DiscordNotifier:
             "tp5_sl75_challenger": report.portfolio_tp5_sl75,
             "hold_7d": report.portfolio_hold_7d,
         }
+        standard_scale_5 = report.portfolio_standard_tp5_10
+        standard_scale_75 = report.portfolio_standard_tp5_10x75
+        standard_scale_10 = report.portfolio_standard_tp5_10x10
+        standard_scale_sl75_10 = report.portfolio_standard_tp5_sl75_10x10
+        standard_scale_summary = report.standard_tp5_validation
+        standard_scale_sl75_summary = report.standard_tp5_sl75_validation
         prospective_validations = {item.strategy: item for item in report.prospective_strategy_validations}
         prospective_portfolios = dict(zip(
             ("tp5_challenger", "tp5_sl75_challenger", "hold_7d"),
@@ -560,10 +566,42 @@ class DiscordNotifier:
         default_capture = capture_rate(b_sl)
         capacity_read = (
             f"The 6-slot default currently captures **{self._percent(default_capture)}** of eligible signals. "
-            "If broader coverage is the goal, test 8/10-slot variants in shadow and compare MTM drawdown; do not raise exposure merely to eliminate misses."
+            "Broader coverage should be judged on return/DD, not on eliminating misses."
             if default_capture is not None and default_capture < 0.80
             else f"The 6-slot default currently captures **{self._percent(default_capture)}** of eligible signals; capacity is not yet the dominant bottleneck."
         )
+
+        standard_tail75 = next((item for item in standard_scale_summary.tail_ladder if item.threshold_pct == 75), None)
+
+        def standard_scale_line(label: str, portfolio) -> str:
+            dd = f"-{self._percent(portfolio.max_mtm_drawdown)}" if portfolio.max_mtm_drawdown is not None else "n/a"
+            return (
+                f"**{label}:** MTM **{self._signed_percent(portfolio.marked_return)}** • "
+                f"30D **{self._signed_percent(monthly_eq(portfolio))}*** • DD **{dd}** • "
+                f"R/DD **{self._number(portfolio.return_over_max_drawdown)}** • "
+                f"capture **{self._percent(capture_rate(portfolio))}**"
+            )
+
+        standard_read_parts = [
+            standard_scale_line("10×5% / 50%", standard_scale_5),
+            standard_scale_line("10×7.5% / 75%", standard_scale_75),
+            standard_scale_line("10×10% / 100%", standard_scale_10),
+        ]
+        if standard_tail75 is not None:
+            standard_read_parts.append(
+                f"STANDARD tail: -75% breaches **{standard_tail75.breached_before_exit_or_mark}/{standard_scale_summary.sample}**; "
+                f"later TP5 **{standard_tail75.later_tp5_after_breach}**."
+            )
+        if standard_scale_10.marked_return == standard_scale_sl75_10.marked_return:
+            standard_read_parts.append(
+                "At 10% sizing, the **SL75 safety twin is currently identical** because no admitted STANDARD trade hit -75% before TP5/mark."
+            )
+        else:
+            standard_read_parts.append(
+                f"10×10% +SL75: MTM **{self._signed_percent(standard_scale_sl75_10.marked_return)}** • "
+                f"DD **-{self._percent(standard_scale_sl75_10.max_mtm_drawdown)}**."
+            )
+        standard_scale_read = "\n".join(standard_read_parts)
 
         feature_best = report.best_slices[:2]
         feature_worst = report.worst_slices[:2]
@@ -612,7 +650,12 @@ class DiscordNotifier:
                     "inline": False,
                 },
                 {
-                    "name": "4 • Entry/regime clues • exploratory",
+                    "name": "4 • STANDARD scaling challenger",
+                    "value": standard_scale_read,
+                    "inline": False,
+                },
+                {
+                    "name": "5 • Entry/regime clues • exploratory",
                     "value": "\n".join(feature_lines) if feature_lines else "Not enough ranked feature evidence yet.",
                     "inline": False,
                 },
@@ -635,6 +678,14 @@ class DiscordNotifier:
                 f"**{label}:** {exit_mix(summary)} • all-signals net Σ **{self._signed_percent(summary.sum_marked_return)}** • "
                 f"portfolio MTM **{self._signed_percent(portfolio.marked_return)}** • DD **{dd}** • capture **{self._percent(capture_rate(portfolio))}**"
             )
+
+        prospective_standard_lines = (
+            standard_scale_line("10×5% / 50%", report.prospective_portfolio_standard_tp5_10),
+            standard_scale_line("10×7.5% / 75%", report.prospective_portfolio_standard_tp5_10x75),
+            standard_scale_line("10×10% / 100%", report.prospective_portfolio_standard_tp5_10x10),
+            f"**10×10% +SL75 safety:** MTM **{self._signed_percent(report.prospective_portfolio_standard_tp5_sl75_10x10.marked_return)}** • "
+            f"DD **-{self._percent(report.prospective_portfolio_standard_tp5_sl75_10x10.max_mtm_drawdown)}**",
+        )
 
         if all(item is not None for item in (
             calendar.latest_30d_tp5, calendar.latest_30d_tp5_sl75, calendar.latest_30d_hold_7d
@@ -659,6 +710,7 @@ class DiscordNotifier:
             "color": 0x1ABC9C,
             "fields": [
                 {"name": "Post-freeze A/B/C", "value": "\n".join(prospective_lines), "inline": False},
+                {"name": "Post-freeze STANDARD scaling", "value": "\n".join(prospective_standard_lines), "inline": False},
                 {"name": "True latest-30d empty-book replay", "value": thirty_day, "inline": False},
                 {
                     "name": "Research bundle",
