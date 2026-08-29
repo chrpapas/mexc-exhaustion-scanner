@@ -27,13 +27,13 @@ def test_three_strategy_semantics_keep_indefinite_open_and_cut_7d_at_168h():
     assert summaries["tp5_challenger"].target_exits == 1
     assert summaries["tp5_challenger"].timeout_exits == 0
     assert summaries["tp5_sl75_challenger"].target_exits == 1
-    assert summaries["tp5_7d_cutoff"].target_exits == 0
-    assert summaries["tp5_7d_cutoff"].timeout_exits == 1
-    assert summaries["tp5_7d_cutoff"].avg_exit_return == -0.25
+    assert summaries["hold_7d"].target_exits == 0
+    assert summaries["hold_7d"].timeout_exits == 1
+    assert summaries["hold_7d"].avg_exit_return == -0.25
 
     assert report.portfolio_tp5.realized_return > 0
     assert report.portfolio_tp5_sl75.realized_return > 0
-    assert report.portfolio_tp5_7d_cutoff.realized_return < 0
+    assert report.portfolio_hold_7d.realized_return < 0
 
 
 def test_strategy_validation_csv_and_signal_dataset_are_llm_ready():
@@ -54,12 +54,15 @@ def test_strategy_validation_csv_and_signal_dataset_are_llm_ready():
 
     assert "tp5_challenger" in summary_text
     assert "tp5_sl75_challenger" in summary_text
-    assert "tp5_7d_cutoff" in summary_text
+    assert "hold_7d" in summary_text
     assert "breach75_later_tp5" in summary_text
+    assert "sum_marked_return_pct" in summary_text
+    assert "thirty_day_equivalent_return_pct" in summary_text
+    assert "capture_rate_pct" in summary_text
 
     assert "tp5_indefinite_status" in dataset_text
     assert "tp5_sl75_status" in dataset_text
-    assert "tp5_7d_cutoff_status" in dataset_text
+    assert "hold_7d_status" in dataset_text
     assert ",target," in dataset_text
     assert ",stop," in dataset_text
     assert ",timeout," in dataset_text
@@ -86,7 +89,26 @@ def test_public_performance_uses_same_entry_universe_for_all_three_exit_policies
     assert report.trader_strategy_tp5.sample == 1
     assert report.trader_strategy_tp5.target_exits == 1
     assert report.trader_strategy_tp5_sl75.stop_exits == 1
-    assert report.trader_strategy_tp5_7d.timeout_exits == 1
+    assert report.trader_strategy_hold_7d.timeout_exits == 1
     assert report.tp5_account_run_rate.eligible_signals == 1
     assert report.tp5_sl75_account_run_rate.eligible_signals == 1
-    assert report.tp5_7d_account_run_rate.eligible_signals == 1
+    assert report.hold_7d_account_run_rate.eligible_signals == 1
+
+
+def test_pure_7d_hold_ignores_early_tp5_and_closes_at_168h_return():
+    start = datetime(2026, 8, 1, tzinfo=UTC)
+    row = _base_row(902, "standard")
+    row["confirmed_at"] = start
+    row["target_5_at"] = start + timedelta(hours=2)  # irrelevant to pure 7D hold
+    row["return_168h_pct"] = -0.25
+    row["path_return_168h"] = -0.25
+    row["path_latest_return"] = -0.25
+
+    report = build_research_analytics([row], generated_at=start + timedelta(days=8))
+    summaries = {item.strategy: item for item in report.strategy_validations}
+
+    assert summaries["tp5_challenger"].target_exits == 1
+    assert summaries["hold_7d"].target_exits == 0
+    assert summaries["hold_7d"].timeout_exits == 1
+    assert summaries["hold_7d"].avg_exit_return == -0.25
+    assert report.portfolio_hold_7d.realized_return < 0

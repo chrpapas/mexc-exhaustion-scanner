@@ -117,9 +117,9 @@ def test_v135_notifier_adds_calendar_throughput_board_without_short_window_proje
         "\n".join(field.get("name", "") + " " + field.get("value", "") for field in embed.get("fields", []))
         for embed in embeds
     )
-    assert "Strategy Validation" in text
-    assert "Observed" in text
+    assert "Research Intelligence" in text
+    assert "Strategy evidence" in text
     assert "True 30d empty-book comparison not available yet" in text
-    assert "entered **1**" in text
+    assert "capture **100.00%**" in text
     for embed in embeds:
         notifier._validate_discord_embed(embed)

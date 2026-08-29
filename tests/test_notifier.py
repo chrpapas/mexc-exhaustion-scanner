@@ -221,12 +221,12 @@ def test_performance_report_uses_dedicated_stats_webhook_and_embeds():
     all_text = embed.get("title", "") + "\n" + embed.get("description", "") + "\n" + "\n".join(
         field["name"] + " " + field["value"] for field in embed.get("fields", [])
     )
-    assert "Strategy Comparison" in all_text
-    assert "Replication settings" in all_text
+    assert "Performance & Playbook" in all_text
+    assert "Suggested execution" in all_text
     assert "TP5 indefinite" in all_text
     assert "TP5 + SL75" in all_text
-    assert "TP5 + 7D cutoff" in all_text
-    assert "6** simultaneous positions" in all_text
+    assert "7D hold" in all_text
+    assert "max **6** open positions" in all_text
     assert "30%" in all_text
     assert "0.08% fee per fill" in all_text
     assert "TP20" not in all_text

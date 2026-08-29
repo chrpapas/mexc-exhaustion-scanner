@@ -272,6 +272,11 @@ class StrategyValidationSummary:
     stop_exits: int
     timeout_exits: int
     waiting: int
+    marked_sample: int
+    marked_positive_rate: float | None
+    avg_marked_return: float | None
+    median_marked_return: float | None
+    sum_marked_return: float | None
     positive_exits: int
     negative_exits: int
     resolved_positive_rate: float | None
@@ -386,14 +391,14 @@ class CalendarThroughputComparison:
     current: PortfolioReplaySummary
     tp5: PortfolioReplaySummary
     tp5_sl75: PortfolioReplaySummary
-    tp5_7d_cutoff: PortfolioReplaySummary
+    hold_7d: PortfolioReplaySummary
     tp2: PortfolioReplaySummary
     tp2_10: PortfolioReplaySummary
     tp1_10: PortfolioReplaySummary
     latest_30d_current: PortfolioReplaySummary | None
     latest_30d_tp5: PortfolioReplaySummary | None
     latest_30d_tp5_sl75: PortfolioReplaySummary | None
-    latest_30d_tp5_7d_cutoff: PortfolioReplaySummary | None
+    latest_30d_hold_7d: PortfolioReplaySummary | None
     latest_30d_tp2: PortfolioReplaySummary | None
     latest_30d_tp2_10: PortfolioReplaySummary | None
     latest_30d_tp1_10: PortfolioReplaySummary | None
@@ -460,7 +465,7 @@ class ResearchAnalyticsReport:
     portfolio_current: PortfolioReplaySummary
     portfolio_tp5: PortfolioReplaySummary
     portfolio_tp5_sl75: PortfolioReplaySummary
-    portfolio_tp5_7d_cutoff: PortfolioReplaySummary
+    portfolio_hold_7d: PortfolioReplaySummary
     portfolio_entrygate_current: PortfolioReplaySummary
     portfolio_entrygate_tp5: PortfolioReplaySummary
     prospective_cohorts: tuple[ProspectiveCohortSummary, ...]
@@ -1222,8 +1227,8 @@ def _strategy_outcome(
     difference is exit policy:
       * tp5_challenger: +5% target, otherwise remain open indefinitely.
       * tp5_sl75_challenger: +5% target or -75% catastrophic stop, no timeout.
-      * tp5_7d_cutoff: +5% target if reached within 168h, otherwise close at
-        the observed 168h mark.  Before 168h an unresolved signal remains open.
+      * hold_7d: hold every entered short for exactly 168h, then close at
+        the observed 168h return. There is no profit target and no stop.
 
     Same-candle target/SL75 races are conservatively stop-first.
     """
@@ -1248,10 +1253,8 @@ def _strategy_outcome(
             return "target", target, 0.05
         return "waiting", None, None
 
-    if strategy == "tp5_7d_cutoff":
+    if strategy == "hold_7d":
         cutoff = confirmed + timedelta(hours=TP5_7D_CUTOFF_HOURS)
-        if target_observed and target <= cutoff:
-            return "target", target, 0.05
         if cutoff <= generated_at:
             value = _horizon_return(row, TP5_7D_CUTOFF_HOURS)
             if value is not None:
@@ -1267,7 +1270,7 @@ def _strategy_validation_summary(
     labels = {
         "tp5_challenger": ("TP5 indefinite", "+5% target • no stop • no timeout"),
         "tp5_sl75_challenger": ("TP5 + SL75", "+5% target • -75% catastrophic stop • no timeout"),
-        "tp5_7d_cutoff": ("TP5 + 7D cutoff", "+5% target within 7d • otherwise close at 168h mark"),
+        "hold_7d": ("7D hold", "hold exactly 168h • close at the 7D return • no TP / no SL"),
     }
     label, rule = labels[strategy]
     observed = [
@@ -1276,6 +1279,7 @@ def _strategy_validation_summary(
     ]
     statuses: list[str] = []
     exits: list[float] = []
+    marked_returns: list[float] = []
     holds: list[float] = []
     effective_ends: list[tuple[dict[str, Any], datetime]] = []
 
@@ -1286,11 +1290,15 @@ def _strategy_validation_summary(
         statuses.append(status)
         if exit_at is not None and exit_return is not None:
             exits.append(float(exit_return))
+            marked_returns.append(float(exit_return) - (2.0 * SHADOW_FEE_PER_FILL))
             hold = _elapsed_hours(row.get("confirmed_at"), exit_at)
             if hold is not None:
                 holds.append(hold)
             effective_ends.append((row, exit_at))
         else:
+            mark = _latest_observed_return(row)
+            if mark is not None:
+                marked_returns.append(float(mark) - (2.0 * SHADOW_FEE_PER_FILL))
             effective_ends.append((row, generated_at))
 
     tails: list[StrategyTailSummary] = []
@@ -1331,6 +1339,11 @@ def _strategy_validation_summary(
         stop_exits=stop_exits,
         timeout_exits=timeout_exits,
         waiting=statuses.count("waiting"),
+        marked_sample=len(marked_returns),
+        marked_positive_rate=(sum(value > 0 for value in marked_returns) / len(marked_returns)) if marked_returns else None,
+        avg_marked_return=_mean(marked_returns),
+        median_marked_return=_median(marked_returns),
+        sum_marked_return=sum(marked_returns) if marked_returns else None,
         positive_exits=positive,
         negative_exits=negative,
         resolved_positive_rate=(positive / resolved) if resolved else None,
@@ -1356,7 +1369,7 @@ def _known_exit(
         if target is not None and target <= generated_at:
             return target, target_pct_override / 100.0
         return None, None
-    if strategy in {"tp5_challenger", "tp5_sl75_challenger", "tp5_7d_cutoff"}:
+    if strategy in {"tp5_challenger", "tp5_sl75_challenger", "hold_7d"}:
         _, exit_at, exit_return = _strategy_outcome(row, strategy=strategy, generated_at=generated_at)
         return exit_at, exit_return
     if strategy in {"tp2_challenger", "tp2_10_challenger", "tp1_10_challenger"}:
@@ -1570,7 +1583,7 @@ def _portfolio_replay(
         return confirmed_at, -score
 
     ordered = sorted(candidates, key=order_key)
-    if strategy in {"tp5_challenger", "tp5_sl75_challenger", "tp5_7d_cutoff", "tp2_challenger", "tp2_10_challenger", "tp1_10_challenger"}:
+    if strategy in {"tp5_challenger", "tp5_sl75_challenger", "hold_7d", "tp2_challenger", "tp2_10_challenger", "tp1_10_challenger"}:
         if strategy in {"tp2_10_challenger", "tp1_10_challenger"}:
             position_fraction = FAST_TP_CHALLENGER_SLOT_PCT
             max_total = FAST_TP_CHALLENGER_MAX_SLOTS
@@ -1581,7 +1594,7 @@ def _portfolio_replay(
         base_name = {
             "tp5_challenger": "tp5_challenger_6x5pct",
             "tp5_sl75_challenger": "tp5_sl75_challenger_6x5pct",
-            "tp5_7d_cutoff": "tp5_7d_cutoff_6x5pct",
+            "hold_7d": "hold_7d_6x5pct",
             "tp2_challenger": "tp2_challenger_6x5pct",
             "tp2_10_challenger": "tp2_challenger_10x5pct",
             "tp1_10_challenger": "tp1_challenger_10x5pct",
@@ -1642,7 +1655,7 @@ def _portfolio_replay(
         if len(positions) >= max_total:
             missed_capacity += 1
             continue
-        if strategy not in {"tp5_challenger", "tp5_sl75_challenger", "tp5_7d_cutoff", "tp2_challenger", "tp2_10_challenger", "tp1_10_challenger"}:
+        if strategy not in {"tp5_challenger", "tp5_sl75_challenger", "hold_7d", "tp2_challenger", "tp2_10_challenger", "tp1_10_challenger"}:
             if tier == "standard" and sum(pos["tier"] == "standard" for pos in positions) >= int(max_standard or 0):
                 missed_capacity += 1
                 continue
@@ -1775,8 +1788,8 @@ def _calendar_throughput_comparison(
         observed, strategy="tp5_sl75_challenger", generated_at=generated_at, path_rows=path_rows,
         cohort="calendar_observed_all_signals",
     )
-    tp5_7d_cutoff = _portfolio_replay(
-        observed, strategy="tp5_7d_cutoff", generated_at=generated_at, path_rows=path_rows,
+    hold_7d = _portfolio_replay(
+        observed, strategy="hold_7d", generated_at=generated_at, path_rows=path_rows,
         cohort="calendar_observed_all_signals",
     )
     tp2 = _portfolio_replay(
@@ -1796,7 +1809,7 @@ def _calendar_throughput_comparison(
     latest_current: PortfolioReplaySummary | None = None
     latest_tp5: PortfolioReplaySummary | None = None
     latest_tp5_sl75: PortfolioReplaySummary | None = None
-    latest_tp5_7d_cutoff: PortfolioReplaySummary | None = None
+    latest_hold_7d: PortfolioReplaySummary | None = None
     latest_tp2: PortfolioReplaySummary | None = None
     latest_tp2_10: PortfolioReplaySummary | None = None
     latest_tp1_10: PortfolioReplaySummary | None = None
@@ -1821,8 +1834,8 @@ def _calendar_throughput_comparison(
             latest_rows, strategy="tp5_sl75_challenger", generated_at=generated_at, path_rows=path_rows,
             cohort="calendar_latest_30d_empty_book",
         )
-        latest_tp5_7d_cutoff = _portfolio_replay(
-            latest_rows, strategy="tp5_7d_cutoff", generated_at=generated_at, path_rows=path_rows,
+        latest_hold_7d = _portfolio_replay(
+            latest_rows, strategy="hold_7d", generated_at=generated_at, path_rows=path_rows,
             cohort="calendar_latest_30d_empty_book",
         )
         latest_tp2 = _portfolio_replay(
@@ -1845,14 +1858,14 @@ def _calendar_throughput_comparison(
         current=current,
         tp5=tp5,
         tp5_sl75=tp5_sl75,
-        tp5_7d_cutoff=tp5_7d_cutoff,
+        hold_7d=hold_7d,
         tp2=tp2,
         tp2_10=tp2_10,
         tp1_10=tp1_10,
         latest_30d_current=latest_current,
         latest_30d_tp5=latest_tp5,
         latest_30d_tp5_sl75=latest_tp5_sl75,
-        latest_30d_tp5_7d_cutoff=latest_tp5_7d_cutoff,
+        latest_30d_hold_7d=latest_hold_7d,
         latest_30d_tp2=latest_tp2,
         latest_30d_tp2_10=latest_tp2_10,
         latest_30d_tp1_10=latest_tp1_10,
@@ -2281,14 +2294,14 @@ def build_research_analytics(
     )
     prospective_strategy_validations = tuple(
         _strategy_validation_summary(post_freeze_rows, strategy=strategy, generated_at=generated_at)
-        for strategy in ("tp5_challenger", "tp5_sl75_challenger", "tp5_7d_cutoff")
+        for strategy in ("tp5_challenger", "tp5_sl75_challenger", "hold_7d")
     )
     prospective_strategy_portfolios = tuple(
         _portfolio_replay(
             post_freeze_rows, strategy=strategy, generated_at=generated_at,
             path_rows=portfolio_path_rows, cohort="post_freeze_observed_all_signals",
         )
-        for strategy in ("tp5_challenger", "tp5_sl75_challenger", "tp5_7d_cutoff")
+        for strategy in ("tp5_challenger", "tp5_sl75_challenger", "hold_7d")
     )
     prospective_gate_acceptance = _prospective_gate_acceptance_summary(post_freeze_rows)
     prospective_regime_drift = _prospective_regime_drift(discovery_rows, post_freeze_rows)
@@ -2394,7 +2407,7 @@ def build_research_analytics(
         tp5_risk=_tp5_risk_summary(rows, generated_at=generated_at),
         strategy_validations=tuple(
             _strategy_validation_summary(rows, strategy=strategy, generated_at=generated_at)
-            for strategy in ("tp5_challenger", "tp5_sl75_challenger", "tp5_7d_cutoff")
+            for strategy in ("tp5_challenger", "tp5_sl75_challenger", "hold_7d")
         ),
         portfolio_current=_portfolio_replay(
             complete_paths_7d, strategy="current", generated_at=generated_at,
@@ -2408,8 +2421,8 @@ def build_research_analytics(
             rows, strategy="tp5_sl75_challenger", generated_at=generated_at,
             path_rows=portfolio_path_rows, cohort="observed_all_signals_open_until_exit",
         ),
-        portfolio_tp5_7d_cutoff=_portfolio_replay(
-            rows, strategy="tp5_7d_cutoff", generated_at=generated_at,
+        portfolio_hold_7d=_portfolio_replay(
+            rows, strategy="hold_7d", generated_at=generated_at,
             path_rows=portfolio_path_rows, cohort="observed_all_signals_open_until_exit",
         ),
         portfolio_entrygate_current=_portfolio_replay(
@@ -2533,7 +2546,7 @@ def research_strategy_sweeps_csv(report: ResearchAnalyticsReport) -> bytes:
             ])
 
     for portfolio in (
-        report.portfolio_current, report.portfolio_tp5, report.portfolio_tp5_sl75, report.portfolio_tp5_7d_cutoff,
+        report.portfolio_current, report.portfolio_tp5, report.portfolio_tp5_sl75, report.portfolio_hold_7d,
         report.portfolio_entrygate_current, report.portfolio_entrygate_tp5,
     ):
         writer.writerow([
@@ -2603,7 +2616,7 @@ def research_strategy_sweeps_csv(report: ResearchAnalyticsReport) -> bytes:
             _csv_pct(portfolio.return_per_slot_day),
             "" if not calendar.history_span_days else f"{portfolio.closed / calendar.history_span_days:.6f}",
         ])
-    for portfolio in (calendar.current, calendar.tp5, calendar.tp5_sl75, calendar.tp5_7d_cutoff, calendar.tp2, calendar.tp2_10, calendar.tp1_10):
+    for portfolio in (calendar.current, calendar.tp5, calendar.tp5_sl75, calendar.hold_7d, calendar.tp2, calendar.tp2_10, calendar.tp1_10):
         writer.writerow([
             "calendar_throughput_observed", portfolio.strategy, portfolio.cohort, portfolio.signals,
             portfolio.entered, portfolio.closed, portfolio.open_positions, portfolio.missed_capacity,
@@ -2614,8 +2627,8 @@ def research_strategy_sweeps_csv(report: ResearchAnalyticsReport) -> bytes:
             "" if not calendar.history_span_days else f"{portfolio.entered / calendar.history_span_days:.6f}",
             "" if not portfolio.signals else f"{portfolio.entered / portfolio.signals:.6f}",
         ])
-    if all(item is not None for item in (calendar.latest_30d_current, calendar.latest_30d_tp5, calendar.latest_30d_tp5_sl75, calendar.latest_30d_tp5_7d_cutoff, calendar.latest_30d_tp2, calendar.latest_30d_tp2_10, calendar.latest_30d_tp1_10)):
-        for portfolio in (calendar.latest_30d_current, calendar.latest_30d_tp5, calendar.latest_30d_tp5_sl75, calendar.latest_30d_tp5_7d_cutoff, calendar.latest_30d_tp2, calendar.latest_30d_tp2_10, calendar.latest_30d_tp1_10):
+    if all(item is not None for item in (calendar.latest_30d_current, calendar.latest_30d_tp5, calendar.latest_30d_tp5_sl75, calendar.latest_30d_hold_7d, calendar.latest_30d_tp2, calendar.latest_30d_tp2_10, calendar.latest_30d_tp1_10)):
+        for portfolio in (calendar.latest_30d_current, calendar.latest_30d_tp5, calendar.latest_30d_tp5_sl75, calendar.latest_30d_hold_7d, calendar.latest_30d_tp2, calendar.latest_30d_tp2_10, calendar.latest_30d_tp1_10):
             writer.writerow([
                 "calendar_latest_30d_empty_book", portfolio.strategy, portfolio.cohort, portfolio.signals,
                 portfolio.entered, portfolio.closed, portfolio.open_positions, portfolio.missed_capacity,
@@ -2702,7 +2715,7 @@ def research_strategy_validation_csv(report: ResearchAnalyticsReport) -> bytes:
     portfolios = {
         "tp5_challenger": report.portfolio_tp5,
         "tp5_sl75_challenger": report.portfolio_tp5_sl75,
-        "tp5_7d_cutoff": report.portfolio_tp5_7d_cutoff,
+        "hold_7d": report.portfolio_hold_7d,
     }
     output = io.StringIO(newline="")
     fields = [
@@ -2710,14 +2723,16 @@ def research_strategy_validation_csv(report: ResearchAnalyticsReport) -> bytes:
         "stop_exits", "timeout_exits", "waiting", "positive_exits", "negative_exits",
         "resolved_positive_rate_pct", "target_rate_to_date_pct", "avg_exit_return_pct",
         "median_exit_return_pct", "best_exit_return_pct", "worst_exit_return_pct",
+        "marked_sample", "marked_positive_rate_pct", "avg_marked_return_pct",
+        "median_marked_return_pct", "sum_marked_return_pct",
         "median_holding_hours", "p75_holding_hours",
         "breach20_count", "breach20_rate_pct", "breach20_later_tp5",
         "breach50_count", "breach50_rate_pct", "breach50_later_tp5",
         "breach75_count", "breach75_rate_pct", "breach75_later_tp5",
         "breach100_count", "breach100_rate_pct", "breach100_later_tp5",
         "portfolio_entered", "portfolio_closed", "portfolio_open", "capacity_misses",
-        "same_symbol_misses", "realized_account_return_pct", "marked_account_return_pct",
-        "max_mtm_drawdown_pct", "return_over_drawdown", "avg_exposure_pct",
+        "same_symbol_misses", "capture_rate_pct", "realized_account_return_pct", "marked_account_return_pct",
+        "thirty_day_equivalent_return_pct", "max_mtm_drawdown_pct", "return_over_drawdown", "avg_exposure_pct",
         "p95_exposure_pct", "slot_days", "return_per_slot_day_pct",
     ]
     writer = csv.DictWriter(output, fieldnames=fields)
@@ -2743,6 +2758,11 @@ def research_strategy_validation_csv(report: ResearchAnalyticsReport) -> bytes:
             "median_exit_return_pct": _csv_pct(summary.median_exit_return),
             "best_exit_return_pct": _csv_pct(summary.best_exit_return),
             "worst_exit_return_pct": _csv_pct(summary.worst_exit_return),
+            "marked_sample": summary.marked_sample,
+            "marked_positive_rate_pct": _csv_pct(summary.marked_positive_rate),
+            "avg_marked_return_pct": _csv_pct(summary.avg_marked_return),
+            "median_marked_return_pct": _csv_pct(summary.median_marked_return),
+            "sum_marked_return_pct": _csv_pct(summary.sum_marked_return),
             "median_holding_hours": "" if summary.median_holding_hours is None else f"{summary.median_holding_hours:.6f}",
             "p75_holding_hours": "" if summary.p75_holding_hours is None else f"{summary.p75_holding_hours:.6f}",
             "portfolio_entered": portfolio.entered,
@@ -2750,8 +2770,10 @@ def research_strategy_validation_csv(report: ResearchAnalyticsReport) -> bytes:
             "portfolio_open": portfolio.open_positions,
             "capacity_misses": portfolio.missed_capacity,
             "same_symbol_misses": portfolio.missed_same_symbol,
+            "capture_rate_pct": _csv_pct((portfolio.entered / portfolio.eligible_signals) if portfolio.eligible_signals else None),
             "realized_account_return_pct": _csv_pct(portfolio.realized_return),
             "marked_account_return_pct": _csv_pct(portfolio.marked_return),
+            "thirty_day_equivalent_return_pct": _csv_pct((portfolio.marked_return * 30.0 / portfolio.replay_span_days) if portfolio.replay_span_days else None),
             "max_mtm_drawdown_pct": _csv_pct(portfolio.max_mtm_drawdown),
             "return_over_drawdown": "" if portfolio.return_over_max_drawdown is None else f"{portfolio.return_over_max_drawdown:.6f}",
             "avg_exposure_pct": _csv_pct(portfolio.avg_exposure_pct),
@@ -2791,7 +2813,7 @@ def research_signal_dataset_csv(rows: Iterable[dict[str, Any]], *, generated_at:
         "persistent_run_risk_cohort",
     ]
     strategy_fields: list[str] = []
-    for prefix in ("tp5_indefinite", "tp5_sl75", "tp5_7d_cutoff"):
+    for prefix in ("tp5_indefinite", "tp5_sl75", "hold_7d"):
         strategy_fields.extend([
             f"{prefix}_status", f"{prefix}_exit_at", f"{prefix}_exit_return_pct",
             f"{prefix}_holding_hours",
@@ -2839,7 +2861,7 @@ def research_signal_dataset_csv(rows: Iterable[dict[str, Any]], *, generated_at:
         for strategy, prefix in (
             ("tp5_challenger", "tp5_indefinite"),
             ("tp5_sl75_challenger", "tp5_sl75"),
-            ("tp5_7d_cutoff", "tp5_7d_cutoff"),
+            ("hold_7d", "hold_7d"),
         ):
             status, exit_at, exit_return = _strategy_outcome(
                 row, strategy=strategy, generated_at=generated_at

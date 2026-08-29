@@ -147,10 +147,10 @@ def test_research_notifier_emits_tp5_challenger_card_within_discord_limits():
         )
         for embed in embeds
     )
-    assert "Strategy Validation" in all_text
+    assert "Research Intelligence" in all_text
     assert "TP5 indefinite" in all_text
     assert "TP5 + SL75" in all_text
-    assert "TP5 + 7D cutoff" in all_text
+    assert "7D hold" in all_text
     assert "TP1-10" not in all_text
     assert "TP2-6" not in all_text
     assert "TP2-10" not in all_text

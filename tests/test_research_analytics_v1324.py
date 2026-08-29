@@ -88,7 +88,7 @@ def test_strategy_validation_report_shows_sl75_outcome_race():
         else:
             body = payload
         for embed in body.get("embeds", []):
-            if embed.get("title") == "📊 Exhaustion Scanner • 3-Strategy Validation":
+            if embed.get("title") == "🧠 Exhaustion Scanner • Research Intelligence":
                 text += embed.get("description", "") + "\n"
                 text += "\n".join(
                     field.get("name", "") + " " + field.get("value", "")
@@ -98,5 +98,5 @@ def test_strategy_validation_report_shows_sl75_outcome_race():
     assert "TP5 + SL75" in text
     assert "TP5 **1**" in text
     assert "SL75 **1**" in text
-    assert "TP5 + 7D cutoff" in text
-    assert "waiting **0**" in text
+    assert "7D hold" in text
+    assert "open **0**" in text

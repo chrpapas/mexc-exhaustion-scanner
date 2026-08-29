@@ -185,8 +185,8 @@ def test_v134_notifier_adds_prospective_monitor_embed():
         "\n".join(field.get("name", "") + " " + field.get("value", "") for field in embed.get("fields", []))
         for embed in embeds
     )
-    assert "Forward Validation" in text
-    assert "Post-freeze strategies" in text
+    assert "Forward Evidence" in text
+    assert "Post-freeze A/B/C" in text
     assert "failed after complete 7d" not in text
     assert "open >7d" in text
     assert "EntryGate-v1 acceptance" not in text

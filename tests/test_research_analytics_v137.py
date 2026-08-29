@@ -160,7 +160,7 @@ def test_v137_notifier_adds_token_behavior_card_and_regime_csv_attachment():
         else:
             titles.extend(embed.get("title") for embed in payload.get("embeds", []))
     assert "🧬 Token Behaviour • Regime Dependency" not in titles
-    assert "📊 Exhaustion Scanner • 3-Strategy Validation" in titles
+    assert "🧠 Exhaustion Scanner • Research Intelligence" in titles
     assert not any(name.startswith("research-token-regime-") for name in attachment_names)
 
 
@@ -211,6 +211,6 @@ def test_v139_token_behavior_card_reports_capital_time_efficiency_metrics():
     )
     assert "TP5 indefinite" in published_text
     assert "TP5 + SL75" in published_text
-    assert "TP5 + 7D cutoff" in published_text
+    assert "7D hold" in published_text
     assert "slot-days **" not in published_text
     assert "idle capacity **" not in published_text

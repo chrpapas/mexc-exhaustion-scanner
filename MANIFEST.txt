@@ -83,6 +83,7 @@ tests/test_research_v126.py
 tests/test_research_v138.py
 tests/test_signal_ledger.py
 tests/test_signals.py
+tests/test_strategy_validation_v1327.py
 tests/test_trader_config.py
 tests/test_trader_db.py
 tests/test_trader_logic.py

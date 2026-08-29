@@ -154,7 +154,7 @@ def test_v1322_notifier_surfaces_research_only_calibration_and_forward_tracker()
     # kept off the trader-facing Discord decision surface.
     assert report.persistent_run_risk.buckets
     assert "Persistent-run continuation risk" not in text
-    assert "3-Strategy Validation" in text
-    assert "Forward Validation" in text
+    assert "Research Intelligence" in text
+    assert "Forward Evidence" in text
     for embed in embeds:
         notifier._validate_discord_embed(embed)

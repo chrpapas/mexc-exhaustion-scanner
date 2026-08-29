@@ -1,20 +1,15 @@
-# MEXC Exhaustion Scanner + Multi-Slot Futures Trader v1.3.27
+# MEXC Exhaustion Scanner + Multi-Slot Futures Trader v1.3.28
 
 Execution + research release. **TP5_SL75_V1 is now the default trader strategy**, based on the v1.3.22 codebase.
 
-## v1.3.27 — three-strategy validation + LLM-ready research
+## v1.3.28 — focused performance playbook + research intelligence
 
-- **Subscriber comparison is now apples-to-apples:** TP5 indefinite, TP5+SL75, and TP5+7D cutoff all use the same STANDARD+HIGH_RISK confirmed-short stream, 6 generic slots, 5% current-equity sizing, 30% cap, 1x, and one position per symbol. Only the exit rule changes.
-- **TP5 indefinite:** +5% target, no stop, no timeout. A target reached after day 7 is still a win; unresolved positions remain open.
-- **TP5+SL75:** +5% target or -75% catastrophic stop, no timeout. Same-candle target/stop ambiguity is conservatively stop-first. This remains the live/default trader.
-- **TP5+7D cutoff:** +5% if reached within 168h; otherwise the position is closed at the 168h observed mark. It is no longer the old STANDARD-only 7D Swing; this makes exit-policy comparisons use identical entries and sizing.
-- **Focused Discord board:** each strategy reports signal resolution mix, median/p75 holding time, -20/-50/-75/-100 tail counts, chronological account MTM return, realized return, max MTM drawdown, return/DD, entered/closed/open positions, and capacity/same-symbol misses.
-- **Forward-validation board:** the same three strategies are shown on the frozen post-21-Aug cohort, plus true 30-day empty-book comparison when enough calendar history exists.
-- **LLM-ready per-signal export:** `research-signal-dataset` now includes explicit status/exit/return/holding-time columns for all three strategies instead of requiring downstream analysis to reconstruct strategy semantics from raw timestamps.
-- **New compact strategy file:** `strategy-validation-YYYY-MM-DD.csv` contains strategy-level signal outcomes, tail rates, counterfactual later-TP5-after-breach counts, and portfolio return/risk/capacity metrics.
-- **Richer research attachments:** on-demand analytics also attach strategy-sweeps, feature-lift, entry-research, and token-regime CSVs while keeping exploratory material off the subscriber decision surface.
-- **Daily performance report aligned:** the public Strategy Comparison now shows the same three strategies and replication settings; the prior STANDARD-only 7D recommendation is removed from the comparison board.
-- No trader execution-rule or schema change from v1.3.26.
+- **Correct 7D benchmark:** strategy C is now a pure 7-day hold. It has **no profit target and no stop**; every entered short is closed exactly 168 hours after confirmation at the observed 7D return.
+- **Subscriber performance board:** separates **all-signal economics** (Σ/average/positive marked trade returns if every qualifying signal were taken) from the **replicable 6×5% / 30% account replay** (observed return, 30D-equivalent run-rate, MTM drawdown, capture rate, exposure, open positions).
+- **Replication playbook:** explicitly documents STANDARD+HIGH_RISK entries, 1× cross, 5% current-equity sizing, six slots, 30% cap, one position/symbol, fees, and exact exit rules. TP5+SL75 remains the live default.
+- **Research intelligence:** Discord now interprets the collected evidence: tail-breach/recovery rates, SL75 insurance effect versus indefinite TP5, pure-7D benchmark economics, TP5 holding-time/tail aging, capacity capture, exploratory feature clues, and post-freeze validation.
+- **LLM-ready strategy export:** `strategy-validation.csv` now includes all-signal marked economics, capture rate, 30D-equivalent portfolio return, account return/DD and tail/recovery counts. `research-signal-dataset.csv` uses explicit `hold_7d_*` outcome fields.
+- Trader execution logic is unchanged from v1.3.27 apart from the heartbeat/version string. No database migration is required.
 
 ## v1.3.26 — no-timeout TP5 validation + MTM query fix
 
