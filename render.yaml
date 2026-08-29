@@ -141,9 +141,9 @@ services:
       - key: TRADING_MODE
         value: paper
       - key: TRADER_EXECUTION_STRATEGY
-        value: tp5_v1
+        value: tp5_sl75_v1
       - key: TRADER_PAPER_RUN_ID
-        value: tp5_v1
+        value: tp5_sl75_v1
       - key: TRADER_MARGIN_MODE
         value: cross
       - key: TRADER_LEVERAGE
@@ -158,6 +158,8 @@ services:
         value: "30"
       - key: TRADER_TP5_TARGET_PCT
         value: "5"
+      - key: TRADER_CATASTROPHIC_STOP_PCT
+        value: "75"
       - key: TRADER_MAX_STANDARD_POSITIONS
         value: "5"
       - key: TRADER_MAX_HIGH_RISK_POSITIONS

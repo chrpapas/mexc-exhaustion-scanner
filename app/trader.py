@@ -349,7 +349,7 @@ class PortfolioShortTrader:
             # Keep a small execution buffer for fees/price movement. At 1x this also prevents
             # the bot from requesting more margin than MEXC reports as immediately available.
             remaining = min(remaining, live_available * 0.98)
-        minimum_slot = desired if self.settings.execution_strategy == "tp5_v1" else desired * 0.5
+        minimum_slot = desired if self.settings.uses_generic_slots else desired * 0.5
         if remaining <= 0 or remaining + 1e-9 < minimum_slot:
             await self._ignore_signal(
                 signal,
@@ -365,7 +365,7 @@ class PortfolioShortTrader:
                 ],
             )
             return
-        notional = desired if self.settings.execution_strategy == "tp5_v1" else min(desired, remaining)
+        notional = desired if self.settings.uses_generic_slots else min(desired, remaining)
         slot_no = next(i for i in range(1, self.settings.max_open_positions + 1) if all(p.slot_no != i for p in active))
 
         position = (
@@ -383,7 +383,12 @@ class PortfolioShortTrader:
             position.notional_usdt,
             equity,
         )
-        if self.settings.execution_strategy == "tp5_v1":
+        if self.settings.uses_catastrophic_stop:
+            exit_text = (
+                f"Full close at +{self.settings.tp5_target_pct:.0f}% favorable short return "
+                f"or catastrophic stop at -{self.settings.catastrophic_stop_pct:.0f}%"
+            )
+        elif self.settings.uses_generic_slots:
             exit_text = f"Full close at +{self.settings.tp5_target_pct:.0f}% favorable short return"
         elif signal.risk_tier == "STANDARD":
             exit_text = f"Fixed {self.settings.standard_hold_days}d hold; +{self.settings.profit_target_pct:.0f}% is telemetry only"
@@ -396,7 +401,15 @@ class PortfolioShortTrader:
                 {"name": "Entry", "value": f"{position.entry_price:.10g}", "inline": True},
                 {"name": "Notional", "value": f"${position.notional_usdt:,.2f}", "inline": True},
                 {"name": "Exit plan", "value": exit_text, "inline": False},
-                {"name": "Risk control", "value": "1x cross • no conventional tight stop • adverse breach telemetry remains active", "inline": False},
+                {
+                    "name": "Risk control",
+                    "value": (
+                        f"1x cross • hard catastrophic stop -{self.settings.catastrophic_stop_pct:.0f}% • adverse telemetry remains active"
+                        if self.settings.uses_catastrophic_stop
+                        else "1x cross • no conventional tight stop • adverse breach telemetry remains active"
+                    ),
+                    "inline": False,
+                },
             ],
             color=BLUE,
         )
@@ -431,8 +444,8 @@ class PortfolioShortTrader:
         entry_fee = notional * self.settings.paper_taker_fee_rate
         runtime = await self.repo.runtime()
         await self.repo.set_paper_equity(max(0.0, float(runtime["paper_equity_usdt"]) - entry_fee))
-        if self.settings.execution_strategy == "tp5_v1":
-            exit_strategy = "tp5_full"
+        if self.settings.uses_generic_slots:
+            exit_strategy = "tp5_sl75_full" if self.settings.uses_catastrophic_stop else "tp5_full"
             position_maturity = "profit_5"
         else:
             exit_strategy = "fixed_time_standard" if signal.risk_tier == "STANDARD" else "tp20_or_timeout"
@@ -462,7 +475,8 @@ class PortfolioShortTrader:
                 "risk_tier": signal.risk_tier,
                 "paper_taker_fee_rate": self.settings.paper_taker_fee_rate,
                 "execution_strategy": self.settings.execution_strategy,
-                "tp_target_pct": self.settings.tp5_target_pct if self.settings.execution_strategy == "tp5_v1" else self.settings.profit_target_pct,
+                "tp_target_pct": self.settings.tp5_target_pct if self.settings.uses_generic_slots else self.settings.profit_target_pct,
+                "catastrophic_stop_pct": self.settings.catastrophic_stop_pct if self.settings.uses_catastrophic_stop else None,
             },
         )
 
@@ -500,8 +514,8 @@ class PortfolioShortTrader:
         )
         hold_contracts = float(live_position.get("holdVol") or contracts)
         entry_fee = float(order.get("takerFee") or order.get("makerFee") or 0.0)
-        if self.settings.execution_strategy == "tp5_v1":
-            exit_strategy = "tp5_full"
+        if self.settings.uses_generic_slots:
+            exit_strategy = "tp5_sl75_full" if self.settings.uses_catastrophic_stop else "tp5_full"
             position_maturity = "profit_5"
         else:
             exit_strategy = "fixed_time_standard" if signal.risk_tier == "STANDARD" else "tp20_or_timeout"
@@ -510,7 +524,7 @@ class PortfolioShortTrader:
                 if signal.risk_tier == "STANDARD"
                 else f"{self.settings.high_risk_timeout_days}d"
             )
-        return await self.repo.create_position(
+        position = await self.repo.create_position(
             signal=signal,
             run_id=self._active_run_id,
             slot_no=slot_no,
@@ -534,9 +548,34 @@ class PortfolioShortTrader:
                 "risk_tier": signal.risk_tier,
                 "mexc_liquidate_price": live_position.get("liquidatePrice"),
                 "execution_strategy": self.settings.execution_strategy,
-                "tp_target_pct": self.settings.tp5_target_pct if self.settings.execution_strategy == "tp5_v1" else self.settings.profit_target_pct,
+                "tp_target_pct": self.settings.tp5_target_pct if self.settings.uses_generic_slots else self.settings.profit_target_pct,
+                "catastrophic_stop_pct": self.settings.catastrophic_stop_pct if self.settings.uses_catastrophic_stop else None,
             },
         )
+        if self.settings.uses_catastrophic_stop:
+            stop_floor = -self.settings.catastrophic_stop_pct
+            try:
+                stop_order_id = await self._place_live_protection(position, stop_floor)
+                await self.repo.mark_protection_armed(
+                    position.id,
+                    order_id=stop_order_id,
+                    floor_pct=stop_floor,
+                    price=entry_price,
+                    return_pct=0.0,
+                )
+                position = (await self.repo.position(position.id)) or position
+            except Exception as exc:
+                LOGGER.exception(
+                    "Catastrophic stop placement failed after opening live position id=%s symbol=%s",
+                    position.id, position.symbol,
+                )
+                try:
+                    await self._close(position, entry_price, "catastrophic_stop_setup_failed")
+                finally:
+                    raise RuntimeError(
+                        f"live position {position.symbol} could not be protected by catastrophic stop"
+                    ) from exc
+        return position
 
     async def _monitor_position(self, position: TraderPosition, price: float) -> None:
         current_return = short_return_pct(position.entry_price, price)
@@ -588,12 +627,16 @@ class PortfolioShortTrader:
                     color=breach_colors[threshold],
                 )
 
-        if position.exit_strategy == "tp5_full":
+        if position.exit_strategy in {"tp5_full", "tp5_sl75_full"}:
             target_pct = float(position.metadata.get("tp_target_pct") or self.settings.tp5_target_pct)
+            if position.exit_strategy == "tp5_sl75_full":
+                stop_pct = float(position.metadata.get("catastrophic_stop_pct") or self.settings.catastrophic_stop_pct)
+                if current_return <= -stop_pct:
+                    await self._close(position, price, f"tp5_catastrophic_stop_{stop_pct:g}")
+                    return
             if current_return >= target_pct:
                 await self._close(position, price, f"tp5_profit_target_{target_pct:g}")
                 return
-            # TP5 has no conventional stop or trailing runner. Adverse telemetry above remains active.
             return
 
         # v1.3 tier-specific live strategy. Only positions opened with the new persisted
@@ -738,7 +781,14 @@ class PortfolioShortTrader:
             "🚨 LIVE PROTECTION WAS MISSING — RESTORED",
             f"**{position.symbol}** had no active MEXC protection order. A replacement exchange-side stop was placed immediately.",
             [
-                {"name": "Protected floor", "value": f"+{position.profit_floor_pct:.2f}%", "inline": True},
+                {
+                    "name": "Protected level",
+                    "value": (
+                        f"{position.profit_floor_pct:+.2f}%"
+                        if position.profit_floor_pct is not None else "n/a"
+                    ),
+                    "inline": True,
+                },
                 {"name": "New stop order", "value": str(order_id), "inline": True},
             ],
             color=ORANGE,
@@ -860,7 +910,11 @@ class PortfolioShortTrader:
             rows = await self.mexc.stop_orders(symbol=position.symbol, finished=True)
             match = next((r for r in rows if int(r.get("id") or 0) == int(position.mexc_protection_order_id or 0) and int(r.get("state") or 0) == 3), None)
             if match:
-                reason = "exchange_protection_stop"
+                if position.exit_strategy == "tp5_sl75_full":
+                    stop_pct = float(position.metadata.get("catastrophic_stop_pct") or self.settings.catastrophic_stop_pct)
+                    reason = f"tp5_catastrophic_stop_{stop_pct:g}_exchange"
+                else:
+                    reason = "exchange_protection_stop"
                 place_order_id = int(match.get("placeOrderId") or 0)
                 if place_order_id:
                     order = await self.mexc.order(place_order_id)
@@ -878,14 +932,15 @@ class PortfolioShortTrader:
             "Exchange-side position close reconciled id=%s symbol=%s reason=%s exit_price=%.10g",
             position.id, position.symbol, reason, price,
         )
+        protection_exit = reason == "exchange_protection_stop" or reason.startswith("tp5_catastrophic_stop_")
         await self._notify(
-            "🛡️ EXCHANGE-SIDE EXIT CONFIRMED" if reason == "exchange_protection_stop" else "🚨 MEXC POSITION CLOSED OUTSIDE BOT FLOW",
+            "🛡️ EXCHANGE-SIDE EXIT CONFIRMED" if protection_exit else "🚨 MEXC POSITION CLOSED OUTSIDE BOT FLOW",
             f"**{position.symbol}** • {reason}",
             [
                 {"name": "Exit", "value": f"{price:.10g}", "inline": True},
                 {"name": "Return", "value": f"{short_return_pct(position.entry_price, price):+.2f}%", "inline": True},
             ],
-            color=GREEN if reason == "exchange_protection_stop" else RED,
+            color=(RED if reason.startswith("tp5_catastrophic_stop_") else GREEN) if protection_exit else RED,
         )
 
     async def _account_equity(self, positions: list[TraderPosition] | None = None) -> float:
@@ -964,7 +1019,7 @@ class PortfolioShortTrader:
             f"liquidations {int(stats.get('liquidation_count') or 0)} • fees ${float(stats.get('fees') or 0):,.4f}"
         )
         exposure_text = f"{exposure:.2f}%" if exposure is not None else "n/a"
-        if self.settings.execution_strategy == "tp5_v1":
+        if self.settings.uses_generic_slots:
             capacity = (
                 f"Slots **{len(positions)}/{self.settings.max_open_positions}** • generic STANDARD + HIGH\n"
                 f"Open notional **${total_notional:,.2f}** • exposure **{exposure_text} / "
@@ -981,7 +1036,11 @@ class PortfolioShortTrader:
         if positions:
             lines = []
             for p in positions[:10]:
-                floor = f" • floor +{p.profit_floor_pct:.1f}%" if p.profit_floor_pct is not None else ""
+                if p.exit_strategy == "tp5_sl75_full":
+                    stop_pct = float(p.metadata.get("catastrophic_stop_pct") or self.settings.catastrophic_stop_pct)
+                    floor = f" • SL -{stop_pct:.0f}%"
+                else:
+                    floor = f" • floor +{p.profit_floor_pct:.1f}%" if p.profit_floor_pct is not None else ""
                 tier = "STD" if p.risk_tier == "STANDARD" else "HIGH" if p.risk_tier == "HIGH_RISK" else "EXT"
                 breach = (
                     " • ⚫400" if p.breach_400_at else " • 🟣300" if p.breach_300_at
@@ -1056,15 +1115,19 @@ class PortfolioShortTrader:
                 "max_total_exposure_pct": self.settings.max_total_exposure_pct,
                 "strategy": self.settings.execution_strategy,
                 "run_id": self._active_run_id,
-                "version": "1.3.6",
+                "version": "1.3.25",
             },
         )
 
     def _strategy_label(self) -> str:
-        if self.settings.execution_strategy == "tp5_v1":
+        if self.settings.uses_generic_slots:
+            stop = (
+                f" • catastrophic SL -{self.settings.catastrophic_stop_pct:g}%"
+                if self.settings.uses_catastrophic_stop else ""
+            )
             return (
-                f"TP5_V1 • {self.settings.max_open_positions} generic slots × "
-                f"{self.settings.slot_allocation_pct:.2f}% • TP +{self.settings.tp5_target_pct:g}% • "
+                f"{self.settings.execution_strategy.upper()} • {self.settings.max_open_positions} generic slots × "
+                f"{self.settings.slot_allocation_pct:.2f}% • TP +{self.settings.tp5_target_pct:g}%{stop} • "
                 f"max {self.settings.max_total_exposure_pct:.1f}% exposure • one position/symbol"
             )
         return (

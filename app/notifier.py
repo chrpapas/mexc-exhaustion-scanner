@@ -512,6 +512,11 @@ class DiscordNotifier:
         completeness_7d = (b.complete_paths_7d / b.matured_7d) if b.matured_7d else None
         tp5 = report.tp5_risk
         calendar = report.calendar_throughput
+        tp5_sl75 = calendar.tp5_sl75
+        sl75_race = next(
+            (item for item in tp5.adverse_races if item.adverse_threshold_pct == 75),
+            None,
+        )
         live_tp5 = report.prospective_tp5_live
         persistent = report.persistent_run_risk
 
@@ -544,12 +549,25 @@ class DiscordNotifier:
             calendar.tp5.closed / calendar.history_span_days
             if calendar.history_span_days > 0 else None
         )
+        sl75_stops = (
+            (sl75_race.adverse_first + sl75_race.same_candle)
+            if sl75_race is not None else 0
+        )
+        sl75_resolved = (
+            (sl75_race.target_first + sl75_stops)
+            if sl75_race is not None else 0
+        )
+        sl75_resolved_tp_rate = (
+            (sl75_race.target_first / sl75_resolved)
+            if sl75_race is not None and sl75_resolved > 0 else None
+        )
 
         strategy_board = {
             "title": "🔬 Exhaustion Scanner • Strategy Validation",
             "description": (
                 f"Updated **{display_time.strftime('%d %b %Y • %H:%M %Z')}**\n"
-                "Exploratory variants remain internal. Subscriber strategy selection lives in the normalized **Strategy Comparison** report."
+                "The trader now defaults to TP5+SL75. Research keeps the prior TP5 no-stop replay beside it for direct comparison. "
+                "7d maturity below is evidence-completeness context only; TP5 positions are never expired at day 7."
             ),
             "color": 0x5865F2,
             "fields": [
@@ -562,15 +580,32 @@ class DiscordNotifier:
                     "inline": False,
                 },
                 {
-                    "name": "⚡ TP5 Frequent • Frozen portfolio monitor",
+                    "name": "⚡ TP5 no-stop • Research baseline",
                     "value": (
-                        f"7d-evaluable **{tp5.sample}** • TP5 hits **{tp5.hits}/{tp5.sample} ({self._percent(tp5.hit_rate)})** • "
+                        f"Observed signals **{tp5.sample}** • TP5 hit to date **{tp5.hits}/{tp5.sample} ({self._percent(tp5.hit_rate)})** • "
+                        f"still open **{max(0, tp5.sample - tp5.hits)}**\n"
                         f"median / p75 **{self._hours(tp5.median_time_hours)} / {self._hours(tp5.p75_time_hours)}**\n"
                         f"Median pre-hit adverse **-{self._percent(tp5.median_adverse_before_target)}** • "
                         f"worst **-{self._percent(tp5.worst_adverse_before_target)}**\n"
                         f"Observed {calendar.history_span_days:.2f}d portfolio return **{self._signed_percent(calendar.tp5.marked_return)}** • "
                         f"MTM DD **{'-' + self._percent(calendar.tp5.max_mtm_drawdown) if calendar.tp5.max_mtm_drawdown is not None else 'n/a'}** • "
                         f"entries/day **{tp5_entries_per_day:.2f}** • releases/day **{tp5_releases_per_day:.2f}**"
+                    ),
+                    "inline": False,
+                },
+                {
+                    "name": "🛡️ TP5 + SL75 • Default trader comparison",
+                    "value": (
+                        f"6×5% / 30% cap • full TP +5% • catastrophic stop -75% • same-candle races stop-first.\n"
+                        f"Observed signals **{sl75_race.sample if sl75_race is not None else 0}** • "
+                        f"TP5 first **{sl75_race.target_first if sl75_race is not None else 0}** • "
+                        f"SL75 first **{sl75_stops}** • waiting **{sl75_race.unresolved if sl75_race is not None else 0}** • "
+                        f"resolved TP rate **{self._percent(sl75_resolved_tp_rate)}**\n"
+                        f"Observed portfolio return **{self._signed_percent(tp5_sl75.marked_return)}** • "
+                        f"realized **{self._signed_percent(tp5_sl75.realized_return)}** • "
+                        f"MTM DD **{'-' + self._percent(tp5_sl75.max_mtm_drawdown) if tp5_sl75.max_mtm_drawdown is not None else 'n/a'}**\n"
+                        f"Entered **{tp5_sl75.entered}** • closed **{tp5_sl75.closed}** • "
+                        f"open **{tp5_sl75.open_positions}** • capacity misses **{tp5_sl75.missed_capacity}**"
                     ),
                     "inline": False,
                 },
@@ -604,10 +639,12 @@ class DiscordNotifier:
             },
         }
 
-        if calendar.latest_30d_tp5 is not None:
+        if calendar.latest_30d_tp5 is not None and calendar.latest_30d_tp5_sl75 is not None:
             thirty_day = (
-                f"True 30d TP5 replay: return **{self._signed_percent(calendar.latest_30d_tp5.marked_return)}** • "
-                f"DD **{'-' + self._percent(calendar.latest_30d_tp5.max_mtm_drawdown) if calendar.latest_30d_tp5.max_mtm_drawdown is not None else 'n/a'}**"
+                f"TP5 no-stop: return **{self._signed_percent(calendar.latest_30d_tp5.marked_return)}** • "
+                f"DD **{'-' + self._percent(calendar.latest_30d_tp5.max_mtm_drawdown) if calendar.latest_30d_tp5.max_mtm_drawdown is not None else 'n/a'}**\n"
+                f"TP5+SL75: return **{self._signed_percent(calendar.latest_30d_tp5_sl75.marked_return)}** • "
+                f"DD **{'-' + self._percent(calendar.latest_30d_tp5_sl75.max_mtm_drawdown) if calendar.latest_30d_tp5_sl75.max_mtm_drawdown is not None else 'n/a'}**"
             )
         else:
             thirty_day = (
@@ -626,9 +663,9 @@ class DiscordNotifier:
                 {
                     "name": "Post-freeze TP5 tracker",
                     "value": (
-                        f"Signals **{live_tp5.signals}** • hit **{live_tp5.hits}** • waiting **{live_tp5.waiting}** • "
-                        f"failed after complete 7d **{live_tp5.failed}**\n"
-                        f"Resolved hit rate **{self._percent(live_tp5.resolved_hit_rate)}** • "
+                        f"Signals **{live_tp5.signals}** • hit **{live_tp5.hits}** • waiting/open **{live_tp5.waiting}** • "
+                        f"open >7d **{live_tp5.waiting_over_7d}**\n"
+                        f"Observed hit-to-date rate **{self._percent(live_tp5.observed_hit_rate)}** • "
                         f"median / p75 **{self._hours(live_tp5.median_hit_hours)} / {self._hours(live_tp5.p75_hit_hours)}**\n"
                         f"Worst pre-hit adverse **-{self._percent(live_tp5.worst_pre_hit_adverse)}** • "
                         f"oldest waiting **{self._hours(live_tp5.oldest_waiting_hours)}**"
@@ -641,7 +678,7 @@ class DiscordNotifier:
                     "inline": False,
                 },
             ],
-            "footer": {"text": "Fast TP5 monitoring is descriptive until the forward cohort fully matures."},
+            "footer": {"text": "TP5 has no time expiry: unresolved positions remain waiting/open until +5% is hit. 7d cohorts are used only for fixed-horizon research."},
         }
 
         embeds = (strategy_board, prospective)

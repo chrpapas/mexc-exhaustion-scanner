@@ -25,7 +25,7 @@ def _rebase(row: dict, confirmed: datetime) -> dict:
     return row
 
 
-def test_prospective_tp5_live_tracker_resolves_hits_waiting_and_7d_failures():
+def test_prospective_tp5_live_tracker_keeps_positions_open_after_7d():
     freeze = RESEARCH_OOS_FREEZE_AT
     hit = _rebase(_base_row(1), freeze + timedelta(hours=1))
     hit["target_5_at"] = hit["confirmed_at"] + timedelta(hours=2)
@@ -38,10 +38,10 @@ def test_prospective_tp5_live_tracker_resolves_hits_waiting_and_7d_failures():
     waiting["path_last_at"] = waiting["confirmed_at"] + timedelta(hours=24)
     waiting["return_168h_pct"] = None
 
-    failed = _rebase(_base_row(3), freeze + timedelta(hours=3))
-    failed["target_5_at"] = None
-    failed["path_last_at"] = failed["confirmed_at"] + timedelta(hours=168)
-    failed["return_168h_pct"] = -0.10
+    older_waiting = _rebase(_base_row(3), freeze + timedelta(hours=3))
+    older_waiting["target_5_at"] = None
+    older_waiting["path_last_at"] = older_waiting["confirmed_at"] + timedelta(hours=168)
+    older_waiting["return_168h_pct"] = -0.10
 
     path = [
         {
@@ -51,16 +51,33 @@ def test_prospective_tp5_live_tracker_resolves_hits_waiting_and_7d_failures():
         }
     ]
     report = build_research_analytics(
-        [hit, waiting, failed],
+        [hit, waiting, older_waiting],
         generated_at=freeze + timedelta(days=8),
         portfolio_path_rows=path,
     )
     live = report.prospective_tp5_live
-    assert (live.signals, live.hits, live.waiting, live.failed, live.resolved) == (3, 1, 1, 1, 2)
-    assert live.resolved_hit_rate == 0.5
+    assert (live.signals, live.hits, live.waiting, live.waiting_over_7d) == (3, 1, 2, 2)
+    assert live.observed_hit_rate == 1 / 3
     assert live.median_hit_hours == 2.0
     assert live.worst_pre_hit_adverse == 0.12
     assert live.worst_waiting_close_adverse == 0.35
+
+
+def test_prospective_tp5_live_counts_post_7d_target_when_it_eventually_hits():
+    freeze = RESEARCH_OOS_FREEZE_AT
+    late_hit = _rebase(_base_row(44), freeze + timedelta(hours=1))
+    late_hit["target_5_at"] = late_hit["confirmed_at"] + timedelta(days=10)
+    late_hit["path_mae_before_target_5"] = -0.30
+
+    report = build_research_analytics(
+        [late_hit],
+        generated_at=freeze + timedelta(days=12),
+    )
+    live = report.prospective_tp5_live
+    assert live.hits == 1
+    assert live.waiting == 0
+    assert live.waiting_over_7d == 0
+    assert live.median_hit_hours == 240.0
 
 
 def test_prospective_entrygate_acceptance_reports_total_and_rolling_20():
@@ -171,6 +188,8 @@ def test_v134_notifier_adds_prospective_monitor_embed():
     assert "TP5 • Prospective Monitor" in text
     assert "Post-freeze TP5 tracker" in text
     assert "30-day validation" in text
+    assert "failed after complete 7d" not in text
+    assert "open >7d" in text
     assert "EntryGate-v1 acceptance" not in text
     assert "Regime drift" not in text
     for embed in embeds:

@@ -74,6 +74,7 @@ tests/test_research_analytics_v1311.py
 tests/test_research_analytics_v1312.py
 tests/test_research_analytics_v132.py
 tests/test_research_analytics_v1322.py
+tests/test_research_analytics_v1324.py
 tests/test_research_analytics_v133.py
 tests/test_research_analytics_v134.py
 tests/test_research_analytics_v135.py
@@ -89,6 +90,7 @@ tests/test_trader_v120.py
 tests/test_trader_v122.py
 tests/test_trader_v123.py
 tests/test_trader_v130.py
+tests/test_trader_v1324.py
 tests/test_trader_v136.py
 tests/test_worker_v125.py
 tests/test_worker_v137.py

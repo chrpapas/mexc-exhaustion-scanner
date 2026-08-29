@@ -6,7 +6,7 @@ from app.research_analytics import build_research_analytics, research_strategy_s
 from tests.test_research_analytics_v128 import _base_row
 
 
-def test_tp5_pre_hit_mae_and_adverse_races_use_complete_7d_cohort():
+def test_tp5_pre_hit_mae_and_adverse_races_use_all_observed_signals():
     row = _base_row(1)
     row["target_5_at"] = row["confirmed_at"] + timedelta(hours=2)
     row["path_mae_before_target_5"] = -0.18
@@ -90,11 +90,25 @@ def test_strategy_csv_contains_tp5_risk_and_portfolio_rows():
     row["path_mae_before_target_5"] = -0.05
     report = build_research_analytics([row], generated_at=datetime(2026, 8, 20, tzinfo=UTC))
     text = research_strategy_sweeps_csv(report).decode("utf-8")
-    assert "tp5_pre_hit_summary" in text
-    assert "tp5_adverse_race_7d" in text
+    assert "tp5_pre_hit_summary_observed" in text
+    assert "tp5_adverse_race_observed" in text
     assert "portfolio_replay_paired_7d" in text
     assert "tp5_challenger_6x5pct" in text
     assert "current_live_5standard_1high" in text
+
+
+def test_tp5_validation_counts_target_after_day_7_as_hit():
+    row = _base_row(77)
+    row["target_5_at"] = row["confirmed_at"] + timedelta(days=10)
+    row["path_mae_before_target_5"] = -0.42
+    generated_at = row["confirmed_at"] + timedelta(days=12)
+
+    report = build_research_analytics([row], generated_at=generated_at)
+
+    assert report.tp5_risk.sample == 1
+    assert report.tp5_risk.hits == 1
+    assert report.tp5_risk.hit_rate == 1.0
+    assert report.tp5_risk.median_time_hours == 240.0
 
 
 def test_research_notifier_emits_tp5_challenger_card_within_discord_limits():

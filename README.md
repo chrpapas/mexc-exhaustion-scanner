@@ -1,7 +1,26 @@
-# MEXC Exhaustion Scanner + Multi-Slot Futures Trader v1.3.22
+# MEXC Exhaustion Scanner + Multi-Slot Futures Trader v1.3.25
 
-Reporting release. **TP5_V1 trader execution remains frozen and unchanged.**
+Execution + research release. **TP5_SL75_V1 is now the default trader strategy**, based on the v1.3.22 codebase.
 
+## v1.3.25 — TP5 validation uses true no-timeout semantics
+
+- **Strategy Validation corrected:** TP5 no-stop is now evaluated across every observed signal and counts a +5% target whenever it is eventually reached, including after day 7. Unresolved positions remain open/waiting indefinitely; they are never classified as failed merely because a 7-day path matured.
+- **7d research remains separate:** seven-day maturity is still used for fixed-horizon feature/return studies and paired 7d cohorts, but it no longer defines TP5 strategy success or position lifetime.
+- **TP5+SL75 added explicitly to the validation board:** the default strategy now shows TP5-first, SL75-first, waiting/open, resolved TP rate, portfolio return, realized return, drawdown, entries, closes, and capacity misses beside the TP5 no-stop baseline.
+- **30-day validation compares both TP5 variants** when a true 30-day empty-book window is available.
+- **Prospective monitor corrected:** reports hit, waiting/open, open >7d, observed hit-to-date rate, and oldest waiting age; the old `failed after complete 7d` classification is removed.
+- No execution-rule or schema change from v1.3.24; TP5+SL75 remains the default trader.
+
+## v1.3.24 — TP5 + catastrophic -75% stop
+
+- **New default trader strategy:** `tp5_sl75_v1` keeps the proven TP5 structure: STANDARD + HIGH_RISK, 6 generic slots, 5% current-equity notional per slot, 30% aggregate exposure, 1x cross, one open position per symbol, full close at +5%.
+- **Catastrophic stop:** new positions close fully at **-75% short return** if that threshold is reached before TP5. This is deliberately a far-tail risk cap, not a tight trading stop.
+- **Live safety:** live `tp5_sl75_v1` positions place an exchange-side MEXC position stop immediately after the short is confirmed. If protection cannot be placed, the bot attempts to close the newly opened position and raises an error rather than intentionally leaving it unprotected.
+- **Legacy compatibility:** persisted `tp5_full` positions from `tp5_v1` retain their old no-stop behavior. Newly opened default positions persist `tp5_sl75_full`, preventing a silent mid-trade mutation on deployment.
+- **Research comparator:** `tp5_sl75_challenger_6x5pct` is replayed beside TP5 without a stop using `target_5_at` versus `adverse_75_at`; same-15m-candle races are conservatively counted stop-first. The comparison is exported in research strategy CSVs and surfaced on the research Discord board.
+- **New config:** `TRADER_CATASTROPHIC_STOP_PCT=75` (default).
+- **New paper run:** Render defaults to `TRADER_PAPER_RUN_ID=tp5_sl75_v1`; deploying over an older paper run intentionally archives the previous run and starts the new strategy at configured paper starting equity.
+- No schema migration is required; migration `015_tp5_trader_runs.sql` remains latest.
 
 
 ## v1.3.22 — research-only persistent-run continuation-risk flag

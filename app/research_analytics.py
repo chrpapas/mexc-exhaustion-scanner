@@ -31,6 +31,7 @@ CURRENT_TOTAL_EXPOSURE_PCT = 0.20
 CURRENT_SLOT_PCT = CURRENT_TOTAL_EXPOSURE_PCT / 6.0
 TP5_CHALLENGER_SLOT_PCT = 0.05
 TP5_CHALLENGER_MAX_SLOTS = 6
+TP5_SL75_STOP_PCT = 75
 TP5_CHALLENGER_TOTAL_EXPOSURE_PCT = TP5_CHALLENGER_SLOT_PCT * TP5_CHALLENGER_MAX_SLOTS
 FAST_TP_CHALLENGER_SLOT_PCT = 0.05
 FAST_TP_CHALLENGER_MAX_SLOTS = 10
@@ -308,9 +309,8 @@ class ProspectiveTp5LiveSummary:
     signals: int
     hits: int
     waiting: int
-    failed: int
-    resolved: int
-    resolved_hit_rate: float | None
+    waiting_over_7d: int
+    observed_hit_rate: float | None
     median_hit_hours: float | None
     p75_hit_hours: float | None
     worst_pre_hit_adverse: float | None
@@ -351,11 +351,13 @@ class CalendarThroughputComparison:
     history_span_days: float
     current: PortfolioReplaySummary
     tp5: PortfolioReplaySummary
+    tp5_sl75: PortfolioReplaySummary
     tp2: PortfolioReplaySummary
     tp2_10: PortfolioReplaySummary
     tp1_10: PortfolioReplaySummary
     latest_30d_current: PortfolioReplaySummary | None
     latest_30d_tp5: PortfolioReplaySummary | None
+    latest_30d_tp5_sl75: PortfolioReplaySummary | None
     latest_30d_tp2: PortfolioReplaySummary | None
     latest_30d_tp2_10: PortfolioReplaySummary | None
     latest_30d_tp1_10: PortfolioReplaySummary | None
@@ -420,6 +422,7 @@ class ResearchAnalyticsReport:
     tp5_risk: Tp5RiskSummary
     portfolio_current: PortfolioReplaySummary
     portfolio_tp5: PortfolioReplaySummary
+    portfolio_tp5_sl75: PortfolioReplaySummary
     portfolio_entrygate_current: PortfolioReplaySummary
     portfolio_entrygate_tp5: PortfolioReplaySummary
     prospective_cohorts: tuple[ProspectiveCohortSummary, ...]
@@ -1054,15 +1057,40 @@ def _build_delayed_entries(raw_rows: Iterable[dict[str, Any]]) -> tuple[DelayedE
     return tuple(result)
 
 
-def _tp5_risk_summary(rows: list[dict[str, Any]]) -> Tp5RiskSummary:
+def _tp5_risk_summary(
+    rows: list[dict[str, Any]],
+    *,
+    generated_at: datetime | None = None,
+    max_hours: int | None = None,
+) -> Tp5RiskSummary:
+    """Summarize TP5 outcomes over the requested observation window.
+
+    ``max_hours=None`` is the live TP5 semantics: a position remains open until
+    +5% is hit, regardless of age. Fixed-horizon research can still pass a
+    finite ``max_hours`` (for example 168h) to answer a separate question such
+    as "what fraction hit TP5 within seven days?".
+    """
+
+    def bounded_event(row: dict[str, Any], key: str) -> datetime | None:
+        event = row.get(key)
+        confirmed = row.get("confirmed_at")
+        if event is None or confirmed is None:
+            return None
+        if generated_at is not None and event > generated_at:
+            return None
+        if max_hours is not None and event > confirmed + timedelta(hours=max_hours):
+            return None
+        return event
+
     sample = len(rows)
-    hit_rows = [row for row in rows if _time_to_target_hours(row, 5, max_hours=168) is not None]
-    times = [
-        value
-        for row in hit_rows
-        for value in [_time_to_target_hours(row, 5, max_hours=168)]
-        if value is not None
-    ]
+    hit_rows: list[dict[str, Any]] = []
+    times: list[float] = []
+    for row in rows:
+        target = bounded_event(row, "target_5_at")
+        elapsed = _elapsed_hours(row.get("confirmed_at"), target)
+        if target is not None and elapsed is not None:
+            hit_rows.append(row)
+            times.append(elapsed)
     adverse_before: list[float] = []
     for row in hit_rows:
         # Older exported datasets do not contain the v1.3.2 pre-TP5 field at all.
@@ -1082,17 +1110,12 @@ def _tp5_risk_summary(rows: list[dict[str, Any]]) -> Tp5RiskSummary:
             if confirmed is None:
                 unresolved += 1
                 continue
-            cutoff = confirmed + timedelta(hours=168)
-            target = row.get("target_5_at")
+            target = bounded_event(row, "target_5_at")
             adverse_key = f"adverse_{threshold}_at"
             if adverse_key not in row:
                 unresolved += 1
                 continue
-            adverse = row.get(adverse_key)
-            if target is not None and target > cutoff:
-                target = None
-            if adverse is not None and adverse > cutoff:
-                adverse = None
+            adverse = bounded_event(row, adverse_key)
             if target is not None and (adverse is None or target < adverse):
                 target_first += 1
             elif adverse is not None and (target is None or adverse < target):
@@ -1156,9 +1179,21 @@ def _known_exit(
     confirmed = row.get("confirmed_at")
     if confirmed is None:
         return None, None
-    if strategy in {"tp5_challenger", "tp2_challenger", "tp2_10_challenger", "tp1_10_challenger"}:
-        target_pct = target_pct_override if target_pct_override is not None else {"tp5_challenger": 5, "tp2_challenger": 2, "tp2_10_challenger": 2, "tp1_10_challenger": 1}[strategy]
+    if strategy in {"tp5_challenger", "tp5_sl75_challenger", "tp2_challenger", "tp2_10_challenger", "tp1_10_challenger"}:
+        target_pct = target_pct_override if target_pct_override is not None else {
+            "tp5_challenger": 5,
+            "tp5_sl75_challenger": 5,
+            "tp2_challenger": 2,
+            "tp2_10_challenger": 2,
+            "tp1_10_challenger": 1,
+        }[strategy]
         target = row.get(f"target_{target_pct}_at")
+        if strategy == "tp5_sl75_challenger":
+            stop = row.get(f"adverse_{TP5_SL75_STOP_PCT}_at")
+            # Same-candle races are conservatively stop-first so the challenger
+            # never receives optimistic intrabar ordering.
+            if stop is not None and stop <= generated_at and (target is None or stop <= target):
+                return stop, -(TP5_SL75_STOP_PCT / 100.0)
         if target is not None and target <= generated_at:
             return target, target_pct / 100.0
         return None, None
@@ -1363,7 +1398,7 @@ def _portfolio_replay(
         return confirmed_at, -score
 
     ordered = sorted(candidates, key=order_key)
-    if strategy in {"tp5_challenger", "tp2_challenger", "tp2_10_challenger", "tp1_10_challenger"}:
+    if strategy in {"tp5_challenger", "tp5_sl75_challenger", "tp2_challenger", "tp2_10_challenger", "tp1_10_challenger"}:
         if strategy in {"tp2_10_challenger", "tp1_10_challenger"}:
             position_fraction = FAST_TP_CHALLENGER_SLOT_PCT
             max_total = FAST_TP_CHALLENGER_MAX_SLOTS
@@ -1373,6 +1408,7 @@ def _portfolio_replay(
         max_standard = max_high = None
         base_name = {
             "tp5_challenger": "tp5_challenger_6x5pct",
+            "tp5_sl75_challenger": "tp5_sl75_challenger_6x5pct",
             "tp2_challenger": "tp2_challenger_6x5pct",
             "tp2_10_challenger": "tp2_challenger_10x5pct",
             "tp1_10_challenger": "tp1_challenger_10x5pct",
@@ -1433,7 +1469,7 @@ def _portfolio_replay(
         if len(positions) >= max_total:
             missed_capacity += 1
             continue
-        if strategy not in {"tp5_challenger", "tp2_challenger", "tp2_10_challenger", "tp1_10_challenger"}:
+        if strategy not in {"tp5_challenger", "tp5_sl75_challenger", "tp2_challenger", "tp2_10_challenger", "tp1_10_challenger"}:
             if tier == "standard" and sum(pos["tier"] == "standard" for pos in positions) >= int(max_standard or 0):
                 missed_capacity += 1
                 continue
@@ -1562,6 +1598,10 @@ def _calendar_throughput_comparison(
         observed, strategy="tp5_challenger", generated_at=generated_at, path_rows=path_rows,
         cohort="calendar_observed_all_signals",
     )
+    tp5_sl75 = _portfolio_replay(
+        observed, strategy="tp5_sl75_challenger", generated_at=generated_at, path_rows=path_rows,
+        cohort="calendar_observed_all_signals",
+    )
     tp2 = _portfolio_replay(
         observed, strategy="tp2_challenger", generated_at=generated_at, path_rows=path_rows,
         cohort="calendar_observed_all_signals",
@@ -1578,6 +1618,7 @@ def _calendar_throughput_comparison(
     latest_start: datetime | None = None
     latest_current: PortfolioReplaySummary | None = None
     latest_tp5: PortfolioReplaySummary | None = None
+    latest_tp5_sl75: PortfolioReplaySummary | None = None
     latest_tp2: PortfolioReplaySummary | None = None
     latest_tp2_10: PortfolioReplaySummary | None = None
     latest_tp1_10: PortfolioReplaySummary | None = None
@@ -1596,6 +1637,10 @@ def _calendar_throughput_comparison(
         )
         latest_tp5 = _portfolio_replay(
             latest_rows, strategy="tp5_challenger", generated_at=generated_at, path_rows=path_rows,
+            cohort="calendar_latest_30d_empty_book",
+        )
+        latest_tp5_sl75 = _portfolio_replay(
+            latest_rows, strategy="tp5_sl75_challenger", generated_at=generated_at, path_rows=path_rows,
             cohort="calendar_latest_30d_empty_book",
         )
         latest_tp2 = _portfolio_replay(
@@ -1617,11 +1662,13 @@ def _calendar_throughput_comparison(
         history_span_days=history_span_days,
         current=current,
         tp5=tp5,
+        tp5_sl75=tp5_sl75,
         tp2=tp2,
         tp2_10=tp2_10,
         tp1_10=tp1_10,
         latest_30d_current=latest_current,
         latest_30d_tp5=latest_tp5,
+        latest_30d_tp5_sl75=latest_tp5_sl75,
         latest_30d_tp2=latest_tp2,
         latest_30d_tp2_10=latest_tp2_10,
         latest_30d_tp1_10=latest_tp1_10,
@@ -1749,7 +1796,9 @@ def _prospective_cohort_summary(
     rows: list[dict[str, Any]], *, cohort: str, freeze_at: datetime
 ) -> ProspectiveCohortSummary:
     complete = [row for row in rows if row.get("return_168h_pct") is not None and _path_complete_7d(row)]
-    risk = _tp5_risk_summary(complete)
+    # This cohort card intentionally asks the fixed-horizon research question:
+    # "did TP5 occur within seven days?". It does NOT define the live TP5 exit.
+    risk = _tp5_risk_summary(complete, max_hours=168)
     gate_eligible = sum(entry_gate_v1(row) for row in rows)
     gate_complete = sum(entry_gate_v1(row) for row in complete)
     return ProspectiveCohortSummary(
@@ -1775,19 +1824,17 @@ def _prospective_tp5_live_summary(
 ) -> ProspectiveTp5LiveSummary:
     hit_rows: list[dict[str, Any]] = []
     waiting_rows: list[dict[str, Any]] = []
-    failed_rows: list[dict[str, Any]] = []
     for row in rows:
-        if _time_to_target_hours(row, 5, max_hours=168) is not None:
+        target = row.get("target_5_at")
+        if target is not None and target <= generated_at:
             hit_rows.append(row)
-        elif _path_complete_7d(row):
-            failed_rows.append(row)
         else:
             waiting_rows.append(row)
 
     hit_times = [
         value
         for row in hit_rows
-        for value in [_time_to_target_hours(row, 5, max_hours=168)]
+        for value in [_elapsed_hours(row.get("confirmed_at"), row.get("target_5_at"))]
         if value is not None
     ]
     pre_hit_adverse: list[float] = []
@@ -1815,14 +1862,12 @@ def _prospective_tp5_live_summary(
         for value in [_elapsed_hours(row.get("confirmed_at"), generated_at)]
         if value is not None
     ]
-    resolved = len(hit_rows) + len(failed_rows)
     return ProspectiveTp5LiveSummary(
         signals=len(rows),
         hits=len(hit_rows),
         waiting=len(waiting_rows),
-        failed=len(failed_rows),
-        resolved=resolved,
-        resolved_hit_rate=(len(hit_rows) / resolved) if resolved else None,
+        waiting_over_7d=sum(value >= 168.0 for value in waiting_ages),
+        observed_hit_rate=(len(hit_rows) / len(rows)) if rows else None,
         median_hit_hours=_median(hit_times),
         p75_hit_hours=_percentile(hit_times, 0.75),
         worst_pre_hit_adverse=max(pre_hit_adverse) if pre_hit_adverse else None,
@@ -2149,13 +2194,19 @@ def build_research_analytics(
         score_buckets=score_buckets,
         interactions=interactions,
         delayed_entries=_build_delayed_entries(delayed_entry_rows),
-        tp5_risk=_tp5_risk_summary(complete_paths_7d),
+        # Live TP5 validation is not a seven-day strategy. Use every observed
+        # signal and keep unresolved positions open indefinitely until target.
+        tp5_risk=_tp5_risk_summary(rows, generated_at=generated_at),
         portfolio_current=_portfolio_replay(
             complete_paths_7d, strategy="current", generated_at=generated_at,
             path_rows=portfolio_path_rows,
         ),
         portfolio_tp5=_portfolio_replay(
             complete_paths_7d, strategy="tp5_challenger", generated_at=generated_at,
+            path_rows=portfolio_path_rows,
+        ),
+        portfolio_tp5_sl75=_portfolio_replay(
+            complete_paths_7d, strategy="tp5_sl75_challenger", generated_at=generated_at,
             path_rows=portfolio_path_rows,
         ),
         portfolio_entrygate_current=_portfolio_replay(
@@ -2244,7 +2295,7 @@ def research_strategy_sweeps_csv(report: ResearchAnalyticsReport) -> bytes:
 
     risk = report.tp5_risk
     writer.writerow([
-        "tp5_pre_hit_summary", "all_public_tiers", "+5% within 7d", risk.sample,
+        "tp5_pre_hit_summary_observed", "all_public_tiers", "open_until_tp5", risk.sample,
         risk.hits, _csv_pct(risk.hit_rate),
         "" if risk.median_time_hours is None else f"{risk.median_time_hours:.6f}",
         "" if risk.p75_time_hours is None else f"{risk.p75_time_hours:.6f}",
@@ -2254,13 +2305,13 @@ def research_strategy_sweeps_csv(report: ResearchAnalyticsReport) -> bytes:
     ])
     for item in risk.adverse_races:
         writer.writerow([
-            "tp5_adverse_race_7d", "all_public_tiers", f"-{item.adverse_threshold_pct}%", item.sample,
+            "tp5_adverse_race_observed", "all_public_tiers", f"-{item.adverse_threshold_pct}%", item.sample,
             item.target_first, _csv_pct(item.target_first_rate), item.adverse_first,
             item.same_candle, item.unresolved, "", "", "", "", "", "", "",
         ])
 
     for portfolio in (
-        report.portfolio_current, report.portfolio_tp5,
+        report.portfolio_current, report.portfolio_tp5, report.portfolio_tp5_sl75,
         report.portfolio_entrygate_current, report.portfolio_entrygate_tp5,
     ):
         writer.writerow([
@@ -2293,8 +2344,8 @@ def research_strategy_sweeps_csv(report: ResearchAnalyticsReport) -> bytes:
         ])
     live = report.prospective_tp5_live
     writer.writerow([
-        "prospective_tp5_live", "post_freeze", "up_to_7d", live.signals,
-        live.hits, live.waiting, live.failed, live.resolved, _csv_pct(live.resolved_hit_rate),
+        "prospective_tp5_live", "post_freeze", "open_until_tp5", live.signals,
+        live.hits, live.waiting, live.waiting_over_7d, _csv_pct(live.observed_hit_rate), "",
         "" if live.median_hit_hours is None else f"{live.median_hit_hours:.6f}",
         "" if live.p75_hit_hours is None else f"{live.p75_hit_hours:.6f}",
         _csv_pct(live.worst_pre_hit_adverse), _csv_pct(live.worst_waiting_close_adverse),
@@ -2330,7 +2381,7 @@ def research_strategy_sweeps_csv(report: ResearchAnalyticsReport) -> bytes:
             _csv_pct(portfolio.return_per_slot_day),
             "" if not calendar.history_span_days else f"{portfolio.closed / calendar.history_span_days:.6f}",
         ])
-    for portfolio in (calendar.current, calendar.tp5, calendar.tp2, calendar.tp2_10, calendar.tp1_10):
+    for portfolio in (calendar.current, calendar.tp5, calendar.tp5_sl75, calendar.tp2, calendar.tp2_10, calendar.tp1_10):
         writer.writerow([
             "calendar_throughput_observed", portfolio.strategy, portfolio.cohort, portfolio.signals,
             portfolio.entered, portfolio.closed, portfolio.open_positions, portfolio.missed_capacity,
@@ -2341,8 +2392,8 @@ def research_strategy_sweeps_csv(report: ResearchAnalyticsReport) -> bytes:
             "" if not calendar.history_span_days else f"{portfolio.entered / calendar.history_span_days:.6f}",
             "" if not portfolio.signals else f"{portfolio.entered / portfolio.signals:.6f}",
         ])
-    if all(item is not None for item in (calendar.latest_30d_current, calendar.latest_30d_tp5, calendar.latest_30d_tp2, calendar.latest_30d_tp2_10, calendar.latest_30d_tp1_10)):
-        for portfolio in (calendar.latest_30d_current, calendar.latest_30d_tp5, calendar.latest_30d_tp2, calendar.latest_30d_tp2_10, calendar.latest_30d_tp1_10):
+    if all(item is not None for item in (calendar.latest_30d_current, calendar.latest_30d_tp5, calendar.latest_30d_tp5_sl75, calendar.latest_30d_tp2, calendar.latest_30d_tp2_10, calendar.latest_30d_tp1_10)):
+        for portfolio in (calendar.latest_30d_current, calendar.latest_30d_tp5, calendar.latest_30d_tp5_sl75, calendar.latest_30d_tp2, calendar.latest_30d_tp2_10, calendar.latest_30d_tp1_10):
             writer.writerow([
                 "calendar_latest_30d_empty_book", portfolio.strategy, portfolio.cohort, portfolio.signals,
                 portfolio.entered, portfolio.closed, portfolio.open_positions, portfolio.missed_capacity,

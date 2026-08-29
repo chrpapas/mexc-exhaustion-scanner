@@ -23,7 +23,7 @@ def _signal(signal_id: int = 900, risk: str = "HIGH_RISK", symbol: str = "NEW_US
     )
 
 
-def test_tp5_v1_defaults_are_frozen(monkeypatch):
+def test_tp5_sl75_v1_defaults_are_frozen(monkeypatch):
     monkeypatch.setenv("DATABASE_URL", "postgresql://example")
     for key in (
         "TRADER_EXECUTION_STRATEGY",
@@ -32,16 +32,19 @@ def test_tp5_v1_defaults_are_frozen(monkeypatch):
         "TRADER_SLOT_ALLOCATION_PCT",
         "TRADER_MAX_TOTAL_EXPOSURE_PCT",
         "TRADER_TP5_TARGET_PCT",
+        "TRADER_CATASTROPHIC_STOP_PCT",
         "PAPER_STARTING_EQUITY_USDT",
     ):
         monkeypatch.delenv(key, raising=False)
     settings = TraderSettings.from_env()
-    assert settings.execution_strategy == "tp5_v1"
-    assert settings.paper_run_id == "tp5_v1"
+    assert settings.execution_strategy == "tp5_sl75_v1"
+    assert settings.paper_run_id == "tp5_sl75_v1"
     assert settings.max_open_positions == 6
     assert settings.slot_allocation_pct == pytest.approx(5.0)
     assert settings.max_total_exposure_pct == pytest.approx(30.0)
     assert settings.tp5_target_pct == pytest.approx(5.0)
+    assert settings.catastrophic_stop_pct == pytest.approx(75.0)
+    assert settings.uses_catastrophic_stop is True
     assert settings.paper_starting_equity_usdt == pytest.approx(2000.0)
     assert settings.uses_generic_slots is True
 
