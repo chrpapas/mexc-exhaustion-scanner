@@ -1,6 +1,6 @@
-# Trader deployment — v1.3.28
+# Trader deployment — v1.3.29
 
-v1.3.28 keeps **`TP5_SL75_V1`** as the default trader strategy. Execution is unchanged. Reporting now compares TP5 indefinite, TP5+SL75, and a **pure 7D hold** (no TP/no SL; close exactly at 168h) on the same STANDARD+HIGH_RISK signal stream and 6×5% / 30% portfolio assumptions. Subscriber stats separate all-signal economics from the capacity-constrained account replay, while research adds tail/capacity/forward interpretation and richer LLM-ready exports. EXTREME_RISK remains suppressed before signal creation.
+v1.3.29 keeps **`TP5_SL75_V1`** as the default trader strategy. Execution is unchanged from v1.3.28; this release fixes the on-demand research analytics timeout and the same scaling risk in performance/ledger reporting by moving expensive per-path aggregation out of PostgreSQL.  Reporting still compares TP5 indefinite, TP5+SL75, and a **pure 7D hold** (no TP/no SL; close exactly at 168h) on the same STANDARD+HIGH_RISK signal stream and 6×5% / 30% portfolio assumptions. Subscriber stats separate all-signal economics from the capacity-constrained account replay, while research adds tail/capacity/forward interpretation and richer LLM-ready exports. EXTREME_RISK remains suppressed before signal creation.
 
 ## Default TP5_SL75_V1 execution
 
@@ -126,4 +126,4 @@ Suggested exposure shown to subscribers:
 
 The Research Validation Discord board now shows **TP5 no-stop** as the research baseline and **TP5 + SL75** as the default-trader comparison, alongside evidence health and the prospective TP5 tracker. Historical TP1/TP2/hybrid/EntryGate/token-behaviour/feature-sweep calculations remain internal.
 
-No new database migration is required in v1.3.28.
+No new database migration is required in v1.3.29.

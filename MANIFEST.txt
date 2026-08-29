@@ -19,6 +19,7 @@ app/performance.py
 app/report_now.py
 app/research_analytics.py
 app/research_analytics_now.py
+app/research_path_aggregation.py
 app/research_status.py
 app/signal_ledger.py
 app/signal_ledger_now.py
@@ -60,6 +61,7 @@ tests/test_cleanup_v1316.py
 tests/test_cleanup_v1317.py
 tests/test_cleanup_v1318.py
 tests/test_cleanup_v1319.py
+tests/test_db_research_aggregation_v1329.py
 tests/test_indicators.py
 tests/test_mexc_parsers.py
 tests/test_mexc_trade.py

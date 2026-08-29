@@ -1,6 +1,14 @@
-# MEXC Exhaustion Scanner + Multi-Slot Futures Trader v1.3.28
+# MEXC Exhaustion Scanner + Multi-Slot Futures Trader v1.3.29
 
 Execution + research release. **TP5_SL75_V1 is now the default trader strategy**, based on the v1.3.22 codebase.
+
+## v1.3.29 — research analytics timeout fix
+
+- **Fixed `research_analytics_rows()` timeout:** removed the legacy PostgreSQL query that repeatedly used ordered `array_agg()` over the growing 15m research-path table.
+- **Fixed the same scaling problem in `performance_rows()`:** `signal_ledger_now`, `report_now`, and scheduled performance reporting now use lightweight path reads plus Python aggregation instead of the old ordered-array SQL.
+- **Single lightweight analytics path read:** the on-demand analytics process now reads the public signal rows plus the required path columns once, aggregates per-signal path statistics in Python, and reuses that same in-memory path set for portfolio MTM replay. Performance/ledger workflows use the same lightweight aggregation approach.
+- **No research semantics changed:** TP5-indefinite, TP5+SL75, pure 7D-hold outcomes, adverse-threshold timing, 7d/14d MFE/MAE and horizon marks preserve the previous definitions.
+- **No trader execution change and no database migration required.**
 
 ## v1.3.28 — focused performance playbook + research intelligence
 

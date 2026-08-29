@@ -134,11 +134,15 @@ def test_strategy_ledger_csv_and_png_reflect_all_three_selected_strategies_and_b
 
 
 def test_performance_rows_exposes_path_derived_subscriber_breach_thresholds():
-    sql = Path("app/db.py").read_text(encoding="utf-8")
-    assert "AS adverse_50_at" in sql
-    assert "AS adverse_100_at" in sql
-    assert "AS adverse_200_path_at" in sql
-    assert "AS adverse_300_path_at" in sql
-    assert "tp.adverse_50_at, tp.adverse_75_at, tp.adverse_100_at" in sql
-    assert "AS path_mae_before_target_20" in sql
-    assert "AS path_mae_7d" in sql
+    source = Path("app/research_path_aggregation.py").read_text(encoding="utf-8")
+    for field in (
+        '"adverse_50_at"',
+        '"adverse_75_at"',
+        '"adverse_100_at"',
+        '"adverse_200_path_at"',
+        '"adverse_300_path_at"',
+        '"adverse_400_path_at"',
+        '"path_mae_before_target_20"',
+        '"path_mae_7d"',
+    ):
+        assert field in source
