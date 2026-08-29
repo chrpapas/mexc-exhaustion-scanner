@@ -1,10 +1,13 @@
-# MEXC Exhaustion Scanner + Multi-Slot Futures Trader v1.3.25
+# MEXC Exhaustion Scanner + Multi-Slot Futures Trader v1.3.26
 
 Execution + research release. **TP5_SL75_V1 is now the default trader strategy**, based on the v1.3.22 codebase.
 
-## v1.3.25 — TP5 validation uses true no-timeout semantics
+## v1.3.26 — no-timeout TP5 validation + MTM query fix
 
-- **Strategy Validation corrected:** TP5 no-stop is now evaluated across every observed signal and counts a +5% target whenever it is eventually reached, including after day 7. Unresolved positions remain open/waiting indefinitely; they are never classified as failed merely because a 7-day path matured.
+- **Portfolio MTM timeout fixed:** the on-demand MTM query no longer joins/sorts the full research path before returning it. It reads the three required path columns directly and lets the replay build/sort its own event timeline, eliminating the expensive query shape that Render canceled at the 10s statement timeout.
+- **MTM no longer stops at day 7:** portfolio path retrieval has no 168h cutoff. TP5/no-stop and TP5+SL75 validation can use every stored post-signal mark.
+- **Research path storage now follows unresolved TP5 positions beyond the normal 14d research horizon:** `RESEARCH_PATH_HORIZON_HOURS=336` remains the minimum fixed research window; if +5% has still not occurred, 15m path collection continues until TP5 is observed. This keeps no-stop validation aligned with the trader instead of silently freezing an old mark.
+- **Strategy Validation corrected:** TP5 no-stop is evaluated across every observed signal and counts a +5% target whenever it is eventually reached, including after day 7. Unresolved positions remain open/waiting indefinitely; they are never classified as failed merely because a 7-day path matured.
 - **7d research remains separate:** seven-day maturity is still used for fixed-horizon feature/return studies and paired 7d cohorts, but it no longer defines TP5 strategy success or position lifetime.
 - **TP5+SL75 added explicitly to the validation board:** the default strategy now shows TP5-first, SL75-first, waiting/open, resolved TP rate, portfolio return, realized return, drawdown, entries, closes, and capacity misses beside the TP5 no-stop baseline.
 - **30-day validation compares both TP5 variants** when a true 30-day empty-book window is available.
@@ -495,7 +498,7 @@ python -m app.research_analytics_now
 
 New research capabilities:
 
-- Post-signal 15m path collection now defaults to **336h / 14 days** (`RESEARCH_PATH_HORIZON_HOURS=336`). Existing 7-day MFE/MAE and target statistics remain explicitly bounded to the first 168h, so extending storage cannot contaminate the old baseline.
+- Post-signal 15m path collection uses **336h / 14 days as the minimum fixed research horizon** (`RESEARCH_PATH_HORIZON_HOURS=336`). If TP5 remains unresolved after that point, collection continues until +5% is observed; fixed 7d/14d statistics remain explicitly bounded to their own horizons.
 - Complete-path classification now requires the expected end timestamp and, for 7d/14d, at least **98% 15m candle coverage**. Exact signal-close candles are excluded from post-entry excursions to avoid pre-entry look-ahead.
 - STANDARD fixed-time exit sweep: **1d, 2d, 3d, 4d, 5d, 6d, 7d, 8d, 10d, 12d, 14d**, reporting sample, positive rate, average/median/worst/best return and average return per day of slot occupation.
 - HIGH RISK strategy sweep: **+20% TP first, otherwise timeout** at 1d/2d/3d/4d/5d/7d/10d/14d.
@@ -537,7 +540,7 @@ The feature-lift board is deliberately exploratory. It is intended to identify h
 - Research path collection defaults to the first 168h after each confirmed signal and records raw OHLCV/amount, close return, per-candle favorable/adverse excursion, and the matching stored BTC 15m close.
 - `research_signal_features_enriched` derives run/breakdown/retest/confirmation timing, while `research_signal_path_15m_enriched` derives cumulative MFE/MAE, best/worst close return, giveback from best, rebound from worst, minutes since signal, and BTC return since signal only when queried.
 - Research SQL uses its own 10-second PostgreSQL statement timeout so optional backfill cannot monopolize the scanner DB pool. A failed research cycle is isolated by the existing periodic-loop error handling.
-- Defaults: `RESEARCH_LOGGING_ENABLED=true`, `RESEARCH_PATH_POLL_SECONDS=900`, `RESEARCH_PATH_BATCH_ROWS=2000`, `RESEARCH_PATH_HORIZON_HOURS=168`, `RESEARCH_DB_TIMEOUT_SECONDS=10`.
+- Defaults: `RESEARCH_LOGGING_ENABLED=true`, `RESEARCH_PATH_POLL_SECONDS=900`, `RESEARCH_PATH_BATCH_ROWS=2000`, `RESEARCH_PATH_HORIZON_HOURS=336`, `RESEARCH_DB_TIMEOUT_SECONDS=10`.
 - Run `python -m app.research_status` to inspect snapshot/path row counts.
 - Public Discord reporting, signal rules, episode locking/re-arm behavior, performance tracking, and trader strategy are unchanged. Migration `013_research_signal_paths.sql` is applied automatically.
 

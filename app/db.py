@@ -565,8 +565,12 @@ class Database:
     ) -> int:
         """Persist a bounded batch of 15m post-signal candles already stored locally.
 
-        No MEXC/API calls are made here. A research-specific PostgreSQL statement
-        timeout prevents this optional backfill from competing with scanner hot paths.
+        ``horizon_hours`` is the minimum fixed research horizon (normally 14d).
+        If TP5 has not been observed by that point, collection continues for that
+        episode until TP5 is eventually observed, matching the no-timeout TP5
+        strategy. No MEXC/API calls are made here. A research-specific PostgreSQL
+        statement timeout prevents this optional backfill from competing with the
+        scanner hot path.
         """
         query = """
             WITH progress AS (
@@ -578,10 +582,14 @@ class Database:
                     COALESCE(
                         rp.last_recorded_close,
                         st.confirmed_at - interval '1 microsecond'
-                    ) AS last_recorded_close
+                    ) AS last_recorded_close,
+                    rp.target_5_at
                 FROM shadow_trades st
                 LEFT JOIN LATERAL (
-                    SELECT max(candle_close_at) AS last_recorded_close
+                    SELECT
+                        max(candle_close_at) AS last_recorded_close,
+                        min(candle_close_at) FILTER (WHERE favorable_return_pct >= 0.05)
+                            AS target_5_at
                     FROM research_signal_path_15m
                     WHERE episode_id = st.episode_id
                 ) rp ON true
@@ -589,9 +597,17 @@ class Database:
             bounds AS MATERIALIZED (
                 SELECT p.*
                 FROM progress p
-                WHERE p.last_recorded_close < LEAST(
-                    now(),
-                    p.confirmed_at + ($2::double precision * interval '1 hour')
+                WHERE p.last_recorded_close < (
+                    CASE
+                        WHEN p.target_5_at IS NULL THEN now()
+                        ELSE LEAST(
+                            now(),
+                            GREATEST(
+                                p.confirmed_at + ($2::double precision * interval '1 hour'),
+                                p.target_5_at
+                            )
+                        )
+                    END
                 )
                   AND EXISTS (
                     SELECT 1
@@ -602,9 +618,18 @@ class Database:
                       AND c0.open_time > p.last_recorded_close - interval '15 minutes'
                       AND c0.open_time > p.confirmed_at - interval '15 minutes'
                       AND c0.open_time <= now() - interval '15 minutes'
-                      AND c0.open_time <= p.confirmed_at
-                          + ($2::double precision * interval '1 hour')
-                          - interval '15 minutes'
+                      AND c0.open_time <= (
+                          CASE
+                              WHEN p.target_5_at IS NULL THEN now() - interval '15 minutes'
+                              ELSE LEAST(
+                                  now() - interval '15 minutes',
+                                  GREATEST(
+                                      p.confirmed_at + ($2::double precision * interval '1 hour'),
+                                      p.target_5_at
+                                  ) - interval '15 minutes'
+                              )
+                          END
+                      )
                   )
                 ORDER BY p.last_recorded_close ASC, p.confirmed_at ASC, p.episode_id ASC
                 -- Bound the expensive candle join before the final LIMIT. With the
@@ -630,9 +655,18 @@ class Database:
                       AND c.open_time > b.last_recorded_close - interval '15 minutes'
                       AND c.open_time > b.confirmed_at - interval '15 minutes'
                       AND c.open_time <= now() - interval '15 minutes'
-                      AND c.open_time <= b.confirmed_at
-                          + ($2::double precision * interval '1 hour')
-                          - interval '15 minutes'
+                      AND c.open_time <= (
+                          CASE
+                              WHEN b.target_5_at IS NULL THEN now() - interval '15 minutes'
+                              ELSE LEAST(
+                                  now() - interval '15 minutes',
+                                  GREATEST(
+                                      b.confirmed_at + ($2::double precision * interval '1 hour'),
+                                      b.target_5_at
+                                  ) - interval '15 minutes'
+                              )
+                          END
+                      )
                     ORDER BY c.open_time ASC
                     LIMIT $1
                 ) c ON true
@@ -930,21 +964,18 @@ class Database:
         *,
         statement_timeout_seconds: int,
     ) -> list[dict[str, Any]]:
-        """Return stored 15m close marks needed for research-only portfolio MTM replay.
+        """Return stored 15m close marks for observed portfolio MTM replay.
 
-        Bounded to the first seven days after confirmation because every v1.3.5
-        champion/challenger portfolio in the paired comparison exits by then.
-        PostgreSQL-only; no exchange/API calls.
+        TP5/no-stop is not a seven-day strategy, so this query deliberately has
+        no 168h cutoff.  The path table is already keyed by episode and contains
+        only research shadow paths; portfolio replay filters the returned rows to
+        episodes that were actually admitted.  Avoiding the feature join and the
+        global ORDER BY also keeps this optional report query index/scan friendly
+        on Render.  Python reconstructs/sorts the event timeline afterwards.
         """
         query = """
-            SELECT
-                p.episode_id, p.candle_close_at, p.close_return_pct
-            FROM research_signal_path_15m p
-            JOIN research_signal_features f ON f.episode_id = p.episode_id
-            WHERE f.risk_tier IN ('standard', 'high_risk')
-              AND p.candle_close_at > f.confirmed_at
-              AND p.candle_close_at <= f.confirmed_at + interval '168 hours'
-            ORDER BY p.candle_close_at ASC, p.episode_id ASC
+            SELECT episode_id, candle_close_at, close_return_pct
+            FROM research_signal_path_15m
         """
         async with self.pool.acquire() as conn:
             async with conn.transaction():

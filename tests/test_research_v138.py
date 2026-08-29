@@ -151,3 +151,55 @@ async def test_v138_on_demand_report_survives_optional_path_sync_timeout(monkeyp
     assert "send" in calls
     assert calls[-2:] == ["notifier_close", "db_close"]
     assert "Research path catch-up failed; continuing with currently persisted paths" in caplog.text
+
+@pytest.mark.asyncio
+async def test_v1326_portfolio_mtm_query_has_no_7d_cutoff_or_global_sort():
+    seen: dict[str, object] = {}
+
+    class FakeTransaction:
+        async def __aenter__(self):
+            return self
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    class FakeConn:
+        def transaction(self):
+            return FakeTransaction()
+        async def execute(self, query: str, *args):
+            seen["timeout"] = (query, args)
+        async def fetch(self, query: str, *args):
+            seen["query"] = query
+            seen["args"] = args
+            return []
+
+    class FakeAcquire:
+        async def __aenter__(self):
+            return FakeConn()
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    class FakePool:
+        def acquire(self):
+            return FakeAcquire()
+
+    db = Database("postgresql://unused")
+    db._pool = FakePool()
+    assert await db.research_portfolio_path_rows(statement_timeout_seconds=10) == []
+
+    query = str(seen["query"])
+    assert "FROM research_signal_path_15m" in query
+    assert "168 hours" not in query
+    assert "JOIN research_signal_features" not in query
+    assert "ORDER BY" not in query
+    assert seen["args"] == ()
+    assert seen["timeout"][1] == ("10s",)
+
+
+def test_v1326_path_sync_continues_past_fixed_horizon_until_tp5():
+    import inspect
+
+    source = inspect.getsource(Database.sync_research_signal_paths)
+    assert "min(candle_close_at) FILTER (WHERE favorable_return_pct >= 0.05)" in source
+    assert "WHEN p.target_5_at IS NULL THEN now()" in source
+    assert "GREATEST(" in source
+    assert "p.confirmed_at + ($2::double precision * interval '1 hour')" in source

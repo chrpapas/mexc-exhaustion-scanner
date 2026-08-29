@@ -2202,12 +2202,12 @@ def build_research_analytics(
             path_rows=portfolio_path_rows,
         ),
         portfolio_tp5=_portfolio_replay(
-            complete_paths_7d, strategy="tp5_challenger", generated_at=generated_at,
-            path_rows=portfolio_path_rows,
+            rows, strategy="tp5_challenger", generated_at=generated_at,
+            path_rows=portfolio_path_rows, cohort="observed_all_signals_open_until_exit",
         ),
         portfolio_tp5_sl75=_portfolio_replay(
-            complete_paths_7d, strategy="tp5_sl75_challenger", generated_at=generated_at,
-            path_rows=portfolio_path_rows,
+            rows, strategy="tp5_sl75_challenger", generated_at=generated_at,
+            path_rows=portfolio_path_rows, cohort="observed_all_signals_open_until_exit",
         ),
         portfolio_entrygate_current=_portfolio_replay(
             complete_paths_7d, strategy="current", generated_at=generated_at,
@@ -2315,7 +2315,7 @@ def research_strategy_sweeps_csv(report: ResearchAnalyticsReport) -> bytes:
         report.portfolio_entrygate_current, report.portfolio_entrygate_tp5,
     ):
         writer.writerow([
-            "portfolio_replay_paired_7d", portfolio.strategy, portfolio.cohort, portfolio.signals,
+            ("portfolio_replay_observed" if portfolio.cohort == "observed_all_signals_open_until_exit" else "portfolio_replay_paired_7d"), portfolio.strategy, portfolio.cohort, portfolio.signals,
             portfolio.eligible_signals, portfolio.entered, portfolio.closed,
             portfolio.missed_capacity, portfolio.missed_same_symbol,
             _csv_pct(portfolio.realized_return), _csv_pct(portfolio.marked_return),
