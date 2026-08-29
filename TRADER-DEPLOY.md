@@ -1,6 +1,6 @@
-# Trader deployment — v1.3.26
+# Trader deployment — v1.3.27
 
-v1.3.26 keeps **`TP5_SL75_V1`** as the default trader strategy from v1.3.24. Execution is unchanged. This release fixes the on-demand portfolio-MTM query timeout, removes the stale 168h MTM cutoff, and makes research path collection continue beyond the normal 14d research window for TP5 positions that are still unresolved. TP5+SL75 remains explicitly compared with TP5 no-stop. EXTREME_RISK remains suppressed before signal creation.
+v1.3.27 keeps **`TP5_SL75_V1`** as the default trader strategy. Execution is unchanged. This release redesigns subscriber/research validation around three apples-to-apples exit policies: TP5 indefinite, TP5+SL75, and TP5+7D cutoff. All three use the same STANDARD+HIGH_RISK signal stream and 6×5% / 30% portfolio assumptions. Research exports now carry explicit per-signal strategy outcomes plus a compact strategy-validation table. EXTREME_RISK remains suppressed before signal creation.
 
 ## Default TP5_SL75_V1 execution
 
@@ -126,4 +126,4 @@ Suggested exposure shown to subscribers:
 
 The Research Validation Discord board now shows **TP5 no-stop** as the research baseline and **TP5 + SL75** as the default-trader comparison, alongside evidence health and the prospective TP5 tracker. Historical TP1/TP2/hybrid/EntryGate/token-behaviour/feature-sweep calculations remain internal.
 
-No new database migration is required in v1.3.26.
+No new database migration is required in v1.3.27.

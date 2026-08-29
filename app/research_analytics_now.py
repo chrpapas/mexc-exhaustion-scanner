@@ -10,6 +10,11 @@ from app.notifier import DiscordNotifier
 from app.research_analytics import (
     build_research_analytics,
     research_signal_dataset_csv,
+    research_strategy_validation_csv,
+    research_feature_lift_csv,
+    research_strategy_sweeps_csv,
+    research_entry_research_csv,
+    research_token_regime_csv,
 )
 
 
@@ -61,11 +66,21 @@ async def main() -> None:
             generated_at=now,
             portfolio_path_rows=portfolio_path_rows,
         )
-        dataset_csv = research_signal_dataset_csv(rows)
+        dataset_csv = research_signal_dataset_csv(rows, generated_at=now)
+        strategy_csv = research_strategy_validation_csv(report)
+        feature_csv = research_feature_lift_csv(report)
+        sweeps_csv = research_strategy_sweeps_csv(report)
+        entry_csv = research_entry_research_csv(report)
+        regime_csv = research_token_regime_csv(report)
 
         sent = await notifier.send_research_analytics(
             report,
             dataset_csv=dataset_csv,
+            strategy_csv=strategy_csv,
+            feature_csv=feature_csv,
+            sweeps_csv=sweeps_csv,
+            entry_csv=entry_csv,
+            regime_csv=regime_csv,
             as_of=now,
             timezone_name=settings.performance_report_timezone,
         )

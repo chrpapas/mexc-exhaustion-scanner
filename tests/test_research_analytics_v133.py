@@ -174,10 +174,10 @@ def test_v133_notifier_reports_four_way_replay_and_prospective_freeze():
         for embed in embeds
     )
     assert "Strategy Validation" in text
-    assert "TP5 Frequent" in text
-    assert "TP20 remains tracked" in text
-    assert "7D Swing" in text
-    assert "TP5 • Prospective Monitor" in text
+    assert "TP5 indefinite" in text
+    assert "TP5 + SL75" in text
+    assert "TP5 + 7D cutoff" in text
+    assert "Forward Validation" in text
     assert "EntryGate-v1" not in text
     assert "Post-freeze score buckets" not in text
     assert "entrygate_v1__tp5_challenger_6x5pct" not in text

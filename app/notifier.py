@@ -137,13 +137,11 @@ class DiscordNotifier:
         as_of: datetime | None = None,
         timezone_name: str | None = None,
     ) -> bool:
-        """Send the compact subscriber-facing strategy board.
+        """Send the subscriber-facing three-strategy comparison.
 
-        The audience-facing board exposes only the two currently recommended approaches:
-        TP5 for frequent STANDARD + HIGH_RISK trading and a fixed 7-day hold for
-        STANDARD signals. TP20 remains observable in the ledger/research layer but is
-        not presented as a subscriber recommendation. Headline account run-rates replay
-        the suggested sizing/capacity chronologically; exploratory research remains internal.
+        Every strategy uses the same public confirmed-short stream, 6 generic 5%
+        slots and 30% aggregate exposure. Only exit policy changes, which keeps the
+        comparison understandable and replicable.
         """
         if not self._performance_webhook_url:
             return False
@@ -156,156 +154,94 @@ class DiscordNotifier:
             if display_time is not None
             else report.report_date.strftime("%d %b %Y")
         )
-        tp5 = report.tp5_7d_comparison
-        swing = report.standard_7d_comparison
 
-        def comparison_range_text() -> str:
-            if report.comparison_start_at is None or report.comparison_end_at is None:
-                return "No complete common 7-day cohort yet."
-            start_at = report.comparison_start_at
-            end_at = report.comparison_end_at
-            if timezone_name:
-                tz = ZoneInfo(timezone_name)
-                start_at = start_at.astimezone(tz)
-                end_at = end_at.astimezone(tz)
-            return (
-                f"Signal cohort **{start_at.strftime('%d %b %Y')} → {end_at.strftime('%d %b %Y')}** • "
-                "every headline return is valued exactly **168h after entry**."
+        strategies = [
+            ("⚡ A • TP5 indefinite", report.trader_strategy_tp5, report.tp5_account_run_rate),
+            ("🛡️ B • TP5 + SL75 • default", report.trader_strategy_tp5_sl75, report.tp5_sl75_account_run_rate),
+            ("🗓️ C • TP5 + 7D cutoff", report.trader_strategy_tp5_7d, report.tp5_7d_account_run_rate),
+        ]
+
+        def account_line(account) -> str:
+            if account is None:
+                return "Account replay unavailable"
+            dd = (
+                f"-{self._percent(account.max_mtm_drawdown)}"
+                if account.max_mtm_drawdown is not None else "n/a"
             )
-
-        def exposure_line(rec, *, tested: bool) -> str:
-            stress_100 = rec.per_trade_pct
-            stress_200 = rec.per_trade_pct * 2.0
-            basis = "portfolio-tested" if tested else "risk-based suggestion"
-            return (
-                f"Suggested account: **{self._percent(rec.per_trade_pct)} / trade** • "
-                f"max **{rec.max_slots}** positions • **{self._percent(rec.max_account_exposure_pct)}** total cap • 1× "
-                f"({basis})\n"
-                f"1-position stress: +100% adverse ≈ **-{self._percent(stress_100)} equity** • "
-                f"+200% ≈ **-{self._percent(stress_200)}**"
-            )
-
-        def risk_line(strategy) -> str:
-            worst_adverse = (
-                f"-{self._percent(strategy.worst_adverse)}"
-                if strategy.worst_adverse is not None else "n/a"
+            ratio = (
+                f"{account.return_over_max_drawdown:.2f}×"
+                if account.return_over_max_drawdown is not None else "n/a"
             )
             return (
-                f"Breaches before exit/7D mark: -50% **{strategy.breach_50}** • "
-                f"-100% **{strategy.breach_100}** • -200% **{strategy.breach_200}** • "
-                f"-300% **{strategy.breach_300}** • worst adverse **{worst_adverse}**"
+                f"Account **{self._signed_percent(account.observed_account_return)}** over **{account.span_days:.2f}d** • "
+                f"DD **{dd}** • R/DD **{ratio}**\n"
+                f"entered **{account.entered}** • closed **{account.closed}** • open **{account.open_positions}** • "
+                f"capacity/symbol misses **{account.missed_capacity}/{account.missed_same_symbol}** • "
+                f"avg/peak exposure **{self._percent(account.avg_exposure_pct)} / {self._percent(account.peak_exposure_pct)}**"
             )
 
-        def signed_money(value: object) -> str:
-            if value is None:
-                return "n/a"
-            number = float(value)
-            sign = "+" if number >= 0 else "-"
-            return f"{sign}${abs(number):,.0f}"
-
-        def account_run_rate_line(label: str, summary) -> str:
+        def signal_line(summary) -> str:
             if summary is None:
-                return f"**{label}:** unavailable"
-            dd_text = (
-                f"-{self._percent(summary.max_mtm_drawdown)}"
-                if summary.max_mtm_drawdown is not None else "n/a"
-            )
-            ratio_text = (
-                f"{summary.return_over_max_drawdown:.2f}×"
-                if summary.return_over_max_drawdown is not None else "n/a"
-            )
+                return "Signal summary unavailable"
+            mix = [f"TP5 **{summary.target_exits}**"]
+            if summary.stop_exits:
+                mix.append(f"SL75 **{summary.stop_exits}**")
+            if summary.timeout_exits:
+                mix.append(f"7D close **{summary.timeout_exits}**")
+            mix.append(f"waiting **{summary.waiting}**")
             return (
-                f"**{label}:** observed account **{self._signed_percent(summary.observed_account_return)}** over **{summary.span_days:.2f}d** "
-                f"→ **{self._signed_percent(summary.thirty_day_equivalent_return)} 30D eq.** "
-                f"(30D eq. ≈ **{signed_money(summary.thirty_day_pnl_per_10k)} per $10k**) • "
-                f"max MTM DD **{dd_text}** • return/DD **{ratio_text}**\n"
-                f"entered **{summary.entered}** • open **{summary.open_positions}** • "
-                f"capacity misses **{summary.missed_capacity}** • avg/peak exposure "
-                f"**{self._percent(summary.avg_exposure_pct)} / {self._percent(summary.peak_exposure_pct)}**"
+                f"**Rule:** {summary.rule}\n"
+                f"Signals **{summary.sample}** • {' • '.join(mix)} • resolved profitable **{self._percent(summary.resolved_positive_rate)}**\n"
+                f"median / p75 hold **{self._hours(summary.median_holding_hours)} / {self._hours(summary.p75_holding_hours)}** • "
+                f"tails before exit/current mark: -50% **{summary.breach_50}** • -75% **{summary.breach_75}** • -100% **{summary.breach_100}**"
             )
 
-        account_comparison_value = "\n".join((
-            account_run_rate_line("TP5", report.tp5_account_run_rate),
-            account_run_rate_line("7D", report.standard_7d_account_run_rate),
-        ))
-
-        if tp5 is not None:
-            tp5_value = (
-                f"**Rule:** STANDARD + HIGH RISK • full close at **+5%**; no forced timeout\n"
-                f"7D normalized **{tp5.sample}** • target hits **{tp5.target_hits}** • open at 7D **{tp5.unresolved_at_7d}** • "
-                f"profitable mark **{tp5.wins}/{tp5.sample} ({self._percent(tp5.positive_rate)})**\n"
-                f"Σ signal **{self._signed_percent(tp5.sum_return)}** • avg/signal **{self._signed_percent(tp5.avg_return)}** • "
-                f"median **{self._signed_percent(tp5.median_return)}** • best/worst **{self._signed_percent(tp5.best_return)} / {self._signed_percent(tp5.worst_return)}**\n"
-                f"Avg / median capital time to exit-or-mark **{self._hours(tp5.avg_effective_holding_hours)} / {self._hours(tp5.median_effective_holding_hours)}**\n"
-                f"{risk_line(tp5)}\n"
-                f"{exposure_line(report.tp5_exposure, tested=True)}"
-            )
-        else:
-            tp5_value = "No complete 7-day comparison cohort yet."
-
-        if swing is not None:
-            swing_value = (
-                f"**Rule:** STANDARD only • short at confirmation and close exactly at **7 days**\n"
-                f"7D normalized **{swing.sample}** • wins **{swing.wins}** • losses **{swing.losses}** • "
-                f"win rate **{self._percent(swing.positive_rate)}**\n"
-                f"Σ signal **{self._signed_percent(swing.sum_return)}** • avg/signal **{self._signed_percent(swing.avg_return)}** • "
-                f"median **{self._signed_percent(swing.median_return)}** • best/worst **{self._signed_percent(swing.best_return)} / {self._signed_percent(swing.worst_return)}**\n"
-                f"Capital time **7.00d fixed**\n"
-                f"{risk_line(swing)}\n"
-                f"{exposure_line(report.standard_7d_exposure, tested=False)}"
-            )
-        else:
-            swing_value = "No complete STANDARD 7-day comparison cohort yet."
+        fields = [
+            {
+                "name": "Replication settings",
+                "value": (
+                    "Enter every published **STANDARD + HIGH_RISK confirmed-short** signal • **1× cross** • "
+                    "**5% of current equity per trade** • max **6** simultaneous positions • **30%** aggregate cap • "
+                    "one open position per symbol. Research accounting assumes **0.08% fee per fill**."
+                ),
+                "inline": False,
+            }
+        ]
+        for title, summary, account in strategies:
+            fields.append({
+                "name": title,
+                "value": f"{signal_line(summary)}\n{account_line(account)}",
+                "inline": False,
+            })
+        fields.extend([
+            {
+                "name": "How to read this",
+                "value": (
+                    "Compare **account return, MTM drawdown, return/DD, open positions and tail counts** before looking at hit rate. "
+                    "A high TP5 hit rate can still be unattractive if unresolved shorts create large tail losses. "
+                    "The 7D variant forcibly closes unresolved positions at exactly 168h; A and B have no time expiry."
+                ),
+                "inline": False,
+            },
+            {
+                "name": "Today",
+                "value": f"Confirmed public signals **{report.confirmed_today}** • currently tracking **{report.open_count}**",
+                "inline": False,
+            },
+        ])
 
         board = {
             "title": "📊 Exhaustion Scanner • Strategy Comparison",
             "description": (
-                f"**{self._pretty_label(label)}**\n"
-                f"Updated **{as_of_text}**\n\n"
-                f"{comparison_range_text()}\n"
-                "Equal-notional signal returns • EXTREME_RISK signals are not published."
+                f"**{self._pretty_label(label)}**\nUpdated **{as_of_text}**\n"
+                "Three exit policies on the same entries and sizing. **TP5+SL75 is the current trader default.**"
             ),
             "color": 0x5865F2,
-            "fields": [
-                {
-                    "name": "💰 Strategy Account Performance • Suggested Sizing",
-                    "value": account_comparison_value,
-                    "inline": False,
-                },
-                {
-                    "name": "⚡ TP5 Frequent",
-                    "value": tp5_value,
-                    "inline": False,
-                },
-                {
-                    "name": "🗓️ 7D Swing • STANDARD",
-                    "value": swing_value,
-                    "inline": False,
-                },
-                {
-                    "name": "How to choose",
-                    "value": (
-                        "**TP5:** highest-turnover approach; fastest capital recycling and the only exposure setup already portfolio-tested.\n"
-                        "**7D Swing:** lower-frequency STANDARD-only alternative with larger individual signal moves and a fixed seven-day hold.\n"
-                        "Use **account return, max MTM drawdown, return/DD, and 30D equivalent** for the practical comparison; Σ signal is supporting opportunity data only."
-                    ),
-                    "inline": False,
-                },
-                {
-                    "name": "Today",
-                    "value": (
-                        f"Confirmed public signals **{report.confirmed_today}** • "
-                        f"currently tracking **{report.open_count}**"
-                    ),
-                    "inline": False,
-                },
-            ],
+            "fields": fields,
             "footer": {
                 "text": (
-                    "Account replay uses the same observed calendar, chronological signals, suggested slot caps, and 0.08% fee per fill; open positions are MTM at report time. "
-                    "Max MTM DD uses the admitted portfolio's available 15m research marks plus exact entry/exit/report events. "
-                    "30D eq. is a linear run-rate from the observed span, not an observed 30-day result or forecast; funding/slippage are not modeled. "
-                    "Σ signal is not account return. 7D sizing is risk-based, not a validated optimum. TP20 remains tracked in the ledger/research layer but is not currently a subscriber-recommended strategy."
+                    "Account replay is chronological and includes capacity, 0.08% entry/exit fees and current MTM for open positions. "
+                    "Max MTM DD uses stored 15m research paths where available. Funding and execution slippage are not modeled; same-candle TP5/SL75 is stop-first."
                 )
             },
         }
@@ -325,7 +261,6 @@ class DiscordNotifier:
         except (httpx.HTTPError, ValueError):
             LOGGER.exception("Discord performance report failed")
             return False
-
 
     async def send_signal_ledger(
         self,
@@ -491,17 +426,18 @@ class DiscordNotifier:
         feature_csv: bytes | None = None,
         dataset_csv: bytes | None = None,
         strategy_csv: bytes | None = None,
+        sweeps_csv: bytes | None = None,
         entry_csv: bytes | None = None,
         regime_csv: bytes | None = None,
         as_of: datetime | None = None,
         timezone_name: str = "Europe/Zurich",
     ) -> bool:
-        """Send the compact research validation board.
+        """Send a focused trader-facing board plus machine-readable research files.
 
-        The analytics engine still retains historical exploratory studies, but the
-        visible research report is intentionally limited to evidence health and
-        prospective TP5 validation. The public Strategy Comparison owns the three
-        subscriber-facing strategy choices so Discord never shows conflicting rules.
+        The visible comparison holds entry universe, sizing and capacity constant and
+        varies only the exit policy: TP5 indefinite, TP5+SL75, and TP5+7D cutoff.
+        Exploratory feature/regime studies stay in the exported research data rather
+        than competing for space on the subscriber decision surface.
         """
         if not self._performance_webhook_url:
             return False
@@ -509,176 +445,157 @@ class DiscordNotifier:
         tz = ZoneInfo(timezone_name)
         display_time = (as_of or report.generated_at).astimezone(tz)
         b = report.baseline
-        completeness_7d = (b.complete_paths_7d / b.matured_7d) if b.matured_7d else None
-        tp5 = report.tp5_risk
         calendar = report.calendar_throughput
-        tp5_sl75 = calendar.tp5_sl75
-        sl75_race = next(
-            (item for item in tp5.adverse_races if item.adverse_threshold_pct == 75),
-            None,
-        )
-        live_tp5 = report.prospective_tp5_live
-        persistent = report.persistent_run_risk
+        validations = {item.strategy: item for item in report.strategy_validations}
+        portfolios = {
+            "tp5_challenger": report.portfolio_tp5,
+            "tp5_sl75_challenger": report.portfolio_tp5_sl75,
+            "tp5_7d_cutoff": report.portfolio_tp5_7d_cutoff,
+        }
+        prospective_validations = {item.strategy: item for item in report.prospective_strategy_validations}
+        prospective_portfolios = dict(zip(
+            ("tp5_challenger", "tp5_sl75_challenger", "tp5_7d_cutoff"),
+            report.prospective_strategy_portfolios,
+        ))
+        completeness_7d = (b.complete_paths_7d / b.matured_7d) if b.matured_7d else None
 
-        def persistent_bucket(cohort: str, flag_name: str, flagged: bool):
-            return persistent.bucket(cohort, flag_name, flagged)
-
-        def breach_fraction(item) -> str:
-            if item is None or item.evaluable_120h <= 0:
-                return "0/0 (n/a)"
-            return (
-                f"{item.adverse_100_breaches}/{item.evaluable_120h} "
-                f"({self._percent(item.adverse_100_rate)})"
+        def tail_text(summary) -> str:
+            tails = {item.threshold_pct: item for item in summary.tail_ladder}
+            return " • ".join(
+                f"-{threshold}% **{tails[threshold].breached_before_exit_or_mark}**"
+                for threshold in (20, 50, 75, 100)
+                if threshold in tails
             )
 
-        cal_long = persistent_bucket("calibration", "long_run_36h", True)
-        cal_short = persistent_bucket("calibration", "long_run_36h", False)
-        cal_strict = persistent_bucket("calibration", "persistent_run_36h_ema3", True)
-        cal_other = persistent_bucket("calibration", "persistent_run_36h_ema3", False)
-        fwd_long = persistent_bucket("prospective", "long_run_36h", True)
-        fwd_short = persistent_bucket("prospective", "long_run_36h", False)
-        fwd_strict = persistent_bucket("prospective", "persistent_run_36h_ema3", True)
-        fwd_other = persistent_bucket("prospective", "persistent_run_36h_ema3", False)
-        fwd_signals = (fwd_long.signals if fwd_long else 0) + (fwd_short.signals if fwd_short else 0)
+        def exit_mix(summary) -> str:
+            parts = [f"TP5 **{summary.target_exits}**"]
+            if summary.stop_exits:
+                parts.append(f"SL75 **{summary.stop_exits}**")
+            if summary.timeout_exits:
+                parts.append(f"7D close **{summary.timeout_exits}**")
+            parts.append(f"waiting **{summary.waiting}**")
+            return " • ".join(parts)
 
-        tp5_entries_per_day = (
-            calendar.tp5.entered / calendar.history_span_days
-            if calendar.history_span_days > 0 else None
-        )
-        tp5_releases_per_day = (
-            calendar.tp5.closed / calendar.history_span_days
-            if calendar.history_span_days > 0 else None
-        )
-        sl75_stops = (
-            (sl75_race.adverse_first + sl75_race.same_candle)
-            if sl75_race is not None else 0
-        )
-        sl75_resolved = (
-            (sl75_race.target_first + sl75_stops)
-            if sl75_race is not None else 0
-        )
-        sl75_resolved_tp_rate = (
-            (sl75_race.target_first / sl75_resolved)
-            if sl75_race is not None and sl75_resolved > 0 else None
-        )
+        def portfolio_line(portfolio) -> str:
+            dd = (
+                f"-{self._percent(portfolio.max_mtm_drawdown)}"
+                if portfolio.max_mtm_drawdown is not None else "n/a"
+            )
+            ratio = (
+                f"{portfolio.return_over_max_drawdown:.2f}×"
+                if portfolio.return_over_max_drawdown is not None else "n/a"
+            )
+            return (
+                f"Account MTM **{self._signed_percent(portfolio.marked_return)}** • "
+                f"realized **{self._signed_percent(portfolio.realized_return)}** • DD **{dd}** • R/DD **{ratio}**\n"
+                f"entered **{portfolio.entered}** • closed **{portfolio.closed}** • open **{portfolio.open_positions}** • "
+                f"capacity/symbol misses **{portfolio.missed_capacity}/{portfolio.missed_same_symbol}**"
+            )
+
+        def strategy_field(strategy: str, title: str) -> dict:
+            summary = validations[strategy]
+            portfolio = portfolios[strategy]
+            return {
+                "name": title,
+                "value": (
+                    f"**Rule:** {summary.rule}\n"
+                    f"Signals **{summary.sample}** • {exit_mix(summary)} • resolved profitable **{self._percent(summary.resolved_positive_rate)}**\n"
+                    f"median / p75 hold **{self._hours(summary.median_holding_hours)} / {self._hours(summary.p75_holding_hours)}** • "
+                    f"tails before exit/current mark: {tail_text(summary)}\n"
+                    f"{portfolio_line(portfolio)}"
+                ),
+                "inline": False,
+            }
 
         strategy_board = {
-            "title": "🔬 Exhaustion Scanner • Strategy Validation",
+            "title": "📊 Exhaustion Scanner • 3-Strategy Validation",
             "description": (
                 f"Updated **{display_time.strftime('%d %b %Y • %H:%M %Z')}**\n"
-                "The trader now defaults to TP5+SL75. Research keeps the prior TP5 no-stop replay beside it for direct comparison. "
-                "7d maturity below is evidence-completeness context only; TP5 positions are never expired at day 7."
+                "Same entries for every comparison: **STANDARD + HIGH_RISK confirmed shorts • 6 slots × 5% current equity • 30% cap • 1× • one position/symbol**. "
+                "Research assumes **0.08% fee per fill**. Only the exit rule changes."
             ),
             "color": 0x5865F2,
             "fields": [
                 {
-                    "name": "📦 Evidence base",
+                    "name": "📦 Evidence",
                     "value": (
-                        f"Signals **{b.total_signals}** • 7d matured **{b.matured_7d}** • "
-                        f"complete paths **{b.complete_paths_7d}/{b.matured_7d} ({self._percent(completeness_7d)})**"
+                        f"Observed signals **{b.total_signals}** over **{calendar.history_span_days:.2f}d** • "
+                        f"7d matured **{b.matured_7d}** • complete 7d paths **{b.complete_paths_7d}/{b.matured_7d} ({self._percent(completeness_7d)})** • "
+                        f"complete 14d paths **{b.complete_paths_14d}**.\n"
+                        "7d maturity is used for fixed-horizon evidence only; it does **not** expire TP5-indefinite or TP5+SL75 positions."
                     ),
                     "inline": False,
                 },
+                strategy_field("tp5_challenger", "⚡ A • TP5 indefinite"),
+                strategy_field("tp5_sl75_challenger", "🛡️ B • TP5 + SL75 • current default"),
+                strategy_field("tp5_7d_cutoff", "🗓️ C • TP5 + 7D cutoff"),
                 {
-                    "name": "⚡ TP5 no-stop • Research baseline",
+                    "name": "How to compare",
                     "value": (
-                        f"Observed signals **{tp5.sample}** • TP5 hit to date **{tp5.hits}/{tp5.sample} ({self._percent(tp5.hit_rate)})** • "
-                        f"still open **{max(0, tp5.sample - tp5.hits)}**\n"
-                        f"median / p75 **{self._hours(tp5.median_time_hours)} / {self._hours(tp5.p75_time_hours)}**\n"
-                        f"Median pre-hit adverse **-{self._percent(tp5.median_adverse_before_target)}** • "
-                        f"worst **-{self._percent(tp5.worst_adverse_before_target)}**\n"
-                        f"Observed {calendar.history_span_days:.2f}d portfolio return **{self._signed_percent(calendar.tp5.marked_return)}** • "
-                        f"MTM DD **{'-' + self._percent(calendar.tp5.max_mtm_drawdown) if calendar.tp5.max_mtm_drawdown is not None else 'n/a'}** • "
-                        f"entries/day **{tp5_entries_per_day:.2f}** • releases/day **{tp5_releases_per_day:.2f}**"
-                    ),
-                    "inline": False,
-                },
-                {
-                    "name": "🛡️ TP5 + SL75 • Default trader comparison",
-                    "value": (
-                        f"6×5% / 30% cap • full TP +5% • catastrophic stop -75% • same-candle races stop-first.\n"
-                        f"Observed signals **{sl75_race.sample if sl75_race is not None else 0}** • "
-                        f"TP5 first **{sl75_race.target_first if sl75_race is not None else 0}** • "
-                        f"SL75 first **{sl75_stops}** • waiting **{sl75_race.unresolved if sl75_race is not None else 0}** • "
-                        f"resolved TP rate **{self._percent(sl75_resolved_tp_rate)}**\n"
-                        f"Observed portfolio return **{self._signed_percent(tp5_sl75.marked_return)}** • "
-                        f"realized **{self._signed_percent(tp5_sl75.realized_return)}** • "
-                        f"MTM DD **{'-' + self._percent(tp5_sl75.max_mtm_drawdown) if tp5_sl75.max_mtm_drawdown is not None else 'n/a'}**\n"
-                        f"Entered **{tp5_sl75.entered}** • closed **{tp5_sl75.closed}** • "
-                        f"open **{tp5_sl75.open_positions}** • capacity misses **{tp5_sl75.missed_capacity}**"
-                    ),
-                    "inline": False,
-                },
-                {
-                    "name": "🧭 Persistent-run continuation risk • research only",
-                    "value": (
-                        f"Frozen **{persistent.freeze_at.astimezone(tz).strftime('%d %b %Y • %H:%M %Z')}** • "
-                        f"evaluate -100% adverse within first **{persistent.observation_hours}h**; no execution filtering.\n"
-                        "Calibration frozen at selection time; non-breaches require a full 120h path: "
-                        f"run ≥{persistent.long_run_hours:.0f}h **{breach_fraction(cal_long)}** vs shorter **{breach_fraction(cal_short)}** • "
-                        f"strict ≥{persistent.long_run_hours:.0f}h + ≤{persistent.max_ema_distance_atr:.0f} ATR **{breach_fraction(cal_strict)}** "
-                        f"vs other **{breach_fraction(cal_other)}**.\n"
-                        f"Forward since freeze: signals **{fwd_signals}** • long flagged **{fwd_long.signals if fwd_long else 0}** • "
-                        f"strict flagged **{fwd_strict.signals if fwd_strict else 0}** • "
-                        f"120h breach long **{breach_fraction(fwd_long)}** vs shorter **{breach_fraction(fwd_short)}** • "
-                        f"strict **{breach_fraction(fwd_strict)}** vs other **{breach_fraction(fwd_other)}**"
-                    ),
-                    "inline": False,
-                },
-                {
-                    "name": "Subscriber report",
-                    "value": (
-                        "Use **Strategy Comparison** for the two current subscriber recommendations: **TP5 Frequent** and **7D Swing • STANDARD**. "
-                        "TP20 remains tracked in the Strategy Ledger/research layer, but is not currently recommended on the subscriber board."
+                        "Prioritize **account MTM return, max MTM drawdown, return/DD, unresolved/open positions and tail counts**. "
+                        "Signal hit rate alone can hide large open losses. The 7D strategy exits unresolved trades at the 168h mark; the other two have no time expiry."
                     ),
                     "inline": False,
                 },
             ],
             "footer": {
-                "text": "EXTREME_RISK is excluded. TP1/TP2/hybrids/EntryGate/feature sweeps remain internal and are intentionally not published."
+                "text": "Research replay uses chronological arrivals and capacity. Funding/slippage are not modeled; same-candle TP5/SL75 races are conservatively stop-first."
             },
         }
 
-        if calendar.latest_30d_tp5 is not None and calendar.latest_30d_tp5_sl75 is not None:
-            thirty_day = (
-                f"TP5 no-stop: return **{self._signed_percent(calendar.latest_30d_tp5.marked_return)}** • "
-                f"DD **{'-' + self._percent(calendar.latest_30d_tp5.max_mtm_drawdown) if calendar.latest_30d_tp5.max_mtm_drawdown is not None else 'n/a'}**\n"
-                f"TP5+SL75: return **{self._signed_percent(calendar.latest_30d_tp5_sl75.marked_return)}** • "
-                f"DD **{'-' + self._percent(calendar.latest_30d_tp5_sl75.max_mtm_drawdown) if calendar.latest_30d_tp5_sl75.max_mtm_drawdown is not None else 'n/a'}**"
+        prospective_lines: list[str] = []
+        for strategy, label in (
+            ("tp5_challenger", "TP5 indefinite"),
+            ("tp5_sl75_challenger", "TP5+SL75"),
+            ("tp5_7d_cutoff", "TP5+7D"),
+        ):
+            summary = prospective_validations[strategy]
+            portfolio = prospective_portfolios[strategy]
+            extra = (
+                f" • open >7d **{report.prospective_tp5_live.waiting_over_7d}**"
+                if strategy == "tp5_challenger" else ""
             )
+            prospective_lines.append(
+                f"**{label}:** {exit_mix(summary)}{extra} • MTM **{self._signed_percent(portfolio.marked_return)}** • "
+                f"DD **{'-' + self._percent(portfolio.max_mtm_drawdown) if portfolio.max_mtm_drawdown is not None else 'n/a'}** • entered **{portfolio.entered}**"
+            )
+
+        if all(item is not None for item in (
+            calendar.latest_30d_tp5, calendar.latest_30d_tp5_sl75, calendar.latest_30d_tp5_7d_cutoff
+        )):
+            thirty_day = "\n".join((
+                f"TP5 indefinite **{self._signed_percent(calendar.latest_30d_tp5.marked_return)}** / DD **-{self._percent(calendar.latest_30d_tp5.max_mtm_drawdown)}**",
+                f"TP5+SL75 **{self._signed_percent(calendar.latest_30d_tp5_sl75.marked_return)}** / DD **-{self._percent(calendar.latest_30d_tp5_sl75.max_mtm_drawdown)}**",
+                f"TP5+7D **{self._signed_percent(calendar.latest_30d_tp5_7d_cutoff.marked_return)}** / DD **-{self._percent(calendar.latest_30d_tp5_7d_cutoff.max_mtm_drawdown)}**",
+            ))
         else:
             thirty_day = (
-                f"First true 30d empty-book replay not available yet • observed **{calendar.history_span_days:.2f}d** • "
+                f"True 30d empty-book comparison not available yet • observed **{calendar.history_span_days:.2f}d** • "
                 f"need **{calendar.days_until_30d:.2f}d** more."
             )
 
         prospective = {
-            "title": "📡 TP5 • Prospective Monitor",
+            "title": "📡 Forward Validation • Frozen 21 Aug",
             "description": (
-                f"Frozen **{report.oos_freeze_at.astimezone(tz).strftime('%d %b %Y • %H:%M %Z')}**. "
-                "This is the real forward-validation stream; no retuning from these observations."
+                f"Post-freeze evidence only. Frozen **{report.oos_freeze_at.astimezone(tz).strftime('%d %b %Y • %H:%M %Z')}**; "
+                "do not tune thresholds from this stream and then call the result out-of-sample."
             ),
             "color": 0x1ABC9C,
             "fields": [
+                {"name": "Post-freeze strategies", "value": "\n".join(prospective_lines), "inline": False},
+                {"name": "True latest-30d empty-book replay", "value": thirty_day, "inline": False},
                 {
-                    "name": "Post-freeze TP5 tracker",
+                    "name": "Files for deeper analysis",
                     "value": (
-                        f"Signals **{live_tp5.signals}** • hit **{live_tp5.hits}** • waiting/open **{live_tp5.waiting}** • "
-                        f"open >7d **{live_tp5.waiting_over_7d}**\n"
-                        f"Observed hit-to-date rate **{self._percent(live_tp5.observed_hit_rate)}** • "
-                        f"median / p75 **{self._hours(live_tp5.median_hit_hours)} / {self._hours(live_tp5.p75_hit_hours)}**\n"
-                        f"Worst pre-hit adverse **-{self._percent(live_tp5.worst_pre_hit_adverse)}** • "
-                        f"oldest waiting **{self._hours(live_tp5.oldest_waiting_hours)}**"
+                        "**strategy-validation.csv** = compact strategy-level decision table.\n"
+                        "**research-signal-dataset.csv** = per-signal features, path statistics, target/adverse timestamps, and explicit outcome columns for all three strategies."
                     ),
                     "inline": False,
                 },
-                {
-                    "name": "30-day validation",
-                    "value": thirty_day,
-                    "inline": False,
-                },
             ],
-            "footer": {"text": "TP5 has no time expiry: unresolved positions remain waiting/open until +5% is hit. 7d cohorts are used only for fixed-horizon research."},
+            "footer": {
+                "text": "Exploratory feature, regime, EntryGate and TP1/TP2 studies remain in internal research exports; they are intentionally kept off this trader-facing comparison."
+            },
         }
 
         embeds = (strategy_board, prospective)
@@ -691,17 +608,48 @@ class DiscordNotifier:
                 "embeds": [strategy_board],
                 "allowed_mentions": {"parse": []},
             }
+            files: dict[str, tuple[str, bytes, str]] = {}
             if dataset_csv is not None:
+                files[f"files[{len(files)}]"] = (
+                    f"research-signal-dataset-{display_time.strftime('%Y-%m-%d')}.csv",
+                    dataset_csv,
+                    "text/csv",
+                )
+            if strategy_csv is not None:
+                files[f"files[{len(files)}]"] = (
+                    f"strategy-validation-{display_time.strftime('%Y-%m-%d')}.csv",
+                    strategy_csv,
+                    "text/csv",
+                )
+            if feature_csv is not None:
+                files[f"files[{len(files)}]"] = (
+                    f"feature-lift-{display_time.strftime('%Y-%m-%d')}.csv",
+                    feature_csv,
+                    "text/csv",
+                )
+            if sweeps_csv is not None:
+                files[f"files[{len(files)}]"] = (
+                    f"strategy-sweeps-{display_time.strftime('%Y-%m-%d')}.csv",
+                    sweeps_csv,
+                    "text/csv",
+                )
+            if entry_csv is not None:
+                files[f"files[{len(files)}]"] = (
+                    f"entry-research-{display_time.strftime('%Y-%m-%d')}.csv",
+                    entry_csv,
+                    "text/csv",
+                )
+            if regime_csv is not None:
+                files[f"files[{len(files)}]"] = (
+                    f"token-regime-{display_time.strftime('%Y-%m-%d')}.csv",
+                    regime_csv,
+                    "text/csv",
+                )
+            if files:
                 response = await self._client.post(
                     self._performance_webhook_url,
                     data={"payload_json": json.dumps(payload)},
-                    files={
-                        "files[0]": (
-                            f"research-signal-dataset-{display_time.strftime('%Y-%m-%d')}.csv",
-                            dataset_csv,
-                            "text/csv",
-                        )
-                    },
+                    files=files,
                 )
             else:
                 response = await self._client.post(self._performance_webhook_url, json=payload)

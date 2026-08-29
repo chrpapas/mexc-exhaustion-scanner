@@ -1279,6 +1279,7 @@ class Database:
                     min(candle_close_at) FILTER (WHERE favorable_return_pct >= 0.05) AS target_5_at,
                     min(candle_close_at) FILTER (WHERE favorable_return_pct >= 0.20) AS target_20_path_at,
                     min(candle_close_at) FILTER (WHERE adverse_return_pct <= -0.50) AS adverse_50_at,
+                    min(candle_close_at) FILTER (WHERE adverse_return_pct <= -0.75) AS adverse_75_at,
                     min(candle_close_at) FILTER (WHERE adverse_return_pct <= -1.00) AS adverse_100_at,
                     min(candle_close_at) FILTER (WHERE adverse_return_pct <= -2.00) AS adverse_200_path_at,
                     min(candle_close_at) FILTER (WHERE adverse_return_pct <= -3.00) AS adverse_300_path_at,
@@ -1292,6 +1293,7 @@ class Database:
                     t.target_5_at,
                     t.target_20_path_at,
                     t.adverse_50_at,
+                    t.adverse_75_at,
                     t.adverse_100_at,
                     t.adverse_200_path_at,
                     t.adverse_300_path_at,
@@ -1345,7 +1347,7 @@ class Database:
                 JOIN shadow_trades stp ON stp.episode_id = p.episode_id
                 LEFT JOIN path_targets t ON t.episode_id = p.episode_id
                 GROUP BY p.episode_id, t.target_5_at, t.target_20_path_at,
-                         t.adverse_50_at, t.adverse_100_at, t.adverse_200_path_at,
+                         t.adverse_50_at, t.adverse_75_at, t.adverse_100_at, t.adverse_200_path_at,
                          t.adverse_300_path_at, t.adverse_400_path_at, stp.confirmed_at
             )
             SELECT st.episode_id, st.symbol, st.confirmed_at, st.entry_price, st.risk_tier,
@@ -1357,7 +1359,7 @@ class Database:
                    st.adverse_200_breach_at, st.adverse_300_breach_at, st.cross_400_breach_at,
                    tp.target_5_at, tp.path_mae_before_target_5, tp.path_mae_before_target_5_at,
                    tp.path_mae_before_target_20, tp.path_mae_7d,
-                   tp.target_20_path_at, tp.adverse_50_at, tp.adverse_100_at,
+                   tp.target_20_path_at, tp.adverse_50_at, tp.adverse_75_at, tp.adverse_100_at,
                    tp.adverse_200_path_at, tp.adverse_300_path_at, tp.adverse_400_path_at,
                    tp.path_last_at, tp.path_rows_10d,
                    tp.path_return_24h, tp.path_return_48h, tp.path_return_72h,

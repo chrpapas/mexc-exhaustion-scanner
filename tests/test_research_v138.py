@@ -141,7 +141,12 @@ async def test_v138_on_demand_report_survives_optional_path_sync_timeout(monkeyp
     monkeypatch.setattr(research_now, "Database", FakeDb)
     monkeypatch.setattr(research_now, "DiscordNotifier", FakeNotifier)
     monkeypatch.setattr(research_now, "build_research_analytics", lambda *a, **k: report)
-    monkeypatch.setattr(research_now, "research_signal_dataset_csv", lambda r: b"")
+    monkeypatch.setattr(research_now, "research_signal_dataset_csv", lambda r, **k: b"")
+    monkeypatch.setattr(research_now, "research_strategy_validation_csv", lambda r: b"")
+    monkeypatch.setattr(research_now, "research_feature_lift_csv", lambda r: b"")
+    monkeypatch.setattr(research_now, "research_strategy_sweeps_csv", lambda r: b"")
+    monkeypatch.setattr(research_now, "research_entry_research_csv", lambda r: b"")
+    monkeypatch.setattr(research_now, "research_token_regime_csv", lambda r: b"")
 
     caplog.set_level("ERROR")
     await research_now.main()

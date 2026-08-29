@@ -312,6 +312,32 @@ class AccountRunRateSummary:
 
 
 @dataclass(frozen=True, slots=True)
+class TraderStrategySummary:
+    strategy: str
+    label: str
+    rule: str
+    sample: int
+    target_exits: int
+    stop_exits: int
+    timeout_exits: int
+    waiting: int
+    positive_exits: int
+    negative_exits: int
+    resolved_positive_rate: float | None
+    avg_exit_return: float | None
+    median_exit_return: float | None
+    worst_exit_return: float | None
+    median_holding_hours: float | None
+    p75_holding_hours: float | None
+    breach_50: int
+    breach_75: int
+    breach_100: int
+
+    def as_dict(self) -> dict[str, Any]:
+        return {name: getattr(self, name) for name in self.__dataclass_fields__}
+
+
+@dataclass(frozen=True, slots=True)
 class PerformanceSummary:
     report_date: date
     confirmed_today: int
@@ -351,10 +377,15 @@ class PerformanceSummary:
     tp5_7d_comparison: Normalized7dStrategySummary | None = None
     tp20_7d_comparison: Normalized7dStrategySummary | None = None
     standard_7d_comparison: Normalized7dStrategySummary | None = None
+    trader_strategy_tp5: TraderStrategySummary | None = None
+    trader_strategy_tp5_sl75: TraderStrategySummary | None = None
+    trader_strategy_tp5_7d: TraderStrategySummary | None = None
     tp5_exposure: ExposureRecommendation = ExposureRecommendation(0.05, 6, 0.30, "portfolio-tested frozen TP5 configuration")
     tp20_exposure: ExposureRecommendation = ExposureRecommendation(0.02, 5, 0.10, "risk-based suggestion from observed HIGH_RISK adverse paths")
     standard_7d_exposure: ExposureRecommendation = ExposureRecommendation(0.03, 5, 0.15, "risk-based suggestion for fixed 7-day STANDARD holds")
     tp5_account_run_rate: AccountRunRateSummary | None = None
+    tp5_sl75_account_run_rate: AccountRunRateSummary | None = None
+    tp5_7d_account_run_rate: AccountRunRateSummary | None = None
     tp20_account_run_rate: AccountRunRateSummary | None = None
     standard_7d_account_run_rate: AccountRunRateSummary | None = None
 
@@ -450,10 +481,15 @@ class PerformanceSummary:
             "tp5_7d_comparison": self.tp5_7d_comparison.as_dict() if self.tp5_7d_comparison else None,
             "tp20_7d_comparison": self.tp20_7d_comparison.as_dict() if self.tp20_7d_comparison else None,
             "standard_7d_comparison": self.standard_7d_comparison.as_dict() if self.standard_7d_comparison else None,
+            "trader_strategy_tp5": self.trader_strategy_tp5.as_dict() if self.trader_strategy_tp5 else None,
+            "trader_strategy_tp5_sl75": self.trader_strategy_tp5_sl75.as_dict() if self.trader_strategy_tp5_sl75 else None,
+            "trader_strategy_tp5_7d": self.trader_strategy_tp5_7d.as_dict() if self.trader_strategy_tp5_7d else None,
             "tp5_exposure": self.tp5_exposure.as_dict(),
             "tp20_exposure": self.tp20_exposure.as_dict(),
             "standard_7d_exposure": self.standard_7d_exposure.as_dict(),
             "tp5_account_run_rate": self.tp5_account_run_rate.as_dict() if self.tp5_account_run_rate else None,
+            "tp5_sl75_account_run_rate": self.tp5_sl75_account_run_rate.as_dict() if self.tp5_sl75_account_run_rate else None,
+            "tp5_7d_account_run_rate": self.tp5_7d_account_run_rate.as_dict() if self.tp5_7d_account_run_rate else None,
             "tp20_account_run_rate": self.tp20_account_run_rate.as_dict() if self.tp20_account_run_rate else None,
             "standard_7d_account_run_rate": self.standard_7d_account_run_rate.as_dict() if self.standard_7d_account_run_rate else None,
         }
@@ -902,6 +938,86 @@ def build_performance_summary(
         values = [row.get(key) for key in keys if row.get(key) is not None]
         return min(values) if values else None
 
+    def trader_strategy_summary(strategy: str) -> TraderStrategySummary:
+        labels = {
+            "tp5": ("TP5 indefinite", "+5% target • no stop • no timeout"),
+            "tp5_sl75": ("TP5 + SL75", "+5% target • -75% catastrophic stop • no timeout"),
+            "tp5_7d": ("TP5 + 7D cutoff", "+5% target within 7d • otherwise close at 168h mark"),
+        }
+        label, rule = labels[strategy]
+        statuses: list[str] = []
+        exit_returns: list[float] = []
+        holding_hours: list[float] = []
+        breaches = {50: 0, 75: 0, 100: 0}
+        observed = [
+            row for row in rows
+            if row.get("confirmed_at") is not None and row["confirmed_at"] <= now_utc
+            and str(row.get("risk_tier") or "standard") in {"standard", "high_risk"}
+        ]
+
+        for row in observed:
+            confirmed = row["confirmed_at"]
+            target = earliest_event(row, "target_5_at")
+            status = "waiting"
+            exit_at = None
+            exit_return = None
+            if strategy == "tp5":
+                if target is not None and target <= now_utc:
+                    status, exit_at, exit_return = "target", target, 0.05
+            elif strategy == "tp5_sl75":
+                stop = earliest_event(row, "adverse_75_at")
+                if stop is not None and stop <= now_utc and (target is None or stop <= target):
+                    status, exit_at, exit_return = "stop", stop, -0.75
+                elif target is not None and target <= now_utc:
+                    status, exit_at, exit_return = "target", target, 0.05
+            elif strategy == "tp5_7d":
+                cutoff = confirmed + timedelta(hours=168)
+                if target is not None and target <= cutoff and target <= now_utc:
+                    status, exit_at, exit_return = "target", target, 0.05
+                elif cutoff <= now_utc:
+                    value = row.get("return_168h_pct")
+                    if value is None:
+                        value = row.get("path_return_168h")
+                    if value is not None:
+                        status, exit_at, exit_return = "timeout", cutoff, float(value)
+            else:
+                raise ValueError(f"unsupported trader strategy: {strategy}")
+
+            statuses.append(status)
+            effective_end = exit_at or now_utc
+            for threshold, key in ((50, "adverse_50_at"), (75, "adverse_75_at"), (100, "adverse_100_at")):
+                event = row.get(key)
+                if event is not None and event <= effective_end:
+                    breaches[threshold] += 1
+            if exit_at is not None and exit_return is not None:
+                exit_returns.append(float(exit_return))
+                holding_hours.append(max(0.0, (exit_at - confirmed).total_seconds() / 3600.0))
+
+        resolved = len(exit_returns)
+        positive = sum(value > 0 for value in exit_returns)
+        return TraderStrategySummary(
+            strategy=strategy,
+            label=label,
+            rule=rule,
+            sample=len(observed),
+            target_exits=statuses.count("target"),
+            stop_exits=statuses.count("stop"),
+            timeout_exits=statuses.count("timeout"),
+            waiting=statuses.count("waiting"),
+            positive_exits=positive,
+            negative_exits=resolved - positive,
+            resolved_positive_rate=(positive / resolved) if resolved else None,
+            avg_exit_return=average(exit_returns),
+            median_exit_return=percentile(exit_returns, 0.50),
+            worst_exit_return=min(exit_returns) if exit_returns else None,
+            median_holding_hours=percentile(holding_hours, 0.50),
+            p75_holding_hours=percentile(holding_hours, 0.75),
+            breach_50=breaches[50],
+            breach_75=breaches[75],
+            breach_100=breaches[100],
+        )
+
+
     def normalized_7d_strategy(
         group: list[dict[str, Any]],
         *,
@@ -1037,6 +1153,26 @@ def build_performance_summary(
                 target = earliest_event(row, "target_5_at")
                 if target is not None and target <= now_utc:
                     return target, 0.05
+                return None, None
+            if strategy == "tp5_sl75":
+                target = earliest_event(row, "target_5_at")
+                stop = earliest_event(row, "adverse_75_at")
+                if stop is not None and stop <= now_utc and (target is None or stop <= target):
+                    return stop, -0.75
+                if target is not None and target <= now_utc:
+                    return target, 0.05
+                return None, None
+            if strategy == "tp5_7d":
+                cutoff = confirmed + timedelta(hours=168)
+                target = earliest_event(row, "target_5_at")
+                if target is not None and target <= cutoff and target <= now_utc:
+                    return target, 0.05
+                if cutoff <= now_utc:
+                    value = row.get("return_168h_pct")
+                    if value is None:
+                        value = row.get("path_return_168h")
+                    if value is not None:
+                        return cutoff, float(value)
                 return None, None
             if strategy == "tp20":
                 target = earliest_event(row, "target_20_path_at", "target_20_at")
@@ -1217,11 +1353,21 @@ def build_performance_summary(
             slot_days=slot_days,
         )
 
+    trader_strategy_tp5 = trader_strategy_summary("tp5")
+    trader_strategy_tp5_sl75 = trader_strategy_summary("tp5_sl75")
+    trader_strategy_tp5_7d = trader_strategy_summary("tp5_7d")
+
     tp5_exposure = ExposureRecommendation(0.05, 6, 0.30, "portfolio-tested frozen TP5 configuration")
     tp20_exposure = ExposureRecommendation(0.02, 5, 0.10, "risk-based suggestion from observed HIGH_RISK adverse paths")
     standard_7d_exposure = ExposureRecommendation(0.03, 5, 0.15, "risk-based suggestion for fixed 7-day STANDARD holds")
     tp5_account_run_rate = account_run_rate(
         strategy="tp5", risk_tiers={"standard", "high_risk"}, exposure=tp5_exposure
+    )
+    tp5_sl75_account_run_rate = account_run_rate(
+        strategy="tp5_sl75", risk_tiers={"standard", "high_risk"}, exposure=tp5_exposure
+    )
+    tp5_7d_account_run_rate = account_run_rate(
+        strategy="tp5_7d", risk_tiers={"standard", "high_risk"}, exposure=tp5_exposure
     )
     tp20_account_run_rate = account_run_rate(
         strategy="tp20", risk_tiers={"high_risk"}, exposure=tp20_exposure
@@ -1269,10 +1415,15 @@ def build_performance_summary(
         tp5_7d_comparison=tp5_7d_comparison,
         tp20_7d_comparison=tp20_7d_comparison,
         standard_7d_comparison=standard_7d_comparison,
+        trader_strategy_tp5=trader_strategy_tp5,
+        trader_strategy_tp5_sl75=trader_strategy_tp5_sl75,
+        trader_strategy_tp5_7d=trader_strategy_tp5_7d,
         tp5_exposure=tp5_exposure,
         tp20_exposure=tp20_exposure,
         standard_7d_exposure=standard_7d_exposure,
         tp5_account_run_rate=tp5_account_run_rate,
+        tp5_sl75_account_run_rate=tp5_sl75_account_run_rate,
+        tp5_7d_account_run_rate=tp5_7d_account_run_rate,
         tp20_account_run_rate=tp20_account_run_rate,
         standard_7d_account_run_rate=standard_7d_account_run_rate,
     )

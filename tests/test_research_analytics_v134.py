@@ -185,9 +185,8 @@ def test_v134_notifier_adds_prospective_monitor_embed():
         "\n".join(field.get("name", "") + " " + field.get("value", "") for field in embed.get("fields", []))
         for embed in embeds
     )
-    assert "TP5 • Prospective Monitor" in text
-    assert "Post-freeze TP5 tracker" in text
-    assert "30-day validation" in text
+    assert "Forward Validation" in text
+    assert "Post-freeze strategies" in text
     assert "failed after complete 7d" not in text
     assert "open >7d" in text
     assert "EntryGate-v1 acceptance" not in text

@@ -150,10 +150,11 @@ def test_v1322_notifier_surfaces_research_only_calibration_and_forward_tracker()
         "\n".join(field.get("name", "") + " " + field.get("value", "") for field in embed.get("fields", []))
         for embed in embeds
     )
-    assert "Persistent-run continuation risk" in text
-    assert "research only" in text
-    assert "run ≥36h" in text
-    assert "strict ≥36h + ≤3 ATR" in text
-    assert "Forward since freeze" in text
+    # Persistent-run research remains in the report object/exports but is intentionally
+    # kept off the trader-facing Discord decision surface.
+    assert report.persistent_run_risk.buckets
+    assert "Persistent-run continuation risk" not in text
+    assert "3-Strategy Validation" in text
+    assert "Forward Validation" in text
     for embed in embeds:
         notifier._validate_discord_embed(embed)

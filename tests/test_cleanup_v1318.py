@@ -139,6 +139,6 @@ def test_performance_rows_exposes_path_derived_subscriber_breach_thresholds():
     assert "AS adverse_100_at" in sql
     assert "AS adverse_200_path_at" in sql
     assert "AS adverse_300_path_at" in sql
-    assert "tp.adverse_50_at, tp.adverse_100_at" in sql
+    assert "tp.adverse_50_at, tp.adverse_75_at, tp.adverse_100_at" in sql
     assert "AS path_mae_before_target_20" in sql
     assert "AS path_mae_7d" in sql

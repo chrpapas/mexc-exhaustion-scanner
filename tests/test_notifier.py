@@ -222,34 +222,15 @@ def test_performance_report_uses_dedicated_stats_webhook_and_embeds():
         field["name"] + " " + field["value"] for field in embed.get("fields", [])
     )
     assert "Strategy Comparison" in all_text
-    assert "Strategy Account Performance" in all_text
-    assert "30D eq." in all_text
-    assert "+22.91% 30D eq." in all_text
-    assert "30D eq. ≈ **+$2,291 per $10k**" in all_text
-    assert "avg/peak exposure" in all_text
-    assert "TP5 Frequent" in all_text
-    assert "7D Swing" in all_text
-    assert "STANDARD + HIGH RISK" in all_text
-    assert "TP20 High Risk" not in all_text
-    assert "TP20 hits by 7D" not in all_text
-    assert "TP1-10" not in all_text
-    assert "TP2-6" not in all_text
-    assert "TP2-10" not in all_text
+    assert "Replication settings" in all_text
+    assert "TP5 indefinite" in all_text
+    assert "TP5 + SL75" in all_text
+    assert "TP5 + 7D cutoff" in all_text
+    assert "6** simultaneous positions" in all_text
+    assert "30%" in all_text
+    assert "0.08% fee per fill" in all_text
+    assert "TP20" not in all_text
     assert "EntryGate" not in all_text
-    assert "EXTREME_RISK signals are not published" in all_text
-    assert "target hits **12**" in all_text
-    assert "profitable mark **12/12 (100.00%)**" in all_text
-    assert "Σ signal **+60.00%**" in all_text
-    assert "wins **4** • losses **1**" in all_text
-    assert "Σ signal **+150.00%**" in all_text
-    assert "Suggested account: **5.00% / trade**" in all_text
-    assert "Suggested account: **3.00% / trade**" in all_text
-    assert "max MTM DD" in all_text
-    assert "return/DD" in all_text
-    assert "max MTM DD **-4.10%**" in all_text
-    assert "return/DD **2.05×**" in all_text
-    assert "TP20 remains tracked in the ledger/research layer" in embed["footer"]["text"]
-    assert "every headline return is valued exactly **168h after entry**" in all_text
 
 
 def test_performance_webhook_falls_back_to_signal_webhook_for_backward_compatibility():
