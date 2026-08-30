@@ -1,9 +1,18 @@
-# MEXC Exhaustion Scanner + Multi-Slot Futures Trader v1.3.32
+# MEXC Exhaustion Scanner + Multi-Slot Futures Trader v1.3.33
 
 Execution + research release. **TP5_SL75_V1 is now the default trader strategy**, based on the v1.3.22 codebase.
 
 
-## v1.3.32 — signal-time volatility / ATR research
+## v1.3.33 — parabolic continuation-risk research
+
+
+Research-only continuation-risk challenger:
+- frozen flag: `return_24h >= 30%` AND `distance_above_ema20_atr_4h >= 3.0`
+- flagged positions shadow-size at 2.5% of equity; all other positions remain 5%
+- same 6 generic slots, 30% nominal exposure cap, TP5 + SL75, one-open-position-per-symbol
+- full-sample and post-freeze MTM, max synchronized drawdown, return/DD and flagged cohort outcomes are reported
+- thresholds are intentionally not swept after observing PONS/HNT/CATE; this remains research-only
+- live/default execution is unchanged
 
 - **Research only; live trader unchanged:** default execution remains `TP5_SL75_V1`, STANDARD+HIGH_RISK, 6×5% / 30%, TP5 + catastrophic SL75.
 - Exposes the already-frozen confirmation-time `atr_15m` feature and derives **`atr_15m_pct = atr_15m / entry_price`** so volatility is comparable across coins without look-ahead.

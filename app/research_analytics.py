@@ -51,6 +51,14 @@ VOLATILITY_MIN_SLOT_PCT = 0.025
 VOLATILITY_MAX_SLOT_PCT = 0.075
 VOLATILITY_MAX_SLOTS = 6
 VOLATILITY_MAX_EXPOSURE_PCT = 0.30
+# Research-only parabolic continuation-risk sizing. Thresholds are frozen from
+# the 30 Aug 2026 investigation of PONS/HNT/CATE and are intentionally not swept.
+PARABOLIC_RISK_RETURN_24H = 0.30
+PARABOLIC_RISK_EMA_DISTANCE_ATR = 3.0
+PARABOLIC_RISK_POSITION_PCT = 0.025
+PARABOLIC_RISK_BASE_POSITION_PCT = 0.05
+PARABOLIC_RISK_MAX_SLOTS = 6
+PARABOLIC_RISK_MAX_EXPOSURE_PCT = 0.30
 RESEARCH_OOS_FREEZE_AT = datetime(2026, 8, 21, 21, 29, tzinfo=UTC)
 ENTRY_GATE_V1_MIN_QUALITY = 4
 ENTRY_GATE_V1_MAX_CONTINUATION = 6
@@ -423,6 +431,14 @@ class VolatilityResearchSummary:
     portfolio_normalized: PortfolioReplaySummary
     prospective_portfolio_fixed: PortfolioReplaySummary
     prospective_portfolio_normalized: PortfolioReplaySummary
+    parabolic_return_24h_threshold: float
+    parabolic_ema_distance_atr_threshold: float
+    parabolic_position_fraction: float
+    parabolic_flagged_validation: StrategyValidationSummary
+    parabolic_unflagged_validation: StrategyValidationSummary
+    parabolic_portfolio_de_risked: PortfolioReplaySummary
+    prospective_parabolic_flagged_validation: StrategyValidationSummary
+    prospective_parabolic_portfolio_de_risked: PortfolioReplaySummary
 
 
 @dataclass(frozen=True, slots=True)
@@ -1942,6 +1958,31 @@ def _volatility_position_fractions(
     return result
 
 
+
+def _parabolic_continuation_risk(row: dict[str, Any]) -> bool:
+    return_24h = _float(_feature_value(row, FEATURE_BY_KEY["return_24h"]))
+    ema_distance = _float(_feature_value(row, FEATURE_BY_KEY["distance_above_ema20_atr_4h"]))
+    return (
+        return_24h is not None
+        and ema_distance is not None
+        and return_24h >= PARABOLIC_RISK_RETURN_24H
+        and ema_distance >= PARABOLIC_RISK_EMA_DISTANCE_ATR
+    )
+
+
+def _parabolic_position_fractions(rows: list[dict[str, Any]]) -> dict[int, float]:
+    result: dict[int, float] = {}
+    for row in rows:
+        episode_id = row.get("episode_id")
+        if episode_id is None:
+            continue
+        result[int(episode_id)] = (
+            PARABOLIC_RISK_POSITION_PCT
+            if _parabolic_continuation_risk(row)
+            else PARABOLIC_RISK_BASE_POSITION_PCT
+        )
+    return result
+
 def _build_volatility_research(
     rows: list[dict[str, Any]],
     *,
@@ -1999,6 +2040,28 @@ def _build_volatility_research(
         max_total_override=VOLATILITY_MAX_SLOTS, position_fraction_by_episode=post_fractions,
         max_exposure_fraction_override=VOLATILITY_MAX_EXPOSURE_PCT,
     )
+
+    parabolic_rows = [row for row in rows if _parabolic_continuation_risk(row)]
+    non_parabolic_rows = [row for row in rows if not _parabolic_continuation_risk(row)]
+    post_parabolic_rows = [row for row in post_freeze_rows if _parabolic_continuation_risk(row)]
+    parabolic_fractions = _parabolic_position_fractions(rows)
+    post_parabolic_fractions = _parabolic_position_fractions(post_freeze_rows)
+    parabolic_de_risked = _portfolio_replay(
+        rows, strategy="tp5_sl75_challenger", generated_at=generated_at, path_rows=path_rows,
+        cohort="parabolic_risk_all_observed",
+        strategy_name_override="tp5_sl75_parabolic_2_5pct_else_5pct_6slot_30pct",
+        max_total_override=PARABOLIC_RISK_MAX_SLOTS,
+        position_fraction_by_episode=parabolic_fractions,
+        max_exposure_fraction_override=PARABOLIC_RISK_MAX_EXPOSURE_PCT,
+    )
+    prospective_parabolic_de_risked = _portfolio_replay(
+        post_freeze_rows, strategy="tp5_sl75_challenger", generated_at=generated_at, path_rows=path_rows,
+        cohort="parabolic_risk_post_freeze",
+        strategy_name_override="post_freeze_tp5_sl75_parabolic_2_5pct_else_5pct_6slot_30pct",
+        max_total_override=PARABOLIC_RISK_MAX_SLOTS,
+        position_fraction_by_episode=post_parabolic_fractions,
+        max_exposure_fraction_override=PARABOLIC_RISK_MAX_EXPOSURE_PCT,
+    )
     observed_valid = sum(_entry_atr_pct(row) is not None for row in rows)
     return VolatilityResearchSummary(
         freeze_at=freeze_at,
@@ -2018,6 +2081,20 @@ def _build_volatility_research(
         portfolio_normalized=normalized,
         prospective_portfolio_fixed=prospective_fixed,
         prospective_portfolio_normalized=prospective_normalized,
+        parabolic_return_24h_threshold=PARABOLIC_RISK_RETURN_24H,
+        parabolic_ema_distance_atr_threshold=PARABOLIC_RISK_EMA_DISTANCE_ATR,
+        parabolic_position_fraction=PARABOLIC_RISK_POSITION_PCT,
+        parabolic_flagged_validation=_strategy_validation_summary(
+            parabolic_rows, strategy="tp5_sl75_challenger", generated_at=generated_at
+        ),
+        parabolic_unflagged_validation=_strategy_validation_summary(
+            non_parabolic_rows, strategy="tp5_sl75_challenger", generated_at=generated_at
+        ),
+        parabolic_portfolio_de_risked=parabolic_de_risked,
+        prospective_parabolic_flagged_validation=_strategy_validation_summary(
+            post_parabolic_rows, strategy="tp5_sl75_challenger", generated_at=generated_at
+        ),
+        prospective_parabolic_portfolio_de_risked=prospective_parabolic_de_risked,
     )
 
 
@@ -3201,6 +3278,8 @@ def research_volatility_csv(report: ResearchAnalyticsReport) -> bytes:
         "max_mtm_drawdown_pct", "return_over_drawdown", "avg_exposure_pct", "p95_exposure_pct",
         "calibration_p25_atr_pct", "calibration_median_atr_pct", "calibration_p75_atr_pct",
         "size_floor_pct", "size_base_pct", "size_ceiling_pct", "max_slots", "max_exposure_pct",
+        "parabolic_return_24h_threshold_pct", "parabolic_ema_distance_atr_threshold",
+        "parabolic_position_pct",
     ]
     writer = csv.DictWriter(output, fieldnames=fields)
     writer.writeheader()
@@ -3222,10 +3301,30 @@ def research_volatility_csv(report: ResearchAnalyticsReport) -> bytes:
             "size_floor_pct": _csv_pct(v.size_floor), "size_base_pct": _csv_pct(v.size_base),
             "size_ceiling_pct": _csv_pct(v.size_ceiling), "max_slots": v.max_slots,
             "max_exposure_pct": _csv_pct(v.max_exposure),
+            "parabolic_return_24h_threshold_pct": _csv_pct(v.parabolic_return_24h_threshold),
+            "parabolic_ema_distance_atr_threshold": f"{v.parabolic_ema_distance_atr_threshold:.6f}",
+            "parabolic_position_pct": _csv_pct(v.parabolic_position_fraction),
+        })
+    for cohort, label, summary in (
+        ("all_observed", "flagged", v.parabolic_flagged_validation),
+        ("all_observed", "unflagged", v.parabolic_unflagged_validation),
+        ("post_freeze", "flagged", v.prospective_parabolic_flagged_validation),
+    ):
+        writer.writerow({
+            "row_type": "parabolic_risk_bucket", "cohort": cohort, "bucket": label,
+            "sample": summary.sample, "tp5": summary.target_exits, "sl75": summary.stop_exits,
+            "waiting": summary.waiting, "tp5_rate_to_date_pct": _csv_pct(summary.target_rate_to_date),
+            "avg_marked_return_pct": _csv_pct(summary.avg_marked_return),
+            "parabolic_return_24h_threshold_pct": _csv_pct(v.parabolic_return_24h_threshold),
+            "parabolic_ema_distance_atr_threshold": f"{v.parabolic_ema_distance_atr_threshold:.6f}",
+            "parabolic_position_pct": _csv_pct(v.parabolic_position_fraction),
+            "max_slots": v.max_slots, "max_exposure_pct": _csv_pct(v.max_exposure),
         })
     for cohort, portfolio in (
         ("all_observed", v.portfolio_fixed), ("all_observed", v.portfolio_normalized),
+        ("all_observed", v.parabolic_portfolio_de_risked),
         ("post_freeze", v.prospective_portfolio_fixed), ("post_freeze", v.prospective_portfolio_normalized),
+        ("post_freeze", v.prospective_parabolic_portfolio_de_risked),
     ):
         writer.writerow({
             "row_type": "portfolio", "cohort": cohort, "strategy": portfolio.strategy,
@@ -3241,6 +3340,9 @@ def research_volatility_csv(report: ResearchAnalyticsReport) -> bytes:
             "size_floor_pct": _csv_pct(v.size_floor), "size_base_pct": _csv_pct(v.size_base),
             "size_ceiling_pct": _csv_pct(v.size_ceiling), "max_slots": v.max_slots,
             "max_exposure_pct": _csv_pct(v.max_exposure),
+            "parabolic_return_24h_threshold_pct": _csv_pct(v.parabolic_return_24h_threshold),
+            "parabolic_ema_distance_atr_threshold": f"{v.parabolic_ema_distance_atr_threshold:.6f}",
+            "parabolic_position_pct": _csv_pct(v.parabolic_position_fraction),
         })
     return output.getvalue().encode("utf-8")
 
