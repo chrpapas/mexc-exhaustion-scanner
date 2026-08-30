@@ -453,6 +453,7 @@ class DiscordNotifier:
         sweeps_csv: bytes | None = None,
         entry_csv: bytes | None = None,
         regime_csv: bytes | None = None,
+        volatility_csv: bytes | None = None,
         as_of: datetime | None = None,
         timezone_name: str = "Europe/Zurich",
     ) -> bool:
@@ -486,6 +487,7 @@ class DiscordNotifier:
             ("tp5_challenger", "tp5_sl75_challenger", "hold_7d"),
             report.prospective_strategy_portfolios,
         ))
+        volatility = report.volatility
 
         def monthly_eq(portfolio) -> float | None:
             if portfolio.replay_span_days is None or portfolio.replay_span_days <= 0:
@@ -617,6 +619,29 @@ class DiscordNotifier:
                 for item in feature_worst if item.rank_score is not None
             ))
 
+        all_vol_buckets = {
+            item.bucket: item for item in volatility.buckets
+            if item.cohort == "all_observed" and item.risk_tier == "all"
+        }
+        q1 = all_vol_buckets.get("Q1_low")
+        q4 = all_vol_buckets.get("Q4_high")
+        fixed_vol = volatility.portfolio_fixed
+        normalized_vol = volatility.portfolio_normalized
+        vol_lines = [
+            f"Frozen ATR% anchor: p25 **{self._percent(volatility.calibration_p25)}** • median **{self._percent(volatility.calibration_median)}** • p75 **{self._percent(volatility.calibration_p75)}** "
+            f"(pre-freeze n={volatility.calibration_sample}; missing current ATR={volatility.missing_atr}).",
+        ]
+        if q1 is not None and q4 is not None:
+            vol_lines.append(
+                f"Low-vol Q1: TP5 **{self._percent(q1.target_rate_to_date)}** • avg marked **{self._signed_percent(q1.avg_marked_return)}** • -50 **{self._percent(q1.breach50_rate)}** | "
+                f"High-vol Q4: TP5 **{self._percent(q4.target_rate_to_date)}** • avg marked **{self._signed_percent(q4.avg_marked_return)}** • -50 **{self._percent(q4.breach50_rate)}**."
+            )
+        vol_lines.append(
+            f"ATR-normalized 2.5–7.5% sizing, 6 slots / 30% cap: MTM **{self._signed_percent(normalized_vol.marked_return)}** • "
+            f"DD **-{self._percent(normalized_vol.max_mtm_drawdown)}** • R/DD **{self._number(normalized_vol.return_over_max_drawdown)}** vs fixed 5%: "
+            f"MTM **{self._signed_percent(fixed_vol.marked_return)}** • DD **-{self._percent(fixed_vol.max_mtm_drawdown)}**."
+        )
+
         intelligence = {
             "title": "🧠 Exhaustion Scanner • Research Intelligence",
             "description": (
@@ -657,6 +682,11 @@ class DiscordNotifier:
                 {
                     "name": "5 • Entry/regime clues • exploratory",
                     "value": "\n".join(feature_lines) if feature_lines else "Not enough ranked feature evidence yet.",
+                    "inline": False,
+                },
+                {
+                    "name": "6 • Volatility / ATR risk • exploratory",
+                    "value": "\n".join(vol_lines),
                     "inline": False,
                 },
             ],
@@ -711,13 +741,25 @@ class DiscordNotifier:
             "fields": [
                 {"name": "Post-freeze A/B/C", "value": "\n".join(prospective_lines), "inline": False},
                 {"name": "Post-freeze STANDARD scaling", "value": "\n".join(prospective_standard_lines), "inline": False},
+                {
+                    "name": "Post-freeze ATR-normalized sizing",
+                    "value": (
+                        f"Fixed 5%: MTM **{self._signed_percent(volatility.prospective_portfolio_fixed.marked_return)}** • "
+                        f"DD **-{self._percent(volatility.prospective_portfolio_fixed.max_mtm_drawdown)}** | "
+                        f"ATR-normalized: MTM **{self._signed_percent(volatility.prospective_portfolio_normalized.marked_return)}** • "
+                        f"DD **-{self._percent(volatility.prospective_portfolio_normalized.max_mtm_drawdown)}** • "
+                        f"R/DD **{self._number(volatility.prospective_portfolio_normalized.return_over_max_drawdown)}**"
+                    ),
+                    "inline": False,
+                },
                 {"name": "True latest-30d empty-book replay", "value": thirty_day, "inline": False},
                 {
                     "name": "Research bundle",
                     "value": (
                         "**strategy-validation.csv** — decision table: all-signal economics, portfolio return/DD, 30D run-rate, capture and tails.\n"
                         "**research-signal-dataset.csv** — every signal with frozen features, full path statistics, adverse/target timestamps and explicit A/B/C outcomes.\n"
-                        "**feature-lift / entry-research / token-regime / strategy-sweeps** — exploratory evidence retained for deeper LLM/human analysis."
+                        "**feature-lift / entry-research / token-regime / strategy-sweeps** — exploratory evidence retained for deeper LLM/human analysis.\n"
+                        "**volatility-research.csv** — frozen ATR% quartiles, tier splits and fixed-vs-ATR-normalized portfolio evidence."
                     ),
                     "inline": False,
                 },
@@ -760,6 +802,10 @@ class DiscordNotifier:
             if regime_csv is not None:
                 files[f"files[{len(files)}]"] = (
                     f"token-regime-{display_time.strftime('%Y-%m-%d')}.csv", regime_csv, "text/csv"
+                )
+            if volatility_csv is not None:
+                files[f"files[{len(files)}]"] = (
+                    f"volatility-research-{display_time.strftime('%Y-%m-%d')}.csv", volatility_csv, "text/csv"
                 )
             if files:
                 response = await self._client.post(

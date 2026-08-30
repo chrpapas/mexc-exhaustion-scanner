@@ -15,6 +15,7 @@ from app.research_analytics import (
     research_strategy_sweeps_csv,
     research_entry_research_csv,
     research_token_regime_csv,
+    research_volatility_csv,
 )
 
 
@@ -72,6 +73,7 @@ async def main() -> None:
         sweeps_csv = research_strategy_sweeps_csv(report)
         entry_csv = research_entry_research_csv(report)
         regime_csv = research_token_regime_csv(report)
+        volatility_csv = research_volatility_csv(report) if hasattr(report, "volatility") else None
 
         sent = await notifier.send_research_analytics(
             report,
@@ -81,6 +83,7 @@ async def main() -> None:
             sweeps_csv=sweeps_csv,
             entry_csv=entry_csv,
             regime_csv=regime_csv,
+            volatility_csv=volatility_csv,
             as_of=now,
             timezone_name=settings.performance_report_timezone,
         )

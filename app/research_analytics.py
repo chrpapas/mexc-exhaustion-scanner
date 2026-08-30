@@ -43,6 +43,14 @@ STANDARD_TP5_SCALE_SLOT_PCT_75 = 0.075
 STANDARD_TP5_SCALE_SLOT_PCT_100 = 0.10
 STANDARD_TP5_SCALE_MAX_SLOTS = 10
 STANDARD_TP5_SCALE_TOTAL_EXPOSURE_PCT = STANDARD_TP5_SCALE_SLOT_PCT * STANDARD_TP5_SCALE_MAX_SLOTS
+# Research-only volatility-normalized sizing. The volatility anchor is frozen
+# from the pre-OOS discovery cohort, then reused unchanged for post-freeze
+# evaluation. Live/default trader sizing remains fixed at 5% / 6 slots / 30%.
+VOLATILITY_BASE_SLOT_PCT = 0.05
+VOLATILITY_MIN_SLOT_PCT = 0.025
+VOLATILITY_MAX_SLOT_PCT = 0.075
+VOLATILITY_MAX_SLOTS = 6
+VOLATILITY_MAX_EXPOSURE_PCT = 0.30
 RESEARCH_OOS_FREEZE_AT = datetime(2026, 8, 21, 21, 29, tzinfo=UTC)
 ENTRY_GATE_V1_MIN_QUALITY = 4
 ENTRY_GATE_V1_MAX_CONTINUATION = 6
@@ -76,6 +84,7 @@ FEATURE_SPECS: tuple[FeatureSpec, ...] = (
     FeatureSpec("cross_section_percentile", "Cross-section percentile"),
     FeatureSpec("volume_zscore_15m", "15m volume z-score"),
     FeatureSpec("distance_above_ema20_atr_4h", "4h EMA20 distance (ATR)"),
+    FeatureSpec("atr_15m_pct", "15m ATR14 / entry price", source="derived"),
     FeatureSpec("amount_24h", "24h turnover"),
     FeatureSpec("spread_pct", "Bid/ask spread"),
     FeatureSpec("funding_rate", "Funding rate"),
@@ -105,6 +114,8 @@ INTERACTION_PAIRS: tuple[tuple[str, str], ...] = (
     ("fair_index_premium_pct", "funding_rate"),
     ("return_24h", "momentum_1h"),
     ("return_72h", "run_score"),
+    ("atr_15m_pct", "distance_above_ema20_atr_4h"),
+    ("atr_15m_pct", "run_score"),
 )
 
 
@@ -374,6 +385,47 @@ class ProspectiveGateAcceptanceSummary:
 
 
 @dataclass(frozen=True, slots=True)
+class VolatilityBucketSummary:
+    cohort: str
+    risk_tier: str
+    bucket: str
+    sample: int
+    atr_pct_min: float | None
+    atr_pct_max: float | None
+    target_exits: int
+    stop_exits: int
+    waiting: int
+    target_rate_to_date: float | None
+    median_tp5_hours: float | None
+    avg_marked_return: float | None
+    breach20_rate: float | None
+    breach50_rate: float | None
+    breach75_rate: float | None
+    breach100_rate: float | None
+
+
+@dataclass(frozen=True, slots=True)
+class VolatilityResearchSummary:
+    freeze_at: datetime
+    calibration_sample: int
+    observed_sample: int
+    missing_atr: int
+    calibration_p25: float | None
+    calibration_median: float | None
+    calibration_p75: float | None
+    size_floor: float
+    size_base: float
+    size_ceiling: float
+    max_slots: int
+    max_exposure: float
+    buckets: tuple[VolatilityBucketSummary, ...]
+    portfolio_fixed: PortfolioReplaySummary
+    portfolio_normalized: PortfolioReplaySummary
+    prospective_portfolio_fixed: PortfolioReplaySummary
+    prospective_portfolio_normalized: PortfolioReplaySummary
+
+
+@dataclass(frozen=True, slots=True)
 class RegimeDriftSummary:
     feature: str
     feature_label: str
@@ -500,6 +552,7 @@ class ResearchAnalyticsReport:
     regime_portfolios: tuple[PortfolioReplaySummary, ...]
     hybrid_portfolios: tuple[PortfolioReplaySummary, ...]
     persistent_run_risk: PersistentRunRiskResearchSummary
+    volatility: VolatilityResearchSummary
     oos_freeze_at: datetime
     min_rank_sample: int
 
@@ -580,9 +633,25 @@ def _bool(value: Any) -> bool | None:
     return None
 
 
+def _entry_atr_pct(row: dict[str, Any]) -> float | None:
+    snapshot = row.get("_snapshot")
+    if snapshot is None:
+        snapshot = json_object(row.get("feature_snapshot"))
+        row["_snapshot"] = snapshot
+    atr = _float(snapshot.get("atr_15m"))
+    price = _float(row.get("entry_price"))
+    if atr is None or price is None or atr <= 0 or price <= 0:
+        return None
+    return atr / price
+
+
 def _feature_value(row: dict[str, Any], spec: FeatureSpec) -> Any:
     if spec.source == "row":
         return row.get(spec.key)
+    if spec.source == "derived":
+        if spec.key == "atr_15m_pct":
+            return _entry_atr_pct(row)
+        return None
     snapshot = row.get("_snapshot")
     if snapshot is None:
         snapshot = json_object(row.get("feature_snapshot"))
@@ -1427,7 +1496,7 @@ def _portfolio_mtm_metrics(
     accepted: list[dict[str, Any]],
     *,
     path_rows: Iterable[dict[str, Any]],
-    position_fraction: float,
+    position_fraction: float | None = None,
 ) -> dict[str, Any]:
     if not accepted:
         return {
@@ -1516,7 +1585,10 @@ def _portfolio_mtm_metrics(
         losers = sum(1 for episode_id in open_positions if latest_marks.get(episode_id, 0.0) < 0)
         max_losers = max(max_losers, losers)
         occupancies.append(float(len(open_positions)))
-        exposures.append(len(open_positions) * position_fraction)
+        exposures.append(sum(
+            float(pos.get("position_fraction") or position_fraction or 0.0)
+            for pos in open_positions.values()
+        ))
 
         if marked_equity >= peak_equity:
             if underwater_since is not None:
@@ -1589,6 +1661,8 @@ def _portfolio_replay(
     target_pct_by_episode: dict[int, int] | None = None,
     position_fraction_override: float | None = None,
     max_total_override: int | None = None,
+    position_fraction_by_episode: dict[int, float] | None = None,
+    max_exposure_fraction_override: float | None = None,
 ) -> PortfolioReplaySummary:
     candidates = [
         row for row in rows
@@ -1634,6 +1708,8 @@ def _portfolio_replay(
         if max_total_override <= 0:
             raise ValueError("max_total_override must be positive")
         max_total = max_total_override
+    if max_exposure_fraction_override is not None and max_exposure_fraction_override <= 0:
+        raise ValueError("max_exposure_fraction_override must be positive")
     strategy_name = f"entrygate_v1__{base_name}" if use_entry_gate else base_name
     if strategy_name_override:
         strategy_name = strategy_name_override
@@ -1678,12 +1754,23 @@ def _portfolio_replay(
             continue
         symbol = str(row.get("symbol") or "")
         tier = str(row.get("risk_tier") or "standard")
+        candidate_fraction = position_fraction
+        if position_fraction_by_episode is not None and episode_id is not None:
+            candidate_fraction = float(position_fraction_by_episode.get(int(episode_id), position_fraction))
+        if candidate_fraction <= 0:
+            filtered_strategy += 1
+            continue
         if any(pos["symbol"] == symbol for pos in positions):
             missed_same_symbol += 1
             continue
         if len(positions) >= max_total:
             missed_capacity += 1
             continue
+        if max_exposure_fraction_override is not None:
+            active_fraction = sum(float(pos.get("position_fraction") or position_fraction) for pos in positions)
+            if active_fraction + candidate_fraction > max_exposure_fraction_override + 1e-12:
+                missed_capacity += 1
+                continue
         if strategy not in {"tp5_challenger", "tp5_sl75_challenger", "hold_7d", "tp2_challenger", "tp2_10_challenger", "tp1_10_challenger"}:
             if tier == "standard" and sum(pos["tier"] == "standard" for pos in positions) >= int(max_standard or 0):
                 missed_capacity += 1
@@ -1699,7 +1786,7 @@ def _portfolio_replay(
             row, strategy=strategy, generated_at=generated_at, target_pct_override=target_override
         )
         pre_fee_equity = equity
-        notional = max(0.0, pre_fee_equity) * position_fraction
+        notional = max(0.0, pre_fee_equity) * candidate_fraction
         equity -= notional * SHADOW_FEE_PER_FILL
         pos = {
             "episode_id": row.get("episode_id"),
@@ -1707,6 +1794,7 @@ def _portfolio_replay(
             "tier": tier,
             "entry_at": entry_at,
             "notional": notional,
+            "position_fraction": candidate_fraction,
             "exit_at": exit_at,
             "exit_return": exit_return,
             "latest_return": _latest_observed_return(row),
@@ -1718,7 +1806,7 @@ def _portfolio_replay(
         entered += 1
         first_entry = entry_at if first_entry is None else min(first_entry, entry_at)
         max_open = max(max_open, len(positions))
-        max_exposure = max(max_exposure, len(positions) * position_fraction)
+        max_exposure = max(max_exposure, sum(float(pos.get("position_fraction") or position_fraction) for pos in positions))
 
     close_due(generated_at)
 
@@ -1784,6 +1872,152 @@ def _portfolio_replay(
         worst_trade_pre_target_mae=mtm["worst_trade_pre_target_mae"],
         portfolio_return_at_worst_trade_mae=mtm["portfolio_return_at_worst_trade_mae"],
         filtered_strategy=filtered_strategy,
+    )
+
+
+def _volatility_bucket_label(value: float, p25: float, p50: float, p75: float) -> str:
+    if value <= p25:
+        return "Q1_low"
+    if value <= p50:
+        return "Q2"
+    if value <= p75:
+        return "Q3"
+    return "Q4_high"
+
+
+def _volatility_bucket_summary(
+    rows: list[dict[str, Any]],
+    *,
+    cohort: str,
+    risk_tier: str,
+    bucket: str,
+    generated_at: datetime,
+) -> VolatilityBucketSummary:
+    values = [value for row in rows for value in [_entry_atr_pct(row)] if value is not None]
+    validation = _strategy_validation_summary(rows, strategy="tp5_sl75_challenger", generated_at=generated_at)
+    tp5_validation = _strategy_validation_summary(rows, strategy="tp5_challenger", generated_at=generated_at)
+    tails = {item.threshold_pct: item for item in tp5_validation.tail_ladder}
+    hit_times = [
+        elapsed
+        for row in rows
+        if row.get("target_5_at") is not None and row.get("target_5_at") <= generated_at
+        for elapsed in [_elapsed_hours(row.get("confirmed_at"), row.get("target_5_at"))]
+        if elapsed is not None
+    ]
+    return VolatilityBucketSummary(
+        cohort=cohort,
+        risk_tier=risk_tier,
+        bucket=bucket,
+        sample=len(rows),
+        atr_pct_min=min(values) if values else None,
+        atr_pct_max=max(values) if values else None,
+        target_exits=tp5_validation.target_exits,
+        stop_exits=validation.stop_exits,
+        waiting=tp5_validation.waiting,
+        target_rate_to_date=tp5_validation.target_rate_to_date,
+        median_tp5_hours=_median(hit_times),
+        avg_marked_return=validation.avg_marked_return,
+        breach20_rate=tails.get(20).breach_rate if tails.get(20) else None,
+        breach50_rate=tails.get(50).breach_rate if tails.get(50) else None,
+        breach75_rate=tails.get(75).breach_rate if tails.get(75) else None,
+        breach100_rate=tails.get(100).breach_rate if tails.get(100) else None,
+    )
+
+
+def _volatility_position_fractions(
+    rows: list[dict[str, Any]], *, calibration_median: float | None
+) -> dict[int, float]:
+    result: dict[int, float] = {}
+    for row in rows:
+        episode_id = row.get("episode_id")
+        if episode_id is None:
+            continue
+        atr_pct = _entry_atr_pct(row)
+        if atr_pct is None or atr_pct <= 0 or calibration_median is None or calibration_median <= 0:
+            fraction = VOLATILITY_BASE_SLOT_PCT
+        else:
+            fraction = VOLATILITY_BASE_SLOT_PCT * calibration_median / atr_pct
+            fraction = min(VOLATILITY_MAX_SLOT_PCT, max(VOLATILITY_MIN_SLOT_PCT, fraction))
+        result[int(episode_id)] = fraction
+    return result
+
+
+def _build_volatility_research(
+    rows: list[dict[str, Any]],
+    *,
+    discovery_rows: list[dict[str, Any]],
+    post_freeze_rows: list[dict[str, Any]],
+    generated_at: datetime,
+    path_rows: Iterable[dict[str, Any]],
+    freeze_at: datetime,
+) -> VolatilityResearchSummary:
+    calibration_values = [
+        value for row in discovery_rows for value in [_entry_atr_pct(row)] if value is not None
+    ]
+    p25 = _percentile(calibration_values, 0.25)
+    p50 = _percentile(calibration_values, 0.50)
+    p75 = _percentile(calibration_values, 0.75)
+
+    bucket_summaries: list[VolatilityBucketSummary] = []
+    if p25 is not None and p50 is not None and p75 is not None:
+        for cohort_name, cohort_rows in (("all_observed", rows), ("post_freeze", post_freeze_rows)):
+            assigned: dict[str, list[dict[str, Any]]] = {name: [] for name in ("Q1_low", "Q2", "Q3", "Q4_high")}
+            for row in cohort_rows:
+                value = _entry_atr_pct(row)
+                if value is None:
+                    continue
+                assigned[_volatility_bucket_label(value, p25, p50, p75)].append(row)
+            for tier in ("all", "standard", "high_risk"):
+                for bucket, group in assigned.items():
+                    selected = group if tier == "all" else [
+                        row for row in group if str(row.get("risk_tier") or "standard") == tier
+                    ]
+                    if selected:
+                        bucket_summaries.append(_volatility_bucket_summary(
+                            selected, cohort=cohort_name, risk_tier=tier, bucket=bucket, generated_at=generated_at
+                        ))
+
+    fractions = _volatility_position_fractions(rows, calibration_median=p50)
+    fixed = _portfolio_replay(
+        rows, strategy="tp5_sl75_challenger", generated_at=generated_at, path_rows=path_rows,
+        cohort="volatility_comparison_all_observed", strategy_name_override="tp5_sl75_fixed_6x5_30pct",
+    )
+    normalized = _portfolio_replay(
+        rows, strategy="tp5_sl75_challenger", generated_at=generated_at, path_rows=path_rows,
+        cohort="volatility_comparison_all_observed", strategy_name_override="tp5_sl75_atr_normalized_6slot_30pct",
+        max_total_override=VOLATILITY_MAX_SLOTS, position_fraction_by_episode=fractions,
+        max_exposure_fraction_override=VOLATILITY_MAX_EXPOSURE_PCT,
+    )
+    post_fractions = _volatility_position_fractions(post_freeze_rows, calibration_median=p50)
+    prospective_fixed = _portfolio_replay(
+        post_freeze_rows, strategy="tp5_sl75_challenger", generated_at=generated_at, path_rows=path_rows,
+        cohort="volatility_comparison_post_freeze", strategy_name_override="post_freeze_tp5_sl75_fixed_6x5_30pct",
+    )
+    prospective_normalized = _portfolio_replay(
+        post_freeze_rows, strategy="tp5_sl75_challenger", generated_at=generated_at, path_rows=path_rows,
+        cohort="volatility_comparison_post_freeze", strategy_name_override="post_freeze_tp5_sl75_atr_normalized_6slot_30pct",
+        max_total_override=VOLATILITY_MAX_SLOTS, position_fraction_by_episode=post_fractions,
+        max_exposure_fraction_override=VOLATILITY_MAX_EXPOSURE_PCT,
+    )
+    observed_valid = sum(_entry_atr_pct(row) is not None for row in rows)
+    return VolatilityResearchSummary(
+        freeze_at=freeze_at,
+        calibration_sample=len(calibration_values),
+        observed_sample=observed_valid,
+        missing_atr=len(rows) - observed_valid,
+        calibration_p25=p25,
+        calibration_median=p50,
+        calibration_p75=p75,
+        size_floor=VOLATILITY_MIN_SLOT_PCT,
+        size_base=VOLATILITY_BASE_SLOT_PCT,
+        size_ceiling=VOLATILITY_MAX_SLOT_PCT,
+        max_slots=VOLATILITY_MAX_SLOTS,
+        max_exposure=VOLATILITY_MAX_EXPOSURE_PCT,
+        buckets=tuple(bucket_summaries),
+        portfolio_fixed=fixed,
+        portfolio_normalized=normalized,
+        prospective_portfolio_fixed=prospective_fixed,
+        prospective_portfolio_normalized=prospective_normalized,
     )
 
 
@@ -2469,6 +2703,10 @@ def build_research_analytics(
             strategy_name_override="hybrid2_ep_tp5_mix_regime_tp2",
         ),
     )
+    volatility = _build_volatility_research(
+        rows, discovery_rows=discovery_rows, post_freeze_rows=post_freeze_rows,
+        generated_at=generated_at, path_rows=portfolio_path_rows, freeze_at=oos_freeze_at,
+    )
     return ResearchAnalyticsReport(
         generated_at=generated_at,
         baseline=baseline,
@@ -2578,6 +2816,7 @@ def build_research_analytics(
         regime_portfolios=regime_portfolios,
         hybrid_portfolios=hybrid_portfolios,
         persistent_run_risk=persistent_run_risk,
+        volatility=volatility,
         oos_freeze_at=oos_freeze_at,
         min_rank_sample=min_rank_sample,
     )
@@ -2952,6 +3191,60 @@ def research_strategy_validation_csv(report: ResearchAnalyticsReport) -> bytes:
     return output.getvalue().encode("utf-8")
 
 
+def research_volatility_csv(report: ResearchAnalyticsReport) -> bytes:
+    output = io.StringIO(newline="")
+    fields = [
+        "row_type", "cohort", "risk_tier", "bucket", "sample", "atr_pct_min", "atr_pct_max",
+        "tp5", "sl75", "waiting", "tp5_rate_to_date_pct", "median_tp5_hours",
+        "avg_marked_return_pct", "breach20_rate_pct", "breach50_rate_pct", "breach75_rate_pct",
+        "breach100_rate_pct", "strategy", "entered", "capture_rate_pct", "marked_account_return_pct",
+        "max_mtm_drawdown_pct", "return_over_drawdown", "avg_exposure_pct", "p95_exposure_pct",
+        "calibration_p25_atr_pct", "calibration_median_atr_pct", "calibration_p75_atr_pct",
+        "size_floor_pct", "size_base_pct", "size_ceiling_pct", "max_slots", "max_exposure_pct",
+    ]
+    writer = csv.DictWriter(output, fieldnames=fields)
+    writer.writeheader()
+    v = report.volatility
+    for item in v.buckets:
+        writer.writerow({
+            "row_type": "volatility_bucket", "cohort": item.cohort, "risk_tier": item.risk_tier,
+            "bucket": item.bucket, "sample": item.sample,
+            "atr_pct_min": _csv_pct(item.atr_pct_min), "atr_pct_max": _csv_pct(item.atr_pct_max),
+            "tp5": item.target_exits, "sl75": item.stop_exits, "waiting": item.waiting,
+            "tp5_rate_to_date_pct": _csv_pct(item.target_rate_to_date),
+            "median_tp5_hours": "" if item.median_tp5_hours is None else f"{item.median_tp5_hours:.6f}",
+            "avg_marked_return_pct": _csv_pct(item.avg_marked_return),
+            "breach20_rate_pct": _csv_pct(item.breach20_rate), "breach50_rate_pct": _csv_pct(item.breach50_rate),
+            "breach75_rate_pct": _csv_pct(item.breach75_rate), "breach100_rate_pct": _csv_pct(item.breach100_rate),
+            "calibration_p25_atr_pct": _csv_pct(v.calibration_p25),
+            "calibration_median_atr_pct": _csv_pct(v.calibration_median),
+            "calibration_p75_atr_pct": _csv_pct(v.calibration_p75),
+            "size_floor_pct": _csv_pct(v.size_floor), "size_base_pct": _csv_pct(v.size_base),
+            "size_ceiling_pct": _csv_pct(v.size_ceiling), "max_slots": v.max_slots,
+            "max_exposure_pct": _csv_pct(v.max_exposure),
+        })
+    for cohort, portfolio in (
+        ("all_observed", v.portfolio_fixed), ("all_observed", v.portfolio_normalized),
+        ("post_freeze", v.prospective_portfolio_fixed), ("post_freeze", v.prospective_portfolio_normalized),
+    ):
+        writer.writerow({
+            "row_type": "portfolio", "cohort": cohort, "strategy": portfolio.strategy,
+            "sample": portfolio.eligible_signals, "entered": portfolio.entered,
+            "capture_rate_pct": _csv_pct((portfolio.entered / portfolio.eligible_signals) if portfolio.eligible_signals else None),
+            "marked_account_return_pct": _csv_pct(portfolio.marked_return),
+            "max_mtm_drawdown_pct": _csv_pct(portfolio.max_mtm_drawdown),
+            "return_over_drawdown": "" if portfolio.return_over_max_drawdown is None else f"{portfolio.return_over_max_drawdown:.6f}",
+            "avg_exposure_pct": _csv_pct(portfolio.avg_exposure_pct), "p95_exposure_pct": _csv_pct(portfolio.p95_exposure_pct),
+            "calibration_p25_atr_pct": _csv_pct(v.calibration_p25),
+            "calibration_median_atr_pct": _csv_pct(v.calibration_median),
+            "calibration_p75_atr_pct": _csv_pct(v.calibration_p75),
+            "size_floor_pct": _csv_pct(v.size_floor), "size_base_pct": _csv_pct(v.size_base),
+            "size_ceiling_pct": _csv_pct(v.size_ceiling), "max_slots": v.max_slots,
+            "max_exposure_pct": _csv_pct(v.max_exposure),
+        })
+    return output.getvalue().encode("utf-8")
+
+
 def research_signal_dataset_csv(rows: Iterable[dict[str, Any]], *, generated_at: datetime | None = None) -> bytes:
     normalized = [dict(row) for row in rows]
     normalized = [row for row in normalized if str(row.get("risk_tier") or "standard") in PUBLIC_RESEARCH_RISK_TIERS]
@@ -2963,6 +3256,7 @@ def research_signal_dataset_csv(rows: Iterable[dict[str, Any]], *, generated_at:
         "path_mfe_7d", "path_mae_7d", "path_mae_before_target_5", "path_mae_before_target_5_at",
         "path_mae_before_target_20", "path_mfe_at", "path_mae_at",
         "path_mfe_14d", "path_mae_14d", "path_mfe_14d_at", "path_mae_14d_at",
+        "atr_15m",
     ]
     horizon_fields = [f"path_return_{hours}h" for hours in STANDARD_EXIT_HORIZONS_HOURS]
     target_fields = [f"target_{pct}_at" for pct in TARGET_LEVELS_PCT if pct != 20]
@@ -2997,12 +3291,17 @@ def research_signal_dataset_csv(rows: Iterable[dict[str, Any]], *, generated_at:
         snapshot = json_object(row.get("feature_snapshot"))
         flattened: dict[str, Any] = {}
         for key in fixed + horizon_fields + target_fields + adverse_race_fields:
-            value = row.get(key)
+            value = snapshot.get("atr_15m") if key == "atr_15m" else row.get(key)
             if isinstance(value, datetime):
                 value = value.isoformat()
             flattened[key] = value
         for spec in FEATURE_SPECS:
-            flattened[spec.key] = row.get(spec.key) if spec.source == "row" else snapshot.get(spec.key)
+            if spec.source == "row":
+                flattened[spec.key] = row.get(spec.key)
+            elif spec.source == "derived":
+                flattened[spec.key] = _feature_value(row, spec)
+            else:
+                flattened[spec.key] = snapshot.get(spec.key)
         quality, continuation = shadow_entry_scores(row)
         flattened["shadow_entry_quality_score"] = quality
         flattened["shadow_continuation_risk_score"] = continuation

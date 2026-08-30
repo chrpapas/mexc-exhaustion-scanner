@@ -1,6 +1,18 @@
-# MEXC Exhaustion Scanner + Multi-Slot Futures Trader v1.3.31
+# MEXC Exhaustion Scanner + Multi-Slot Futures Trader v1.3.32
 
 Execution + research release. **TP5_SL75_V1 is now the default trader strategy**, based on the v1.3.22 codebase.
+
+
+## v1.3.32 — signal-time volatility / ATR research
+
+- **Research only; live trader unchanged:** default execution remains `TP5_SL75_V1`, STANDARD+HIGH_RISK, 6×5% / 30%, TP5 + catastrophic SL75.
+- Exposes the already-frozen confirmation-time `atr_15m` feature and derives **`atr_15m_pct = atr_15m / entry_price`** so volatility is comparable across coins without look-ahead.
+- Freezes ATR% quartile boundaries and the sizing anchor from the **pre-21-Aug discovery cohort only**; post-freeze analysis reuses those frozen thresholds.
+- Adds volatility quartiles for all signals plus STANDARD/HIGH_RISK tier splits with TP5 hit-to-date, TP5 speed, average SL75-policy marked return and adverse -20/-50/-75/-100 rates.
+- Adds ATR% to generic feature-lift research and interaction research versus 4h EMA extension and run score.
+- Adds a fair fixed-vs-volatility-normalized portfolio replay under the **same 6-slot / 30% total exposure cap**. Normalized sizing is `5% × frozen_median_ATR% / signal_ATR%`, clamped to **2.5%–7.5% per trade**; missing ATR falls back to 5%.
+- Adds `volatility-research.csv` and Discord full-sample/post-freeze volatility evidence.
+- No database migration is required because ATR14 was already stored inside confirmed-signal feature snapshots.
 
 
 ## v1.3.31 — TP5+SL75 schema constraint fix
