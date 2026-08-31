@@ -3167,6 +3167,7 @@ def research_strategy_validation_csv(report: ResearchAnalyticsReport) -> bytes:
         "standard_tp5_10x5": report.portfolio_standard_tp5_10,
         "standard_tp5_10x7_5": report.portfolio_standard_tp5_10x75,
         "standard_tp5_10x10": report.portfolio_standard_tp5_10x10,
+        "standard_tp5_sl75_10x5": report.portfolio_standard_tp5_sl75_10,
         "standard_tp5_sl75_10x10": report.portfolio_standard_tp5_sl75_10x10,
     }
     output = io.StringIO(newline="")
@@ -3202,6 +3203,7 @@ def research_strategy_validation_csv(report: ResearchAnalyticsReport) -> bytes:
         label="STANDARD TP5 • 10×10%",
         rule="STANDARD only • +5% target • no stop • no timeout • 10×10% / 100% cap",
     )
+    standard_sl75_5 = report.standard_tp5_sl75_validation
     standard_sl75_10 = replace(
         report.standard_tp5_sl75_validation,
         strategy="standard_tp5_sl75_10x10",
@@ -3211,6 +3213,7 @@ def research_strategy_validation_csv(report: ResearchAnalyticsReport) -> bytes:
     summaries = (
         *report.strategy_validations,
         standard_5,
+        standard_sl75_5,
         standard_75,
         standard_10,
         standard_sl75_10,

@@ -1,7 +1,16 @@
-# MEXC Exhaustion Scanner + Multi-Slot Futures Trader v1.3.33
+# MEXC Exhaustion Scanner + Multi-Slot Futures Trader v1.3.34
 
 Execution + research release. **TP5_SL75_V1 is now the default trader strategy**, based on the v1.3.22 codebase.
 
+
+## v1.3.34 — STANDARD 10×5% + SL75 promoted as challenger
+
+- **Research only; live trader unchanged:** `TP5_SL75_V1` remains STANDARD+HIGH_RISK at 6×5% / 30%.
+- Promotes the already-computed **STANDARD-only TP5 + SL75, 10 slots × 5% / 50% cap** replay to the main research board as strategy **D**.
+- Keeps the pure STANDARD TP5 10×5% replay beside it as a no-stop twin, so the report directly measures the historical cost/benefit of catastrophic protection at the proposed capacity.
+- Exports `standard_tp5_sl75_10x5` in `strategy-validation.csv`, including exact synchronized MTM drawdown, return/DD, capture, exposure and tail/recovery evidence.
+- Forward/frozen evidence now reports the same STANDARD 10×5% + SL75 challenger, rather than using only the 10×10% safety stress case.
+- 7.5% and 10% STANDARD slot sizes remain **stress-size research**, not deployment recommendations.
 
 ## v1.3.33 — parabolic continuation-risk research
 

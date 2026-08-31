@@ -53,3 +53,17 @@ def test_strategy_validation_csv_exports_standard_scaling_curve():
     assert "standard_tp5_sl75_10x10" in csv_text
     assert "10×7.5% / 75% cap" in csv_text
     assert "10×10% / 100% cap" in csv_text
+
+
+def test_standard_10x5_sl75_challenger_is_exported():
+    from app.research_analytics import research_strategy_validation_csv
+    report = build_research_analytics(_standard_cluster(), generated_at=datetime(2026, 8, 5, tzinfo=UTC))
+    text = research_strategy_validation_csv(report).decode("utf-8")
+    assert "standard_tp5_sl75_10x5" in text
+    assert "STANDARD TP5 + SL75 • 10×5%" in text
+
+
+def test_standard_10x5_sl75_is_same_as_no_stop_without_tail_breach():
+    report = build_research_analytics(_standard_cluster(), generated_at=datetime(2026, 8, 5, tzinfo=UTC))
+    assert report.portfolio_standard_tp5_10.marked_return == report.portfolio_standard_tp5_sl75_10.marked_return
+    assert report.portfolio_standard_tp5_10.entered == report.portfolio_standard_tp5_sl75_10.entered

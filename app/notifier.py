@@ -479,6 +479,7 @@ class DiscordNotifier:
         standard_scale_5 = report.portfolio_standard_tp5_10
         standard_scale_75 = report.portfolio_standard_tp5_10x75
         standard_scale_10 = report.portfolio_standard_tp5_10x10
+        standard_scale_sl75_5 = report.portfolio_standard_tp5_sl75_10
         standard_scale_sl75_10 = report.portfolio_standard_tp5_sl75_10x10
         standard_scale_summary = report.standard_tp5_validation
         standard_scale_sl75_summary = report.standard_tp5_sl75_validation
@@ -585,23 +586,25 @@ class DiscordNotifier:
             )
 
         standard_read_parts = [
-            standard_scale_line("10×5% / 50%", standard_scale_5),
-            standard_scale_line("10×7.5% / 75%", standard_scale_75),
-            standard_scale_line("10×10% / 100%", standard_scale_10),
+            standard_scale_line("D • STANDARD TP5 + SL75 • 10×5% / 50%", standard_scale_sl75_5),
+            standard_scale_line("No-stop twin • 10×5% / 50%", standard_scale_5),
+            standard_scale_line("Stress size • 10×7.5% / 75%", standard_scale_75),
+            standard_scale_line("Stress size • 10×10% / 100%", standard_scale_10),
         ]
         if standard_tail75 is not None:
             standard_read_parts.append(
                 f"STANDARD tail: -75% breaches **{standard_tail75.breached_before_exit_or_mark}/{standard_scale_summary.sample}**; "
                 f"later TP5 **{standard_tail75.later_tp5_after_breach}**."
             )
-        if standard_scale_10.marked_return == standard_scale_sl75_10.marked_return:
+        if standard_scale_5.marked_return == standard_scale_sl75_5.marked_return:
             standard_read_parts.append(
-                "At 10% sizing, the **SL75 safety twin is currently identical** because no admitted STANDARD trade hit -75% before TP5/mark."
+                "The **10×5% SL75 challenger is currently identical to its no-stop twin** because no admitted STANDARD trade hit -75% before TP5/mark; the stop therefore adds a catastrophic boundary at zero observed historical return cost."
             )
         else:
             standard_read_parts.append(
-                f"10×10% +SL75: MTM **{self._signed_percent(standard_scale_sl75_10.marked_return)}** • "
-                f"DD **-{self._percent(standard_scale_sl75_10.max_mtm_drawdown)}**."
+                f"10×5% +SL75 vs no-stop: MTM **{self._signed_percent(standard_scale_sl75_5.marked_return)}** vs "
+                f"**{self._signed_percent(standard_scale_5.marked_return)}** • DD **-{self._percent(standard_scale_sl75_5.max_mtm_drawdown)}** vs "
+                f"**-{self._percent(standard_scale_5.max_mtm_drawdown)}**."
             )
         standard_scale_read = "\n".join(standard_read_parts)
 
@@ -655,7 +658,7 @@ class DiscordNotifier:
             "title": "🧠 Exhaustion Scanner • Research Intelligence",
             "description": (
                 f"Updated **{display_time.strftime('%d %b %Y • %H:%M %Z')}** • observed signals **{b.total_signals}** over **{calendar.history_span_days:.1f}d**.\n"
-                "A/B/C use the same STANDARD+HIGH_RISK entries and 6×5% / 30% portfolio. Only the exit policy changes."
+                "A/B/C use the same STANDARD+HIGH_RISK entries and 6×5% / 30% portfolio. D is the STANDARD-only 10×5% / 50% TP5+SL75 scaling challenger."
             ),
             "color": 0x5865F2,
             "fields": [
@@ -724,11 +727,10 @@ class DiscordNotifier:
             )
 
         prospective_standard_lines = (
-            standard_scale_line("10×5% / 50%", report.prospective_portfolio_standard_tp5_10),
-            standard_scale_line("10×7.5% / 75%", report.prospective_portfolio_standard_tp5_10x75),
-            standard_scale_line("10×10% / 100%", report.prospective_portfolio_standard_tp5_10x10),
-            f"**10×10% +SL75 safety:** MTM **{self._signed_percent(report.prospective_portfolio_standard_tp5_sl75_10x10.marked_return)}** • "
-            f"DD **-{self._percent(report.prospective_portfolio_standard_tp5_sl75_10x10.max_mtm_drawdown)}**",
+            standard_scale_line("D • TP5 + SL75 • 10×5% / 50%", report.prospective_portfolio_standard_tp5_sl75_10),
+            standard_scale_line("No-stop twin • 10×5% / 50%", report.prospective_portfolio_standard_tp5_10),
+            standard_scale_line("Stress size • 10×7.5% / 75%", report.prospective_portfolio_standard_tp5_10x75),
+            standard_scale_line("Stress size • 10×10% / 100%", report.prospective_portfolio_standard_tp5_10x10),
         )
 
         if all(item is not None for item in (
