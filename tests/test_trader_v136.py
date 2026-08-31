@@ -23,7 +23,7 @@ def _signal(signal_id: int = 900, risk: str = "HIGH_RISK", symbol: str = "NEW_US
     )
 
 
-def test_tp5_sl75_v1_defaults_are_frozen(monkeypatch):
+def test_tp5_sl75_pcr_v1_defaults_are_frozen(monkeypatch):
     monkeypatch.setenv("DATABASE_URL", "postgresql://example")
     for key in (
         "TRADER_EXECUTION_STRATEGY",
@@ -37,8 +37,8 @@ def test_tp5_sl75_v1_defaults_are_frozen(monkeypatch):
     ):
         monkeypatch.delenv(key, raising=False)
     settings = TraderSettings.from_env()
-    assert settings.execution_strategy == "tp5_sl75_v1"
-    assert settings.paper_run_id == "tp5_sl75_v1"
+    assert settings.execution_strategy == "tp5_sl75_pcr_v1"
+    assert settings.paper_run_id == "tp5_sl75_pcr_v1"
     assert settings.max_open_positions == 6
     assert settings.slot_allocation_pct == pytest.approx(5.0)
     assert settings.max_total_exposure_pct == pytest.approx(30.0)

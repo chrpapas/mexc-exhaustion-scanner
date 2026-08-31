@@ -1,7 +1,16 @@
-# MEXC Exhaustion Scanner + Multi-Slot Futures Trader v1.3.34
+# MEXC Exhaustion Scanner + Multi-Slot Futures Trader v1.3.35
 
-Execution + research release. **TP5_SL75_V1 is now the default trader strategy**, based on the v1.3.22 codebase.
+Execution + research release. **TP5_SL75_PCR_V1 is now the default trader strategy**.
 
+
+## v1.3.35 — PCR de-risk promoted to live/default sizing
+
+- **New default execution strategy:** `tp5_sl75_pcr_v1`. Entry signal logic, STANDARD+HIGH_RISK eligibility, TP5, SL75, one-position-per-symbol, 6-slot limit, 30% exposure cap and 1x cross are unchanged.
+- **Only sizing changes for new entries:** frozen PCR flag = signal-time 24h return >=30% **and** distance above 4h EMA20 >=3 ATR. Flagged entries use **2.5%** of current equity; all other entries use **5%**.
+- The PCR thresholds are code-frozen and shared by live execution and research analytics so the implementation cannot silently drift from the replay rule.
+- Existing **live** positions are not resized or reclassified on deployment; their persisted exit strategy remains unchanged. The default paper run ID changes to `tp5_sl75_pcr_v1`, so a paper deployment intentionally archives the prior paper run and starts a clean $2,000 PCR-forward run unless you override the run ID.
+- `tp5_sl75_v1` remains supported as an explicit rollback strategy with fixed 5% sizing.
+- Live catastrophic-stop behavior is unchanged: every new PCR/default position still persists `tp5_sl75_full` and must establish the exchange-side SL75 protection.
 
 ## v1.3.34 — STANDARD 10×5% + SL75 promoted as challenger
 

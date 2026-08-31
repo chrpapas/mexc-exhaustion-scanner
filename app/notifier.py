@@ -650,6 +650,7 @@ class DiscordNotifier:
         parabolic_book = volatility.parabolic_portfolio_de_risked
         parabolic_lines = [
             f"Frozen flag: 24h return **≥{self._percent(volatility.parabolic_return_24h_threshold)}** AND EMA20 extension **≥{volatility.parabolic_ema_distance_atr_threshold:.1f} ATR**.",
+            "**PCR rule frozen 30 Aug 2026; historical results shown here are retrospective to that rule.**",
             f"Flagged **{parabolic_flagged.sample}**: TP5 **{parabolic_flagged.target_exits}** • SL75 **{parabolic_flagged.stop_exits}** • open **{parabolic_flagged.waiting}** • avg marked **{self._signed_percent(parabolic_flagged.avg_marked_return)}** | unflagged **{parabolic_unflagged.sample}**: SL75 **{parabolic_unflagged.stop_exits}**.",
             f"De-risk flagged to **{self._percent(volatility.parabolic_position_fraction)}** (others 5%), same 6 slots / 30% cap: MTM **{self._signed_percent(parabolic_book.marked_return)}** • DD **-{self._percent(parabolic_book.max_mtm_drawdown)}** • R/DD **{self._number(parabolic_book.return_over_max_drawdown)}** vs fixed 5% MTM **{self._signed_percent(fixed_vol.marked_return)}** • DD **-{self._percent(fixed_vol.max_mtm_drawdown)}**.",
         ]
@@ -702,7 +703,7 @@ class DiscordNotifier:
                     "inline": False,
                 },
                 {
-                    "name": "7 • Parabolic continuation risk • exploratory",
+                    "name": "7 • PCR de-risk • retrospective evidence",
                     "value": "\n".join(parabolic_lines),
                     "inline": False,
                 },
@@ -769,8 +770,9 @@ class DiscordNotifier:
                     "inline": False,
                 },
                 {
-                    "name": "Post-freeze parabolic de-risk sizing",
+                    "name": "Aug21-cohort PCR shadow • retrospective to PCR",
                     "value": (
+                        "The Aug21 split predates the PCR rule; do **not** treat this as PCR out-of-sample evidence. "
                         f"Flagged signals **{volatility.prospective_parabolic_flagged_validation.sample}** • SL75 **{volatility.prospective_parabolic_flagged_validation.stop_exits}** | "
                         f"fixed 5% MTM **{self._signed_percent(volatility.prospective_portfolio_fixed.marked_return)}** / DD **-{self._percent(volatility.prospective_portfolio_fixed.max_mtm_drawdown)}** vs "
                         f"parabolic 2.5% MTM **{self._signed_percent(volatility.prospective_parabolic_portfolio_de_risked.marked_return)}** / DD **-{self._percent(volatility.prospective_parabolic_portfolio_de_risked.max_mtm_drawdown)}** / R-DD **{self._number(volatility.prospective_parabolic_portfolio_de_risked.return_over_max_drawdown)}**"
@@ -790,7 +792,7 @@ class DiscordNotifier:
                 },
             ],
             "footer": {
-                "text": "Do not tune on post-freeze results and then relabel them out-of-sample. Funding and real execution slippage remain outside the replay."
+                "text": "PCR was frozen 30 Aug 2026. Only later signals are prospective for PCR; the Aug21 cohort is retrospective to PCR. Funding and real execution slippage remain outside the replay."
             },
         }
 

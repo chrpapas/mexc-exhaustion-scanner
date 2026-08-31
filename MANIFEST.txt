@@ -68,6 +68,7 @@ tests/test_mexc_trade.py
 tests/test_migration_v1331.py
 tests/test_notifier.py
 tests/test_parabolic_risk_v1333.py
+tests/test_pcr_live_v1335.py
 tests/test_performance.py
 tests/test_report_now.py
 tests/test_research_analytics_v127.py

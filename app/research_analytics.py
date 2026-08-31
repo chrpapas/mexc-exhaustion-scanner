@@ -9,6 +9,13 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, Iterable
 
 from app.json_utils import json_object
+from app.trader_logic import (
+    PCR_BASE_POSITION_FRACTION,
+    PCR_EMA_DISTANCE_ATR_THRESHOLD,
+    PCR_FLAGGED_POSITION_FRACTION,
+    PCR_RETURN_24H_THRESHOLD,
+    parabolic_continuation_risk,
+)
 from app.token_regime import (
     EPISODIC_CLASS,
     INSUFFICIENT_CLASS,
@@ -51,12 +58,13 @@ VOLATILITY_MIN_SLOT_PCT = 0.025
 VOLATILITY_MAX_SLOT_PCT = 0.075
 VOLATILITY_MAX_SLOTS = 6
 VOLATILITY_MAX_EXPOSURE_PCT = 0.30
-# Research-only parabolic continuation-risk sizing. Thresholds are frozen from
-# the 30 Aug 2026 investigation of PONS/HNT/CATE and are intentionally not swept.
-PARABOLIC_RISK_RETURN_24H = 0.30
-PARABOLIC_RISK_EMA_DISTANCE_ATR = 3.0
-PARABOLIC_RISK_POSITION_PCT = 0.025
-PARABOLIC_RISK_BASE_POSITION_PCT = 0.05
+# Frozen parabolic continuation-risk sizing rule. Thresholds were discovered/frozen
+# in the 30 Aug 2026 PONS/HNT/CATE investigation and are now shared with live execution.
+# Historical PCR replays through the freeze remain retrospective/hypothesis-generating.
+PARABOLIC_RISK_RETURN_24H = PCR_RETURN_24H_THRESHOLD
+PARABOLIC_RISK_EMA_DISTANCE_ATR = PCR_EMA_DISTANCE_ATR_THRESHOLD
+PARABOLIC_RISK_POSITION_PCT = PCR_FLAGGED_POSITION_FRACTION
+PARABOLIC_RISK_BASE_POSITION_PCT = PCR_BASE_POSITION_FRACTION
 PARABOLIC_RISK_MAX_SLOTS = 6
 PARABOLIC_RISK_MAX_EXPOSURE_PCT = 0.30
 RESEARCH_OOS_FREEZE_AT = datetime(2026, 8, 21, 21, 29, tzinfo=UTC)
@@ -1960,14 +1968,11 @@ def _volatility_position_fractions(
 
 
 def _parabolic_continuation_risk(row: dict[str, Any]) -> bool:
-    return_24h = _float(_feature_value(row, FEATURE_BY_KEY["return_24h"]))
-    ema_distance = _float(_feature_value(row, FEATURE_BY_KEY["distance_above_ema20_atr_4h"]))
-    return (
-        return_24h is not None
-        and ema_distance is not None
-        and return_24h >= PARABOLIC_RISK_RETURN_24H
-        and ema_distance >= PARABOLIC_RISK_EMA_DISTANCE_ATR
-    )
+    snapshot = row.get("_snapshot")
+    if snapshot is None:
+        snapshot = json_object(row.get("feature_snapshot"))
+        row["_snapshot"] = snapshot
+    return parabolic_continuation_risk(snapshot)
 
 
 def _parabolic_position_fractions(rows: list[dict[str, Any]]) -> dict[int, float]:

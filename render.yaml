@@ -141,9 +141,9 @@ services:
       - key: TRADING_MODE
         value: paper
       - key: TRADER_EXECUTION_STRATEGY
-        value: tp5_sl75_v1
+        value: tp5_sl75_pcr_v1
       - key: TRADER_PAPER_RUN_ID
-        value: tp5_sl75_v1
+        value: tp5_sl75_pcr_v1
       - key: TRADER_MARGIN_MODE
         value: cross
       - key: TRADER_LEVERAGE

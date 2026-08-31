@@ -11,7 +11,11 @@ from app.mexc_trade import MexcTradeClient, MexcTradeError
 from app.trader_config import TraderSettings
 from app.trader_db import TraderRepository
 from app.trader_logic import (
+    PCR_EMA_DISTANCE_ATR_THRESHOLD,
+    PCR_RETURN_24H_THRESHOLD,
     newly_breached_thresholds,
+    parabolic_continuation_risk,
+    pcr_position_fraction,
     protected_profit_floor_pct,
     short_price_for_return,
     short_return_pct,
@@ -339,7 +343,13 @@ class PortfolioShortTrader:
         if equity <= 0:
             raise RuntimeError("account equity is not positive")
         total_notional = sum(p.notional_usdt for p in active)
-        desired = equity * self.settings.slot_fraction
+        pcr_flagged = self.settings.uses_pcr_derisk and parabolic_continuation_risk(signal.features)
+        candidate_fraction = (
+            pcr_position_fraction(signal.features)
+            if self.settings.uses_pcr_derisk
+            else self.settings.slot_fraction
+        )
+        desired = equity * candidate_fraction
         max_notional = equity * self.settings.max_total_exposure_fraction
         remaining = max_notional - total_notional
         current_exposure = total_notional / equity * 100.0 if equity > 0 else 0.0
@@ -359,7 +369,7 @@ class PortfolioShortTrader:
                 event_fields=[
                     {"name": "Current exposure", "value": f"{current_exposure:.2f}%", "inline": True},
                     {"name": "Exposure cap", "value": f"{self.settings.max_total_exposure_pct:.2f}%", "inline": True},
-                    {"name": "Requested slot", "value": f"${desired:,.2f} ({self.settings.slot_allocation_pct:.2f}%)", "inline": True},
+                    {"name": "Requested slot", "value": f"${desired:,.2f} ({candidate_fraction * 100.0:.2f}%)", "inline": True},
                     {"name": "Remaining capacity", "value": f"${max(0.0, remaining):,.2f}", "inline": True},
                     *([{"name": "MEXC available USDT", "value": f"${live_available:,.2f}", "inline": True}] if live_available is not None else []),
                 ],
@@ -374,10 +384,11 @@ class PortfolioShortTrader:
             else await self._open_live(signal, slot_no, equity, notional)
         )
         LOGGER.info(
-            "Signal accepted id=%s symbol=%s risk=%s action=OPENED position_id=%s slot=%s notional=%.4f equity=%.4f",
+            "Signal accepted id=%s symbol=%s risk=%s pcr=%s action=OPENED position_id=%s slot=%s notional=%.4f equity=%.4f",
             signal.id,
             signal.symbol,
             signal.risk_tier,
+            pcr_flagged,
             position.id,
             position.slot_no,
             position.notional_usdt,
@@ -400,6 +411,17 @@ class PortfolioShortTrader:
             [
                 {"name": "Entry", "value": f"{position.entry_price:.10g}", "inline": True},
                 {"name": "Notional", "value": f"${position.notional_usdt:,.2f}", "inline": True},
+                *([
+                    {
+                        "name": "PCR sizing",
+                        "value": (
+                            f"FLAGGED → {candidate_fraction * 100.0:.2f}% equity"
+                            if pcr_flagged
+                            else f"Unflagged → {candidate_fraction * 100.0:.2f}% equity"
+                        ),
+                        "inline": True,
+                    }
+                ] if self.settings.uses_pcr_derisk else []),
                 {"name": "Exit plan", "value": exit_text, "inline": False},
                 {
                     "name": "Risk control",
@@ -475,6 +497,11 @@ class PortfolioShortTrader:
                 "risk_tier": signal.risk_tier,
                 "paper_taker_fee_rate": self.settings.paper_taker_fee_rate,
                 "execution_strategy": self.settings.execution_strategy,
+                "pcr_flagged": self.settings.uses_pcr_derisk and parabolic_continuation_risk(signal.features),
+                "pcr_return_24h": signal.features.get("return_24h") if self.settings.uses_pcr_derisk else None,
+                "pcr_ema_distance_atr_4h": signal.features.get("distance_above_ema20_atr_4h") if self.settings.uses_pcr_derisk else None,
+                "pcr_return_24h_threshold": PCR_RETURN_24H_THRESHOLD if self.settings.uses_pcr_derisk else None,
+                "pcr_ema_distance_atr_threshold": PCR_EMA_DISTANCE_ATR_THRESHOLD if self.settings.uses_pcr_derisk else None,
                 "tp_target_pct": self.settings.tp5_target_pct if self.settings.uses_generic_slots else self.settings.profit_target_pct,
                 "catastrophic_stop_pct": self.settings.catastrophic_stop_pct if self.settings.uses_catastrophic_stop else None,
             },
@@ -548,6 +575,11 @@ class PortfolioShortTrader:
                 "risk_tier": signal.risk_tier,
                 "mexc_liquidate_price": live_position.get("liquidatePrice"),
                 "execution_strategy": self.settings.execution_strategy,
+                "pcr_flagged": self.settings.uses_pcr_derisk and parabolic_continuation_risk(signal.features),
+                "pcr_return_24h": signal.features.get("return_24h") if self.settings.uses_pcr_derisk else None,
+                "pcr_ema_distance_atr_4h": signal.features.get("distance_above_ema20_atr_4h") if self.settings.uses_pcr_derisk else None,
+                "pcr_return_24h_threshold": PCR_RETURN_24H_THRESHOLD if self.settings.uses_pcr_derisk else None,
+                "pcr_ema_distance_atr_threshold": PCR_EMA_DISTANCE_ATR_THRESHOLD if self.settings.uses_pcr_derisk else None,
                 "tp_target_pct": self.settings.tp5_target_pct if self.settings.uses_generic_slots else self.settings.profit_target_pct,
                 "catastrophic_stop_pct": self.settings.catastrophic_stop_pct if self.settings.uses_catastrophic_stop else None,
             },
@@ -1115,7 +1147,7 @@ class PortfolioShortTrader:
                 "max_total_exposure_pct": self.settings.max_total_exposure_pct,
                 "strategy": self.settings.execution_strategy,
                 "run_id": self._active_run_id,
-                "version": "1.3.34",
+                "version": "1.3.35",
             },
         )
 
@@ -1125,9 +1157,14 @@ class PortfolioShortTrader:
                 f" • catastrophic SL -{self.settings.catastrophic_stop_pct:g}%"
                 if self.settings.uses_catastrophic_stop else ""
             )
+            sizing = (
+                "PCR 2.50% flagged / 5.00% otherwise"
+                if self.settings.uses_pcr_derisk
+                else f"{self.settings.slot_allocation_pct:.2f}%"
+            )
             return (
                 f"{self.settings.execution_strategy.upper()} • {self.settings.max_open_positions} generic slots × "
-                f"{self.settings.slot_allocation_pct:.2f}% • TP +{self.settings.tp5_target_pct:g}%{stop} • "
+                f"{sizing} • TP +{self.settings.tp5_target_pct:g}%{stop} • "
                 f"max {self.settings.max_total_exposure_pct:.1f}% exposure • one position/symbol"
             )
         return (

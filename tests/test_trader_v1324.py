@@ -8,7 +8,7 @@ from app.trader_config import TraderSettings
 from tests.test_trader_v123 import FakeRepo, _position
 
 
-def test_sl75_default_configuration(monkeypatch):
+def test_pcr_sl75_default_configuration(monkeypatch):
     monkeypatch.setenv("DATABASE_URL", "postgresql://example")
     for key in (
         "TRADER_EXECUTION_STRATEGY", "TRADER_PAPER_RUN_ID", "TRADER_MAX_OPEN_POSITIONS",
@@ -17,8 +17,8 @@ def test_sl75_default_configuration(monkeypatch):
     ):
         monkeypatch.delenv(key, raising=False)
     settings = TraderSettings.from_env()
-    assert settings.execution_strategy == "tp5_sl75_v1"
-    assert settings.paper_run_id == "tp5_sl75_v1"
+    assert settings.execution_strategy == "tp5_sl75_pcr_v1"
+    assert settings.paper_run_id == "tp5_sl75_pcr_v1"
     assert settings.uses_generic_slots is True
     assert settings.uses_catastrophic_stop is True
     assert settings.max_open_positions == 6

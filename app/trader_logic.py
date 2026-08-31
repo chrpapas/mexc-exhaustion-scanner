@@ -1,6 +1,49 @@
 from __future__ import annotations
 
 
+# Frozen Parabolic Continuation Risk (PCR) sizing overlay.
+# Discovered/frozen 30 Aug 2026 from the PONS/HNT/CATE tail investigation.
+# These constants are deliberately code-frozen rather than environment-tunable.
+PCR_RETURN_24H_THRESHOLD = 0.30
+PCR_EMA_DISTANCE_ATR_THRESHOLD = 3.0
+PCR_FLAGGED_POSITION_FRACTION = 0.025
+PCR_BASE_POSITION_FRACTION = 0.05
+
+
+def _numeric_feature(features: dict[str, object], key: str) -> float | None:
+    value = features.get(key)
+    try:
+        parsed = float(value) if value is not None else None
+    except (TypeError, ValueError):
+        return None
+    return parsed
+
+
+def parabolic_continuation_risk(features: dict[str, object]) -> bool:
+    """Return the frozen PCR flag used by both research and live sizing.
+
+    A confirmed signal is PCR-flagged only when its signal-time snapshot has
+    24h return >= +30% AND 4h EMA20 extension >= 3 ATR. Missing/unparseable
+    features are treated as unflagged, matching the frozen research rule.
+    """
+    return_24h = _numeric_feature(features, "return_24h")
+    ema_distance = _numeric_feature(features, "distance_above_ema20_atr_4h")
+    return (
+        return_24h is not None
+        and ema_distance is not None
+        and return_24h >= PCR_RETURN_24H_THRESHOLD
+        and ema_distance >= PCR_EMA_DISTANCE_ATR_THRESHOLD
+    )
+
+
+def pcr_position_fraction(features: dict[str, object]) -> float:
+    return (
+        PCR_FLAGGED_POSITION_FRACTION
+        if parabolic_continuation_risk(features)
+        else PCR_BASE_POSITION_FRACTION
+    )
+
+
 def short_return_pct(entry_price: float, current_price: float) -> float:
     return (entry_price - current_price) / entry_price * 100.0
 
