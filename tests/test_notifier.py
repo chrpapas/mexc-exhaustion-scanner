@@ -182,6 +182,14 @@ def _report() -> PerformanceSummary:
             "tp5", datetime(2026, 8, 1, tzinfo=UTC), datetime(2026, 8, 12, tzinfo=UTC),
             11.0, 20, 18, 16, 2, 0, 1, 1, 0.084, 0.2291, 2291.0, 0.12, 0.30, 26.4, 0.041, 0.084 / 0.041,
         ),
+        tp5_sl75_account_run_rate=AccountRunRateSummary(
+            "tp5_sl75", datetime(2026, 8, 1, tzinfo=UTC), datetime(2026, 8, 12, tzinfo=UTC),
+            11.0, 20, 18, 16, 2, 0, 1, 1, 0.071, 0.1936, 1936.0, 0.12, 0.30, 26.4, 0.052, 0.071 / 0.052,
+        ),
+        tp5_sl75_pcr_account_run_rate=AccountRunRateSummary(
+            "tp5_sl75_pcr", datetime(2026, 8, 1, tzinfo=UTC), datetime(2026, 8, 12, tzinfo=UTC),
+            11.0, 20, 18, 16, 2, 0, 1, 1, 0.091, 0.2482, 2482.0, 0.10, 0.275, 26.4, 0.041, 0.091 / 0.041,
+        ),
         tp20_account_run_rate=AccountRunRateSummary(
             "tp20", datetime(2026, 8, 1, tzinfo=UTC), datetime(2026, 8, 12, tzinfo=UTC),
             11.0, 10, 8, 5, 3, 0, 2, 0, 0.031, 0.0845, 845.0, 0.07, 0.10, 38.5, 0.12, 0.031 / 0.12,
@@ -223,12 +231,19 @@ def test_performance_report_uses_dedicated_stats_webhook_and_embeds():
     )
     assert "Performance & Playbook" in all_text
     assert "Suggested execution" in all_text
-    assert "TP5 indefinite" in all_text
-    assert "TP5 + SL75" in all_text
-    assert "7D hold" in all_text
+    assert "Previous active" in all_text
+    assert "Current • TP5 + SL75 • PCR de-risk" in all_text
+    assert "fixed 5%" in all_text
+    assert "PCR 2.5/5% account" in all_text
+    assert "Est. monthly" in all_text
+    assert "max DD" in all_text
+    assert "captured" in all_text
+    assert "avg/peak exposure" in all_text
     assert "max **6** open positions" in all_text
     assert "30%" in all_text
     assert "0.08% fee per fill" in all_text
+    assert "TP5 indefinite" not in all_text
+    assert "7D hold" not in all_text
     assert "TP20" not in all_text
     assert "EntryGate" not in all_text
 

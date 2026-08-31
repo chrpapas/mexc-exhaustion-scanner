@@ -90,6 +90,7 @@ tests/test_signal_ledger.py
 tests/test_signals.py
 tests/test_standard_scaling_v1330.py
 tests/test_strategy_validation_v1327.py
+tests/test_subscriber_pcr_report_v1337.py
 tests/test_trader_config.py
 tests/test_trader_db.py
 tests/test_trader_logic.py

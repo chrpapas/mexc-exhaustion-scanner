@@ -1,7 +1,17 @@
-# MEXC Exhaustion Scanner + Multi-Slot Futures Trader v1.3.35
+# MEXC Exhaustion Scanner + Multi-Slot Futures Trader v1.3.37
 
 Execution + research release. **TP5_SL75_PCR_V1 is now the default trader strategy**.
 
+
+
+## v1.3.37 — subscriber performance board: fixed TP5+SL75 vs PCR
+
+- **Subscriber Discord performance board only:** replaces the old TP5-indefinite / TP5+SL75 / 7D presentation with the two strategies users can actually compare now: previous live **TP5+SL75 fixed 5%** versus current **TP5+SL75 PCR de-risk**.
+- Preserves the existing subscriber statistics: all-signal net sum / average / positive rate, TP5/SL75/open counts, holding-time stats, chronological account MTM return, 30D-equivalent run-rate, max DD, return/DD, capture, closed/open counts, capacity/symbol misses, and average/peak exposure.
+- Adds a dedicated PCR account replay to `performance.py`, using the same frozen signal-time PCR rule as the live trader: 24h return >=30% and 4h EMA20 extension >=3 ATR => 2.5%; otherwise 5%. Entries, TP5, SL75, slots and symbol rules are identical to the fixed competitor.
+- `performance_rows()` now reads each signal's frozen feature snapshot so the subscriber PCR replay uses signal-time features without look-ahead.
+- **Research Intelligence is unchanged from v1.3.35.** A/B/C, STANDARD scaling, ATR, parabolic research, forward evidence and research CSV exports remain intact.
+- Trader execution is unchanged from v1.3.35; this release does not reset or resize the existing PCR paper/live run.
 
 ## v1.3.35 — PCR de-risk promoted to live/default sizing
 

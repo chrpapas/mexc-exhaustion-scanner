@@ -1198,15 +1198,17 @@ class Database:
         base_rows = await self.pool.fetch(
             """
             SELECT
-                episode_id, symbol, confirmed_at, entry_price, risk_tier,
-                current_return_pct, mfe_pct, mae_pct,
-                return_1h_pct, return_4h_pct, return_12h_pct, return_24h_pct,
-                return_48h_pct, return_72h_pct, return_168h_pct,
-                matured_at, matured_48h_at, matured_72h_at, matured_168h_at,
-                first_profit_at, target_20_at, isolated_100_breach_at,
-                adverse_200_breach_at, adverse_300_breach_at, cross_400_breach_at
-            FROM shadow_trades
-            ORDER BY confirmed_at ASC
+                st.episode_id, st.symbol, st.confirmed_at, st.entry_price, st.risk_tier,
+                st.current_return_pct, st.mfe_pct, st.mae_pct,
+                st.return_1h_pct, st.return_4h_pct, st.return_12h_pct, st.return_24h_pct,
+                st.return_48h_pct, st.return_72h_pct, st.return_168h_pct,
+                st.matured_at, st.matured_48h_at, st.matured_72h_at, st.matured_168h_at,
+                st.first_profit_at, st.target_20_at, st.isolated_100_breach_at,
+                st.adverse_200_breach_at, st.adverse_300_breach_at, st.cross_400_breach_at,
+                rsf.feature_snapshot
+            FROM shadow_trades st
+            LEFT JOIN research_signal_features rsf ON rsf.episode_id = st.episode_id
+            ORDER BY st.confirmed_at ASC
             """
         )
         episode_ids = [int(row["episode_id"]) for row in base_rows]

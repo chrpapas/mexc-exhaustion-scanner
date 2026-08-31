@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
 from datetime import date, datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
+
+from app.trader_logic import pcr_position_fraction
 
 PUBLIC_PERFORMANCE_RISK_TIERS = frozenset({"standard", "high_risk"})
 SHADOW_FEE_PER_FILL = 0.0008
@@ -390,6 +393,7 @@ class PerformanceSummary:
     standard_7d_exposure: ExposureRecommendation = ExposureRecommendation(0.03, 5, 0.15, "risk-based suggestion for fixed 7-day STANDARD holds")
     tp5_account_run_rate: AccountRunRateSummary | None = None
     tp5_sl75_account_run_rate: AccountRunRateSummary | None = None
+    tp5_sl75_pcr_account_run_rate: AccountRunRateSummary | None = None
     hold_7d_account_run_rate: AccountRunRateSummary | None = None
     tp20_account_run_rate: AccountRunRateSummary | None = None
     standard_7d_account_run_rate: AccountRunRateSummary | None = None
@@ -494,6 +498,7 @@ class PerformanceSummary:
             "standard_7d_exposure": self.standard_7d_exposure.as_dict(),
             "tp5_account_run_rate": self.tp5_account_run_rate.as_dict() if self.tp5_account_run_rate else None,
             "tp5_sl75_account_run_rate": self.tp5_sl75_account_run_rate.as_dict() if self.tp5_sl75_account_run_rate else None,
+            "tp5_sl75_pcr_account_run_rate": self.tp5_sl75_pcr_account_run_rate.as_dict() if self.tp5_sl75_pcr_account_run_rate else None,
             "hold_7d_account_run_rate": self.hold_7d_account_run_rate.as_dict() if self.hold_7d_account_run_rate else None,
             "tp20_account_run_rate": self.tp20_account_run_rate.as_dict() if self.tp20_account_run_rate else None,
             "standard_7d_account_run_rate": self.standard_7d_account_run_rate.as_dict() if self.standard_7d_account_run_rate else None,
@@ -1153,6 +1158,7 @@ def build_performance_summary(
         strategy: str,
         risk_tiers: set[str],
         exposure: ExposureRecommendation,
+        pcr_sizing: bool = False,
     ) -> AccountRunRateSummary:
         ordered = sorted(
             [row for row in rows if row.get("confirmed_at") is not None and row["confirmed_at"] <= now_utc],
@@ -1166,8 +1172,23 @@ def build_performance_summary(
         positions: list[dict[str, Any]] = []
         all_positions: list[dict[str, Any]] = []
         holds_hours: list[float] = []
+        exposure_hour_fractions: list[float] = []
         eligible_signals = entered = closed = missed_capacity = missed_same_symbol = 0
         max_open = 0
+        max_exposure_fraction = 0.0
+
+        def signal_position_fraction(row: dict[str, Any]) -> float:
+            if not pcr_sizing:
+                return exposure.per_trade_pct
+            snapshot = row.get("feature_snapshot")
+            if isinstance(snapshot, str):
+                try:
+                    snapshot = json.loads(snapshot)
+                except (TypeError, ValueError, json.JSONDecodeError):
+                    snapshot = {}
+            if not isinstance(snapshot, dict):
+                snapshot = {}
+            return pcr_position_fraction(snapshot)
 
         def known_exit(row: dict[str, Any]) -> tuple[datetime | None, float | None]:
             confirmed = row["confirmed_at"]
@@ -1213,7 +1234,9 @@ def build_performance_summary(
             )
             for pos in due:
                 equity += pos["notional"] * (float(pos["exit_return"]) - SHADOW_FEE_PER_FILL)
-                holds_hours.append(max(0.0, (pos["exit_at"] - pos["entry_at"]).total_seconds() / 3600.0))
+                hold_hours = max(0.0, (pos["exit_at"] - pos["entry_at"]).total_seconds() / 3600.0)
+                holds_hours.append(hold_hours)
+                exposure_hour_fractions.append(hold_hours * float(pos["position_fraction"]))
                 positions.remove(pos)
                 closed += 1
 
@@ -1233,7 +1256,8 @@ def build_performance_summary(
                 continue
 
             exit_at, exit_return = known_exit(row)
-            notional = max(0.0, equity) * exposure.per_trade_pct
+            candidate_fraction = signal_position_fraction(row)
+            notional = max(0.0, equity) * candidate_fraction
             equity -= notional * SHADOW_FEE_PER_FILL
             path_times = list(row.get("path_times") or ())
             path_returns = list(row.get("path_returns") or ())
@@ -1247,6 +1271,7 @@ def build_performance_summary(
                 "symbol": symbol,
                 "entry_at": entry_at,
                 "notional": notional,
+                "position_fraction": candidate_fraction,
                 "exit_at": exit_at,
                 "exit_return": exit_return,
                 "mark_return": row.get("current_return_pct"),
@@ -1256,13 +1281,19 @@ def build_performance_summary(
             all_positions.append(position)
             entered += 1
             max_open = max(max_open, len(positions))
+            max_exposure_fraction = max(
+                max_exposure_fraction,
+                sum(float(pos["position_fraction"]) for pos in positions),
+            )
 
         close_due(now_utc)
 
         marked_equity = equity
         unmarked = 0
         for pos in positions:
-            holds_hours.append(max(0.0, (now_utc - pos["entry_at"]).total_seconds() / 3600.0))
+            hold_hours = max(0.0, (now_utc - pos["entry_at"]).total_seconds() / 3600.0)
+            holds_hours.append(hold_hours)
+            exposure_hour_fractions.append(hold_hours * float(pos["position_fraction"]))
             mark = pos["mark_return"]
             if mark is None:
                 unmarked += 1
@@ -1337,10 +1368,8 @@ def build_performance_summary(
             peak_equity = max(peak_equity, path_equity)
 
         slot_days = sum(holds_hours) / 24.0
-        avg_exposure = (
-            slot_days * exposure.per_trade_pct / span_days
-            if span_days > 0 else None
-        )
+        exposure_days = sum(exposure_hour_fractions) / 24.0
+        avg_exposure = (exposure_days / span_days) if span_days > 0 else None
         observed_return = None if unmarked else (marked_equity - 1.0)
         run_rate = (
             observed_return * MONTHLY_RUN_RATE_DAYS / span_days
@@ -1366,7 +1395,7 @@ def build_performance_summary(
             thirty_day_equivalent_return=run_rate,
             thirty_day_pnl_per_10k=(run_rate * 10000.0) if run_rate is not None else None,
             avg_exposure_pct=avg_exposure,
-            peak_exposure_pct=max_open * exposure.per_trade_pct,
+            peak_exposure_pct=max_exposure_fraction,
             max_mtm_drawdown=max_mtm_drawdown if event_times else None,
             return_over_max_drawdown=return_over_drawdown,
             slot_days=slot_days,
@@ -1384,6 +1413,12 @@ def build_performance_summary(
     )
     tp5_sl75_account_run_rate = account_run_rate(
         strategy="tp5_sl75", risk_tiers={"standard", "high_risk"}, exposure=tp5_exposure
+    )
+    tp5_sl75_pcr_account_run_rate = account_run_rate(
+        strategy="tp5_sl75",
+        risk_tiers={"standard", "high_risk"},
+        exposure=tp5_exposure,
+        pcr_sizing=True,
     )
     hold_7d_account_run_rate = account_run_rate(
         strategy="hold_7d", risk_tiers={"standard", "high_risk"}, exposure=tp5_exposure
@@ -1442,6 +1477,7 @@ def build_performance_summary(
         standard_7d_exposure=standard_7d_exposure,
         tp5_account_run_rate=tp5_account_run_rate,
         tp5_sl75_account_run_rate=tp5_sl75_account_run_rate,
+        tp5_sl75_pcr_account_run_rate=tp5_sl75_pcr_account_run_rate,
         hold_7d_account_run_rate=hold_7d_account_run_rate,
         tp20_account_run_rate=tp20_account_run_rate,
         standard_7d_account_run_rate=standard_7d_account_run_rate,

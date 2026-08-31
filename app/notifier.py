@@ -157,9 +157,18 @@ class DiscordNotifier:
         )
 
         strategies = [
-            ("⚡ A • TP5 indefinite", report.trader_strategy_tp5, report.tp5_account_run_rate),
-            ("🛡️ B • TP5 + SL75 • DEFAULT", report.trader_strategy_tp5_sl75, report.tp5_sl75_account_run_rate),
-            ("🗓️ C • 7D hold", report.trader_strategy_hold_7d, report.hold_7d_account_run_rate),
+            (
+                "🕰️ Previous active • TP5 + SL75 • fixed 5%",
+                report.trader_strategy_tp5_sl75,
+                report.tp5_sl75_account_run_rate,
+                "6×5% account",
+            ),
+            (
+                "🛡️ Current • TP5 + SL75 • PCR de-risk",
+                report.trader_strategy_tp5_sl75,
+                report.tp5_sl75_pcr_account_run_rate,
+                "PCR 2.5/5% account",
+            ),
         ]
 
         def exit_mix(summary) -> str:
@@ -183,9 +192,9 @@ class DiscordNotifier:
                 f"{exit_mix(summary)} • median/p75 completed hold **{self._hours(summary.median_holding_hours)} / {self._hours(summary.p75_holding_hours)}**"
             )
 
-        def account_economics(account) -> str:
+        def account_economics(account, account_label: str) -> str:
             if account is None:
-                return "6-slot account replay unavailable"
+                return f"{account_label} replay unavailable"
             dd = (
                 f"-{self._percent(account.max_mtm_drawdown)}"
                 if account.max_mtm_drawdown is not None else "n/a"
@@ -196,7 +205,7 @@ class DiscordNotifier:
             )
             capture = (account.entered / account.eligible_signals) if account.eligible_signals else None
             return (
-                f"6×5% account: observed **{self._signed_percent(account.observed_account_return)}** in **{account.span_days:.1f}d** → "
+                f"{account_label}: observed **{self._signed_percent(account.observed_account_return)}** in **{account.span_days:.1f}d** → "
                 f"**Est. monthly {self._signed_percent(account.thirty_day_equivalent_return)}*** • max DD **{dd}** • R/DD **{ratio}**\n"
                 f"captured **{account.entered}/{account.eligible_signals} ({self._percent(capture)})** signals • "
                 f"closed/open **{account.closed}/{account.open_positions}** • capacity/symbol misses **{account.missed_capacity}/{account.missed_same_symbol}** • "
@@ -207,23 +216,24 @@ class DiscordNotifier:
             {
                 "name": "▶️ Suggested execution • current default",
                 "value": (
-                    "**TP5 + SL75:** short every published **STANDARD + HIGH_RISK confirmed-short** signal • **1× cross** • "
-                    "size each new trade at **5% of current equity** • max **6** open positions • max **30% aggregate exposure** • "
-                    "one position per symbol • take profit at **+5% short return** • catastrophic stop at **-75% short return** • no time expiry.\n"
-                    "Research assumes **0.08% fee per fill**. A 5% slot stopped at -75% is roughly **-3.75% account** before fees/slippage."
+                    "**TP5 + SL75 + PCR sizing:** short every published **STANDARD + HIGH_RISK confirmed-short** signal • **1× cross** • "
+                    "size a normal entry at **5% of current equity**; if **24h return ≥30% AND 4h EMA20 extension ≥3 ATR**, size it at **2.5%** • "
+                    "max **6** open positions • max **30% aggregate exposure** • one position per symbol • take profit at **+5% short return** • "
+                    "catastrophic stop at **-75% short return** • no time expiry.\n"
+                    "Research assumes **0.08% fee per fill**. A 5% slot stopped at -75% is roughly **-3.75% account** before fees/slippage; a PCR 2.5% slot roughly halves that account hit."
                 ),
                 "inline": False,
             },
         ]
-        for title, summary, account in strategies:
-            rule = summary.rule if summary is not None else (
-                "+5% TP, no stop/timeout" if "indefinite" in title else
-                "+5% TP or -75% SL, no timeout" if "SL75" in title else
-                "hold exactly 168h, then close; no TP/SL"
-            )
+        for title, summary, account, account_label in strategies:
+            rule = summary.rule if summary is not None else "+5% TP or -75% SL, no timeout"
+            if "PCR" in title:
+                rule = f"{rule}; 2.5% size when 24h ≥30% and EMA20 extension ≥3 ATR, otherwise 5%"
+            else:
+                rule = f"{rule}; fixed 5% per entry"
             fields.append({
                 "name": title,
-                "value": f"**Rule:** {rule}\n{signal_economics(summary)}\n{account_economics(account)}",
+                "value": f"**Rule:** {rule}\n{signal_economics(summary)}\n{account_economics(account, account_label)}",
                 "inline": False,
             })
 
@@ -231,19 +241,19 @@ class DiscordNotifier:
             {
                 "name": "📖 What the numbers mean",
                 "value": (
-                    "**Net Σ trade return** asks what the signal stream itself produced if every qualifying signal were taken; it ignores capital/slot conflicts. "
-                    "**6×5% account** is the replicable chronological portfolio and therefore the main performance number. "
+                    "**Net Σ trade return** asks what the shared TP5+SL75 signal stream produced if every qualifying signal were taken; it ignores capital/slot conflicts. "
+                    "The chronological **account replay** is the main performance number and applies each competitor's actual sizing rule. "
                     "**Est. monthly*** linearly scales the observed account return to 30 days; it is a run-rate, **not a forecast**. "
                     "Use **MTM return + max DD + capture rate** together; win rate alone can hide open short tails."
                 ),
                 "inline": False,
             },
             {
-                "name": "🧭 How to use the alternatives",
+                "name": "🧭 How to use the comparison",
                 "value": (
-                    "**A TP5 indefinite:** highest tail tolerance; downside of a short is unbounded. "
-                    "**B TP5 + SL75:** current recommended implementation because it keeps TP5 behavior but bounds planned single-trade catastrophe. "
-                    "**C 7D hold:** benchmark for whether simply holding the reversal for one week beats harvesting +5%; close at exactly 168h regardless of profit/loss."
+                    "**Previous active:** TP5 + SL75 with a fixed **5%** allocation on every admitted trade. "
+                    "**Current PCR:** identical entries and exits, but PCR-flagged parabolic signals use **2.5%** instead of 5%. "
+                    "Because only sizing changes, differences in account return/DD isolate the effect of the PCR risk overlay."
                 ),
                 "inline": False,
             },
@@ -258,7 +268,7 @@ class DiscordNotifier:
             "title": "📊 Exhaustion Scanner • Performance & Playbook",
             "description": (
                 f"**{self._pretty_label(label)}** • Updated **{as_of_text}**\n"
-                "Same entries and sizing for A/B/C; **only the exit policy changes**. This lets you compare strategy edge and portfolio reality separately."
+                "Same entries and exits for both competitors; **only position sizing changes**. This isolates the effect of PCR de-risking on portfolio return and drawdown."
             ),
             "color": 0x5865F2,
             "fields": fields,
