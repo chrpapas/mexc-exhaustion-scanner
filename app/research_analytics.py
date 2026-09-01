@@ -76,6 +76,17 @@ ENTRY_GATE_V1_MAX_CONTINUATION = 6
 PROSPECTIVE_GATE_ROLLING_WINDOW = 20
 CALENDAR_MONTH_DAYS = 30
 
+# Research-only Continuation Core V1. Frozen 1 Sep 2026 after the first
+# 194-signal tail-pattern review. Do not retune these thresholds in-place;
+# future variants must use a new version name so forward evidence stays clean.
+CONTINUATION_CORE_V1_RUN_SCORE_MIN = 5.0
+CONTINUATION_CORE_V1_EMA_DISTANCE_ATR_MIN = 3.0
+CONTINUATION_CORE_V1_CROSS_SECTION_MIN = 0.99
+CONTINUATION_CORE_V1_PREVIOUS_MOMENTUM_MIN = 0.0
+CONTINUATION_CORE_V1_FLAGGED_POSITION_PCT = 0.025
+CONTINUATION_CORE_V1_BASE_POSITION_PCT = 0.05
+CONTINUATION_CORE_V1_VERSION = "continuation_core_v1"
+
 # Research-only persistent-pump continuation-risk candidate. These thresholds
 # were selected from the 26 Aug 2026 analysis and are frozen prospectively;
 # they MUST NOT affect subscriber strategy eligibility or TP5 execution.
@@ -462,6 +473,18 @@ class VolatilityResearchSummary:
     htf_only_flagged: int
     pcr_only_flagged: int
     neither_flagged: int
+    continuation_core_computable_signals: int
+    continuation_core_missing_signals: int
+    continuation_core_flagged_validation: StrategyValidationSummary
+    continuation_core_unflagged_validation: StrategyValidationSummary
+    continuation_core_portfolio_fixed_comparable: PortfolioReplaySummary
+    continuation_core_portfolio_pcr_comparable: PortfolioReplaySummary
+    continuation_core_portfolio_htf_comparable: PortfolioReplaySummary
+    continuation_core_portfolio_de_risked: PortfolioReplaySummary
+    continuation_core_pcr_both_flagged: int
+    continuation_core_pcr_only_flagged: int
+    continuation_core_only_flagged: int
+    continuation_core_neither_flagged: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -2037,6 +2060,47 @@ def _pcr_plus_htf_position_fractions(rows: list[dict[str, Any]]) -> dict[int, fl
     return result
 
 
+def _continuation_core_v1_state(row: dict[str, Any]) -> bool | None:
+    """Tri-state frozen Continuation Core V1 classifier.
+
+    The rule is deliberately research-only and uses only signal-time fields:
+    run_score >= 5, 4h EMA20 extension >= 3 ATR, and either positive previous
+    1h momentum or top-1% cross-sectional leadership. Missing inputs are not
+    treated as safe/unflagged.
+    """
+    snapshot = json_object(row.get("feature_snapshot"))
+    run_score = _float(row.get("run_score"))
+    ema_distance = _float(snapshot.get("distance_above_ema20_atr_4h"))
+    previous_momentum = _float(snapshot.get("previous_momentum_1h"))
+    cross_section = _float(snapshot.get("cross_section_percentile"))
+    if any(value is None for value in (run_score, ema_distance, previous_momentum, cross_section)):
+        return None
+    return (
+        run_score >= CONTINUATION_CORE_V1_RUN_SCORE_MIN
+        and ema_distance >= CONTINUATION_CORE_V1_EMA_DISTANCE_ATR_MIN
+        and (
+            previous_momentum > CONTINUATION_CORE_V1_PREVIOUS_MOMENTUM_MIN
+            or cross_section >= CONTINUATION_CORE_V1_CROSS_SECTION_MIN
+        )
+    )
+
+
+def _continuation_core_v1_position_fractions(rows: list[dict[str, Any]]) -> dict[int, float]:
+    result: dict[int, float] = {}
+    for row in rows:
+        episode_id = row.get("episode_id")
+        if episode_id is None:
+            continue
+        state = _continuation_core_v1_state(row)
+        if state is None:
+            continue
+        result[int(episode_id)] = (
+            CONTINUATION_CORE_V1_FLAGGED_POSITION_PCT
+            if state else CONTINUATION_CORE_V1_BASE_POSITION_PCT
+        )
+    return result
+
+
 def _build_volatility_research(
     rows: list[dict[str, Any]],
     *,
@@ -2161,6 +2225,70 @@ def _build_volatility_research(
     pcr_only = sum(_htf_v1_state(row) is False and _parabolic_continuation_risk(row) for row in computable_rows)
     neither = len(computable_rows) - htf_pcr_both - htf_only - pcr_only
 
+    continuation_core_computable_ids = {
+        int(row["episode_id"]) for row in rows
+        if row.get("episode_id") is not None and _continuation_core_v1_state(row) is not None
+    }
+    # Use the intersection with HTF-computable rows so Fixed/PCR/HTF/Core are
+    # always compared on one identical cohort.
+    continuation_core_common_ids = htf_computable_ids & continuation_core_computable_ids
+    continuation_core_rows = [
+        row for row in rows
+        if row.get("episode_id") is not None
+        and int(row["episode_id"]) in continuation_core_common_ids
+    ]
+    continuation_core_flagged_rows = [
+        row for row in continuation_core_rows if _continuation_core_v1_state(row) is True
+    ]
+    continuation_core_unflagged_rows = [
+        row for row in continuation_core_rows if _continuation_core_v1_state(row) is False
+    ]
+    continuation_core_fractions = _continuation_core_v1_position_fractions(continuation_core_rows)
+    continuation_core_fixed = _portfolio_replay(
+        rows, strategy="tp5_sl75_challenger", generated_at=generated_at, path_rows=path_rows,
+        cohort="continuation_core_v1_common_cohort",
+        strategy_name_override="tp5_sl75_fixed_5pct_continuation_core_common",
+        max_total_override=6, max_exposure_fraction_override=0.30,
+        eligible_episode_ids=continuation_core_common_ids,
+    )
+    continuation_core_pcr = _portfolio_replay(
+        rows, strategy="tp5_sl75_challenger", generated_at=generated_at, path_rows=path_rows,
+        cohort="continuation_core_v1_common_cohort",
+        strategy_name_override="tp5_sl75_pcr_continuation_core_common",
+        max_total_override=6, position_fraction_by_episode=pcr_fractions,
+        max_exposure_fraction_override=0.30, eligible_episode_ids=continuation_core_common_ids,
+    )
+    continuation_core_htf = _portfolio_replay(
+        rows, strategy="tp5_sl75_challenger", generated_at=generated_at, path_rows=path_rows,
+        cohort="continuation_core_v1_common_cohort",
+        strategy_name_override="tp5_sl75_htf_v1_continuation_core_common",
+        max_total_override=6, position_fraction_by_episode=htf_fractions,
+        max_exposure_fraction_override=0.30, eligible_episode_ids=continuation_core_common_ids,
+    )
+    continuation_core_book = _portfolio_replay(
+        rows, strategy="tp5_sl75_challenger", generated_at=generated_at, path_rows=path_rows,
+        cohort="continuation_core_v1_common_cohort",
+        strategy_name_override="tp5_sl75_continuation_core_v1_2_5pct_else_5pct_6slot_30pct",
+        max_total_override=6, position_fraction_by_episode=continuation_core_fractions,
+        max_exposure_fraction_override=0.30, eligible_episode_ids=continuation_core_common_ids,
+    )
+    continuation_core_pcr_both = sum(
+        _continuation_core_v1_state(row) is True and _parabolic_continuation_risk(row)
+        for row in continuation_core_rows
+    )
+    continuation_core_pcr_only = sum(
+        _continuation_core_v1_state(row) is False and _parabolic_continuation_risk(row)
+        for row in continuation_core_rows
+    )
+    continuation_core_only = sum(
+        _continuation_core_v1_state(row) is True and not _parabolic_continuation_risk(row)
+        for row in continuation_core_rows
+    )
+    continuation_core_neither = (
+        len(continuation_core_rows) - continuation_core_pcr_both
+        - continuation_core_pcr_only - continuation_core_only
+    )
+
     observed_valid = sum(_entry_atr_pct(row) is not None for row in rows)
     return VolatilityResearchSummary(
         freeze_at=freeze_at,
@@ -2210,6 +2338,22 @@ def _build_volatility_research(
         htf_only_flagged=htf_only,
         pcr_only_flagged=pcr_only,
         neither_flagged=neither,
+        continuation_core_computable_signals=len(continuation_core_common_ids),
+        continuation_core_missing_signals=len(rows) - len(continuation_core_common_ids),
+        continuation_core_flagged_validation=_strategy_validation_summary(
+            continuation_core_flagged_rows, strategy="tp5_sl75_challenger", generated_at=generated_at
+        ),
+        continuation_core_unflagged_validation=_strategy_validation_summary(
+            continuation_core_unflagged_rows, strategy="tp5_sl75_challenger", generated_at=generated_at
+        ),
+        continuation_core_portfolio_fixed_comparable=continuation_core_fixed,
+        continuation_core_portfolio_pcr_comparable=continuation_core_pcr,
+        continuation_core_portfolio_htf_comparable=continuation_core_htf,
+        continuation_core_portfolio_de_risked=continuation_core_book,
+        continuation_core_pcr_both_flagged=continuation_core_pcr_both,
+        continuation_core_pcr_only_flagged=continuation_core_pcr_only,
+        continuation_core_only_flagged=continuation_core_only,
+        continuation_core_neither_flagged=continuation_core_neither,
     )
 
 
@@ -3449,10 +3593,21 @@ def research_volatility_csv(report: ResearchAnalyticsReport) -> bytes:
             "htf_computable_signals": v.htf_computable_signals,
             "htf_missing_signals": v.htf_missing_signals,
         })
+    for label, summary in (("flagged", v.continuation_core_flagged_validation), ("unflagged", v.continuation_core_unflagged_validation)):
+        writer.writerow({
+            "row_type": "continuation_core_v1_bucket", "cohort": "all_observed", "bucket": label,
+            "sample": summary.sample, "tp5": summary.target_exits, "sl75": summary.stop_exits,
+            "waiting": summary.waiting, "tp5_rate_to_date_pct": _csv_pct(summary.target_rate_to_date),
+            "avg_marked_return_pct": _csv_pct(summary.avg_marked_return),
+            "max_slots": 6, "max_exposure_pct": _csv_pct(0.30),
+            "htf_computable_signals": v.continuation_core_computable_signals,
+            "htf_missing_signals": v.continuation_core_missing_signals,
+        })
     for cohort, portfolio in (
         ("all_observed", v.portfolio_fixed), ("all_observed", v.portfolio_normalized),
         ("all_observed", v.parabolic_portfolio_de_risked),
         ("all_observed", v.htf_portfolio_de_risked),
+        ("all_observed", v.continuation_core_portfolio_de_risked),
         ("post_freeze", v.prospective_portfolio_fixed), ("post_freeze", v.prospective_portfolio_normalized),
         ("post_freeze", v.prospective_parabolic_portfolio_de_risked),
     ):
@@ -3503,6 +3658,8 @@ def research_signal_dataset_csv(rows: Iterable[dict[str, Any]], *, generated_at:
         "persistent_run_risk_cohort",
         "htf_v1_version", "htf_v1_computable", "htf_v1_flagged",
         "htf_v1_missing_fields", "htf_v1_position_fraction",
+        "continuation_core_v1_version", "continuation_core_v1_computable",
+        "continuation_core_v1_flagged", "continuation_core_v1_position_fraction",
     ]
     strategy_fields: list[str] = []
     for prefix in ("tp5_indefinite", "tp5_sl75", "hold_7d"):
@@ -3566,6 +3723,15 @@ def research_signal_dataset_csv(rows: Iterable[dict[str, Any]], *, generated_at:
         flattened["htf_v1_position_fraction"] = (
             HTF_FLAGGED_POSITION_FRACTION if htf_state is True
             else HTF_BASE_POSITION_FRACTION if htf_state is False
+            else ""
+        )
+        core_state = _continuation_core_v1_state(row)
+        flattened["continuation_core_v1_version"] = CONTINUATION_CORE_V1_VERSION
+        flattened["continuation_core_v1_computable"] = core_state is not None
+        flattened["continuation_core_v1_flagged"] = core_state
+        flattened["continuation_core_v1_position_fraction"] = (
+            CONTINUATION_CORE_V1_FLAGGED_POSITION_PCT if core_state is True
+            else CONTINUATION_CORE_V1_BASE_POSITION_PCT if core_state is False
             else ""
         )
         for strategy, prefix in (

@@ -1,9 +1,17 @@
-# MEXC Exhaustion Scanner + Multi-Slot Futures Trader v1.3.40
+# MEXC Exhaustion Scanner + Multi-Slot Futures Trader v1.3.41
 
 Execution + research release. **TP5_SL75_PCR_V1 is now the default trader strategy**.
 
 
 
+
+## v1.3.41 — Continuation Core V1 research challenger
+
+- Freezes a new **research-only** tail-risk challenger from the 1 Sep 2026 194-signal review: `run_score >= 5`, 4h EMA20 extension `>=3 ATR`, and (`previous_momentum_1h > 0` OR cross-sectional percentile `>=99%`).
+- Flagged signals are replayed at **2.5%** versus **5%** otherwise, with the same TP5 +5%, SL75 -75%, 6-slot / 30% portfolio mechanics.
+- Research Intelligence adds a separate Continuation Core V1 section comparing **Fixed / current PCR / HTF V1 / Continuation Core V1** on one common computable cohort, plus PCR/Core overlap counts.
+- `research-signal-dataset.csv` exports the frozen Core V1 classification and sizing state; `volatility-research.csv` exports the Core V1 portfolio replay.
+- The rule is intentionally **not selectable for live execution yet**. Default/live trader remains `tp5_sl75_pcr_v1`; no existing position is resized or reclassified.
 
 ## v1.3.40 — bounded HTF DB backfill + one-shot recovery command
 

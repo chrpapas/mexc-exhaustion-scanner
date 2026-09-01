@@ -690,6 +690,23 @@ class DiscordNotifier:
             htf_replay_line("PCR + HTF", htf_combined),
         ]
 
+        core_flagged = volatility.continuation_core_flagged_validation
+        core_unflagged = volatility.continuation_core_unflagged_validation
+        core_fixed = volatility.continuation_core_portfolio_fixed_comparable
+        core_pcr = volatility.continuation_core_portfolio_pcr_comparable
+        core_htf = volatility.continuation_core_portfolio_htf_comparable
+        core_book = volatility.continuation_core_portfolio_de_risked
+        continuation_core_lines = [
+            "Frozen Continuation Core V1: run score ≥5 • ≥3 ATR above 4h EMA20 • (previous 1h momentum >0 OR top 1% cross-section).",
+            "**Frozen 1 Sep 2026 after the 194-signal tail review. Research-only: no live strategy switch is added in this build. Replay uses one common computable cohort.**",
+            f"Computable **{volatility.continuation_core_computable_signals}** • missing **{volatility.continuation_core_missing_signals}** | flagged **{core_flagged.sample}**: TP5 **{core_flagged.target_exits}** • SL75 **{core_flagged.stop_exits}** • open **{core_flagged.waiting}** | unflagged **{core_unflagged.sample}**: SL75 **{core_unflagged.stop_exits}**.",
+            f"PCR/Core overlap: both **{volatility.continuation_core_pcr_both_flagged}** • Core-only **{volatility.continuation_core_only_flagged}** • PCR-only **{volatility.continuation_core_pcr_only_flagged}** • neither **{volatility.continuation_core_neither_flagged}**.",
+            htf_replay_line("Fixed 5%", core_fixed),
+            htf_replay_line("Current PCR", core_pcr),
+            htf_replay_line("HTF V1", core_htf),
+            htf_replay_line("Continuation Core V1", core_book),
+        ]
+
         intelligence = {
             "title": "🧠 Exhaustion Scanner • Research Intelligence",
             "description": (
@@ -745,6 +762,11 @@ class DiscordNotifier:
                 {
                     "name": "8 • HTF V1 de-risk • retrospective evidence",
                     "value": "\n".join(htf_lines),
+                    "inline": False,
+                },
+                {
+                    "name": "9 • Continuation Core V1 • retrospective evidence",
+                    "value": "\n".join(continuation_core_lines),
                     "inline": False,
                 },
             ],
