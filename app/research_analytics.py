@@ -535,6 +535,10 @@ class VolatilityResearchSummary:
     daily_confirmed_core_portfolio_pcr: PortfolioReplaySummary
     daily_confirmed_core_portfolio_core: PortfolioReplaySummary
     daily_confirmed_core_portfolio_de_risked: PortfolioReplaySummary
+    hold_7d_daily_core_portfolio_fixed: PortfolioReplaySummary
+    hold_7d_daily_core_portfolio_core: PortfolioReplaySummary
+    hold_7d_daily_core_portfolio_de_risked: PortfolioReplaySummary
+    hold_7d_daily_core_portfolio_skip_flagged: PortfolioReplaySummary
     prospective_daily_confirmed_core_computable_signals: int
     prospective_daily_confirmed_core_missing_signals: int
     prospective_daily_confirmed_core_flagged_validation: StrategyValidationSummary
@@ -2522,6 +2526,42 @@ def _build_volatility_research(
         max_exposure_fraction_override=0.30, eligible_episode_ids=daily_confirmed_ids,
     )
 
+    # Research-only 7D-cutoff replay on the exact same Daily-Confirmed Core
+    # computable cohort.  This tests whether the frozen continuation-risk layer
+    # improves the pure 168h hold strategy without changing its exit policy.
+    daily_confirmed_unflagged_ids = {
+        int(row["episode_id"]) for row in daily_confirmed_unflagged_rows
+        if row.get("episode_id") is not None
+    }
+    hold_7d_daily_fixed = _portfolio_replay(
+        rows, strategy="hold_7d", generated_at=generated_at, path_rows=path_rows,
+        cohort="hold_7d_daily_confirmed_core_v1_common_cohort",
+        strategy_name_override="hold_7d_fixed_5pct_daily_confirmed_core_common",
+        max_total_override=6, max_exposure_fraction_override=0.30,
+        eligible_episode_ids=daily_confirmed_ids,
+    )
+    hold_7d_daily_core = _portfolio_replay(
+        rows, strategy="hold_7d", generated_at=generated_at, path_rows=path_rows,
+        cohort="hold_7d_daily_confirmed_core_v1_common_cohort",
+        strategy_name_override="hold_7d_core_v1_2_5pct_else_5pct",
+        max_total_override=6, position_fraction_by_episode=daily_confirmed_core_fractions,
+        max_exposure_fraction_override=0.30, eligible_episode_ids=daily_confirmed_ids,
+    )
+    hold_7d_daily_de_risked = _portfolio_replay(
+        rows, strategy="hold_7d", generated_at=generated_at, path_rows=path_rows,
+        cohort="hold_7d_daily_confirmed_core_v1_common_cohort",
+        strategy_name_override="hold_7d_daily_confirmed_core_v1_2_5pct_else_5pct",
+        max_total_override=6, position_fraction_by_episode=daily_confirmed_fractions,
+        max_exposure_fraction_override=0.30, eligible_episode_ids=daily_confirmed_ids,
+    )
+    hold_7d_daily_skip = _portfolio_replay(
+        rows, strategy="hold_7d", generated_at=generated_at, path_rows=path_rows,
+        cohort="hold_7d_daily_confirmed_core_v1_skip_flagged",
+        strategy_name_override="hold_7d_skip_daily_confirmed_core_v1_flagged",
+        max_total_override=6, max_exposure_fraction_override=0.30,
+        eligible_episode_ids=daily_confirmed_unflagged_ids,
+    )
+
     prospective_daily_source_rows = [
         row for row in rows
         if row.get("confirmed_at") is not None and row["confirmed_at"] > DAILY_CONFIRMED_CORE_V1_FREEZE_AT
@@ -2677,6 +2717,10 @@ def _build_volatility_research(
         daily_confirmed_core_portfolio_pcr=daily_confirmed_pcr,
         daily_confirmed_core_portfolio_core=daily_confirmed_core,
         daily_confirmed_core_portfolio_de_risked=daily_confirmed_book,
+        hold_7d_daily_core_portfolio_fixed=hold_7d_daily_fixed,
+        hold_7d_daily_core_portfolio_core=hold_7d_daily_core,
+        hold_7d_daily_core_portfolio_de_risked=hold_7d_daily_de_risked,
+        hold_7d_daily_core_portfolio_skip_flagged=hold_7d_daily_skip,
         prospective_daily_confirmed_core_computable_signals=len(prospective_daily_ids),
         prospective_daily_confirmed_core_missing_signals=len(prospective_daily_source_rows) - len(prospective_daily_ids),
         prospective_daily_confirmed_core_flagged_validation=_strategy_validation_summary(
@@ -3982,6 +4026,10 @@ def research_volatility_csv(report: ResearchAnalyticsReport) -> bytes:
         ("daily_confirmed_common", v.daily_confirmed_core_portfolio_pcr),
         ("daily_confirmed_common", v.daily_confirmed_core_portfolio_core),
         ("daily_confirmed_common", v.daily_confirmed_core_portfolio_de_risked),
+        ("hold_7d_daily_confirmed_common", v.hold_7d_daily_core_portfolio_fixed),
+        ("hold_7d_daily_confirmed_common", v.hold_7d_daily_core_portfolio_core),
+        ("hold_7d_daily_confirmed_common", v.hold_7d_daily_core_portfolio_de_risked),
+        ("hold_7d_daily_confirmed_skip", v.hold_7d_daily_core_portfolio_skip_flagged),
         ("post_freeze", v.prospective_portfolio_fixed), ("post_freeze", v.prospective_portfolio_normalized),
         ("post_freeze", v.prospective_parabolic_portfolio_de_risked),
         ("true_forward", v.prospective_continuation_core_portfolio_fixed),

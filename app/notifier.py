@@ -805,6 +805,49 @@ class DiscordNotifier:
             htf_replay_line("Core V1", volatility.daily_confirmed_core_portfolio_core),
             htf_replay_line("Daily-Confirmed Core V1", daily_confirmed),
         ]
+        hold7d_daily_fixed = volatility.hold_7d_daily_core_portfolio_fixed
+        hold7d_daily_core = volatility.hold_7d_daily_core_portfolio_core
+        hold7d_daily_derisk = volatility.hold_7d_daily_core_portfolio_de_risked
+        hold7d_daily_skip = volatility.hold_7d_daily_core_portfolio_skip_flagged
+
+        def hold7d_line(label: str, portfolio) -> str:
+            dd = (
+                f"-{self._percent(portfolio.max_mtm_drawdown)}"
+                if portfolio.max_mtm_drawdown is not None else "n/a"
+            )
+            return (
+                f"**{label}:** MTM **{self._signed_percent(portfolio.marked_return)}** • "
+                f"DD **{dd}** • R/DD **{self._number(portfolio.return_over_max_drawdown)}** • "
+                f"entered **{portfolio.entered}/{portfolio.eligible_signals}**"
+            )
+
+        hold7d_daily_lines = [
+            "Same exact 168h exit policy as C 7D hold: no TP and no SL. Only the entry sizing/admission treatment changes.",
+            f"Common daily-computable cohort **{volatility.daily_confirmed_core_computable_signals}** • Daily-Confirmed Core flagged **{daily_confirmed_flagged.sample}**.",
+            hold7d_line("7D fixed 5%", hold7d_daily_fixed),
+            hold7d_line("7D + Core V1 sizing", hold7d_daily_core),
+            hold7d_line("7D + Daily-Confirmed Core sizing", hold7d_daily_derisk),
+            hold7d_line("7D + skip Daily-Confirmed Core", hold7d_daily_skip),
+        ]
+        hold7d_daily_embed = {
+            "title": "🗓️ 7D Hold • Daily-Confirmed Core Replay",
+            "description": (
+                "Research-only replay of the pure 7-day cutoff with the frozen 4h+1D continuation-risk layer. "
+                "Live PCR execution is unchanged."
+            ),
+            "color": 0xE67E22,
+            "fields": [
+                {
+                    "name": "7D cutoff × continuation-risk treatment",
+                    "value": "\n".join(hold7d_daily_lines),
+                    "inline": False,
+                },
+            ],
+            "footer": {
+                "text": "Sizing overlay = flagged 2.5%, otherwise 5%. Skip variant excludes flagged entries entirely. All use 6 slots / 30% max exposure."
+            },
+        }
+
         prospective_daily_flagged = volatility.prospective_daily_confirmed_core_flagged_validation
         prospective_daily_lines = [
             f"Frozen **{volatility.daily_confirmed_core_freeze_at.astimezone(tz).strftime('%d %b %Y • %H:%M %Z')}**. Only later confirmed signals count.",
@@ -950,7 +993,7 @@ class DiscordNotifier:
         }
 
         try:
-            for embed in (intelligence, daily_regime_embed, prospective):
+            for embed in (intelligence, daily_regime_embed, hold7d_daily_embed, prospective):
                 self._validate_discord_embed(embed)
 
             payload = {
@@ -1000,6 +1043,16 @@ class DiscordNotifier:
                 json={
                     "username": "Exhaustion Scanner • Research",
                     "embeds": [daily_regime_embed],
+                    "allowed_mentions": {"parse": []},
+                },
+            )
+            response.raise_for_status()
+
+            response = await self._client.post(
+                self._performance_webhook_url,
+                json={
+                    "username": "Exhaustion Scanner • Research",
+                    "embeds": [hold7d_daily_embed],
                     "allowed_mentions": {"parse": []},
                 },
             )

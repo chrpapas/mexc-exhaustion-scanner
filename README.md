@@ -1,10 +1,18 @@
-# MEXC Exhaustion Scanner + Multi-Slot Futures Trader v1.3.44
+# MEXC Exhaustion Scanner + Multi-Slot Futures Trader v1.3.45
 
 Execution + research release. **TP5_SL75_PCR_V1 is now the default trader strategy**.
 
 
 
 
+
+## v1.3.45 — 7D cutoff × Daily-Confirmed Core replay
+
+- Adds a research-only replay of the **pure 168h / 7-day hold** on the same Daily-Confirmed Core computable cohort. The 7D exit policy remains unchanged: no TP and no SL.
+- Compares four chronological 6-slot / 30% books: **7D fixed 5%**, **7D + Core V1 sizing**, **7D + Daily-Confirmed Core sizing**, and **7D + skip Daily-Confirmed Core**.
+- The sizing overlays use the already-frozen rules only: flagged positions are 2.5%, otherwise 5%. The skip variant excludes Daily-Confirmed Core flagged entries entirely. No threshold is retuned.
+- Adds a separate **7D Hold • Daily-Confirmed Core Replay** Discord research card and exports the four portfolio rows to `volatility-research.csv`.
+- Research-only: live/default execution remains `tp5_sl75_pcr_v1`; no existing position is resized and no DB migration/backfill is required when daily features are already populated.
 
 ## v1.3.44 — Daily-Confirmed Core V1 replay + true-forward monitor
 

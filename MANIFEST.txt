@@ -1,5 +1,6 @@
 .gitignore
 .python-version
+MANIFEST.txt
 README.md
 README_v0.8.8.md
 TRADER-DEPLOY.md
@@ -69,6 +70,7 @@ tests/test_continuation_core_v141.py
 tests/test_daily_confirmed_core_v144.py
 tests/test_daily_regime_v143.py
 tests/test_db_research_aggregation_v1329.py
+tests/test_hold7d_daily_core_v145.py
 tests/test_htf_backfill_v1340.py
 tests/test_htf_regime_v138.py
 tests/test_indicators.py
