@@ -667,12 +667,27 @@ class DiscordNotifier:
 
         htf_flagged = volatility.htf_flagged_validation
         htf_unflagged = volatility.htf_unflagged_validation
+        htf_fixed = volatility.htf_portfolio_fixed_comparable
+        htf_pcr = volatility.htf_portfolio_pcr_comparable
         htf_book = volatility.htf_portfolio_de_risked
+        htf_combined = volatility.htf_portfolio_pcr_plus_htf
+
+        def htf_replay_line(label: str, book) -> str:
+            dd = f"-{self._percent(book.max_mtm_drawdown)}" if book.max_mtm_drawdown is not None else "n/a"
+            return (
+                f"**{label}:** MTM **{self._signed_percent(book.marked_return)}** • DD **{dd}** • "
+                f"R/DD **{self._number(book.return_over_max_drawdown)}** • entered **{book.entered}/{book.eligible_signals}**"
+            )
+
         htf_lines = [
             "Frozen HTF V1: 24h ≥30% • top 2% cross-section • ≥3 ATR above 4h EMA20 • previous 1h momentum >0.",
-            "**HTF V1 frozen 1 Sep 2026; the current historical replay is retrospective. Missing required inputs are excluded, not treated as unflagged.**",
+            "**HTF V1 frozen 1 Sep 2026; replay uses one identical HTF-computable cohort for every competitor. Missing inputs are excluded from all four books, never treated as unflagged.**",
             f"Computable **{volatility.htf_computable_signals}** • missing **{volatility.htf_missing_signals}** | flagged **{htf_flagged.sample}**: TP5 **{htf_flagged.target_exits}** • SL75 **{htf_flagged.stop_exits}** • open **{htf_flagged.waiting}** | unflagged **{htf_unflagged.sample}**: SL75 **{htf_unflagged.stop_exits}**.",
-            f"HTF de-risk 2.5% flagged / 5% otherwise, same 6 slots / 30% cap: MTM **{self._signed_percent(htf_book.marked_return)}** • DD **-{self._percent(htf_book.max_mtm_drawdown)}** • R/DD **{self._number(htf_book.return_over_max_drawdown)}** vs fixed 5% MTM **{self._signed_percent(fixed_vol.marked_return)}**.",
+            f"PCR/HTF overlap: both **{volatility.htf_pcr_both_flagged}** • HTF-only **{volatility.htf_only_flagged}** • PCR-only **{volatility.pcr_only_flagged}** • neither **{volatility.neither_flagged}**.",
+            htf_replay_line("Fixed 5%", htf_fixed),
+            htf_replay_line("Current PCR", htf_pcr),
+            htf_replay_line("HTF V1", htf_book),
+            htf_replay_line("PCR + HTF", htf_combined),
         ]
 
         intelligence = {

@@ -454,7 +454,14 @@ class VolatilityResearchSummary:
     htf_missing_signals: int
     htf_flagged_validation: StrategyValidationSummary
     htf_unflagged_validation: StrategyValidationSummary
+    htf_portfolio_fixed_comparable: PortfolioReplaySummary
+    htf_portfolio_pcr_comparable: PortfolioReplaySummary
     htf_portfolio_de_risked: PortfolioReplaySummary
+    htf_portfolio_pcr_plus_htf: PortfolioReplaySummary
+    htf_pcr_both_flagged: int
+    htf_only_flagged: int
+    pcr_only_flagged: int
+    neither_flagged: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -2014,6 +2021,22 @@ def _htf_v1_position_fractions(rows: list[dict[str, Any]]) -> dict[int, float]:
     return result
 
 
+def _pcr_plus_htf_position_fractions(rows: list[dict[str, Any]]) -> dict[int, float]:
+    result: dict[int, float] = {}
+    for row in rows:
+        episode_id = row.get("episode_id")
+        if episode_id is None:
+            continue
+        htf_state = _htf_v1_state(row)
+        if htf_state is None:
+            continue
+        flagged = htf_state or _parabolic_continuation_risk(row)
+        result[int(episode_id)] = (
+            HTF_FLAGGED_POSITION_FRACTION if flagged else HTF_BASE_POSITION_FRACTION
+        )
+    return result
+
+
 def _build_volatility_research(
     rows: list[dict[str, Any]],
     *,
@@ -2100,15 +2123,43 @@ def _build_volatility_research(
         if row.get("episode_id") is not None and _htf_v1_state(row) is not None
     }
     htf_fractions = _htf_v1_position_fractions(rows)
+    pcr_fractions = _parabolic_position_fractions(rows)
+    pcr_plus_htf_fractions = _pcr_plus_htf_position_fractions(rows)
+    htf_fixed_comparable = _portfolio_replay(
+        rows, strategy="tp5_sl75_challenger", generated_at=generated_at, path_rows=path_rows,
+        cohort="htf_v1_computable_common_cohort",
+        strategy_name_override="tp5_sl75_fixed_5pct_htf_computable",
+        max_total_override=6, max_exposure_fraction_override=0.30,
+        eligible_episode_ids=htf_computable_ids,
+    )
+    htf_pcr_comparable = _portfolio_replay(
+        rows, strategy="tp5_sl75_challenger", generated_at=generated_at, path_rows=path_rows,
+        cohort="htf_v1_computable_common_cohort",
+        strategy_name_override="tp5_sl75_pcr_2_5pct_else_5pct_htf_computable",
+        max_total_override=6, position_fraction_by_episode=pcr_fractions,
+        max_exposure_fraction_override=0.30, eligible_episode_ids=htf_computable_ids,
+    )
     htf_de_risked = _portfolio_replay(
         rows, strategy="tp5_sl75_challenger", generated_at=generated_at, path_rows=path_rows,
-        cohort="htf_v1_all_observed",
+        cohort="htf_v1_computable_common_cohort",
         strategy_name_override="tp5_sl75_htf_v1_2_5pct_else_5pct_6slot_30pct",
         max_total_override=6,
         position_fraction_by_episode=htf_fractions,
         max_exposure_fraction_override=0.30,
         eligible_episode_ids=htf_computable_ids,
     )
+    htf_pcr_plus_htf = _portfolio_replay(
+        rows, strategy="tp5_sl75_challenger", generated_at=generated_at, path_rows=path_rows,
+        cohort="htf_v1_computable_common_cohort",
+        strategy_name_override="tp5_sl75_pcr_plus_htf_2_5pct_if_either_flagged",
+        max_total_override=6, position_fraction_by_episode=pcr_plus_htf_fractions,
+        max_exposure_fraction_override=0.30, eligible_episode_ids=htf_computable_ids,
+    )
+    computable_rows = [row for row in rows if row.get("episode_id") is not None and int(row["episode_id"]) in htf_computable_ids]
+    htf_pcr_both = sum(_htf_v1_state(row) is True and _parabolic_continuation_risk(row) for row in computable_rows)
+    htf_only = sum(_htf_v1_state(row) is True and not _parabolic_continuation_risk(row) for row in computable_rows)
+    pcr_only = sum(_htf_v1_state(row) is False and _parabolic_continuation_risk(row) for row in computable_rows)
+    neither = len(computable_rows) - htf_pcr_both - htf_only - pcr_only
 
     observed_valid = sum(_entry_atr_pct(row) is not None for row in rows)
     return VolatilityResearchSummary(
@@ -2151,7 +2202,14 @@ def _build_volatility_research(
         htf_unflagged_validation=_strategy_validation_summary(
             htf_unflagged_rows, strategy="tp5_sl75_challenger", generated_at=generated_at
         ),
+        htf_portfolio_fixed_comparable=htf_fixed_comparable,
+        htf_portfolio_pcr_comparable=htf_pcr_comparable,
         htf_portfolio_de_risked=htf_de_risked,
+        htf_portfolio_pcr_plus_htf=htf_pcr_plus_htf,
+        htf_pcr_both_flagged=htf_pcr_both,
+        htf_only_flagged=htf_only,
+        pcr_only_flagged=pcr_only,
+        neither_flagged=neither,
     )
 
 

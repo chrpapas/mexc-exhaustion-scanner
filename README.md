@@ -1,8 +1,19 @@
-# MEXC Exhaustion Scanner + Multi-Slot Futures Trader v1.3.38
+# MEXC Exhaustion Scanner + Multi-Slot Futures Trader v1.3.39
 
 Execution + research release. **TP5_SL75_PCR_V1 is now the default trader strategy**.
 
 
+
+
+## v1.3.39 — true HTF feature reconstruction + common-cohort replay
+
+- Adds an automatic **historical HTF feature reconstruction pass** before HTF classification. Missing fields are recovered only from information available at or before each original signal timestamp.
+- Recovery order is auditable and persisted per feature: frozen prior `run_signals` snapshot → recent stored MEXC ticker snapshot for exact 24h return → pre-signal 15m/4h candle reconstruction. A candle-derived 24h return is explicitly tagged `min15_24h_proxy`.
+- **Historical `cross_section_percentile` is never fabricated.** It is recovered only from a frozen prior signal snapshot; if unavailable, HTF V1 remains non-computable for that signal.
+- Backfill metadata now records feature provenance, backfill timestamp, approximation fields, tri-state computability, flag, missing fields and the resulting HTF position fraction. After deeper history is fetched, non-computable rows are retried automatically.
+- Research Intelligence now replays **Fixed 5% / current PCR / HTF V1 / PCR+HTF** on the exact same HTF-computable signal cohort, so missing legacy rows cannot bias the challenger comparison.
+- The report also shows PCR/HTF overlap. Under the frozen V1 rules, HTF is a strict subset of PCR (same 24h + 4h core thresholds plus two extra requirements), so `PCR + HTF` is intentionally expected to equal PCR; the useful question is whether the narrower HTF sizing rule preserves more winning exposure while retaining tail protection.
+- Default/live execution remains **`tp5_sl75_pcr_v1`**. No existing position is resized and no strategy switch occurs on deploy.
 
 ## v1.3.38 — HTF unresolved-bull-regime de-risk challenger
 

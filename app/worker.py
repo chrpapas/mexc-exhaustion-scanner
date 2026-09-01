@@ -565,9 +565,11 @@ class ScannerWorker:
         for result in results:
             if isinstance(result, Exception):
                 LOGGER.warning("Research HTF-history sync failed: %s", result)
+        retry_backfill = getattr(self.db, "backfill_research_htf_features", None)
+        recovered = await retry_backfill(retry_missing=True) if retry_backfill is not None else 0
         LOGGER.info(
-            "Research HTF-history sync complete: 4h_symbols=%d 15m_symbols=%d failures=%d",
-            len(requirements_4h), len(requirements_15m), failures,
+            "Research HTF-history sync complete: 4h_symbols=%d 15m_symbols=%d failures=%d htf_backfilled=%d",
+            len(requirements_4h), len(requirements_15m), failures, recovered,
         )
 
     async def collect_funding(self) -> None:
@@ -1193,6 +1195,8 @@ class ScannerWorker:
         loop = asyncio.get_running_loop()
         started = loop.time()
         snapshots = await self.db.sync_research_signal_snapshots()
+        htf_backfill = getattr(self.db, "backfill_research_htf_features", None)
+        htf_recovered = await htf_backfill() if htf_backfill is not None else 0
         htf_sync = getattr(self.db, "sync_research_htf_metadata", None)
         htf_metadata = await htf_sync() if htf_sync is not None else 0
         path_rows = await self.db.sync_research_signal_paths(
@@ -1201,11 +1205,12 @@ class ScannerWorker:
             statement_timeout_seconds=self.settings.research_db_timeout_seconds,
         )
         LOGGER.info(
-            "Research sync: snapshots=%d path_rows=%d batch_cap=%d horizon=%dh htf_metadata=%d duration=%.2fs",
+            "Research sync: snapshots=%d path_rows=%d batch_cap=%d horizon=%dh htf_backfilled=%d htf_metadata=%d duration=%.2fs",
             snapshots,
             path_rows,
             self.settings.research_path_batch_rows,
             self.settings.research_path_horizon_hours,
+            htf_recovered,
             htf_metadata,
             loop.time() - started,
         )
