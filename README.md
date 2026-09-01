@@ -1,10 +1,20 @@
-# MEXC Exhaustion Scanner + Multi-Slot Futures Trader v1.3.43
+# MEXC Exhaustion Scanner + Multi-Slot Futures Trader v1.3.44
 
 Execution + research release. **TP5_SL75_PCR_V1 is now the default trader strategy**.
 
 
 
 
+
+## v1.3.44 — Daily-Confirmed Core V1 replay + true-forward monitor
+
+- Freezes **Daily-Confirmed Core V1** at **01 Sep 2026 23:25 CEST**, immediately after the first 190-computable Core×1D matrix review.
+- The rule is the exact intersection of already-frozen rules: `Continuation Core V1 == true AND Daily Bull V1 == true`. No new threshold is fitted.
+- Research sizing is **2.5%** only for that intersection and **5%** for all other computable signals, with TP5 + SL75, 6 slots and 30% aggregate exposure unchanged.
+- The 1D Regime card now replays **Fixed 5% vs current PCR vs Core V1 vs Daily-Confirmed Core V1** on one identical daily-computable cohort.
+- Adds a clean Daily-Confirmed Core true-forward cohort beginning strictly after the 23:25 CEST freeze.
+- `research-signal-dataset.csv` and `volatility-research.csv` export the new state, sizing, buckets and portfolio replays.
+- Research-only: no live strategy option is added and the default trader stays `tp5_sl75_pcr_v1`. If v1.3.43 daily backfill already completed, no backfill rerun is required.
 
 ## v1.3.43 — completed-1D regime backfill + Core×daily matrix
 

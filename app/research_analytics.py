@@ -91,6 +91,14 @@ CONTINUATION_CORE_V1_VERSION = "continuation_core_v1"
 # generated after Core V1 was frozen/replayed on the 194-signal discovery set.
 CONTINUATION_CORE_V1_FREEZE_AT = datetime(2026, 9, 1, 19, 57, tzinfo=UTC)
 
+# Research-only Daily-Confirmed Core V1. Frozen immediately after the first
+# completed-1D Core×regime matrix was reviewed at 01 Sep 2026 23:25 CEST.
+# The rule is the exact intersection of frozen Core V1 and frozen Daily Bull V1.
+DAILY_CONFIRMED_CORE_V1_VERSION = "daily_confirmed_core_v1"
+DAILY_CONFIRMED_CORE_V1_FREEZE_AT = datetime(2026, 9, 1, 21, 25, tzinfo=UTC)
+DAILY_CONFIRMED_CORE_V1_FLAGGED_POSITION_PCT = 0.025
+DAILY_CONFIRMED_CORE_V1_BASE_POSITION_PCT = 0.05
+
 # Research-only persistent-pump continuation-risk candidate. These thresholds
 # were selected from the 26 Aug 2026 analysis and are frozen prospectively;
 # they MUST NOT affect subscriber strategy eligibility or TP5 execution.
@@ -517,6 +525,24 @@ class VolatilityResearchSummary:
     daily_regime_bullish_signals: int
     daily_regime_nonbullish_signals: int
     daily_core_matrix: tuple[DailyRegimeMatrixCellSummary, ...]
+    daily_confirmed_core_version: str
+    daily_confirmed_core_freeze_at: datetime
+    daily_confirmed_core_computable_signals: int
+    daily_confirmed_core_missing_signals: int
+    daily_confirmed_core_flagged_validation: StrategyValidationSummary
+    daily_confirmed_core_unflagged_validation: StrategyValidationSummary
+    daily_confirmed_core_portfolio_fixed: PortfolioReplaySummary
+    daily_confirmed_core_portfolio_pcr: PortfolioReplaySummary
+    daily_confirmed_core_portfolio_core: PortfolioReplaySummary
+    daily_confirmed_core_portfolio_de_risked: PortfolioReplaySummary
+    prospective_daily_confirmed_core_computable_signals: int
+    prospective_daily_confirmed_core_missing_signals: int
+    prospective_daily_confirmed_core_flagged_validation: StrategyValidationSummary
+    prospective_daily_confirmed_core_unflagged_validation: StrategyValidationSummary
+    prospective_daily_confirmed_core_portfolio_fixed: PortfolioReplaySummary
+    prospective_daily_confirmed_core_portfolio_pcr: PortfolioReplaySummary
+    prospective_daily_confirmed_core_portfolio_core: PortfolioReplaySummary
+    prospective_daily_confirmed_core_portfolio_de_risked: PortfolioReplaySummary
 
 
 @dataclass(frozen=True, slots=True)
@@ -2137,6 +2163,30 @@ def _daily_regime_v1_state(row: dict[str, Any]) -> bool | None:
     return daily_regime_state(json_object(row.get("feature_snapshot")))
 
 
+def _daily_confirmed_core_v1_state(row: dict[str, Any]) -> bool | None:
+    core_state = _continuation_core_v1_state(row)
+    daily_state = _daily_regime_v1_state(row)
+    if core_state is None or daily_state is None:
+        return None
+    return core_state and daily_state
+
+
+def _daily_confirmed_core_v1_position_fractions(rows: list[dict[str, Any]]) -> dict[int, float]:
+    result: dict[int, float] = {}
+    for row in rows:
+        episode_id = row.get("episode_id")
+        if episode_id is None:
+            continue
+        state = _daily_confirmed_core_v1_state(row)
+        if state is None:
+            continue
+        result[int(episode_id)] = (
+            DAILY_CONFIRMED_CORE_V1_FLAGGED_POSITION_PCT
+            if state else DAILY_CONFIRMED_CORE_V1_BASE_POSITION_PCT
+        )
+    return result
+
+
 def _build_volatility_research(
     rows: list[dict[str, Any]],
     *,
@@ -2425,6 +2475,102 @@ def _build_volatility_research(
         for key, label, core_flagged, daily_bullish in daily_matrix_specs
     )
 
+    daily_confirmed_ids = {
+        int(row["episode_id"]) for row in continuation_core_all_rows
+        if row.get("episode_id") is not None
+        and _daily_confirmed_core_v1_state(row) is not None
+    }
+    daily_confirmed_rows = [
+        row for row in rows
+        if row.get("episode_id") is not None and int(row["episode_id"]) in daily_confirmed_ids
+    ]
+    daily_confirmed_flagged_rows = [
+        row for row in daily_confirmed_rows if _daily_confirmed_core_v1_state(row) is True
+    ]
+    daily_confirmed_unflagged_rows = [
+        row for row in daily_confirmed_rows if _daily_confirmed_core_v1_state(row) is False
+    ]
+    daily_confirmed_fractions = _daily_confirmed_core_v1_position_fractions(daily_confirmed_rows)
+    daily_confirmed_core_fractions = _continuation_core_v1_position_fractions(daily_confirmed_rows)
+    daily_confirmed_pcr_fractions = _parabolic_position_fractions(daily_confirmed_rows)
+    daily_confirmed_fixed = _portfolio_replay(
+        rows, strategy="tp5_sl75_challenger", generated_at=generated_at, path_rows=path_rows,
+        cohort="daily_confirmed_core_v1_common_cohort",
+        strategy_name_override="tp5_sl75_fixed_5pct_daily_confirmed_core_common",
+        max_total_override=6, max_exposure_fraction_override=0.30,
+        eligible_episode_ids=daily_confirmed_ids,
+    )
+    daily_confirmed_pcr = _portfolio_replay(
+        rows, strategy="tp5_sl75_challenger", generated_at=generated_at, path_rows=path_rows,
+        cohort="daily_confirmed_core_v1_common_cohort",
+        strategy_name_override="tp5_sl75_pcr_daily_confirmed_core_common",
+        max_total_override=6, position_fraction_by_episode=daily_confirmed_pcr_fractions,
+        max_exposure_fraction_override=0.30, eligible_episode_ids=daily_confirmed_ids,
+    )
+    daily_confirmed_core = _portfolio_replay(
+        rows, strategy="tp5_sl75_challenger", generated_at=generated_at, path_rows=path_rows,
+        cohort="daily_confirmed_core_v1_common_cohort",
+        strategy_name_override="tp5_sl75_core_v1_daily_confirmed_common",
+        max_total_override=6, position_fraction_by_episode=daily_confirmed_core_fractions,
+        max_exposure_fraction_override=0.30, eligible_episode_ids=daily_confirmed_ids,
+    )
+    daily_confirmed_book = _portfolio_replay(
+        rows, strategy="tp5_sl75_challenger", generated_at=generated_at, path_rows=path_rows,
+        cohort="daily_confirmed_core_v1_common_cohort",
+        strategy_name_override="tp5_sl75_daily_confirmed_core_v1_2_5pct_else_5pct",
+        max_total_override=6, position_fraction_by_episode=daily_confirmed_fractions,
+        max_exposure_fraction_override=0.30, eligible_episode_ids=daily_confirmed_ids,
+    )
+
+    prospective_daily_source_rows = [
+        row for row in rows
+        if row.get("confirmed_at") is not None and row["confirmed_at"] > DAILY_CONFIRMED_CORE_V1_FREEZE_AT
+    ]
+    prospective_daily_ids = {
+        int(row["episode_id"]) for row in prospective_daily_source_rows
+        if row.get("episode_id") is not None and _daily_confirmed_core_v1_state(row) is not None
+    }
+    prospective_daily_rows = [
+        row for row in prospective_daily_source_rows
+        if row.get("episode_id") is not None and int(row["episode_id"]) in prospective_daily_ids
+    ]
+    prospective_daily_flagged_rows = [
+        row for row in prospective_daily_rows if _daily_confirmed_core_v1_state(row) is True
+    ]
+    prospective_daily_unflagged_rows = [
+        row for row in prospective_daily_rows if _daily_confirmed_core_v1_state(row) is False
+    ]
+    prospective_daily_fractions = _daily_confirmed_core_v1_position_fractions(prospective_daily_rows)
+    prospective_daily_core_fractions = _continuation_core_v1_position_fractions(prospective_daily_rows)
+    prospective_daily_pcr_fractions = _parabolic_position_fractions(prospective_daily_rows)
+    prospective_daily_fixed = _portfolio_replay(
+        prospective_daily_rows, strategy="tp5_sl75_challenger", generated_at=generated_at, path_rows=path_rows,
+        cohort="daily_confirmed_core_v1_true_forward",
+        strategy_name_override="true_forward_tp5_sl75_fixed_daily_confirmed_core_v1",
+        max_total_override=6, max_exposure_fraction_override=0.30, eligible_episode_ids=prospective_daily_ids,
+    )
+    prospective_daily_pcr = _portfolio_replay(
+        prospective_daily_rows, strategy="tp5_sl75_challenger", generated_at=generated_at, path_rows=path_rows,
+        cohort="daily_confirmed_core_v1_true_forward",
+        strategy_name_override="true_forward_tp5_sl75_pcr_daily_confirmed_core_v1",
+        max_total_override=6, position_fraction_by_episode=prospective_daily_pcr_fractions,
+        max_exposure_fraction_override=0.30, eligible_episode_ids=prospective_daily_ids,
+    )
+    prospective_daily_core = _portfolio_replay(
+        prospective_daily_rows, strategy="tp5_sl75_challenger", generated_at=generated_at, path_rows=path_rows,
+        cohort="daily_confirmed_core_v1_true_forward",
+        strategy_name_override="true_forward_tp5_sl75_core_v1_daily_confirmed_common",
+        max_total_override=6, position_fraction_by_episode=prospective_daily_core_fractions,
+        max_exposure_fraction_override=0.30, eligible_episode_ids=prospective_daily_ids,
+    )
+    prospective_daily_book = _portfolio_replay(
+        prospective_daily_rows, strategy="tp5_sl75_challenger", generated_at=generated_at, path_rows=path_rows,
+        cohort="daily_confirmed_core_v1_true_forward",
+        strategy_name_override="true_forward_tp5_sl75_daily_confirmed_core_v1",
+        max_total_override=6, position_fraction_by_episode=prospective_daily_fractions,
+        max_exposure_fraction_override=0.30, eligible_episode_ids=prospective_daily_ids,
+    )
+
     observed_valid = sum(_entry_atr_pct(row) is not None for row in rows)
     return VolatilityResearchSummary(
         freeze_at=freeze_at,
@@ -2517,6 +2663,32 @@ def _build_volatility_research(
         daily_regime_bullish_signals=len(daily_bullish_rows),
         daily_regime_nonbullish_signals=len(daily_nonbullish_rows),
         daily_core_matrix=daily_core_matrix,
+        daily_confirmed_core_version=DAILY_CONFIRMED_CORE_V1_VERSION,
+        daily_confirmed_core_freeze_at=DAILY_CONFIRMED_CORE_V1_FREEZE_AT,
+        daily_confirmed_core_computable_signals=len(daily_confirmed_ids),
+        daily_confirmed_core_missing_signals=len(continuation_core_all_rows) - len(daily_confirmed_ids),
+        daily_confirmed_core_flagged_validation=_strategy_validation_summary(
+            daily_confirmed_flagged_rows, strategy="tp5_sl75_challenger", generated_at=generated_at
+        ),
+        daily_confirmed_core_unflagged_validation=_strategy_validation_summary(
+            daily_confirmed_unflagged_rows, strategy="tp5_sl75_challenger", generated_at=generated_at
+        ),
+        daily_confirmed_core_portfolio_fixed=daily_confirmed_fixed,
+        daily_confirmed_core_portfolio_pcr=daily_confirmed_pcr,
+        daily_confirmed_core_portfolio_core=daily_confirmed_core,
+        daily_confirmed_core_portfolio_de_risked=daily_confirmed_book,
+        prospective_daily_confirmed_core_computable_signals=len(prospective_daily_ids),
+        prospective_daily_confirmed_core_missing_signals=len(prospective_daily_source_rows) - len(prospective_daily_ids),
+        prospective_daily_confirmed_core_flagged_validation=_strategy_validation_summary(
+            prospective_daily_flagged_rows, strategy="tp5_sl75_challenger", generated_at=generated_at
+        ),
+        prospective_daily_confirmed_core_unflagged_validation=_strategy_validation_summary(
+            prospective_daily_unflagged_rows, strategy="tp5_sl75_challenger", generated_at=generated_at
+        ),
+        prospective_daily_confirmed_core_portfolio_fixed=prospective_daily_fixed,
+        prospective_daily_confirmed_core_portfolio_pcr=prospective_daily_pcr,
+        prospective_daily_confirmed_core_portfolio_core=prospective_daily_core,
+        prospective_daily_confirmed_core_portfolio_de_risked=prospective_daily_book,
     )
 
 
@@ -3708,6 +3880,8 @@ def research_volatility_csv(report: ResearchAnalyticsReport) -> bytes:
         "htf_computable_signals", "htf_missing_signals",
         "continuation_core_freeze_at", "continuation_core_computable_signals",
         "continuation_core_missing_signals",
+        "daily_confirmed_core_freeze_at", "daily_confirmed_core_computable_signals",
+        "daily_confirmed_core_missing_signals",
     ]
     writer = csv.DictWriter(output, fieldnames=fields)
     writer.writeheader()
@@ -3783,16 +3957,40 @@ def research_volatility_csv(report: ResearchAnalyticsReport) -> bytes:
             "continuation_core_computable_signals": v.prospective_continuation_core_computable_signals,
             "continuation_core_missing_signals": v.prospective_continuation_core_missing_signals,
         })
+    for cohort, label, summary, computable, missing in (
+        ("all_observed", "flagged", v.daily_confirmed_core_flagged_validation, v.daily_confirmed_core_computable_signals, v.daily_confirmed_core_missing_signals),
+        ("all_observed", "unflagged", v.daily_confirmed_core_unflagged_validation, v.daily_confirmed_core_computable_signals, v.daily_confirmed_core_missing_signals),
+        ("true_forward", "flagged", v.prospective_daily_confirmed_core_flagged_validation, v.prospective_daily_confirmed_core_computable_signals, v.prospective_daily_confirmed_core_missing_signals),
+        ("true_forward", "unflagged", v.prospective_daily_confirmed_core_unflagged_validation, v.prospective_daily_confirmed_core_computable_signals, v.prospective_daily_confirmed_core_missing_signals),
+    ):
+        writer.writerow({
+            "row_type": "daily_confirmed_core_v1_bucket", "cohort": cohort, "bucket": label,
+            "sample": summary.sample, "tp5": summary.target_exits, "sl75": summary.stop_exits,
+            "waiting": summary.waiting, "tp5_rate_to_date_pct": _csv_pct(summary.target_rate_to_date),
+            "avg_marked_return_pct": _csv_pct(summary.avg_marked_return),
+            "max_slots": 6, "max_exposure_pct": _csv_pct(0.30),
+            "daily_confirmed_core_freeze_at": v.daily_confirmed_core_freeze_at.isoformat(),
+            "daily_confirmed_core_computable_signals": computable,
+            "daily_confirmed_core_missing_signals": missing,
+        })
     for cohort, portfolio in (
         ("all_observed", v.portfolio_fixed), ("all_observed", v.portfolio_normalized),
         ("all_observed", v.parabolic_portfolio_de_risked),
         ("all_observed", v.htf_portfolio_de_risked),
         ("all_observed", v.continuation_core_portfolio_de_risked),
+        ("daily_confirmed_common", v.daily_confirmed_core_portfolio_fixed),
+        ("daily_confirmed_common", v.daily_confirmed_core_portfolio_pcr),
+        ("daily_confirmed_common", v.daily_confirmed_core_portfolio_core),
+        ("daily_confirmed_common", v.daily_confirmed_core_portfolio_de_risked),
         ("post_freeze", v.prospective_portfolio_fixed), ("post_freeze", v.prospective_portfolio_normalized),
         ("post_freeze", v.prospective_parabolic_portfolio_de_risked),
         ("true_forward", v.prospective_continuation_core_portfolio_fixed),
         ("true_forward", v.prospective_continuation_core_portfolio_pcr),
         ("true_forward", v.prospective_continuation_core_portfolio_de_risked),
+        ("daily_confirmed_true_forward", v.prospective_daily_confirmed_core_portfolio_fixed),
+        ("daily_confirmed_true_forward", v.prospective_daily_confirmed_core_portfolio_pcr),
+        ("daily_confirmed_true_forward", v.prospective_daily_confirmed_core_portfolio_core),
+        ("daily_confirmed_true_forward", v.prospective_daily_confirmed_core_portfolio_de_risked),
     ):
         writer.writerow({
             "row_type": "portfolio", "cohort": cohort, "strategy": portfolio.strategy,
@@ -3816,6 +4014,15 @@ def research_volatility_csv(report: ResearchAnalyticsReport) -> bytes:
             "continuation_core_freeze_at": v.continuation_core_freeze_at.isoformat(),
             "continuation_core_computable_signals": v.prospective_continuation_core_computable_signals if cohort == "true_forward" else v.continuation_core_computable_signals,
             "continuation_core_missing_signals": v.prospective_continuation_core_missing_signals if cohort == "true_forward" else v.continuation_core_missing_signals,
+            "daily_confirmed_core_freeze_at": v.daily_confirmed_core_freeze_at.isoformat(),
+            "daily_confirmed_core_computable_signals": (
+                v.prospective_daily_confirmed_core_computable_signals
+                if cohort == "daily_confirmed_true_forward" else v.daily_confirmed_core_computable_signals
+            ),
+            "daily_confirmed_core_missing_signals": (
+                v.prospective_daily_confirmed_core_missing_signals
+                if cohort == "daily_confirmed_true_forward" else v.daily_confirmed_core_missing_signals
+            ),
         })
     return output.getvalue().encode("utf-8")
 
@@ -3851,6 +4058,9 @@ def research_signal_dataset_csv(rows: Iterable[dict[str, Any]], *, generated_at:
         "daily_close_above_ema20", "daily_ema20_slope", "daily_momentum_3d",
         "daily_momentum_7d", "daily_distance_above_ema20_atr", "daily_higher_high",
         "daily_higher_low", "continuation_core_v1_vs_daily_regime",
+        "daily_confirmed_core_v1_version", "daily_confirmed_core_v1_computable",
+        "daily_confirmed_core_v1_flagged", "daily_confirmed_core_v1_position_fraction",
+        "daily_confirmed_core_v1_true_forward",
     ]
     strategy_fields: list[str] = []
     for prefix in ("tp5_indefinite", "tp5_sl75", "hold_7d"):
@@ -3952,6 +4162,18 @@ def research_signal_dataset_csv(rows: Iterable[dict[str, Any]], *, generated_at:
             else "core_no_daily_yes" if core_state is False and daily_state is True
             else "core_no_daily_no" if core_state is False and daily_state is False
             else "missing"
+        )
+        daily_confirmed_state = _daily_confirmed_core_v1_state(row)
+        flattened["daily_confirmed_core_v1_version"] = DAILY_CONFIRMED_CORE_V1_VERSION
+        flattened["daily_confirmed_core_v1_computable"] = daily_confirmed_state is not None
+        flattened["daily_confirmed_core_v1_flagged"] = daily_confirmed_state
+        flattened["daily_confirmed_core_v1_position_fraction"] = (
+            DAILY_CONFIRMED_CORE_V1_FLAGGED_POSITION_PCT if daily_confirmed_state is True
+            else DAILY_CONFIRMED_CORE_V1_BASE_POSITION_PCT if daily_confirmed_state is False
+            else ""
+        )
+        flattened["daily_confirmed_core_v1_true_forward"] = (
+            isinstance(confirmed, datetime) and confirmed > DAILY_CONFIRMED_CORE_V1_FREEZE_AT
         )
         for strategy, prefix in (
             ("tp5_challenger", "tp5_indefinite"),

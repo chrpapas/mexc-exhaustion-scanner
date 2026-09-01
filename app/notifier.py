@@ -794,6 +794,27 @@ class DiscordNotifier:
             },
         }
 
+        daily_confirmed = volatility.daily_confirmed_core_portfolio_de_risked
+        daily_confirmed_flagged = volatility.daily_confirmed_core_flagged_validation
+        daily_confirmed_lines = [
+            "Frozen Daily-Confirmed Core V1 = Continuation Core V1 AND Daily Bull V1; only the intersection is sized at 2.5%, all other computable signals stay at 5%.",
+            "**Frozen 01 Sep 2026 • 23:25 CEST after the first 190-computable Core×1D matrix review. Research-only; live PCR is unchanged.**",
+            f"Computable **{volatility.daily_confirmed_core_computable_signals}** • missing **{volatility.daily_confirmed_core_missing_signals}** • flagged **{daily_confirmed_flagged.sample}**: TP5 **{daily_confirmed_flagged.target_exits}** • SL75 **{daily_confirmed_flagged.stop_exits}** • open **{daily_confirmed_flagged.waiting}**.",
+            htf_replay_line("Fixed 5%", volatility.daily_confirmed_core_portfolio_fixed),
+            htf_replay_line("Current PCR", volatility.daily_confirmed_core_portfolio_pcr),
+            htf_replay_line("Core V1", volatility.daily_confirmed_core_portfolio_core),
+            htf_replay_line("Daily-Confirmed Core V1", daily_confirmed),
+        ]
+        prospective_daily_flagged = volatility.prospective_daily_confirmed_core_flagged_validation
+        prospective_daily_lines = [
+            f"Frozen **{volatility.daily_confirmed_core_freeze_at.astimezone(tz).strftime('%d %b %Y • %H:%M %Z')}**. Only later confirmed signals count.",
+            f"Computable **{volatility.prospective_daily_confirmed_core_computable_signals}** • missing **{volatility.prospective_daily_confirmed_core_missing_signals}** • flagged **{prospective_daily_flagged.sample}**: TP5 **{prospective_daily_flagged.target_exits}** • SL75 **{prospective_daily_flagged.stop_exits}** • open **{prospective_daily_flagged.waiting}**.",
+            htf_replay_line("Fixed 5%", volatility.prospective_daily_confirmed_core_portfolio_fixed),
+            htf_replay_line("PCR", volatility.prospective_daily_confirmed_core_portfolio_pcr),
+            htf_replay_line("Core V1", volatility.prospective_daily_confirmed_core_portfolio_core),
+            htf_replay_line("Daily-Confirmed Core V1", volatility.prospective_daily_confirmed_core_portfolio_de_risked),
+        ]
+
         daily_regime_embed = {
             "title": "🗓️ 1D Regime • Core Context",
             "description": (
@@ -806,10 +827,20 @@ class DiscordNotifier:
                     "name": "Core × 1D regime matrix",
                     "value": "\n".join(daily_matrix_lines),
                     "inline": False,
-                }
+                },
+                {
+                    "name": "Daily-Confirmed Core V1 • retrospective replay",
+                    "value": "\n".join(daily_confirmed_lines),
+                    "inline": False,
+                },
+                {
+                    "name": "Daily-Confirmed Core V1 • true forward",
+                    "value": "\n".join(prospective_daily_lines),
+                    "inline": False,
+                },
             ],
             "footer": {
-                "text": "Daily Bull V1 is structural and unfitted: close>EMA20D, EMA20D slope>0, 3D momentum>0."
+                "text": "Daily Bull V1 and Daily-Confirmed Core V1 are frozen research rules. Live PCR execution is unchanged."
             },
         }
 
