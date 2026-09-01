@@ -568,10 +568,17 @@ class Database:
     async def backfill_research_htf_features(
         self,
         *,
-        batch_size: int = 250,
+        batch_size: int = 64,
         retry_missing: bool = False,
+        statement_timeout_seconds: int = 20,
+        retry_before: datetime | None = None,
     ) -> int:
         """Recover missing HTF V1 signal-time inputs without look-ahead.
+
+        The work is deliberately bounded because this is optional research
+        maintenance sharing the production PostgreSQL instance with the scanner.
+        Candle lookups keep the indexed ``open_time`` column bare and only a
+        small episode batch is processed per call.
 
         Recovery order is deliberately conservative:
         1. A prior frozen ``run_signals.features`` value from the same episode,
@@ -586,102 +593,142 @@ class Database:
         persisted. If no frozen prior signal snapshot contains it, that field
         remains explicitly missing and HTF V1 stays non-computable.
         """
-        retry_clause = "OR COALESCE(feature_snapshot->>'htf_v1_computable', 'false') <> 'true'" if retry_missing else ""
-        rows = await self.pool.fetch(
-            f"""
-            SELECT episode_id, symbol, confirmed_at, entry_price, feature_snapshot
-            FROM research_signal_features
-            WHERE NOT (feature_snapshot ? 'htf_v1_backfill_attempted_at')
-               OR COALESCE(feature_snapshot->>'htf_v1_version', '') <> 'htf_unresolved_bull_v1'
-               {retry_clause}
-            ORDER BY confirmed_at ASC
-            LIMIT $1
-            """,
-            batch_size,
-        )
-        if not rows:
-            return 0
+        batch_size = max(1, min(int(batch_size), 128))
+        timeout_seconds = max(5, min(int(statement_timeout_seconds), 120))
+        if retry_missing and retry_before is None:
+            # Gives a caller a stable retry frontier: rows updated by this call
+            # receive a newer attempted_at and will not starve older rows on the
+            # next bounded retry.
+            retry_before = datetime.now(UTC)
 
-        episode_ids = [int(row["episode_id"]) for row in rows]
-        prior_signal_rows = await self.pool.fetch(
+        retry_clause = ""
+        args: list[object] = [batch_size]
+        if retry_missing:
+            args.append(retry_before)
+            retry_clause = """
+               OR (
+                    COALESCE(feature_snapshot->>'htf_v1_computable', 'false') <> 'true'
+                    AND (
+                        COALESCE(feature_snapshot->'htf_v1_missing_fields', '[]'::jsonb) ? 'return_24h'
+                        OR COALESCE(feature_snapshot->'htf_v1_missing_fields', '[]'::jsonb) ? 'distance_above_ema20_atr_4h'
+                        OR COALESCE(feature_snapshot->'htf_v1_missing_fields', '[]'::jsonb) ? 'previous_momentum_1h'
+                    )
+                    AND (
+                        NOT (feature_snapshot ? 'htf_v1_backfill_attempted_at')
+                        OR (feature_snapshot->>'htf_v1_backfill_attempted_at')::timestamptz < $2
+                    )
+               )
             """
-            SELECT f.episode_id, rs.signaled_at, rs.features
-            FROM research_signal_features f
-            JOIN run_signals rs
-              ON rs.episode_id = f.episode_id
-             AND rs.signaled_at <= f.confirmed_at
-             AND rs.signaled_at >= f.confirmed_at - interval '1 hour'
-            WHERE f.episode_id = ANY($1::bigint[])
-            ORDER BY f.episode_id ASC, rs.signaled_at DESC
-            """,
-            episode_ids,
-        )
-        prior_by_episode: dict[int, list[dict[str, Any]]] = {}
-        for record in prior_signal_rows:
-            prior_by_episode.setdefault(int(record["episode_id"]), []).append(dict(record))
 
-        ticker_rows = await self.pool.fetch(
-            """
-            SELECT f.episode_id, t.observed_at, t.rise_fall_rate
-            FROM research_signal_features f
-            LEFT JOIN LATERAL (
-                SELECT observed_at, rise_fall_rate
-                FROM ticker_snapshots t
-                WHERE t.symbol = f.symbol
-                  AND t.observed_at <= f.confirmed_at
-                ORDER BY t.observed_at DESC
-                LIMIT 1
-            ) t ON TRUE
-            WHERE f.episode_id = ANY($1::bigint[])
-            """,
-            episode_ids,
-        )
-        ticker_by_episode = {int(record["episode_id"]): dict(record) for record in ticker_rows}
-
-        candle_rows = await self.pool.fetch(
-            """
-            SELECT f.episode_id, c.interval, c.open_time, c.high, c.low, c.close
-            FROM research_signal_features f
-            JOIN LATERAL (
-                (
-                    SELECT interval, open_time, high, low, close
-                    FROM candles c15
-                    WHERE c15.symbol = f.symbol
-                      AND c15.interval = 'Min15'
-                      AND c15.open_time + interval '15 minutes' <= f.confirmed_at
-                    ORDER BY c15.open_time DESC
-                    LIMIT 110
-                )
-                UNION ALL
-                (
-                    SELECT interval, open_time, high, low, close
-                    FROM candles c4
-                    WHERE c4.symbol = f.symbol
-                      AND c4.interval = 'Hour4'
-                      AND c4.open_time + interval '4 hours' <= f.confirmed_at
-                    ORDER BY c4.open_time DESC
-                    LIMIT 80
-                )
-            ) c ON TRUE
-            WHERE f.episode_id = ANY($1::bigint[])
-            """,
-            episode_ids,
-        )
-        candles_by_episode: dict[int, dict[str, list[dict[str, Any]]]] = {}
-        for record in candle_rows:
-            bucket = candles_by_episode.setdefault(int(record["episode_id"]), {"Min15": [], "Hour4": []})
-            bucket[str(record["interval"])].append(dict(record))
-
-        def numeric(value: object) -> float | None:
-            try:
-                return float(value) if value is not None else None
-            except (TypeError, ValueError):
-                return None
-
-        updated = 0
-        now = datetime.now(UTC)
         async with self.pool.acquire() as conn:
             async with conn.transaction():
+                await conn.execute(
+                    "SELECT set_config('statement_timeout', $1, true)",
+                    f"{timeout_seconds}s",
+                )
+                rows = await conn.fetch(
+                    f"""
+                    SELECT episode_id, symbol, confirmed_at, entry_price, feature_snapshot
+                    FROM research_signal_features
+                    WHERE NOT (feature_snapshot ? 'htf_v1_backfill_attempted_at')
+                       OR COALESCE(feature_snapshot->>'htf_v1_version', '') <> 'htf_unresolved_bull_v1'
+                       {retry_clause}
+                    ORDER BY
+                        CASE WHEN feature_snapshot ? 'htf_v1_backfill_attempted_at' THEN 1 ELSE 0 END ASC,
+                        COALESCE(
+                            (feature_snapshot->>'htf_v1_backfill_attempted_at')::timestamptz,
+                            confirmed_at
+                        ) ASC,
+                        confirmed_at ASC
+                    LIMIT $1
+                    """,
+                    *args,
+                )
+                if not rows:
+                    return 0
+
+                episode_ids = [int(row["episode_id"]) for row in rows]
+                prior_signal_rows = await conn.fetch(
+                    """
+                    SELECT f.episode_id, rs.signaled_at, rs.features
+                    FROM research_signal_features f
+                    JOIN run_signals rs
+                      ON rs.episode_id = f.episode_id
+                     AND rs.signaled_at <= f.confirmed_at
+                     AND rs.signaled_at >= f.confirmed_at - interval '1 hour'
+                    WHERE f.episode_id = ANY($1::bigint[])
+                    ORDER BY f.episode_id ASC, rs.signaled_at DESC
+                    """,
+                    episode_ids,
+                )
+                prior_by_episode: dict[int, list[dict[str, Any]]] = {}
+                for record in prior_signal_rows:
+                    prior_by_episode.setdefault(int(record["episode_id"]), []).append(dict(record))
+
+                ticker_rows = await conn.fetch(
+                    """
+                    SELECT f.episode_id, t.observed_at, t.rise_fall_rate
+                    FROM research_signal_features f
+                    LEFT JOIN LATERAL (
+                        SELECT observed_at, rise_fall_rate
+                        FROM ticker_snapshots t
+                        WHERE t.symbol = f.symbol
+                          AND t.observed_at <= f.confirmed_at
+                        ORDER BY t.observed_at DESC
+                        LIMIT 1
+                    ) t ON TRUE
+                    WHERE f.episode_id = ANY($1::bigint[])
+                    """,
+                    episode_ids,
+                )
+                ticker_by_episode = {int(record["episode_id"]): dict(record) for record in ticker_rows}
+
+                candle_rows = await conn.fetch(
+                    """
+                    SELECT f.episode_id, c.interval, c.open_time, c.high, c.low, c.close
+                    FROM research_signal_features f
+                    JOIN LATERAL (
+                        (
+                            SELECT interval, open_time, high, low, close
+                            FROM candles c15
+                            WHERE c15.symbol = f.symbol
+                              AND c15.interval = 'Min15'
+                              -- Keep indexed open_time bare on the left side.
+                              AND c15.open_time <= f.confirmed_at - interval '15 minutes'
+                            ORDER BY c15.open_time DESC
+                            LIMIT 110
+                        )
+                        UNION ALL
+                        (
+                            SELECT interval, open_time, high, low, close
+                            FROM candles c4
+                            WHERE c4.symbol = f.symbol
+                              AND c4.interval = 'Hour4'
+                              -- Keep indexed open_time bare on the left side.
+                              AND c4.open_time <= f.confirmed_at - interval '4 hours'
+                            ORDER BY c4.open_time DESC
+                            LIMIT 80
+                        )
+                    ) c ON TRUE
+                    WHERE f.episode_id = ANY($1::bigint[])
+                    """,
+                    episode_ids,
+                )
+                candles_by_episode: dict[int, dict[str, list[dict[str, Any]]]] = {}
+                for record in candle_rows:
+                    bucket = candles_by_episode.setdefault(
+                        int(record["episode_id"]), {"Min15": [], "Hour4": []}
+                    )
+                    bucket[str(record["interval"])].append(dict(record))
+
+                def numeric(value: object) -> float | None:
+                    try:
+                        return float(value) if value is not None else None
+                    except (TypeError, ValueError):
+                        return None
+
+                updated = 0
+                now = datetime.now(UTC)
                 for row in rows:
                     episode_id = int(row["episode_id"])
                     snapshot = row["feature_snapshot"]
@@ -703,7 +750,7 @@ class Database:
 
                     # Recover from the closest prior state-machine signal. Fill
                     # each key independently so a single row need not contain all.
-                    for prior in prior_by_episode.get(episode_id, ()): 
+                    for prior in prior_by_episode.get(episode_id, ()):
                         features = prior.get("features")
                         if isinstance(features, str):
                             try:
@@ -760,7 +807,7 @@ class Database:
                     )
                     if result == "UPDATE 1":
                         updated += 1
-        return updated
+                return updated
 
     async def sync_research_htf_metadata(self, *, batch_size: int = 1000) -> int:
         """Backfill auditable HTF V1 metadata from frozen signal-time features.

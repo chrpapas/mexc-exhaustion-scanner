@@ -19,6 +19,7 @@ app/performance.py
 app/report_now.py
 app/research_analytics.py
 app/research_analytics_now.py
+app/research_htf_backfill_now.py
 app/research_path_aggregation.py
 app/research_status.py
 app/signal_ledger.py
@@ -63,6 +64,7 @@ tests/test_cleanup_v1317.py
 tests/test_cleanup_v1318.py
 tests/test_cleanup_v1319.py
 tests/test_db_research_aggregation_v1329.py
+tests/test_htf_backfill_v1340.py
 tests/test_htf_regime_v138.py
 tests/test_indicators.py
 tests/test_mexc_parsers.py

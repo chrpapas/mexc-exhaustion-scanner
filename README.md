@@ -1,8 +1,17 @@
-# MEXC Exhaustion Scanner + Multi-Slot Futures Trader v1.3.39
+# MEXC Exhaustion Scanner + Multi-Slot Futures Trader v1.3.40
 
 Execution + research release. **TP5_SL75_PCR_V1 is now the default trader strategy**.
 
 
+
+
+## v1.3.40 — bounded HTF DB backfill + one-shot recovery command
+
+- Fixes the deployed v1.3.39 HTF reconstruction timeout observed in `backfill_research_htf_features()`. Historical candle predicates now keep indexed `candles.open_time` bare (`open_time <= confirmed_at - interval ...`) so PostgreSQL can use the existing `(symbol, interval, open_time)` index efficiently.
+- Reduces HTF reconstruction to bounded 64-episode batches and applies the research DB statement timeout per batch instead of allowing one large optional research query to monopolize the shared database.
+- HTF retry work now ignores rows whose only missing input is `cross_section_percentile`, because that field is intentionally not fabricated. Recoverable missing rows use a stable retry frontier so one repeatedly incomplete episode cannot starve the rest of the backlog.
+- Adds `python -m app.research_htf_backfill_now`: drains never-attempted HTF rows in bounded batches, makes one bounded pass over recoverable legacy misses, refreshes HTF metadata, and prints final `computable / missing / flagged` counts.
+- Worker research and HTF-history loops pass `RESEARCH_DB_TIMEOUT_SECONDS` into HTF reconstruction. Live/default trader behavior remains `tp5_sl75_pcr_v1`; no strategy switch or position resize occurs on deploy.
 
 
 ## v1.3.39 — true HTF feature reconstruction + common-cohort replay
