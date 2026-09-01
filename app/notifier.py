@@ -707,6 +707,25 @@ class DiscordNotifier:
             htf_replay_line("Continuation Core V1", core_book),
         ]
 
+        def daily_tail(validation, threshold: int):
+            return next((item for item in validation.tail_ladder if item.threshold_pct == threshold), None)
+
+        daily_matrix_lines = [
+            "Daily Bull V1 is structural, not threshold-fitted: last completed 1D close > EMA20D • EMA20D slope >0 • 3D momentum >0.",
+            "**Research-only context layer. It does not change PCR/Core sizing or live execution.**",
+            f"Computable **{volatility.daily_regime_computable_signals}** • missing **{volatility.daily_regime_missing_signals}** • 1D bullish **{volatility.daily_regime_bullish_signals}** • not bullish **{volatility.daily_regime_nonbullish_signals}**.",
+        ]
+        for cell in volatility.daily_core_matrix:
+            validation = cell.validation
+            tail50 = daily_tail(validation, 50)
+            tail75 = daily_tail(validation, 75)
+            daily_matrix_lines.append(
+                f"**{cell.label}:** n=**{validation.sample}** • TP5 **{validation.target_exits}** • SL75 **{validation.stop_exits}** • "
+                f"-50 **{tail50.breached_before_exit_or_mark if tail50 else 0}** ({self._percent(tail50.breach_rate if tail50 else None)}) • "
+                f"-75 **{tail75.breached_before_exit_or_mark if tail75 else 0}** ({self._percent(tail75.breach_rate if tail75 else None)}) • "
+                f"avg marked **{self._signed_percent(validation.avg_marked_return)}**"
+            )
+
         intelligence = {
             "title": "🧠 Exhaustion Scanner • Research Intelligence",
             "description": (
@@ -772,6 +791,25 @@ class DiscordNotifier:
             ],
             "footer": {
                 "text": "30D eq is a linear observed run-rate, not a forecast. Feature rankings are exploratory; do not promote them to live rules without forward validation."
+            },
+        }
+
+        daily_regime_embed = {
+            "title": "🗓️ 1D Regime • Core Context",
+            "description": (
+                "Exploratory daily-timeframe context using completed 1D candles only. "
+                "No live sizing or entry rule is changed."
+            ),
+            "color": 0xF1C40F,
+            "fields": [
+                {
+                    "name": "Core × 1D regime matrix",
+                    "value": "\n".join(daily_matrix_lines),
+                    "inline": False,
+                }
+            ],
+            "footer": {
+                "text": "Daily Bull V1 is structural and unfitted: close>EMA20D, EMA20D slope>0, 3D momentum>0."
             },
         }
 
@@ -881,7 +919,7 @@ class DiscordNotifier:
         }
 
         try:
-            for embed in (intelligence, prospective):
+            for embed in (intelligence, daily_regime_embed, prospective):
                 self._validate_discord_embed(embed)
 
             payload = {
@@ -924,6 +962,16 @@ class DiscordNotifier:
                 )
             else:
                 response = await self._client.post(self._performance_webhook_url, json=payload)
+            response.raise_for_status()
+
+            response = await self._client.post(
+                self._performance_webhook_url,
+                json={
+                    "username": "Exhaustion Scanner • Research",
+                    "embeds": [daily_regime_embed],
+                    "allowed_mentions": {"parse": []},
+                },
+            )
             response.raise_for_status()
 
             response = await self._client.post(

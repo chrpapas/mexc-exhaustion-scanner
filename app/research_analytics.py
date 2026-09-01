@@ -9,6 +9,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, Iterable
 
 from app.json_utils import json_object
+from app.daily_regime import DAILY_REGIME_V1_VERSION, daily_regime_state
 from app.trader_logic import (
     HTF_BASE_POSITION_FRACTION,
     HTF_FLAGGED_POSITION_FRACTION,
@@ -340,6 +341,15 @@ class StrategyValidationSummary:
 
 
 @dataclass(frozen=True, slots=True)
+class DailyRegimeMatrixCellSummary:
+    key: str
+    label: str
+    core_flagged: bool
+    daily_bullish: bool
+    validation: StrategyValidationSummary
+
+
+@dataclass(frozen=True, slots=True)
 class PortfolioReplaySummary:
     strategy: str
     cohort: str
@@ -501,6 +511,12 @@ class VolatilityResearchSummary:
     prospective_continuation_core_only_flagged: int
     prospective_continuation_core_pcr_only_flagged: int
     prospective_continuation_core_neither_flagged: int
+    daily_regime_version: str
+    daily_regime_computable_signals: int
+    daily_regime_missing_signals: int
+    daily_regime_bullish_signals: int
+    daily_regime_nonbullish_signals: int
+    daily_core_matrix: tuple[DailyRegimeMatrixCellSummary, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -2117,6 +2133,10 @@ def _continuation_core_v1_position_fractions(rows: list[dict[str, Any]]) -> dict
     return result
 
 
+def _daily_regime_v1_state(row: dict[str, Any]) -> bool | None:
+    return daily_regime_state(json_object(row.get("feature_snapshot")))
+
+
 def _build_volatility_research(
     rows: list[dict[str, Any]],
     *,
@@ -2245,6 +2265,11 @@ def _build_volatility_research(
         int(row["episode_id"]) for row in rows
         if row.get("episode_id") is not None and _continuation_core_v1_state(row) is not None
     }
+    continuation_core_all_rows = [
+        row for row in rows
+        if row.get("episode_id") is not None
+        and int(row["episode_id"]) in continuation_core_computable_ids
+    ]
     # Use the intersection with HTF-computable rows so Fixed/PCR/HTF/Core are
     # always compared on one identical cohort.
     continuation_core_common_ids = htf_computable_ids & continuation_core_computable_ids
@@ -2369,6 +2394,37 @@ def _build_volatility_research(
         - prospective_core_pcr_only - prospective_core_only
     )
 
+    daily_core_rows = [
+        row for row in continuation_core_all_rows
+        if _daily_regime_v1_state(row) is not None
+    ]
+    daily_bullish_rows = [row for row in daily_core_rows if _daily_regime_v1_state(row) is True]
+    daily_nonbullish_rows = [row for row in daily_core_rows if _daily_regime_v1_state(row) is False]
+    daily_matrix_specs = (
+        ("core0_daily0", "Core no • 1D not bullish", False, False),
+        ("core0_daily1", "Core no • 1D bullish", False, True),
+        ("core1_daily0", "Core yes • 1D not bullish", True, False),
+        ("core1_daily1", "Core yes • 1D bullish", True, True),
+    )
+    daily_core_matrix = tuple(
+        DailyRegimeMatrixCellSummary(
+            key=key,
+            label=label,
+            core_flagged=core_flagged,
+            daily_bullish=daily_bullish,
+            validation=_strategy_validation_summary(
+                [
+                    row for row in daily_core_rows
+                    if _continuation_core_v1_state(row) is core_flagged
+                    and _daily_regime_v1_state(row) is daily_bullish
+                ],
+                strategy="tp5_sl75_challenger",
+                generated_at=generated_at,
+            ),
+        )
+        for key, label, core_flagged, daily_bullish in daily_matrix_specs
+    )
+
     observed_valid = sum(_entry_atr_pct(row) is not None for row in rows)
     return VolatilityResearchSummary(
         freeze_at=freeze_at,
@@ -2455,6 +2511,12 @@ def _build_volatility_research(
         prospective_continuation_core_only_flagged=prospective_core_only,
         prospective_continuation_core_pcr_only_flagged=prospective_core_pcr_only,
         prospective_continuation_core_neither_flagged=prospective_core_neither,
+        daily_regime_version=DAILY_REGIME_V1_VERSION,
+        daily_regime_computable_signals=len(daily_core_rows),
+        daily_regime_missing_signals=len(continuation_core_all_rows) - len(daily_core_rows),
+        daily_regime_bullish_signals=len(daily_bullish_rows),
+        daily_regime_nonbullish_signals=len(daily_nonbullish_rows),
+        daily_core_matrix=daily_core_matrix,
     )
 
 
@@ -3785,6 +3847,10 @@ def research_signal_dataset_csv(rows: Iterable[dict[str, Any]], *, generated_at:
         "continuation_core_v1_version", "continuation_core_v1_computable",
         "continuation_core_v1_flagged", "continuation_core_v1_position_fraction",
         "continuation_core_v1_true_forward", "continuation_core_v1_vs_pcr",
+        "daily_regime_v1_version", "daily_regime_v1_computable", "daily_regime_v1_bullish",
+        "daily_close_above_ema20", "daily_ema20_slope", "daily_momentum_3d",
+        "daily_momentum_7d", "daily_distance_above_ema20_atr", "daily_higher_high",
+        "daily_higher_low", "continuation_core_v1_vs_daily_regime",
     ]
     strategy_fields: list[str] = []
     for prefix in ("tp5_indefinite", "tp5_sl75", "hold_7d"):
@@ -3868,6 +3934,23 @@ def research_signal_dataset_csv(rows: Iterable[dict[str, Any]], *, generated_at:
             else "core_only" if core_state is True and not pcr_state
             else "pcr_only" if core_state is False and pcr_state
             else "neither" if core_state is False
+            else "missing"
+        )
+        daily_state = _daily_regime_v1_state(row)
+        flattened["daily_regime_v1_version"] = snapshot.get("daily_regime_v1_version") or DAILY_REGIME_V1_VERSION
+        flattened["daily_regime_v1_computable"] = daily_state is not None
+        flattened["daily_regime_v1_bullish"] = daily_state
+        for key in (
+            "daily_close_above_ema20", "daily_ema20_slope", "daily_momentum_3d",
+            "daily_momentum_7d", "daily_distance_above_ema20_atr",
+            "daily_higher_high", "daily_higher_low",
+        ):
+            flattened[key] = snapshot.get(key)
+        flattened["continuation_core_v1_vs_daily_regime"] = (
+            "core_yes_daily_yes" if core_state is True and daily_state is True
+            else "core_yes_daily_no" if core_state is True and daily_state is False
+            else "core_no_daily_yes" if core_state is False and daily_state is True
+            else "core_no_daily_no" if core_state is False and daily_state is False
             else "missing"
         )
         for strategy, prefix in (

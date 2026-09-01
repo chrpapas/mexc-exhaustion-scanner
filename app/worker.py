@@ -533,8 +533,8 @@ class ScannerWorker:
         """Ensure pre-signal history exists for regime and HTF backfills.
 
         15m history lets us reconstruct 24h return and prior/current 1h momentum.
-        4h history supports EMA/ATR extension plus future 4h/1d exhaustion work.
-        The cross-sectional percentile remains sourced from the frozen signal
+        4h history supports EMA/ATR extension and Day1 history supports a true
+        structural daily regime layer. The cross-sectional percentile remains sourced from the frozen signal
         snapshot because recreating the exact historical discovery universe is
         not reliably possible from candles alone.
         """
@@ -542,7 +542,8 @@ class ScannerWorker:
             lookback_days=max(REGIME_LOOKBACK_DAYS, 120)
         )
         requirements_15m = await self.db.research_regime_history_requirements(lookback_days=8)
-        if not requirements_4h and not requirements_15m:
+        requirements_1d = await self.db.research_regime_history_requirements(lookback_days=45)
+        if not requirements_4h and not requirements_15m and not requirements_1d:
             return
         semaphore = asyncio.Semaphore(self.settings.request_concurrency)
 
@@ -559,6 +560,7 @@ class ScannerWorker:
         jobs = [
             *(sync_requirement(item, "Hour4", 12) for item in requirements_4h),
             *(sync_requirement(item, "Min15", 2) for item in requirements_15m),
+            *(sync_requirement(item, "Day1", 48) for item in requirements_1d),
         ]
         results = await asyncio.gather(*jobs, return_exceptions=True)
         failures = sum(isinstance(result, Exception) for result in results)
@@ -574,9 +576,18 @@ class ScannerWorker:
             if retry_backfill is not None
             else 0
         )
+        daily_backfill = getattr(self.db, "backfill_research_daily_regime_features", None)
+        daily_recovered = (
+            await daily_backfill(
+                retry_missing=True,
+                statement_timeout_seconds=self.settings.research_db_timeout_seconds,
+            )
+            if daily_backfill is not None
+            else 0
+        )
         LOGGER.info(
-            "Research HTF-history sync complete: 4h_symbols=%d 15m_symbols=%d failures=%d htf_backfilled=%d",
-            len(requirements_4h), len(requirements_15m), failures, recovered,
+            "Research regime-history sync complete: 4h_symbols=%d 15m_symbols=%d 1d_symbols=%d failures=%d htf_backfilled=%d daily_backfilled=%d",
+            len(requirements_4h), len(requirements_15m), len(requirements_1d), failures, recovered, daily_recovered,
         )
 
     async def collect_funding(self) -> None:
@@ -1212,19 +1223,28 @@ class ScannerWorker:
         )
         htf_sync = getattr(self.db, "sync_research_htf_metadata", None)
         htf_metadata = await htf_sync() if htf_sync is not None else 0
+        daily_backfill = getattr(self.db, "backfill_research_daily_regime_features", None)
+        daily_recovered = (
+            await daily_backfill(
+                statement_timeout_seconds=self.settings.research_db_timeout_seconds,
+            )
+            if daily_backfill is not None
+            else 0
+        )
         path_rows = await self.db.sync_research_signal_paths(
             batch_rows=self.settings.research_path_batch_rows,
             horizon_hours=self.settings.research_path_horizon_hours,
             statement_timeout_seconds=self.settings.research_db_timeout_seconds,
         )
         LOGGER.info(
-            "Research sync: snapshots=%d path_rows=%d batch_cap=%d horizon=%dh htf_backfilled=%d htf_metadata=%d duration=%.2fs",
+            "Research sync: snapshots=%d path_rows=%d batch_cap=%d horizon=%dh htf_backfilled=%d htf_metadata=%d daily_backfilled=%d duration=%.2fs",
             snapshots,
             path_rows,
             self.settings.research_path_batch_rows,
             self.settings.research_path_horizon_hours,
             htf_recovered,
             htf_metadata,
+            daily_recovered,
             loop.time() - started,
         )
 

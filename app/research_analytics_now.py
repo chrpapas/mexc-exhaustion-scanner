@@ -41,6 +41,14 @@ async def main() -> None:
         # already present in PostgreSQL. This preserves the v1.2.6 no-extra-MEXC-call rule.
         await db.sync_research_signal_snapshots()
         try:
+            await db.backfill_research_daily_regime_features(
+                statement_timeout_seconds=settings.research_db_timeout_seconds,
+            )
+        except Exception:
+            logging.exception(
+                "Daily regime DB backfill failed; continuing with currently persisted 1D features"
+            )
+        try:
             await db.sync_research_signal_paths(
                 batch_rows=settings.research_path_batch_rows,
                 horizon_hours=settings.research_path_horizon_hours,

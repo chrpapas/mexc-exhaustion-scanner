@@ -6,6 +6,7 @@ TRADER-DEPLOY.md
 UPLOAD-INSTRUCTIONS.txt
 app/__init__.py
 app/config.py
+app/daily_regime.py
 app/db.py
 app/htf_backfill.py
 app/indicators.py
@@ -19,6 +20,7 @@ app/performance.py
 app/report_now.py
 app/research_analytics.py
 app/research_analytics_now.py
+app/research_daily_regime_backfill_now.py
 app/research_htf_backfill_now.py
 app/research_path_aggregation.py
 app/research_status.py
@@ -64,6 +66,7 @@ tests/test_cleanup_v1317.py
 tests/test_cleanup_v1318.py
 tests/test_cleanup_v1319.py
 tests/test_continuation_core_v141.py
+tests/test_daily_regime_v143.py
 tests/test_db_research_aggregation_v1329.py
 tests/test_htf_backfill_v1340.py
 tests/test_htf_regime_v138.py

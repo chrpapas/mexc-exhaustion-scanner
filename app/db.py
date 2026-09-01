@@ -10,6 +10,11 @@ import asyncpg
 
 from app.models import Candle, PumpEpisode, RunSignal, Ticker
 from app.htf_backfill import reconstruct_candle_htf_features
+from app.daily_regime import (
+    DAILY_REGIME_V1_VERSION,
+    daily_regime_snapshot_metadata,
+    reconstruct_daily_regime_features,
+)
 from app.trader_logic import HTF_REQUIRED_FEATURES, htf_snapshot_metadata
 
 
@@ -804,6 +809,120 @@ class Database:
                         "UPDATE research_signal_features SET feature_snapshot=$2::jsonb WHERE episode_id=$1",
                         episode_id,
                         json.dumps(enriched),
+                    )
+                    if result == "UPDATE 1":
+                        updated += 1
+                return updated
+
+    async def backfill_research_daily_regime_features(
+        self,
+        *,
+        batch_size: int = 64,
+        retry_missing: bool = False,
+        statement_timeout_seconds: int = 20,
+        retry_before: datetime | None = None,
+    ) -> int:
+        """Recover causal 1D regime features from completed Day1 candles."""
+        batch_size = max(1, min(int(batch_size), 128))
+        timeout_seconds = max(5, min(int(statement_timeout_seconds), 120))
+        if retry_missing and retry_before is None:
+            retry_before = datetime.now(UTC)
+
+        retry_clause = ""
+        args: list[object] = [batch_size]
+        if retry_missing:
+            args.append(retry_before)
+            retry_clause = """
+               OR (
+                    COALESCE(feature_snapshot->>'daily_regime_v1_computable', 'false') <> 'true'
+                    AND (
+                        NOT (feature_snapshot ? 'daily_regime_v1_backfill_attempted_at')
+                        OR (feature_snapshot->>'daily_regime_v1_backfill_attempted_at')::timestamptz < $2
+                    )
+               )
+            """
+
+        async with self.pool.acquire() as conn:
+            async with conn.transaction():
+                await conn.execute(
+                    "SELECT set_config('statement_timeout', $1, true)",
+                    f"{timeout_seconds}s",
+                )
+                rows = await conn.fetch(
+                    f"""
+                    SELECT episode_id, symbol, confirmed_at, entry_price, feature_snapshot
+                    FROM research_signal_features
+                    WHERE NOT (feature_snapshot ? 'daily_regime_v1_backfill_attempted_at')
+                       OR COALESCE(feature_snapshot->>'daily_regime_v1_version', '') <> '{DAILY_REGIME_V1_VERSION}'
+                       {retry_clause}
+                    ORDER BY
+                        CASE WHEN feature_snapshot ? 'daily_regime_v1_backfill_attempted_at' THEN 1 ELSE 0 END ASC,
+                        COALESCE(
+                            (feature_snapshot->>'daily_regime_v1_backfill_attempted_at')::timestamptz,
+                            confirmed_at
+                        ) ASC,
+                        confirmed_at ASC
+                    LIMIT $1
+                    """,
+                    *args,
+                )
+                if not rows:
+                    return 0
+
+                episode_ids = [int(row["episode_id"]) for row in rows]
+                candle_rows = await conn.fetch(
+                    """
+                    SELECT f.episode_id, c.open_time, c.high, c.low, c.close
+                    FROM research_signal_features f
+                    JOIN LATERAL (
+                        SELECT open_time, high, low, close
+                        FROM candles d1
+                        WHERE d1.symbol = f.symbol
+                          AND d1.interval = 'Day1'
+                          AND d1.open_time <= f.confirmed_at - interval '1 day'
+                        ORDER BY d1.open_time DESC
+                        LIMIT 45
+                    ) c ON TRUE
+                    WHERE f.episode_id = ANY($1::bigint[])
+                    """,
+                    episode_ids,
+                )
+                by_episode: dict[int, list[dict[str, Any]]] = {}
+                for record in candle_rows:
+                    by_episode.setdefault(int(record["episode_id"]), []).append(dict(record))
+
+                def numeric(value: object) -> float | None:
+                    try:
+                        return float(value) if value is not None else None
+                    except (TypeError, ValueError):
+                        return None
+
+                updated = 0
+                now = datetime.now(UTC)
+                for row in rows:
+                    episode_id = int(row["episode_id"])
+                    snapshot = row["feature_snapshot"]
+                    if isinstance(snapshot, str):
+                        try:
+                            snapshot = json.loads(snapshot)
+                        except json.JSONDecodeError:
+                            snapshot = {}
+                    if not isinstance(snapshot, dict):
+                        snapshot = {}
+                    enriched = dict(snapshot)
+                    values, sources = reconstruct_daily_regime_features(
+                        confirmed_at=row["confirmed_at"],
+                        entry_price=numeric(row.get("entry_price")) or 0.0,
+                        day1_rows=by_episode.get(episode_id, ()),
+                    )
+                    for key, value in values.items():
+                        enriched[key] = value
+                    enriched["daily_regime_v1_feature_sources"] = sources
+                    enriched["daily_regime_v1_backfill_attempted_at"] = now.isoformat()
+                    enriched.update(daily_regime_snapshot_metadata(enriched))
+                    result = await conn.execute(
+                        "UPDATE research_signal_features SET feature_snapshot=$2::jsonb WHERE episode_id=$1",
+                        episode_id, json.dumps(enriched),
                     )
                     if result == "UPDATE 1":
                         updated += 1

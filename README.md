@@ -1,9 +1,20 @@
-# MEXC Exhaustion Scanner + Multi-Slot Futures Trader v1.3.42
+# MEXC Exhaustion Scanner + Multi-Slot Futures Trader v1.3.43
 
 Execution + research release. **TP5_SL75_PCR_V1 is now the default trader strategy**.
 
 
 
+
+
+## v1.3.43 — completed-1D regime backfill + Core×daily matrix
+
+- Adds a **research-only completed-1D regime layer**. Daily Bull V1 is intentionally structural and unfitted: last completed Day1 close above EMA20D, EMA20D slope >0, and 3-day momentum >0.
+- Stores additional causal daily context (`daily_momentum_7d`, daily EMA20/ATR extension, higher-high / higher-low flags) for analysis, but these extra fields do **not** alter the Daily Bull V1 label.
+- Research history maintenance now syncs `Day1` candles in addition to 15m/4h history and causally reconstructs daily features at each original signal timestamp. Incomplete current-day candles are excluded.
+- Adds `python -m app.research_daily_regime_backfill_now` to fetch the required 45-day Day1 history, drain bounded DB backfill batches, retry incomplete rows once, and print `computable / missing / bullish` counts.
+- Adds a separate **1D Regime • Core Context** research card with the four `Core no/yes × 1D not-bullish/bullish` cells, showing TP5, SL75, -50/-75 tail rates and average marked return.
+- `research-signal-dataset.csv` exports the daily regime inputs/state plus the Core×1D cell label for every signal.
+- No live sizing/entry change, no Core promotion, and no DB migration. Default trader remains `tp5_sl75_pcr_v1`.
 
 ## v1.3.42 — Continuation Core V1 true-forward monitor
 
