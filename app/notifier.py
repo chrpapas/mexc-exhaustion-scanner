@@ -665,6 +665,16 @@ class DiscordNotifier:
             f"De-risk flagged to **{self._percent(volatility.parabolic_position_fraction)}** (others 5%), same 6 slots / 30% cap: MTM **{self._signed_percent(parabolic_book.marked_return)}** • DD **-{self._percent(parabolic_book.max_mtm_drawdown)}** • R/DD **{self._number(parabolic_book.return_over_max_drawdown)}** vs fixed 5% MTM **{self._signed_percent(fixed_vol.marked_return)}** • DD **-{self._percent(fixed_vol.max_mtm_drawdown)}**.",
         ]
 
+        htf_flagged = volatility.htf_flagged_validation
+        htf_unflagged = volatility.htf_unflagged_validation
+        htf_book = volatility.htf_portfolio_de_risked
+        htf_lines = [
+            "Frozen HTF V1: 24h ≥30% • top 2% cross-section • ≥3 ATR above 4h EMA20 • previous 1h momentum >0.",
+            "**HTF V1 frozen 1 Sep 2026; the current historical replay is retrospective. Missing required inputs are excluded, not treated as unflagged.**",
+            f"Computable **{volatility.htf_computable_signals}** • missing **{volatility.htf_missing_signals}** | flagged **{htf_flagged.sample}**: TP5 **{htf_flagged.target_exits}** • SL75 **{htf_flagged.stop_exits}** • open **{htf_flagged.waiting}** | unflagged **{htf_unflagged.sample}**: SL75 **{htf_unflagged.stop_exits}**.",
+            f"HTF de-risk 2.5% flagged / 5% otherwise, same 6 slots / 30% cap: MTM **{self._signed_percent(htf_book.marked_return)}** • DD **-{self._percent(htf_book.max_mtm_drawdown)}** • R/DD **{self._number(htf_book.return_over_max_drawdown)}** vs fixed 5% MTM **{self._signed_percent(fixed_vol.marked_return)}**.",
+        ]
+
         intelligence = {
             "title": "🧠 Exhaustion Scanner • Research Intelligence",
             "description": (
@@ -715,6 +725,11 @@ class DiscordNotifier:
                 {
                     "name": "7 • PCR de-risk • retrospective evidence",
                     "value": "\n".join(parabolic_lines),
+                    "inline": False,
+                },
+                {
+                    "name": "8 • HTF V1 de-risk • retrospective evidence",
+                    "value": "\n".join(htf_lines),
                     "inline": False,
                 },
             ],

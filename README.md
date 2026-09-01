@@ -1,8 +1,12 @@
-# MEXC Exhaustion Scanner + Multi-Slot Futures Trader v1.3.37
+# MEXC Exhaustion Scanner + Multi-Slot Futures Trader v1.3.38
 
 Execution + research release. **TP5_SL75_PCR_V1 is now the default trader strategy**.
 
 
+
+## v1.3.38 — HTF unresolved-bull-regime de-risk challenger
+
+Adds a separate `tp5_sl75_htf_v1` strategy using the frozen 1 Sep 2026 rule: 24h return >=30%, cross-sectional percentile >=98%, 4h EMA20 extension >=3 ATR, and previous 1h momentum >0. Flagged entries use 2.5% of equity; otherwise 5%, with the same TP5 + SL75 exits, 6 slots and 30% cap. The existing `tp5_sl75_pcr_v1` remains the default. HTF classification is tri-state: missing required inputs are explicitly marked non-computable and an HTF-selected trader fails closed rather than treating missing data as unflagged. Research sync backfills HTF metadata into frozen snapshots and pre-signal history collection now covers 15m plus 4h data for future reconstruction/multi-timeframe exhaustion research.
 
 ## v1.3.37 — subscriber performance board: fixed TP5+SL75 vs PCR
 

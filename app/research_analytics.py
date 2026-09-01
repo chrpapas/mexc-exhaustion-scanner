@@ -10,6 +10,9 @@ from typing import Any, Iterable
 
 from app.json_utils import json_object
 from app.trader_logic import (
+    HTF_BASE_POSITION_FRACTION,
+    HTF_FLAGGED_POSITION_FRACTION,
+    htf_continuation_risk,
     PCR_BASE_POSITION_FRACTION,
     PCR_EMA_DISTANCE_ATR_THRESHOLD,
     PCR_FLAGGED_POSITION_FRACTION,
@@ -447,6 +450,11 @@ class VolatilityResearchSummary:
     parabolic_portfolio_de_risked: PortfolioReplaySummary
     prospective_parabolic_flagged_validation: StrategyValidationSummary
     prospective_parabolic_portfolio_de_risked: PortfolioReplaySummary
+    htf_computable_signals: int
+    htf_missing_signals: int
+    htf_flagged_validation: StrategyValidationSummary
+    htf_unflagged_validation: StrategyValidationSummary
+    htf_portfolio_de_risked: PortfolioReplaySummary
 
 
 @dataclass(frozen=True, slots=True)
@@ -1988,6 +1996,24 @@ def _parabolic_position_fractions(rows: list[dict[str, Any]]) -> dict[int, float
         )
     return result
 
+def _htf_v1_state(row: dict[str, Any]) -> bool | None:
+    snapshot = json_object(row.get("feature_snapshot"))
+    return htf_continuation_risk(snapshot)
+
+
+def _htf_v1_position_fractions(rows: list[dict[str, Any]]) -> dict[int, float]:
+    result: dict[int, float] = {}
+    for row in rows:
+        episode_id = row.get("episode_id")
+        if episode_id is None:
+            continue
+        state = _htf_v1_state(row)
+        if state is None:
+            continue
+        result[int(episode_id)] = HTF_FLAGGED_POSITION_FRACTION if state else HTF_BASE_POSITION_FRACTION
+    return result
+
+
 def _build_volatility_research(
     rows: list[dict[str, Any]],
     *,
@@ -2067,6 +2093,23 @@ def _build_volatility_research(
         position_fraction_by_episode=post_parabolic_fractions,
         max_exposure_fraction_override=PARABOLIC_RISK_MAX_EXPOSURE_PCT,
     )
+    htf_flagged_rows = [row for row in rows if _htf_v1_state(row) is True]
+    htf_unflagged_rows = [row for row in rows if _htf_v1_state(row) is False]
+    htf_computable_ids = {
+        int(row["episode_id"]) for row in rows
+        if row.get("episode_id") is not None and _htf_v1_state(row) is not None
+    }
+    htf_fractions = _htf_v1_position_fractions(rows)
+    htf_de_risked = _portfolio_replay(
+        rows, strategy="tp5_sl75_challenger", generated_at=generated_at, path_rows=path_rows,
+        cohort="htf_v1_all_observed",
+        strategy_name_override="tp5_sl75_htf_v1_2_5pct_else_5pct_6slot_30pct",
+        max_total_override=6,
+        position_fraction_by_episode=htf_fractions,
+        max_exposure_fraction_override=0.30,
+        eligible_episode_ids=htf_computable_ids,
+    )
+
     observed_valid = sum(_entry_atr_pct(row) is not None for row in rows)
     return VolatilityResearchSummary(
         freeze_at=freeze_at,
@@ -2100,6 +2143,15 @@ def _build_volatility_research(
             post_parabolic_rows, strategy="tp5_sl75_challenger", generated_at=generated_at
         ),
         prospective_parabolic_portfolio_de_risked=prospective_parabolic_de_risked,
+        htf_computable_signals=len(htf_computable_ids),
+        htf_missing_signals=len(rows) - len(htf_computable_ids),
+        htf_flagged_validation=_strategy_validation_summary(
+            htf_flagged_rows, strategy="tp5_sl75_challenger", generated_at=generated_at
+        ),
+        htf_unflagged_validation=_strategy_validation_summary(
+            htf_unflagged_rows, strategy="tp5_sl75_challenger", generated_at=generated_at
+        ),
+        htf_portfolio_de_risked=htf_de_risked,
     )
 
 
@@ -3288,6 +3340,7 @@ def research_volatility_csv(report: ResearchAnalyticsReport) -> bytes:
         "size_floor_pct", "size_base_pct", "size_ceiling_pct", "max_slots", "max_exposure_pct",
         "parabolic_return_24h_threshold_pct", "parabolic_ema_distance_atr_threshold",
         "parabolic_position_pct",
+        "htf_computable_signals", "htf_missing_signals",
     ]
     writer = csv.DictWriter(output, fieldnames=fields)
     writer.writeheader()
@@ -3328,9 +3381,20 @@ def research_volatility_csv(report: ResearchAnalyticsReport) -> bytes:
             "parabolic_position_pct": _csv_pct(v.parabolic_position_fraction),
             "max_slots": v.max_slots, "max_exposure_pct": _csv_pct(v.max_exposure),
         })
+    for label, summary in (("flagged", v.htf_flagged_validation), ("unflagged", v.htf_unflagged_validation)):
+        writer.writerow({
+            "row_type": "htf_v1_bucket", "cohort": "all_observed", "bucket": label,
+            "sample": summary.sample, "tp5": summary.target_exits, "sl75": summary.stop_exits,
+            "waiting": summary.waiting, "tp5_rate_to_date_pct": _csv_pct(summary.target_rate_to_date),
+            "avg_marked_return_pct": _csv_pct(summary.avg_marked_return),
+            "max_slots": 6, "max_exposure_pct": _csv_pct(0.30),
+            "htf_computable_signals": v.htf_computable_signals,
+            "htf_missing_signals": v.htf_missing_signals,
+        })
     for cohort, portfolio in (
         ("all_observed", v.portfolio_fixed), ("all_observed", v.portfolio_normalized),
         ("all_observed", v.parabolic_portfolio_de_risked),
+        ("all_observed", v.htf_portfolio_de_risked),
         ("post_freeze", v.prospective_portfolio_fixed), ("post_freeze", v.prospective_portfolio_normalized),
         ("post_freeze", v.prospective_parabolic_portfolio_de_risked),
     ):
@@ -3351,6 +3415,8 @@ def research_volatility_csv(report: ResearchAnalyticsReport) -> bytes:
             "parabolic_return_24h_threshold_pct": _csv_pct(v.parabolic_return_24h_threshold),
             "parabolic_ema_distance_atr_threshold": f"{v.parabolic_ema_distance_atr_threshold:.6f}",
             "parabolic_position_pct": _csv_pct(v.parabolic_position_fraction),
+            "htf_computable_signals": v.htf_computable_signals,
+            "htf_missing_signals": v.htf_missing_signals,
         })
     return output.getvalue().encode("utf-8")
 
@@ -3377,6 +3443,8 @@ def research_signal_dataset_csv(rows: Iterable[dict[str, Any]], *, generated_at:
         "entry_gate_v1_eligible", "prospective_cohort",
         "persistent_run_long_flag", "persistent_run_strict_flag",
         "persistent_run_risk_cohort",
+        "htf_v1_version", "htf_v1_computable", "htf_v1_flagged",
+        "htf_v1_missing_fields", "htf_v1_position_fraction",
     ]
     strategy_fields: list[str] = []
     for prefix in ("tp5_indefinite", "tp5_sl75", "hold_7d"):
@@ -3429,6 +3497,19 @@ def research_signal_dataset_csv(rows: Iterable[dict[str, Any]], *, generated_at:
             flattened["persistent_run_risk_cohort"] = "prospective"
         else:
             flattened["persistent_run_risk_cohort"] = "calibration"
+        htf_state = htf_continuation_risk(snapshot)
+        flattened["htf_v1_version"] = snapshot.get("htf_v1_version") or "htf_unresolved_bull_v1"
+        flattened["htf_v1_computable"] = htf_state is not None
+        flattened["htf_v1_flagged"] = htf_state
+        required_htf = ("return_24h", "cross_section_percentile", "distance_above_ema20_atr_4h", "previous_momentum_1h")
+        flattened["htf_v1_missing_fields"] = ";".join(
+            key for key in required_htf if snapshot.get(key) is None
+        )
+        flattened["htf_v1_position_fraction"] = (
+            HTF_FLAGGED_POSITION_FRACTION if htf_state is True
+            else HTF_BASE_POSITION_FRACTION if htf_state is False
+            else ""
+        )
         for strategy, prefix in (
             ("tp5_challenger", "tp5_indefinite"),
             ("tp5_sl75_challenger", "tp5_sl75"),

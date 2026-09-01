@@ -54,6 +54,7 @@ migrations/016_tp5_sl75_exit_strategy.sql
 pyproject.toml
 render.yaml
 scripts/verify_project.py
+tests/test_htf_regime_v138.py
 tests/test_cleanup_v1313.py
 tests/test_cleanup_v1314.py
 tests/test_cleanup_v1315.py

@@ -9,6 +9,69 @@ PCR_EMA_DISTANCE_ATR_THRESHOLD = 3.0
 PCR_FLAGGED_POSITION_FRACTION = 0.025
 PCR_BASE_POSITION_FRACTION = 0.05
 
+# Frozen Higher-Timeframe (HTF) unresolved-bull-regime sizing challenger.
+# Measured 1 Sep 2026 on the 188-signal research dataset. This is deliberately
+# a separate challenger from PCR: it adds cross-sectional leadership and
+# positive prior 1h momentum to isolate local 15m exhaustion occurring inside
+# an unresolved higher-timeframe bullish regime.
+HTF_RETURN_24H_THRESHOLD = 0.30
+HTF_CROSS_SECTION_PERCENTILE_THRESHOLD = 0.98
+HTF_EMA_DISTANCE_ATR_THRESHOLD = 3.0
+HTF_PREVIOUS_MOMENTUM_1H_THRESHOLD = 0.0
+HTF_FLAGGED_POSITION_FRACTION = 0.025
+HTF_BASE_POSITION_FRACTION = 0.05
+HTF_RULE_VERSION = "htf_unresolved_bull_v1"
+HTF_REQUIRED_FEATURES = (
+    "return_24h",
+    "cross_section_percentile",
+    "distance_above_ema20_atr_4h",
+    "previous_momentum_1h",
+)
+
+
+def htf_missing_features(features: dict[str, object]) -> tuple[str, ...]:
+    """Return required HTF V1 inputs that are absent or not numeric."""
+    return tuple(key for key in HTF_REQUIRED_FEATURES if _numeric_feature(features, key) is None)
+
+
+def htf_continuation_risk(features: dict[str, object]) -> bool | None:
+    """Tri-state HTF V1 classification.
+
+    True means the unresolved bullish HTF regime is present. False means all
+    required signal-time inputs were available and the rule did not trigger.
+    None means the historical/live snapshot is incomplete. Missing data is
+    intentionally *not* treated as unflagged.
+    """
+    if htf_missing_features(features):
+        return None
+    return (
+        float(features["return_24h"]) >= HTF_RETURN_24H_THRESHOLD
+        and float(features["cross_section_percentile"]) >= HTF_CROSS_SECTION_PERCENTILE_THRESHOLD
+        and float(features["distance_above_ema20_atr_4h"]) >= HTF_EMA_DISTANCE_ATR_THRESHOLD
+        and float(features["previous_momentum_1h"]) > HTF_PREVIOUS_MOMENTUM_1H_THRESHOLD
+    )
+
+
+def htf_position_fraction(features: dict[str, object]) -> float | None:
+    """Return HTF V1 size, or None when the signal cannot be classified safely."""
+    flagged = htf_continuation_risk(features)
+    if flagged is None:
+        return None
+    return HTF_FLAGGED_POSITION_FRACTION if flagged else HTF_BASE_POSITION_FRACTION
+
+
+def htf_snapshot_metadata(features: dict[str, object]) -> dict[str, object]:
+    """Persist auditable HTF V1 classification alongside the raw signal features."""
+    missing = htf_missing_features(features)
+    flagged = htf_continuation_risk(features)
+    return {
+        "htf_v1_version": HTF_RULE_VERSION,
+        "htf_v1_computable": not missing,
+        "htf_v1_flagged": flagged,
+        "htf_v1_missing_fields": list(missing),
+        "htf_v1_position_fraction": htf_position_fraction(features),
+    }
+
 
 def _numeric_feature(features: dict[str, object], key: str) -> float | None:
     value = features.get(key)

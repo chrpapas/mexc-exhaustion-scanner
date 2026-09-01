@@ -11,8 +11,15 @@ from app.mexc_trade import MexcTradeClient, MexcTradeError
 from app.trader_config import TraderSettings
 from app.trader_db import TraderRepository
 from app.trader_logic import (
+    HTF_CROSS_SECTION_PERCENTILE_THRESHOLD,
+    HTF_EMA_DISTANCE_ATR_THRESHOLD,
+    HTF_PREVIOUS_MOMENTUM_1H_THRESHOLD,
+    HTF_RETURN_24H_THRESHOLD,
     PCR_EMA_DISTANCE_ATR_THRESHOLD,
     PCR_RETURN_24H_THRESHOLD,
+    htf_continuation_risk,
+    htf_missing_features,
+    htf_position_fraction,
     newly_breached_thresholds,
     parabolic_continuation_risk,
     pcr_position_fraction,
@@ -344,11 +351,27 @@ class PortfolioShortTrader:
             raise RuntimeError("account equity is not positive")
         total_notional = sum(p.notional_usdt for p in active)
         pcr_flagged = self.settings.uses_pcr_derisk and parabolic_continuation_risk(signal.features)
-        candidate_fraction = (
-            pcr_position_fraction(signal.features)
-            if self.settings.uses_pcr_derisk
-            else self.settings.slot_fraction
-        )
+        htf_flagged = htf_continuation_risk(signal.features) if self.settings.uses_htf_derisk else None
+        if self.settings.uses_htf_derisk and htf_flagged is None:
+            missing = htf_missing_features(signal.features)
+            await self._ignore_signal(
+                signal,
+                "ignored_missing_htf_data",
+                "HTF V1 sizing is fail-closed because required signal-time data is missing: "
+                + ", ".join(missing),
+                active=active,
+                event_fields=[
+                    {"name": "Missing HTF inputs", "value": ", ".join(missing), "inline": False},
+                ],
+            )
+            return
+        if self.settings.uses_pcr_derisk:
+            candidate_fraction = pcr_position_fraction(signal.features)
+        elif self.settings.uses_htf_derisk:
+            candidate_fraction = htf_position_fraction(signal.features)
+            assert candidate_fraction is not None
+        else:
+            candidate_fraction = self.settings.slot_fraction
         desired = equity * candidate_fraction
         max_notional = equity * self.settings.max_total_exposure_fraction
         remaining = max_notional - total_notional
@@ -384,11 +407,12 @@ class PortfolioShortTrader:
             else await self._open_live(signal, slot_no, equity, notional)
         )
         LOGGER.info(
-            "Signal accepted id=%s symbol=%s risk=%s pcr=%s action=OPENED position_id=%s slot=%s notional=%.4f equity=%.4f",
+            "Signal accepted id=%s symbol=%s risk=%s pcr=%s htf=%s action=OPENED position_id=%s slot=%s notional=%.4f equity=%.4f",
             signal.id,
             signal.symbol,
             signal.risk_tier,
             pcr_flagged,
+            htf_flagged,
             position.id,
             position.slot_no,
             position.notional_usdt,
@@ -422,6 +446,17 @@ class PortfolioShortTrader:
                         "inline": True,
                     }
                 ] if self.settings.uses_pcr_derisk else []),
+                *([
+                    {
+                        "name": "HTF V1 sizing",
+                        "value": (
+                            f"FLAGGED → {candidate_fraction * 100.0:.2f}% equity"
+                            if htf_flagged
+                            else f"Unflagged → {candidate_fraction * 100.0:.2f}% equity"
+                        ),
+                        "inline": True,
+                    }
+                ] if self.settings.uses_htf_derisk else []),
                 {"name": "Exit plan", "value": exit_text, "inline": False},
                 {
                     "name": "Risk control",
@@ -502,6 +537,15 @@ class PortfolioShortTrader:
                 "pcr_ema_distance_atr_4h": signal.features.get("distance_above_ema20_atr_4h") if self.settings.uses_pcr_derisk else None,
                 "pcr_return_24h_threshold": PCR_RETURN_24H_THRESHOLD if self.settings.uses_pcr_derisk else None,
                 "pcr_ema_distance_atr_threshold": PCR_EMA_DISTANCE_ATR_THRESHOLD if self.settings.uses_pcr_derisk else None,
+                "htf_v1_flagged": htf_continuation_risk(signal.features) if self.settings.uses_htf_derisk else None,
+                "htf_v1_return_24h": signal.features.get("return_24h") if self.settings.uses_htf_derisk else None,
+                "htf_v1_cross_section_percentile": signal.features.get("cross_section_percentile") if self.settings.uses_htf_derisk else None,
+                "htf_v1_ema_distance_atr_4h": signal.features.get("distance_above_ema20_atr_4h") if self.settings.uses_htf_derisk else None,
+                "htf_v1_previous_momentum_1h": signal.features.get("previous_momentum_1h") if self.settings.uses_htf_derisk else None,
+                "htf_v1_return_24h_threshold": HTF_RETURN_24H_THRESHOLD if self.settings.uses_htf_derisk else None,
+                "htf_v1_cross_section_threshold": HTF_CROSS_SECTION_PERCENTILE_THRESHOLD if self.settings.uses_htf_derisk else None,
+                "htf_v1_ema_distance_atr_threshold": HTF_EMA_DISTANCE_ATR_THRESHOLD if self.settings.uses_htf_derisk else None,
+                "htf_v1_previous_momentum_threshold": HTF_PREVIOUS_MOMENTUM_1H_THRESHOLD if self.settings.uses_htf_derisk else None,
                 "tp_target_pct": self.settings.tp5_target_pct if self.settings.uses_generic_slots else self.settings.profit_target_pct,
                 "catastrophic_stop_pct": self.settings.catastrophic_stop_pct if self.settings.uses_catastrophic_stop else None,
             },
@@ -580,6 +624,15 @@ class PortfolioShortTrader:
                 "pcr_ema_distance_atr_4h": signal.features.get("distance_above_ema20_atr_4h") if self.settings.uses_pcr_derisk else None,
                 "pcr_return_24h_threshold": PCR_RETURN_24H_THRESHOLD if self.settings.uses_pcr_derisk else None,
                 "pcr_ema_distance_atr_threshold": PCR_EMA_DISTANCE_ATR_THRESHOLD if self.settings.uses_pcr_derisk else None,
+                "htf_v1_flagged": htf_continuation_risk(signal.features) if self.settings.uses_htf_derisk else None,
+                "htf_v1_return_24h": signal.features.get("return_24h") if self.settings.uses_htf_derisk else None,
+                "htf_v1_cross_section_percentile": signal.features.get("cross_section_percentile") if self.settings.uses_htf_derisk else None,
+                "htf_v1_ema_distance_atr_4h": signal.features.get("distance_above_ema20_atr_4h") if self.settings.uses_htf_derisk else None,
+                "htf_v1_previous_momentum_1h": signal.features.get("previous_momentum_1h") if self.settings.uses_htf_derisk else None,
+                "htf_v1_return_24h_threshold": HTF_RETURN_24H_THRESHOLD if self.settings.uses_htf_derisk else None,
+                "htf_v1_cross_section_threshold": HTF_CROSS_SECTION_PERCENTILE_THRESHOLD if self.settings.uses_htf_derisk else None,
+                "htf_v1_ema_distance_atr_threshold": HTF_EMA_DISTANCE_ATR_THRESHOLD if self.settings.uses_htf_derisk else None,
+                "htf_v1_previous_momentum_threshold": HTF_PREVIOUS_MOMENTUM_1H_THRESHOLD if self.settings.uses_htf_derisk else None,
                 "tp_target_pct": self.settings.tp5_target_pct if self.settings.uses_generic_slots else self.settings.profit_target_pct,
                 "catastrophic_stop_pct": self.settings.catastrophic_stop_pct if self.settings.uses_catastrophic_stop else None,
             },
@@ -1147,7 +1200,7 @@ class PortfolioShortTrader:
                 "max_total_exposure_pct": self.settings.max_total_exposure_pct,
                 "strategy": self.settings.execution_strategy,
                 "run_id": self._active_run_id,
-                "version": "1.3.37",
+                "version": "1.3.38",
             },
         )
 
@@ -1157,11 +1210,12 @@ class PortfolioShortTrader:
                 f" • catastrophic SL -{self.settings.catastrophic_stop_pct:g}%"
                 if self.settings.uses_catastrophic_stop else ""
             )
-            sizing = (
-                "PCR 2.50% flagged / 5.00% otherwise"
-                if self.settings.uses_pcr_derisk
-                else f"{self.settings.slot_allocation_pct:.2f}%"
-            )
+            if self.settings.uses_pcr_derisk:
+                sizing = "PCR 2.50% flagged / 5.00% otherwise"
+            elif self.settings.uses_htf_derisk:
+                sizing = "HTF V1 2.50% flagged / 5.00% otherwise"
+            else:
+                sizing = f"{self.settings.slot_allocation_pct:.2f}%"
             return (
                 f"{self.settings.execution_strategy.upper()} • {self.settings.max_open_positions} generic slots × "
                 f"{sizing} • TP +{self.settings.tp5_target_pct:g}%{stop} • "

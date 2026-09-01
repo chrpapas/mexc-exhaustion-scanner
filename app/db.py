@@ -9,6 +9,7 @@ from typing import Any
 import asyncpg
 
 from app.models import Candle, PumpEpisode, RunSignal, Ticker
+from app.trader_logic import htf_snapshot_metadata
 
 
 from app.research_path_aggregation import (
@@ -562,6 +563,47 @@ class Database:
             return int(result.rsplit(" ", 1)[-1])
         except (TypeError, ValueError):
             return 0
+
+    async def sync_research_htf_metadata(self, *, batch_size: int = 1000) -> int:
+        """Backfill auditable HTF V1 metadata from frozen signal-time features.
+
+        Raw inputs stay untouched. Records with incomplete inputs are explicitly
+        marked non-computable with the missing-field list so missing data can
+        never be silently interpreted as an unflagged regime.
+        """
+        rows = await self.pool.fetch(
+            """
+            SELECT episode_id, feature_snapshot
+            FROM research_signal_features
+            WHERE NOT (feature_snapshot ? 'htf_v1_version')
+               OR COALESCE(feature_snapshot->>'htf_v1_version', '') <> 'htf_unresolved_bull_v1'
+            ORDER BY confirmed_at ASC
+            LIMIT $1
+            """,
+            batch_size,
+        )
+        updated = 0
+        async with self.pool.acquire() as conn:
+            async with conn.transaction():
+                for row in rows:
+                    snapshot = row['feature_snapshot']
+                    if isinstance(snapshot, str):
+                        try:
+                            snapshot = json.loads(snapshot)
+                        except json.JSONDecodeError:
+                            snapshot = {}
+                    if not isinstance(snapshot, dict):
+                        snapshot = {}
+                    enriched = dict(snapshot)
+                    enriched.update(htf_snapshot_metadata(enriched))
+                    result = await conn.execute(
+                        "UPDATE research_signal_features SET feature_snapshot=$2::jsonb WHERE episode_id=$1",
+                        int(row['episode_id']),
+                        json.dumps(enriched),
+                    )
+                    if result == 'UPDATE 1':
+                        updated += 1
+        return updated
 
     async def sync_research_signal_paths(
         self,

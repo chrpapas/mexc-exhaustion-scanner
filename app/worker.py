@@ -26,6 +26,7 @@ from app.token_regime import REGIME_LOOKBACK_DAYS
 from app.trader_db import TraderRepository
 from app.trader_notifier import TraderNotifier
 from app.performance import build_performance_summary, short_return, should_send_daily_report
+from app.trader_logic import htf_snapshot_metadata
 from app.signals import (
     ExhaustionFeatures,
     ExhaustionThresholds,
@@ -529,38 +530,44 @@ class ScannerWorker:
         await self.db.upsert_candles(recent)
 
     async def collect_research_regime_history(self) -> None:
-        """Ensure signal-relative 4h history exists for token-behaviour research only."""
-        requirements = await self.db.research_regime_history_requirements(
-            lookback_days=REGIME_LOOKBACK_DAYS
+        """Ensure pre-signal history exists for regime and HTF backfills.
+
+        15m history lets us reconstruct 24h return and prior/current 1h momentum.
+        4h history supports EMA/ATR extension plus future 4h/1d exhaustion work.
+        The cross-sectional percentile remains sourced from the frozen signal
+        snapshot because recreating the exact historical discovery universe is
+        not reliably possible from candles alone.
+        """
+        requirements_4h = await self.db.research_regime_history_requirements(
+            lookback_days=max(REGIME_LOOKBACK_DAYS, 120)
         )
-        if not requirements:
+        requirements_15m = await self.db.research_regime_history_requirements(lookback_days=8)
+        if not requirements_4h and not requirements_15m:
             return
         semaphore = asyncio.Semaphore(self.settings.request_concurrency)
 
-        async def sync_requirement(item: dict[str, object]) -> None:
+        async def sync_requirement(item: dict[str, object], interval: str, overlap_hours: int) -> None:
             symbol = str(item.get("symbol") or "")
             required_start = item.get("required_start")
             if not symbol or not isinstance(required_start, datetime):
                 return
             async with semaphore:
                 await self._sync_interval_from(
-                    symbol, "Hour4", desired_start=required_start, overlap_hours=12
+                    symbol, interval, desired_start=required_start, overlap_hours=overlap_hours
                 )
 
-        results = await asyncio.gather(
-            *(sync_requirement(item) for item in requirements), return_exceptions=True
-        )
-        failures = 0
-        for item, result in zip(requirements, results, strict=True):
+        jobs = [
+            *(sync_requirement(item, "Hour4", 12) for item in requirements_4h),
+            *(sync_requirement(item, "Min15", 2) for item in requirements_15m),
+        ]
+        results = await asyncio.gather(*jobs, return_exceptions=True)
+        failures = sum(isinstance(result, Exception) for result in results)
+        for result in results:
             if isinstance(result, Exception):
-                failures += 1
-                LOGGER.warning(
-                    "Research regime-history sync failed for %s: %s",
-                    item.get("symbol"), result,
-                )
+                LOGGER.warning("Research HTF-history sync failed: %s", result)
         LOGGER.info(
-            "Research regime-history sync complete: symbols=%d failures=%d lookback=%dd",
-            len(requirements), failures, REGIME_LOOKBACK_DAYS,
+            "Research HTF-history sync complete: 4h_symbols=%d 15m_symbols=%d failures=%d",
+            len(requirements_4h), len(requirements_15m), failures,
         )
 
     async def collect_funding(self) -> None:
@@ -782,6 +789,9 @@ class ScannerWorker:
                 base_features["execution_eligible"] = risk.execution_eligible
                 base_features["execution_risk_reasons"] = list(risk.reasons)
                 base_features["execution_risk_warning"] = risk.warning
+                # Freeze the HTF V1 classification state at signal time. This is
+                # auditable research metadata; it does not alter scanner admission.
+                base_features.update(htf_snapshot_metadata(base_features))
 
                 episode = await self.db.get_active_episode(symbol)
 
@@ -1183,17 +1193,20 @@ class ScannerWorker:
         loop = asyncio.get_running_loop()
         started = loop.time()
         snapshots = await self.db.sync_research_signal_snapshots()
+        htf_sync = getattr(self.db, "sync_research_htf_metadata", None)
+        htf_metadata = await htf_sync() if htf_sync is not None else 0
         path_rows = await self.db.sync_research_signal_paths(
             batch_rows=self.settings.research_path_batch_rows,
             horizon_hours=self.settings.research_path_horizon_hours,
             statement_timeout_seconds=self.settings.research_db_timeout_seconds,
         )
         LOGGER.info(
-            "Research sync: snapshots=%d path_rows=%d batch_cap=%d horizon=%dh duration=%.2fs",
+            "Research sync: snapshots=%d path_rows=%d batch_cap=%d horizon=%dh htf_metadata=%d duration=%.2fs",
             snapshots,
             path_rows,
             self.settings.research_path_batch_rows,
             self.settings.research_path_horizon_hours,
+            htf_metadata,
             loop.time() - started,
         )
 
