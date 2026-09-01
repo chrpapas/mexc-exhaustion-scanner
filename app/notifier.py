@@ -841,6 +841,28 @@ class DiscordNotifier:
                     ),
                     "inline": False,
                 },
+                {
+                    "name": "Continuation Core V1 • true forward since Sep 1 freeze",
+                    "value": (
+                        f"Frozen **{volatility.continuation_core_freeze_at.astimezone(tz).strftime('%d %b %Y • %H:%M %Z')}** after the 194-signal discovery/replay. "
+                        "Only later confirmed signals count here; no Aug21 or retrospective rows are reused.\n"
+                        f"Computable **{volatility.prospective_continuation_core_computable_signals}** • missing **{volatility.prospective_continuation_core_missing_signals}** | "
+                        f"Core flagged **{volatility.prospective_continuation_core_flagged_validation.sample}**: TP5 **{volatility.prospective_continuation_core_flagged_validation.target_exits}** • "
+                        f"SL75 **{volatility.prospective_continuation_core_flagged_validation.stop_exits}** • open **{volatility.prospective_continuation_core_flagged_validation.waiting}**.\n"
+                        f"Overlap: PCR+Core **{volatility.prospective_continuation_core_pcr_both_flagged}** • Core-only **{volatility.prospective_continuation_core_only_flagged}** • "
+                        f"PCR-only **{volatility.prospective_continuation_core_pcr_only_flagged}** • neither **{volatility.prospective_continuation_core_neither_flagged}**. "
+                        f"Core-only outcomes: n=**{volatility.prospective_continuation_core_only_validation.sample}** • TP5 **{volatility.prospective_continuation_core_only_validation.target_exits}** • "
+                        f"SL75 **{volatility.prospective_continuation_core_only_validation.stop_exits}** • open **{volatility.prospective_continuation_core_only_validation.waiting}** • "
+                        f"avg marked **{self._signed_percent(volatility.prospective_continuation_core_only_validation.avg_marked_return)}**.\n"
+                        f"Fixed 5%: MTM **{self._signed_percent(volatility.prospective_continuation_core_portfolio_fixed.marked_return)}** / "
+                        f"DD **-{self._percent(volatility.prospective_continuation_core_portfolio_fixed.max_mtm_drawdown)}** | "
+                        f"PCR: MTM **{self._signed_percent(volatility.prospective_continuation_core_portfolio_pcr.marked_return)}** / "
+                        f"DD **-{self._percent(volatility.prospective_continuation_core_portfolio_pcr.max_mtm_drawdown)}** / R-DD **{self._number(volatility.prospective_continuation_core_portfolio_pcr.return_over_max_drawdown)}** | "
+                        f"Core: MTM **{self._signed_percent(volatility.prospective_continuation_core_portfolio_de_risked.marked_return)}** / "
+                        f"DD **-{self._percent(volatility.prospective_continuation_core_portfolio_de_risked.max_mtm_drawdown)}** / R-DD **{self._number(volatility.prospective_continuation_core_portfolio_de_risked.return_over_max_drawdown)}**"
+                    ),
+                    "inline": False,
+                },
                 {"name": "True latest-30d empty-book replay", "value": thirty_day, "inline": False},
                 {
                     "name": "Research bundle",
@@ -854,7 +876,7 @@ class DiscordNotifier:
                 },
             ],
             "footer": {
-                "text": "PCR was frozen 30 Aug 2026. Only later signals are prospective for PCR; the Aug21 cohort is retrospective to PCR. Funding and real execution slippage remain outside the replay."
+                "text": "PCR was frozen 30 Aug 2026. Continuation Core V1 true-forward evidence starts 1 Sep 2026 21:57 CEST after its 194-signal discovery replay. Funding and real execution slippage remain outside the replay."
             },
         }
 

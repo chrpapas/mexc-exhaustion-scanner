@@ -5,6 +5,7 @@ from datetime import UTC, datetime, timedelta
 
 from app.notifier import DiscordNotifier
 from app.research_analytics import (
+    CONTINUATION_CORE_V1_FREEZE_AT,
     RESEARCH_OOS_FREEZE_AT,
     build_research_analytics,
     research_entry_research_csv,
@@ -187,9 +188,42 @@ def test_v134_notifier_adds_prospective_monitor_embed():
     )
     assert "Forward Evidence" in text
     assert "Post-freeze A/B/C" in text
+    assert "Continuation Core V1 • true forward" in text
     assert "failed after complete 7d" not in text
     assert "open >7d" in text
     assert "EntryGate-v1 acceptance" not in text
     assert "Regime drift" not in text
     for embed in embeds:
         notifier._validate_discord_embed(embed)
+
+
+def test_continuation_core_v1_true_forward_boundary_and_core_only_cohort():
+    before = _rebase(_base_row(501), CONTINUATION_CORE_V1_FREEZE_AT - timedelta(minutes=1))
+    before["feature_snapshot"] = dict(before["feature_snapshot"])
+    before["feature_snapshot"]["distance_above_ema20_atr_4h"] = 3.0
+
+    both = _rebase(_base_row(502), CONTINUATION_CORE_V1_FREEZE_AT + timedelta(minutes=1))
+    both["feature_snapshot"] = dict(both["feature_snapshot"])
+    both["feature_snapshot"]["distance_above_ema20_atr_4h"] = 3.0
+    both["feature_snapshot"]["return_24h"] = 0.30
+    both["target_5_at"] = both["confirmed_at"] + timedelta(hours=2)
+
+    core_only = _rebase(_base_row(503), CONTINUATION_CORE_V1_FREEZE_AT + timedelta(minutes=2))
+    core_only["feature_snapshot"] = dict(core_only["feature_snapshot"])
+    core_only["feature_snapshot"]["distance_above_ema20_atr_4h"] = 3.0
+    core_only["feature_snapshot"]["return_24h"] = 0.20
+    core_only["target_5_at"] = core_only["confirmed_at"] + timedelta(hours=3)
+
+    report = build_research_analytics(
+        [before, both, core_only],
+        generated_at=CONTINUATION_CORE_V1_FREEZE_AT + timedelta(days=1),
+    )
+    v = report.volatility
+    assert v.prospective_continuation_core_computable_signals == 2
+    assert v.prospective_continuation_core_missing_signals == 0
+    assert v.prospective_continuation_core_flagged_validation.sample == 2
+    assert v.prospective_continuation_core_pcr_both_flagged == 1
+    assert v.prospective_continuation_core_only_flagged == 1
+    assert v.prospective_continuation_core_pcr_only_flagged == 0
+    assert v.prospective_continuation_core_only_validation.sample == 1
+    assert v.prospective_continuation_core_only_validation.target_exits == 1

@@ -1,9 +1,18 @@
-# MEXC Exhaustion Scanner + Multi-Slot Futures Trader v1.3.41
+# MEXC Exhaustion Scanner + Multi-Slot Futures Trader v1.3.42
 
 Execution + research release. **TP5_SL75_PCR_V1 is now the default trader strategy**.
 
 
 
+
+## v1.3.42 — Continuation Core V1 true-forward monitor
+
+- Keeps the frozen Continuation Core V1 rule unchanged and **research-only**; live/default execution remains `tp5_sl75_pcr_v1`.
+- Starts a conservative true-forward Core V1 cohort at **01 Sep 2026 21:57 CEST**, after the 194-signal discovery/replay, so none of the data used to design the rule can leak into its prospective evidence.
+- Forward Evidence now shows Core flagged TP5/SL75/open counts, common-cohort **Fixed vs PCR vs Core** MTM/DD/R-DD, and PCR/Core overlap.
+- Tracks the decisive **Core-only** cohort separately: signals Core de-risks while PCR leaves at 5%, including its TP5/SL75/open mix and average marked return.
+- `research-signal-dataset.csv` adds `continuation_core_v1_true_forward` and `continuation_core_v1_vs_pcr`; `volatility-research.csv` adds true-forward Core buckets and portfolio rows.
+- No DB migration and no HTF backfill rerun are required when v1.3.40 already completed with `missing=0`.
 
 ## v1.3.41 — Continuation Core V1 research challenger
 
