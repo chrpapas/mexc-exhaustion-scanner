@@ -7,6 +7,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from app.trader_logic import pcr_position_fraction
+from app.daily_core_strategy import daily_confirmed_core_v1_state
 
 PUBLIC_PERFORMANCE_RISK_TIERS = frozenset({"standard", "high_risk"})
 SHADOW_FEE_PER_FILL = 0.0008
@@ -394,6 +395,7 @@ class PerformanceSummary:
     tp5_account_run_rate: AccountRunRateSummary | None = None
     tp5_sl75_account_run_rate: AccountRunRateSummary | None = None
     tp5_sl75_pcr_account_run_rate: AccountRunRateSummary | None = None
+    tp5_sl75_daily_core_skip_account_run_rate: AccountRunRateSummary | None = None
     hold_7d_account_run_rate: AccountRunRateSummary | None = None
     tp20_account_run_rate: AccountRunRateSummary | None = None
     standard_7d_account_run_rate: AccountRunRateSummary | None = None
@@ -499,6 +501,7 @@ class PerformanceSummary:
             "tp5_account_run_rate": self.tp5_account_run_rate.as_dict() if self.tp5_account_run_rate else None,
             "tp5_sl75_account_run_rate": self.tp5_sl75_account_run_rate.as_dict() if self.tp5_sl75_account_run_rate else None,
             "tp5_sl75_pcr_account_run_rate": self.tp5_sl75_pcr_account_run_rate.as_dict() if self.tp5_sl75_pcr_account_run_rate else None,
+            "tp5_sl75_daily_core_skip_account_run_rate": self.tp5_sl75_daily_core_skip_account_run_rate.as_dict() if self.tp5_sl75_daily_core_skip_account_run_rate else None,
             "hold_7d_account_run_rate": self.hold_7d_account_run_rate.as_dict() if self.hold_7d_account_run_rate else None,
             "tp20_account_run_rate": self.tp20_account_run_rate.as_dict() if self.tp20_account_run_rate else None,
             "standard_7d_account_run_rate": self.standard_7d_account_run_rate.as_dict() if self.standard_7d_account_run_rate else None,
@@ -1159,6 +1162,7 @@ def build_performance_summary(
         risk_tiers: set[str],
         exposure: ExposureRecommendation,
         pcr_sizing: bool = False,
+        daily_core_skip: bool = False,
     ) -> AccountRunRateSummary:
         ordered = sorted(
             [row for row in rows if row.get("confirmed_at") is not None and row["confirmed_at"] <= now_utc],
@@ -1177,18 +1181,19 @@ def build_performance_summary(
         max_open = 0
         max_exposure_fraction = 0.0
 
-        def signal_position_fraction(row: dict[str, Any]) -> float:
-            if not pcr_sizing:
-                return exposure.per_trade_pct
+        def feature_snapshot(row: dict[str, Any]) -> dict[str, Any]:
             snapshot = row.get("feature_snapshot")
             if isinstance(snapshot, str):
                 try:
                     snapshot = json.loads(snapshot)
                 except (TypeError, ValueError, json.JSONDecodeError):
                     snapshot = {}
-            if not isinstance(snapshot, dict):
-                snapshot = {}
-            return pcr_position_fraction(snapshot)
+            return snapshot if isinstance(snapshot, dict) else {}
+
+        def signal_position_fraction(row: dict[str, Any]) -> float:
+            if not pcr_sizing:
+                return exposure.per_trade_pct
+            return pcr_position_fraction(feature_snapshot(row))
 
         def known_exit(row: dict[str, Any]) -> tuple[datetime | None, float | None]:
             confirmed = row["confirmed_at"]
@@ -1246,6 +1251,11 @@ def build_performance_summary(
             tier = str(row.get("risk_tier") or "standard")
             if tier not in risk_tiers:
                 continue
+            if daily_core_skip:
+                # Live hard filter is fail-closed: flagged and non-computable
+                # signals are not subscriber/trader eligible.
+                if daily_confirmed_core_v1_state(feature_snapshot(row)) is not False:
+                    continue
             eligible_signals += 1
             symbol = str(row.get("symbol") or "")
             if any(pos["symbol"] == symbol for pos in positions):
@@ -1420,6 +1430,12 @@ def build_performance_summary(
         exposure=tp5_exposure,
         pcr_sizing=True,
     )
+    tp5_sl75_daily_core_skip_account_run_rate = account_run_rate(
+        strategy="tp5_sl75",
+        risk_tiers={"standard", "high_risk"},
+        exposure=tp5_exposure,
+        daily_core_skip=True,
+    )
     hold_7d_account_run_rate = account_run_rate(
         strategy="hold_7d", risk_tiers={"standard", "high_risk"}, exposure=tp5_exposure
     )
@@ -1478,6 +1494,7 @@ def build_performance_summary(
         tp5_account_run_rate=tp5_account_run_rate,
         tp5_sl75_account_run_rate=tp5_sl75_account_run_rate,
         tp5_sl75_pcr_account_run_rate=tp5_sl75_pcr_account_run_rate,
+        tp5_sl75_daily_core_skip_account_run_rate=tp5_sl75_daily_core_skip_account_run_rate,
         hold_7d_account_run_rate=hold_7d_account_run_rate,
         tp20_account_run_rate=tp20_account_run_rate,
         standard_7d_account_run_rate=standard_7d_account_run_rate,

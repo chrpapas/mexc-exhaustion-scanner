@@ -10,6 +10,10 @@ from typing import Any, Iterable
 
 from app.json_utils import json_object
 from app.daily_regime import DAILY_REGIME_V1_VERSION, daily_regime_state
+from app.daily_core_strategy import (
+    continuation_core_v1_state,
+    daily_confirmed_core_v1_state,
+)
 from app.trader_logic import (
     HTF_BASE_POSITION_FRACTION,
     HTF_FLAGGED_POSITION_FRACTION,
@@ -2137,28 +2141,11 @@ def _pcr_plus_htf_position_fractions(rows: list[dict[str, Any]]) -> dict[int, fl
 
 
 def _continuation_core_v1_state(row: dict[str, Any]) -> bool | None:
-    """Tri-state frozen Continuation Core V1 classifier.
-
-    The rule is deliberately research-only and uses only signal-time fields:
-    run_score >= 5, 4h EMA20 extension >= 3 ATR, and either positive previous
-    1h momentum or top-1% cross-sectional leadership. Missing inputs are not
-    treated as safe/unflagged.
-    """
+    """Frozen Core V1 wrapper using the same classifier as live admission."""
     snapshot = json_object(row.get("feature_snapshot"))
-    run_score = _float(row.get("run_score"))
-    ema_distance = _float(snapshot.get("distance_above_ema20_atr_4h"))
-    previous_momentum = _float(snapshot.get("previous_momentum_1h"))
-    cross_section = _float(snapshot.get("cross_section_percentile"))
-    if any(value is None for value in (run_score, ema_distance, previous_momentum, cross_section)):
-        return None
-    return (
-        run_score >= CONTINUATION_CORE_V1_RUN_SCORE_MIN
-        and ema_distance >= CONTINUATION_CORE_V1_EMA_DISTANCE_ATR_MIN
-        and (
-            previous_momentum > CONTINUATION_CORE_V1_PREVIOUS_MOMENTUM_MIN
-            or cross_section >= CONTINUATION_CORE_V1_CROSS_SECTION_MIN
-        )
-    )
+    if snapshot.get("run_score") is None and row.get("run_score") is not None:
+        snapshot["run_score"] = row.get("run_score")
+    return continuation_core_v1_state(snapshot)
 
 
 def _continuation_core_v1_position_fractions(rows: list[dict[str, Any]]) -> dict[int, float]:
@@ -2182,11 +2169,10 @@ def _daily_regime_v1_state(row: dict[str, Any]) -> bool | None:
 
 
 def _daily_confirmed_core_v1_state(row: dict[str, Any]) -> bool | None:
-    core_state = _continuation_core_v1_state(row)
-    daily_state = _daily_regime_v1_state(row)
-    if core_state is None or daily_state is None:
-        return None
-    return core_state and daily_state
+    snapshot = json_object(row.get("feature_snapshot"))
+    if snapshot.get("run_score") is None and row.get("run_score") is not None:
+        snapshot["run_score"] = row.get("run_score")
+    return daily_confirmed_core_v1_state(snapshot)
 
 
 def _daily_confirmed_core_v1_position_fractions(rows: list[dict[str, Any]]) -> dict[int, float]:

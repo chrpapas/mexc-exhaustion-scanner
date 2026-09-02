@@ -42,14 +42,15 @@ def test_pcr_frozen_boundaries_and_missing_features():
     assert pcr_position_fraction({"return_24h": 0.29, "distance_above_ema20_atr_4h": 4.0}) == pytest.approx(0.05)
 
 
-def test_pcr_is_new_default_but_fixed_sl75_remains_supported(monkeypatch):
+def test_daily_core_skip_is_new_default_but_pcr_and_fixed_sl75_remain_supported(monkeypatch):
     monkeypatch.setenv("DATABASE_URL", "postgresql://example")
     monkeypatch.delenv("TRADER_EXECUTION_STRATEGY", raising=False)
     monkeypatch.delenv("TRADER_PAPER_RUN_ID", raising=False)
     settings = TraderSettings.from_env()
-    assert settings.execution_strategy == "tp5_sl75_pcr_v1"
-    assert settings.paper_run_id == "tp5_sl75_pcr_v1"
-    assert settings.uses_pcr_derisk
+    assert settings.execution_strategy == "tp5_sl75_daily_core_skip_v1"
+    assert settings.paper_run_id == "tp5_sl75_daily_core_skip_v1"
+    assert settings.uses_daily_core_skip
+    assert not settings.uses_pcr_derisk
     assert settings.uses_catastrophic_stop
     assert settings.uses_generic_slots
     assert settings.max_open_positions == 6
@@ -68,6 +69,7 @@ async def test_live_handler_uses_2_5pct_flagged_and_5pct_unflagged(monkeypatch):
     from app.trader import PortfolioShortTrader
 
     monkeypatch.setenv("DATABASE_URL", "postgresql://example")
+    monkeypatch.setenv("TRADER_EXECUTION_STRATEGY", "tp5_sl75_pcr_v1")
     settings = TraderSettings.from_env()
     trader = PortfolioShortTrader(settings)
     active = []
@@ -107,6 +109,7 @@ async def test_pcr_flagged_can_use_last_2_5pct_capacity_but_normal_5pct_cannot(m
     from app.trader import PortfolioShortTrader
 
     monkeypatch.setenv("DATABASE_URL", "postgresql://example")
+    monkeypatch.setenv("TRADER_EXECUTION_STRATEGY", "tp5_sl75_pcr_v1")
     settings = TraderSettings.from_env()
 
     def existing_positions():

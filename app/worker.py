@@ -9,6 +9,8 @@ from zoneinfo import ZoneInfo
 from typing import Awaitable, Callable
 
 from app.config import Settings
+from app.daily_core_strategy import daily_confirmed_core_v1_snapshot_metadata
+from app.daily_regime import daily_regime_snapshot_metadata, reconstruct_daily_regime_features
 from app.db import Database
 from app.indicators import (
     atr,
@@ -57,6 +59,7 @@ class ScannerWorker:
             settings.discord_webhook_url,
             settings.discord_signal_levels,
             performance_webhook_url=settings.discord_performance_webhook_url,
+            subscriber_signal_strategy=settings.subscriber_signal_strategy,
         )
         self.trader_watchdog_notifier = TraderNotifier(settings.discord_trader_events_webhook_url)
         self.trader_repo = TraderRepository(self.db)
@@ -493,6 +496,51 @@ class ScannerWorker:
             "Candle sync complete: symbols=%d failures=%d", len(symbols), failures
         )
 
+    async def _daily_regime_for_confirmed_signal(
+        self, *, symbol: str, confirmed_at: datetime, entry_price: float
+    ) -> dict[str, object]:
+        """Build causal Day1 regime metadata at confirmation time.
+
+        Day1 data is fetched on demand only for a confirmed short. A fetch failure
+        does not discard the raw signal: existing cached history is still tried,
+        and missing inputs are persisted so subscriber/trader admission can fail
+        closed while research retains the observation.
+        """
+        try:
+            await self._sync_interval(
+                symbol, "Day1", bootstrap_days=45, overlap_hours=48
+            )
+        except Exception:
+            LOGGER.warning(
+                "Day1 confirmation-time sync failed for %s; using cached history if available",
+                symbol,
+                exc_info=True,
+            )
+        try:
+            day1 = await self.db.fetch_candles(symbol, "Day1", 45)
+        except Exception:
+            LOGGER.warning(
+                "Day1 confirmation-time read failed for %s", symbol, exc_info=True
+            )
+            day1 = []
+        rows = [
+            {
+                "open_time": item.open_time,
+                "high": item.high,
+                "low": item.low,
+                "close": item.close,
+            }
+            for item in day1
+        ]
+        recovered, _sources = reconstruct_daily_regime_features(
+            confirmed_at=confirmed_at,
+            entry_price=entry_price,
+            day1_rows=rows,
+        )
+        result: dict[str, object] = dict(recovered)
+        result.update(daily_regime_snapshot_metadata(result))
+        return result
+
     async def _sync_interval(
         self, symbol: str, interval: str, bootstrap_days: int, overlap_hours: int
     ) -> None:
@@ -885,6 +933,16 @@ class ScannerWorker:
                         )
                         if retest.confirmed:
                             confirm_features = dict(base_features)
+                            daily_features = await self._daily_regime_for_confirmed_signal(
+                                symbol=symbol,
+                                confirmed_at=signaled_at,
+                                entry_price=(
+                                    retest.retest_close
+                                    if retest.retest_close is not None and retest.retest_close > 0
+                                    else ticker.last_price
+                                ),
+                            )
+                            confirm_features.update(daily_features)
                             confirm_features.update(
                                 {
                                     "episode_peak_price": episode.peak_price,
@@ -896,6 +954,9 @@ class ScannerWorker:
                                     "retest_tolerance_atr": self.settings.retest_tolerance_atr,
                                     "retest_window_candles": self.settings.retest_window_candles,
                                 }
+                            )
+                            confirm_features.update(
+                                daily_confirmed_core_v1_snapshot_metadata(confirm_features)
                             )
                             episode = await self.db.update_episode(
                                 episode.id,

@@ -67,12 +67,13 @@ def test_htf_v1_frozen_boundaries_and_missing_are_tristate():
     assert metadata["htf_v1_missing_fields"] == ["cross_section_percentile"]
 
 
-def test_htf_strategy_supported_but_pcr_remains_default(monkeypatch):
+def test_htf_strategy_supported_but_daily_core_skip_remains_default(monkeypatch):
     monkeypatch.setenv("DATABASE_URL", "postgresql://example")
     monkeypatch.delenv("TRADER_EXECUTION_STRATEGY", raising=False)
     default = TraderSettings.from_env()
-    assert default.execution_strategy == "tp5_sl75_pcr_v1"
-    assert default.uses_pcr_derisk
+    assert default.execution_strategy == "tp5_sl75_daily_core_skip_v1"
+    assert default.uses_daily_core_skip
+    assert not default.uses_pcr_derisk
     assert not default.uses_htf_derisk
 
     monkeypatch.setenv("TRADER_EXECUTION_STRATEGY", "tp5_sl75_htf_v1")

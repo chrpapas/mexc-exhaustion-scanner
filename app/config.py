@@ -29,6 +29,7 @@ class Settings:
     discord_trader_events_webhook_url: str | None
     trader_watchdog_stale_seconds: int
     discord_signal_levels: frozenset[str]
+    subscriber_signal_strategy: str
     mexc_base_url: str
     mexc_spot_base_url: str
     require_mexc_spot_pair: bool
@@ -108,6 +109,9 @@ class Settings:
                 "DISCORD_SIGNAL_LEVELS",
                 "confirmed_short",
             ),
+            subscriber_signal_strategy=os.getenv(
+                "SUBSCRIBER_SIGNAL_STRATEGY", "tp5_sl75_daily_core_skip_v1"
+            ).strip().lower(),
             mexc_base_url=os.getenv("MEXC_BASE_URL", "https://contract.mexc.com"),
             mexc_spot_base_url=os.getenv("MEXC_SPOT_BASE_URL", "https://api.mexc.com"),
             require_mexc_spot_pair=_env_bool("REQUIRE_MEXC_SPOT_PAIR", True),
@@ -180,6 +184,10 @@ class Settings:
             "breakdown_watch",
             "confirmed_short",
         }
+        if self.subscriber_signal_strategy not in {"tp5_sl75_daily_core_skip_v1", "all_confirmed"}:
+            raise ValueError(
+                "SUBSCRIBER_SIGNAL_STRATEGY must be tp5_sl75_daily_core_skip_v1 or all_confirmed"
+            )
         unknown_signal_levels = self.discord_signal_levels - allowed_signal_levels
         if unknown_signal_levels:
             raise ValueError(

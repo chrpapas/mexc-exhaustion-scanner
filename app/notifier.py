@@ -9,6 +9,11 @@ from zoneinfo import ZoneInfo
 import httpx
 
 from app.models import RunSignal
+from app.daily_core_strategy import (
+    DAILY_CORE_SKIP_STRATEGY,
+    daily_confirmed_core_v1_missing_features,
+    daily_confirmed_core_v1_state,
+)
 from app.signal_ledger import SignalLedger, SignalLedgerItem
 from app.signal_ledger_table import LedgerTableImage
 from app.research_analytics import ResearchAnalyticsReport
@@ -33,12 +38,14 @@ class DiscordNotifier:
         signal_levels: frozenset[str] | set[str] | None = None,
         *,
         performance_webhook_url: str | None = None,
+        subscriber_signal_strategy: str = "all_confirmed",
     ) -> None:
         self._webhook_url = webhook_url
         # Backward-compatible fallback: if the dedicated stats webhook is not
         # configured, reports continue to go to the existing Discord webhook.
         self._performance_webhook_url = performance_webhook_url or webhook_url
         self._signal_levels = frozenset(signal_levels or {"confirmed_short"})
+        self._subscriber_signal_strategy = subscriber_signal_strategy
         self._client = httpx.AsyncClient(timeout=15.0)
 
     def should_send_signal(self, level: str) -> bool:
@@ -55,6 +62,22 @@ class DiscordNotifier:
             return
 
         features = signal.features
+        if self._subscriber_signal_strategy == DAILY_CORE_SKIP_STRATEGY:
+            daily_core_state = daily_confirmed_core_v1_state(features)
+            if daily_core_state is None:
+                missing = daily_confirmed_core_v1_missing_features(features)
+                LOGGER.warning(
+                    "Subscriber signal suppressed fail-closed for %s: missing Daily-Core inputs=%s",
+                    signal.symbol,
+                    ",".join(missing) or "unknown",
+                )
+                return
+            if daily_core_state:
+                LOGGER.info(
+                    "Subscriber signal hard-filtered by Daily-Confirmed Core V1: %s",
+                    signal.symbol,
+                )
+                return
         run_score = features.get("run_score", signal.score)
         exhaustion_score = features.get("exhaustion_score")
         risk_tier = str(features.get("risk_tier") or "standard")
@@ -158,16 +181,16 @@ class DiscordNotifier:
 
         strategies = [
             (
-                "🕰️ Previous active • TP5 + SL75 • fixed 5%",
-                report.trader_strategy_tp5_sl75,
-                report.tp5_sl75_account_run_rate,
-                "6×5% account",
-            ),
-            (
-                "🛡️ Current • TP5 + SL75 • PCR de-risk",
+                "🕰️ Previous active • TP5 + SL75 • PCR de-risk",
                 report.trader_strategy_tp5_sl75,
                 report.tp5_sl75_pcr_account_run_rate,
                 "PCR 2.5/5% account",
+            ),
+            (
+                "🛡️ Current • TP5 + SL75 • Daily-Core hard filter",
+                report.trader_strategy_tp5_sl75,
+                report.tp5_sl75_daily_core_skip_account_run_rate,
+                "Daily-Core hard-filter account",
             ),
         ]
 
@@ -216,11 +239,11 @@ class DiscordNotifier:
             {
                 "name": "▶️ Suggested execution • current default",
                 "value": (
-                    "**TP5 + SL75 + PCR sizing:** short every published **STANDARD + HIGH_RISK confirmed-short** signal • **1× cross** • "
-                    "size a normal entry at **5% of current equity**; if **24h return ≥30% AND 4h EMA20 extension ≥3 ATR**, size it at **2.5%** • "
+                    "**TP5 + SL75 + Daily-Confirmed Core hard filter:** publish/trade only **STANDARD + HIGH_RISK confirmed-short** signals that pass the frozen 4h+1D admission rule • **1× cross** • "
+                    "size each admitted entry at **5% of current equity** • **hard-skip** signals where Continuation Core V1 AND Daily Bull V1 are both true • "
                     "max **6** open positions • max **30% aggregate exposure** • one position per symbol • take profit at **+5% short return** • "
-                    "catastrophic stop at **-75% short return** • no time expiry.\n"
-                    "Research assumes **0.08% fee per fill**. A 5% slot stopped at -75% is roughly **-3.75% account** before fees/slippage; a PCR 2.5% slot roughly halves that account hit."
+                    "catastrophic stop at **-75% short return** • no time expiry. Missing Daily-Core inputs fail closed.\n"
+                    "Research assumes **0.08% fee per fill**. A 5% slot stopped at -75% is roughly **-3.75% account** before fees/slippage."
                 ),
                 "inline": False,
             },
@@ -229,6 +252,8 @@ class DiscordNotifier:
             rule = summary.rule if summary is not None else "+5% TP or -75% SL, no timeout"
             if "PCR" in title:
                 rule = f"{rule}; 2.5% size when 24h ≥30% and EMA20 extension ≥3 ATR, otherwise 5%"
+            elif "Daily-Core" in title:
+                rule = f"{rule}; hard-skip Daily-Confirmed Core V1 flagged/non-computable signals, otherwise fixed 5%"
             else:
                 rule = f"{rule}; fixed 5% per entry"
             fields.append({
@@ -251,9 +276,9 @@ class DiscordNotifier:
             {
                 "name": "🧭 How to use the comparison",
                 "value": (
-                    "**Previous active:** TP5 + SL75 with a fixed **5%** allocation on every admitted trade. "
-                    "**Current PCR:** identical entries and exits, but PCR-flagged parabolic signals use **2.5%** instead of 5%. "
-                    "Because only sizing changes, differences in account return/DD isolate the effect of the PCR risk overlay."
+                    "**Previous active:** TP5 + SL75 with PCR sizing (2.5% on PCR-flagged signals, otherwise 5%). "
+                    "**Current:** TP5 + SL75 at **5%** per admitted trade, but Daily-Confirmed Core flagged or non-computable signals are **not published/traded**. "
+                    "The current account replay therefore includes the real capacity benefit from freeing slots when risky signals are filtered."
                 ),
                 "inline": False,
             },
@@ -268,7 +293,7 @@ class DiscordNotifier:
             "title": "📊 Exhaustion Scanner • Performance & Playbook",
             "description": (
                 f"**{self._pretty_label(label)}** • Updated **{as_of_text}**\n"
-                "Same entries and exits for both competitors; **only position sizing changes**. This isolates the effect of PCR de-risking on portfolio return and drawdown."
+                "Previous PCR versus the current **Daily-Confirmed Core hard-filter** strategy. The current replay changes admission as well as capacity, matching live behavior."
             ),
             "color": 0x5865F2,
             "fields": fields,
@@ -685,7 +710,7 @@ class DiscordNotifier:
             f"Computable **{volatility.htf_computable_signals}** • missing **{volatility.htf_missing_signals}** | flagged **{htf_flagged.sample}**: TP5 **{htf_flagged.target_exits}** • SL75 **{htf_flagged.stop_exits}** • open **{htf_flagged.waiting}** | unflagged **{htf_unflagged.sample}**: SL75 **{htf_unflagged.stop_exits}**.",
             f"PCR/HTF overlap: both **{volatility.htf_pcr_both_flagged}** • HTF-only **{volatility.htf_only_flagged}** • PCR-only **{volatility.pcr_only_flagged}** • neither **{volatility.neither_flagged}**.",
             htf_replay_line("Fixed 5%", htf_fixed),
-            htf_replay_line("Current PCR", htf_pcr),
+            htf_replay_line("PCR baseline", htf_pcr),
             htf_replay_line("HTF V1", htf_book),
             htf_replay_line("PCR + HTF", htf_combined),
         ]
@@ -702,7 +727,7 @@ class DiscordNotifier:
             f"Computable **{volatility.continuation_core_computable_signals}** • missing **{volatility.continuation_core_missing_signals}** | flagged **{core_flagged.sample}**: TP5 **{core_flagged.target_exits}** • SL75 **{core_flagged.stop_exits}** • open **{core_flagged.waiting}** | unflagged **{core_unflagged.sample}**: SL75 **{core_unflagged.stop_exits}**.",
             f"PCR/Core overlap: both **{volatility.continuation_core_pcr_both_flagged}** • Core-only **{volatility.continuation_core_only_flagged}** • PCR-only **{volatility.continuation_core_pcr_only_flagged}** • neither **{volatility.continuation_core_neither_flagged}**.",
             htf_replay_line("Fixed 5%", core_fixed),
-            htf_replay_line("Current PCR", core_pcr),
+            htf_replay_line("PCR baseline", core_pcr),
             htf_replay_line("HTF V1", core_htf),
             htf_replay_line("Continuation Core V1", core_book),
         ]
@@ -712,7 +737,7 @@ class DiscordNotifier:
 
         daily_matrix_lines = [
             "Daily Bull V1 is structural, not threshold-fitted: last completed 1D close > EMA20D • EMA20D slope >0 • 3D momentum >0.",
-            "**Research-only context layer. It does not change PCR/Core sizing or live execution.**",
+            "**Frozen context layer; the current live/default strategy hard-skips Daily-Confirmed Core flagged signals.**",
             f"Computable **{volatility.daily_regime_computable_signals}** • missing **{volatility.daily_regime_missing_signals}** • 1D bullish **{volatility.daily_regime_bullish_signals}** • not bullish **{volatility.daily_regime_nonbullish_signals}**.",
         ]
         for cell in volatility.daily_core_matrix:
@@ -798,10 +823,10 @@ class DiscordNotifier:
         daily_confirmed_flagged = volatility.daily_confirmed_core_flagged_validation
         daily_confirmed_lines = [
             "Frozen Daily-Confirmed Core V1 = Continuation Core V1 AND Daily Bull V1; only the intersection is sized at 2.5%, all other computable signals stay at 5%.",
-            "**Frozen 01 Sep 2026 • 23:25 CEST after the first 190-computable Core×1D matrix review. Research-only; live PCR is unchanged.**",
+            "**Frozen 01 Sep 2026 • 23:25 CEST after the first 190-computable Core×1D matrix review. The rule is now promoted as the live hard-filter admission strategy; thresholds remain frozen.**",
             f"Computable **{volatility.daily_confirmed_core_computable_signals}** • missing **{volatility.daily_confirmed_core_missing_signals}** • flagged **{daily_confirmed_flagged.sample}**: TP5 **{daily_confirmed_flagged.target_exits}** • SL75 **{daily_confirmed_flagged.stop_exits}** • open **{daily_confirmed_flagged.waiting}**.",
             htf_replay_line("Fixed 5%", volatility.daily_confirmed_core_portfolio_fixed),
-            htf_replay_line("Current PCR", volatility.daily_confirmed_core_portfolio_pcr),
+            htf_replay_line("PCR baseline", volatility.daily_confirmed_core_portfolio_pcr),
             htf_replay_line("Core V1", volatility.daily_confirmed_core_portfolio_core),
             htf_replay_line("Daily-Confirmed Core V1 • 2.5% sizing", daily_confirmed),
             htf_replay_line("Daily-Confirmed Core V1 • hard skip", volatility.daily_confirmed_core_portfolio_skip_flagged),
@@ -834,7 +859,7 @@ class DiscordNotifier:
             "title": "🗓️ 7D Hold • Daily-Confirmed Core Replay",
             "description": (
                 "Research-only replay of the pure 7-day cutoff with the frozen 4h+1D continuation-risk layer. "
-                "Live PCR execution is unchanged."
+                "Live/default execution now uses the frozen Daily-Confirmed Core hard filter."
             ),
             "color": 0xE67E22,
             "fields": [
@@ -860,7 +885,7 @@ class DiscordNotifier:
         ]
         tp20_embed = {
             "title": "🎯 TP20 • Daily-Confirmed Core Replay",
-            "description": "Research-only larger-target replay using the frozen 4h+1D continuation-risk sizing layer. Live PCR execution is unchanged.",
+            "description": "Research-only larger-target replay using the frozen 4h+1D continuation-risk sizing layer. Live/default execution now uses the frozen Daily-Confirmed Core hard filter.",
             "color": 0x9B59B6,
             "fields": [{"name": "TP20 vs TP5 • same risk layer", "value": "\n".join(tp20_lines), "inline": False}],
             "footer": {"text": "TP20 and TP5 both retain SL75. This isolates target size while preserving the frozen Daily-Confirmed Core sizing rule."},
@@ -901,7 +926,7 @@ class DiscordNotifier:
                 },
             ],
             "footer": {
-                "text": "Daily Bull V1 and Daily-Confirmed Core V1 are frozen research rules. Live PCR execution is unchanged."
+                "text": "Daily Bull V1 and Daily-Confirmed Core V1 are frozen research rules. Live/default execution now uses the frozen Daily-Confirmed Core hard filter."
             },
         }
 

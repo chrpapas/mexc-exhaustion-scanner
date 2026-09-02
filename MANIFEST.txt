@@ -7,6 +7,7 @@
 ./UPLOAD-INSTRUCTIONS.txt
 ./app/__init__.py
 ./app/config.py
+./app/daily_core_strategy.py
 ./app/daily_regime.py
 ./app/db.py
 ./app/htf_backfill.py
@@ -68,6 +69,7 @@
 ./tests/test_cleanup_v1319.py
 ./tests/test_continuation_core_v141.py
 ./tests/test_daily_confirmed_core_v144.py
+./tests/test_daily_core_live_v148.py
 ./tests/test_daily_regime_v143.py
 ./tests/test_db_research_aggregation_v1329.py
 ./tests/test_hold7d_daily_core_v145.py

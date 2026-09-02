@@ -7,6 +7,11 @@ from datetime import UTC, datetime
 from typing import Any
 
 from app.db import Database
+from app.daily_core_strategy import (
+    DAILY_CORE_SKIP_STRATEGY,
+    daily_confirmed_core_v1_missing_features,
+    daily_confirmed_core_v1_state,
+)
 from app.mexc_trade import MexcTradeClient, MexcTradeError
 from app.trader_config import TraderSettings
 from app.trader_db import TraderRepository
@@ -291,6 +296,35 @@ class PortfolioShortTrader:
             )
             return
 
+        daily_core_flagged = (
+            daily_confirmed_core_v1_state(signal.features)
+            if self.settings.uses_daily_core_skip
+            else None
+        )
+        if self.settings.uses_daily_core_skip and daily_core_flagged is None:
+            missing = daily_confirmed_core_v1_missing_features(signal.features)
+            await self._ignore_signal(
+                signal,
+                "ignored_missing_daily_core_data",
+                "Daily-Confirmed Core hard filter is fail-closed because required signal-time data is missing: "
+                + ", ".join(missing),
+                event_fields=[
+                    {"name": "Missing Daily-Core inputs", "value": ", ".join(missing), "inline": False},
+                ],
+            )
+            return
+        if self.settings.uses_daily_core_skip and daily_core_flagged:
+            await self._ignore_signal(
+                signal,
+                "ignored_daily_core_filter",
+                "Daily-Confirmed Core V1 flagged unresolved 4h+1D bullish continuation risk; hard-filtered",
+                event_fields=[
+                    {"name": "Live admission", "value": "HARD SKIP", "inline": True},
+                    {"name": "Rule", "value": "Continuation Core V1 AND Daily Bull V1", "inline": False},
+                ],
+            )
+            return
+
         active = await self._active_positions()
         if len(active) >= self.settings.max_open_positions:
             await self._ignore_signal(
@@ -407,12 +441,13 @@ class PortfolioShortTrader:
             else await self._open_live(signal, slot_no, equity, notional)
         )
         LOGGER.info(
-            "Signal accepted id=%s symbol=%s risk=%s pcr=%s htf=%s action=OPENED position_id=%s slot=%s notional=%.4f equity=%.4f",
+            "Signal accepted id=%s symbol=%s risk=%s pcr=%s htf=%s daily_core=%s action=OPENED position_id=%s slot=%s notional=%.4f equity=%.4f",
             signal.id,
             signal.symbol,
             signal.risk_tier,
             pcr_flagged,
             htf_flagged,
+            daily_core_flagged,
             position.id,
             position.slot_no,
             position.notional_usdt,
@@ -1200,7 +1235,7 @@ class PortfolioShortTrader:
                 "max_total_exposure_pct": self.settings.max_total_exposure_pct,
                 "strategy": self.settings.execution_strategy,
                 "run_id": self._active_run_id,
-                "version": "1.3.47",
+                "version": "1.3.48",
             },
         )
 
@@ -1210,7 +1245,9 @@ class PortfolioShortTrader:
                 f" • catastrophic SL -{self.settings.catastrophic_stop_pct:g}%"
                 if self.settings.uses_catastrophic_stop else ""
             )
-            if self.settings.uses_pcr_derisk:
+            if self.settings.uses_daily_core_skip:
+                sizing = "5.00% • Daily-Confirmed Core flagged = HARD SKIP"
+            elif self.settings.uses_pcr_derisk:
                 sizing = "PCR 2.50% flagged / 5.00% otherwise"
             elif self.settings.uses_htf_derisk:
                 sizing = "HTF V1 2.50% flagged / 5.00% otherwise"

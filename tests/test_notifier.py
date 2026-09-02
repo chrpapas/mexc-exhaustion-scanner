@@ -232,8 +232,8 @@ def test_performance_report_uses_dedicated_stats_webhook_and_embeds():
     assert "Performance & Playbook" in all_text
     assert "Suggested execution" in all_text
     assert "Previous active" in all_text
-    assert "Current • TP5 + SL75 • PCR de-risk" in all_text
-    assert "fixed 5%" in all_text
+    assert "Current • TP5 + SL75 • Daily-Core hard filter" in all_text
+    assert "Daily-Core hard-filter account" in all_text
     assert "PCR 2.5/5% account" in all_text
     assert "Est. monthly" in all_text
     assert "max DD" in all_text

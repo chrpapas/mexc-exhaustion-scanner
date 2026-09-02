@@ -1,8 +1,38 @@
-# MEXC Exhaustion Scanner + Multi-Slot Futures Trader v1.3.45
+# MEXC Exhaustion Scanner + Multi-Slot Futures Trader v1.3.48
 
-Execution + research release. **TP5_SL75_PCR_V1 is now the default trader strategy**.
+Execution + research release. **TP5 + SL75 + Daily-Confirmed Core hard skip is now the default live/paper trader and subscriber admission strategy.** Raw confirmed signals remain stored for research.
 
+## v1.3.48 — promote Daily-Confirmed Core hard filter live
 
+- New default trader strategy: `tp5_sl75_daily_core_skip_v1`. Admitted signals use fixed **5% current-equity** sizing, TP **+5%**, catastrophic SL **-75%**, 6 generic slots, 30% max aggregate exposure, STANDARD+HIGH_RISK, 1x cross, and one position per symbol.
+- Frozen hard filter: **skip when Continuation Core V1 AND Daily Bull V1 are both true**. Continuation Core V1 remains `run_score >= 5`, 4h EMA20 extension `>=3 ATR`, and (`previous_momentum_1h > 0` OR cross-section percentile `>=0.99`). Daily Bull V1 remains completed Day1 close > EMA20D, EMA20D slope >0, and 3D momentum >0.
+- The scanner now reconstructs the completed-Day1 state **on demand at confirmation time**. It does not poll Day1 candles for the whole universe.
+- Raw confirmed signals are always inserted into the signal/research pipeline first. Subscriber Discord then hard-filters flagged signals; the trader independently rechecks the **same shared classifier** before order admission.
+- Missing Core/Day1 inputs are **fail-closed**: the raw signal stays in research, but subscriber publication and trader entry are both suppressed.
+- Subscriber performance board now compares the **previous PCR strategy** with the **current Daily-Core hard-filter strategy**, including the real capacity benefit from skipped entries.
+- PCR remains an explicit rollback strategy via `TRADER_EXECUTION_STRATEGY=tp5_sl75_pcr_v1`; subscriber rollback is `SUBSCRIBER_SIGNAL_STRATEGY=all_confirmed`.
+- No database migration is required. Existing live positions are not resized or reclassified; the hard filter applies to new confirmed signals. A new default paper run ID (`tp5_sl75_daily_core_skip_v1`) intentionally starts a clean paper experiment when promoted.
+
+### Required deployment values
+
+Scanner service:
+```text
+SUBSCRIBER_SIGNAL_STRATEGY=tp5_sl75_daily_core_skip_v1
+```
+
+Trader service:
+```text
+TRADER_EXECUTION_STRATEGY=tp5_sl75_daily_core_skip_v1
+TRADER_PAPER_RUN_ID=tp5_sl75_daily_core_skip_v1
+TRADER_ALLOWED_RISK_TIERS=STANDARD,HIGH_RISK
+TRADER_MAX_OPEN_POSITIONS=6
+TRADER_SLOT_ALLOCATION_PCT=5
+TRADER_MAX_TOTAL_EXPOSURE_PCT=30
+TRADER_TP5_TARGET_PCT=5
+TRADER_CATASTROPHIC_STOP_PCT=75
+TRADER_MARGIN_MODE=cross
+TRADER_LEVERAGE=1
+```
 
 
 
