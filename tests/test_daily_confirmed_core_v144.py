@@ -44,6 +44,12 @@ def test_daily_confirmed_core_v1_is_exact_core_and_daily_intersection():
     assert v.daily_confirmed_core_flagged_validation.stop_exits == 1
     assert v.daily_confirmed_core_unflagged_validation.sample == 3
     assert v.daily_confirmed_core_portfolio_de_risked.eligible_signals == 4
+    assert v.daily_confirmed_core_portfolio_skip_flagged.eligible_signals == 3
+    assert v.daily_confirmed_core_portfolio_skip_flagged.entered == 3
+    assert (
+        v.daily_confirmed_core_portfolio_skip_flagged.marked_return
+        > v.daily_confirmed_core_portfolio_de_risked.marked_return
+    )
 
 
 def test_daily_confirmed_core_true_forward_starts_after_matrix_freeze():
@@ -91,5 +97,6 @@ def test_daily_regime_card_includes_daily_confirmed_core_replay_and_forward_bloc
     )
     assert "Daily-Confirmed Core V1 • retrospective replay" in text
     assert "Daily-Confirmed Core V1 • true forward" in text
+    assert "Daily-Confirmed Core V1 • hard skip" in text
     for embed in embeds:
         notifier._validate_discord_embed(embed)

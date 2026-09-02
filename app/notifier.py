@@ -803,7 +803,8 @@ class DiscordNotifier:
             htf_replay_line("Fixed 5%", volatility.daily_confirmed_core_portfolio_fixed),
             htf_replay_line("Current PCR", volatility.daily_confirmed_core_portfolio_pcr),
             htf_replay_line("Core V1", volatility.daily_confirmed_core_portfolio_core),
-            htf_replay_line("Daily-Confirmed Core V1", daily_confirmed),
+            htf_replay_line("Daily-Confirmed Core V1 • 2.5% sizing", daily_confirmed),
+            htf_replay_line("Daily-Confirmed Core V1 • hard skip", volatility.daily_confirmed_core_portfolio_skip_flagged),
         ]
         hold7d_daily_fixed = volatility.hold_7d_daily_core_portfolio_fixed
         hold7d_daily_core = volatility.hold_7d_daily_core_portfolio_core
@@ -846,6 +847,23 @@ class DiscordNotifier:
             "footer": {
                 "text": "Sizing overlay = flagged 2.5%, otherwise 5%. Skip variant excludes flagged entries entirely. All use 6 slots / 30% max exposure."
             },
+        }
+
+        tp20_fixed = volatility.tp20_sl75_daily_core_portfolio_fixed
+        tp20_derisk = volatility.tp20_sl75_daily_core_portfolio_de_risked
+        tp20_lines = [
+            "Same 6 slots / 30% cap and SL75 boundary as TP5. Only the profit target changes from +5% to +20%; Daily-Confirmed Core flags are 2.5%, others 5%.",
+            f"Common daily-computable cohort **{volatility.daily_confirmed_core_computable_signals}** • flagged **{daily_confirmed_flagged.sample}**.",
+            hold7d_line("TP20 + SL75 fixed 5%", tp20_fixed),
+            hold7d_line("TP20 + SL75 + Daily-Confirmed Core", tp20_derisk),
+            hold7d_line("TP5 + SL75 + Daily-Confirmed Core", volatility.daily_confirmed_core_portfolio_de_risked),
+        ]
+        tp20_embed = {
+            "title": "🎯 TP20 • Daily-Confirmed Core Replay",
+            "description": "Research-only larger-target replay using the frozen 4h+1D continuation-risk sizing layer. Live PCR execution is unchanged.",
+            "color": 0x9B59B6,
+            "fields": [{"name": "TP20 vs TP5 • same risk layer", "value": "\n".join(tp20_lines), "inline": False}],
+            "footer": {"text": "TP20 and TP5 both retain SL75. This isolates target size while preserving the frozen Daily-Confirmed Core sizing rule."},
         }
 
         prospective_daily_flagged = volatility.prospective_daily_confirmed_core_flagged_validation
@@ -993,7 +1011,7 @@ class DiscordNotifier:
         }
 
         try:
-            for embed in (intelligence, daily_regime_embed, hold7d_daily_embed, prospective):
+            for embed in (intelligence, daily_regime_embed, hold7d_daily_embed, tp20_embed, prospective):
                 self._validate_discord_embed(embed)
 
             payload = {
@@ -1053,6 +1071,16 @@ class DiscordNotifier:
                 json={
                     "username": "Exhaustion Scanner • Research",
                     "embeds": [hold7d_daily_embed],
+                    "allowed_mentions": {"parse": []},
+                },
+            )
+            response.raise_for_status()
+
+            response = await self._client.post(
+                self._performance_webhook_url,
+                json={
+                    "username": "Exhaustion Scanner • Research",
+                    "embeds": [tp20_embed],
                     "allowed_mentions": {"parse": []},
                 },
             )

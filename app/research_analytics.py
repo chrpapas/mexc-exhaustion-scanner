@@ -535,10 +535,13 @@ class VolatilityResearchSummary:
     daily_confirmed_core_portfolio_pcr: PortfolioReplaySummary
     daily_confirmed_core_portfolio_core: PortfolioReplaySummary
     daily_confirmed_core_portfolio_de_risked: PortfolioReplaySummary
+    daily_confirmed_core_portfolio_skip_flagged: PortfolioReplaySummary
     hold_7d_daily_core_portfolio_fixed: PortfolioReplaySummary
     hold_7d_daily_core_portfolio_core: PortfolioReplaySummary
     hold_7d_daily_core_portfolio_de_risked: PortfolioReplaySummary
     hold_7d_daily_core_portfolio_skip_flagged: PortfolioReplaySummary
+    tp20_sl75_daily_core_portfolio_fixed: PortfolioReplaySummary
+    tp20_sl75_daily_core_portfolio_de_risked: PortfolioReplaySummary
     prospective_daily_confirmed_core_computable_signals: int
     prospective_daily_confirmed_core_missing_signals: int
     prospective_daily_confirmed_core_flagged_validation: StrategyValidationSummary
@@ -1581,6 +1584,16 @@ def _known_exit(
         if target is not None and target <= generated_at:
             return target, target_pct_override / 100.0
         return None, None
+    if strategy == "tp20_sl75_challenger":
+        target = _first_target_20(row)
+        stop = row.get(f"adverse_{TP5_SL75_STOP_PCT}_at")
+        target_observed = target is not None and target <= generated_at
+        stop_observed = stop is not None and stop <= generated_at
+        if stop_observed and (not target_observed or stop <= target):
+            return stop, -(TP5_SL75_STOP_PCT / 100.0)
+        if target_observed:
+            return target, 0.20
+        return None, None
     if strategy in {"tp5_challenger", "tp5_sl75_challenger", "hold_7d"}:
         _, exit_at, exit_return = _strategy_outcome(row, strategy=strategy, generated_at=generated_at)
         return exit_at, exit_return
@@ -1802,7 +1815,7 @@ def _portfolio_replay(
         return confirmed_at, -score
 
     ordered = sorted(candidates, key=order_key)
-    if strategy in {"tp5_challenger", "tp5_sl75_challenger", "hold_7d", "tp2_challenger", "tp2_10_challenger", "tp1_10_challenger"}:
+    if strategy in {"tp5_challenger", "tp5_sl75_challenger", "tp20_sl75_challenger", "hold_7d", "tp2_challenger", "tp2_10_challenger", "tp1_10_challenger"}:
         if strategy in {"tp2_10_challenger", "tp1_10_challenger"}:
             position_fraction = FAST_TP_CHALLENGER_SLOT_PCT
             max_total = FAST_TP_CHALLENGER_MAX_SLOTS
@@ -1813,6 +1826,7 @@ def _portfolio_replay(
         base_name = {
             "tp5_challenger": "tp5_challenger_6x5pct",
             "tp5_sl75_challenger": "tp5_sl75_challenger_6x5pct",
+            "tp20_sl75_challenger": "tp20_sl75_challenger_6x5pct",
             "hold_7d": "hold_7d_6x5pct",
             "tp2_challenger": "tp2_challenger_6x5pct",
             "tp2_10_challenger": "tp2_challenger_10x5pct",
@@ -1895,7 +1909,7 @@ def _portfolio_replay(
             if active_fraction + candidate_fraction > max_exposure_fraction_override + 1e-12:
                 missed_capacity += 1
                 continue
-        if strategy not in {"tp5_challenger", "tp5_sl75_challenger", "hold_7d", "tp2_challenger", "tp2_10_challenger", "tp1_10_challenger"}:
+        if strategy not in {"tp5_challenger", "tp5_sl75_challenger", "tp20_sl75_challenger", "hold_7d", "tp2_challenger", "tp2_10_challenger", "tp1_10_challenger"}:
             if tier == "standard" and sum(pos["tier"] == "standard" for pos in positions) >= int(max_standard or 0):
                 missed_capacity += 1
                 continue
@@ -2526,13 +2540,21 @@ def _build_volatility_research(
         max_exposure_fraction_override=0.30, eligible_episode_ids=daily_confirmed_ids,
     )
 
-    # Research-only 7D-cutoff replay on the exact same Daily-Confirmed Core
-    # computable cohort.  This tests whether the frozen continuation-risk layer
-    # improves the pure 168h hold strategy without changing its exit policy.
     daily_confirmed_unflagged_ids = {
         int(row["episode_id"]) for row in daily_confirmed_unflagged_rows
         if row.get("episode_id") is not None
     }
+    daily_confirmed_skip_flagged = _portfolio_replay(
+        rows, strategy="tp5_sl75_challenger", generated_at=generated_at, path_rows=path_rows,
+        cohort="daily_confirmed_core_v1_skip_flagged",
+        strategy_name_override="tp5_sl75_skip_daily_confirmed_core_v1_flagged",
+        max_total_override=6, max_exposure_fraction_override=0.30,
+        eligible_episode_ids=daily_confirmed_unflagged_ids,
+    )
+
+    # Research-only 7D-cutoff replay on the exact same Daily-Confirmed Core
+    # computable cohort.  This tests whether the frozen continuation-risk layer
+    # improves the pure 168h hold strategy without changing its exit policy.
     hold_7d_daily_fixed = _portfolio_replay(
         rows, strategy="hold_7d", generated_at=generated_at, path_rows=path_rows,
         cohort="hold_7d_daily_confirmed_core_v1_common_cohort",
@@ -2560,6 +2582,21 @@ def _build_volatility_research(
         strategy_name_override="hold_7d_skip_daily_confirmed_core_v1_flagged",
         max_total_override=6, max_exposure_fraction_override=0.30,
         eligible_episode_ids=daily_confirmed_unflagged_ids,
+    )
+
+    tp20_sl75_daily_fixed = _portfolio_replay(
+        rows, strategy="tp20_sl75_challenger", generated_at=generated_at, path_rows=path_rows,
+        cohort="tp20_sl75_daily_confirmed_core_v1_common_cohort",
+        strategy_name_override="tp20_sl75_fixed_5pct_daily_confirmed_core_common",
+        max_total_override=6, max_exposure_fraction_override=0.30,
+        eligible_episode_ids=daily_confirmed_ids,
+    )
+    tp20_sl75_daily_de_risked = _portfolio_replay(
+        rows, strategy="tp20_sl75_challenger", generated_at=generated_at, path_rows=path_rows,
+        cohort="tp20_sl75_daily_confirmed_core_v1_common_cohort",
+        strategy_name_override="tp20_sl75_daily_confirmed_core_v1_2_5pct_else_5pct",
+        max_total_override=6, position_fraction_by_episode=daily_confirmed_fractions,
+        max_exposure_fraction_override=0.30, eligible_episode_ids=daily_confirmed_ids,
     )
 
     prospective_daily_source_rows = [
@@ -2717,10 +2754,13 @@ def _build_volatility_research(
         daily_confirmed_core_portfolio_pcr=daily_confirmed_pcr,
         daily_confirmed_core_portfolio_core=daily_confirmed_core,
         daily_confirmed_core_portfolio_de_risked=daily_confirmed_book,
+        daily_confirmed_core_portfolio_skip_flagged=daily_confirmed_skip_flagged,
         hold_7d_daily_core_portfolio_fixed=hold_7d_daily_fixed,
         hold_7d_daily_core_portfolio_core=hold_7d_daily_core,
         hold_7d_daily_core_portfolio_de_risked=hold_7d_daily_de_risked,
         hold_7d_daily_core_portfolio_skip_flagged=hold_7d_daily_skip,
+        tp20_sl75_daily_core_portfolio_fixed=tp20_sl75_daily_fixed,
+        tp20_sl75_daily_core_portfolio_de_risked=tp20_sl75_daily_de_risked,
         prospective_daily_confirmed_core_computable_signals=len(prospective_daily_ids),
         prospective_daily_confirmed_core_missing_signals=len(prospective_daily_source_rows) - len(prospective_daily_ids),
         prospective_daily_confirmed_core_flagged_validation=_strategy_validation_summary(
