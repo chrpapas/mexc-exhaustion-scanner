@@ -1,4 +1,12 @@
-# MEXC Exhaustion Scanner + Multi-Slot Futures Trader v1.3.48
+# MEXC Exhaustion Scanner + Multi-Slot Futures Trader v1.3.49
+
+## v1.3.49 — hard-filter exposure challengers + true-forward 5×10 shadow
+
+- Live/default remains `tp5_sl75_daily_core_skip_v1` at 6×5% / 30% max exposure.
+- Research-only full-path challengers: 5×7.5% / 37.5% and 5×10% / 50%.
+- Frozen true-forward sizing shadow starts 02 Sep 2026 09:13 CEST and compares live 6×5% against 5×10% on identical future hard-filtered signals.
+- No signal thresholds, hard-filter admission logic, TP5, or SL75 settings changed.
+
 
 Execution + research release. **TP5 + SL75 + Daily-Confirmed Core hard skip is now the default live/paper trader and subscriber admission strategy.** Raw confirmed signals remain stored for research.
 

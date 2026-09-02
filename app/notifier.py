@@ -901,11 +901,50 @@ class DiscordNotifier:
             htf_replay_line("Daily-Confirmed Core V1", volatility.prospective_daily_confirmed_core_portfolio_de_risked),
         ]
 
+        exposure_live = volatility.daily_confirmed_core_portfolio_skip_flagged
+        exposure_75 = volatility.daily_confirmed_core_portfolio_skip_5x75
+        exposure_10 = volatility.daily_confirmed_core_portfolio_skip_5x10
+
+        def exposure_line(label: str, book) -> str:
+            dd = f"-{self._percent(book.max_mtm_drawdown)}" if book.max_mtm_drawdown is not None else "n/a"
+            capture = (book.entered / book.eligible_signals) if book.eligible_signals else None
+            return (
+                f"**{label}:** MTM **{self._signed_percent(book.marked_return)}** • DD **{dd}** • "
+                f"R/DD **{self._number(book.return_over_max_drawdown)}** • entered **{book.entered}/{book.eligible_signals}** • "
+                f"capture **{self._percent(capture)}** • capacity miss **{book.missed_capacity}** • "
+                f"max exp **{self._percent(book.max_observed_exposure_pct)}**"
+            )
+
+        exposure_retro_lines = [
+            "Same frozen TP5+SL75 + Daily-Confirmed Core hard-filter admission. Only slot count and per-trade size change.",
+            exposure_line("Live benchmark • 6×5% / 30%", exposure_live),
+            exposure_line("Sizing challenger • 5×7.5% / 37.5%", exposure_75),
+            exposure_line("Sizing challenger • 5×10% / 50%", exposure_10),
+        ]
+        exposure_forward_6x5 = volatility.prospective_daily_core_exposure_shadow_6x5
+        exposure_forward_5x10 = volatility.prospective_daily_core_exposure_shadow_5x10
+        exposure_forward_lines = [
+            f"Frozen **{volatility.daily_core_exposure_shadow_freeze_at.astimezone(tz).strftime('%d %b %Y • %H:%M %Z')}** after the 5×10 sizing decision. Only later confirmed signals count.",
+            f"Daily-Core computable **{volatility.prospective_daily_core_exposure_shadow_computable_signals}** • hard-filtered **{volatility.prospective_daily_core_exposure_shadow_flagged_signals}** • admitted universe **{volatility.prospective_daily_core_exposure_shadow_allowed_signals}**.",
+            exposure_line("Live shadow • 6×5% / 30%", exposure_forward_6x5),
+            exposure_line("Aggressive shadow • 5×10% / 50%", exposure_forward_5x10),
+        ]
+        exposure_embed = {
+            "title": "📐 Exposure Shadow • Hard Filter",
+            "description": "Research-only sizing evaluation on the live Daily-Confirmed Core hard-filter signal set. Live execution remains 6×5% / 30%.",
+            "color": 0x3498DB,
+            "fields": [
+                {"name": "Retrospective full-path sizing replay", "value": "\n".join(exposure_retro_lines), "inline": False},
+                {"name": "5×10 true-forward shadow", "value": "\n".join(exposure_forward_lines), "inline": False},
+            ],
+            "footer": {"text": "Sizing only: signal thresholds and hard-filter admission are frozen. Promote exposure only on forward return/DD evidence."},
+        }
+
         daily_regime_embed = {
             "title": "🗓️ 1D Regime • Core Context",
             "description": (
-                "Exploratory daily-timeframe context using completed 1D candles only. "
-                "No live sizing or entry rule is changed."
+                "Completed-1D regime context for the frozen Daily-Confirmed Core rule. "
+                "Live/default admission now uses the hard filter; sizing remains 6×5% / 30%."
             ),
             "color": 0xF1C40F,
             "fields": [
@@ -1036,7 +1075,7 @@ class DiscordNotifier:
         }
 
         try:
-            for embed in (intelligence, daily_regime_embed, hold7d_daily_embed, tp20_embed, prospective):
+            for embed in (intelligence, daily_regime_embed, exposure_embed, hold7d_daily_embed, tp20_embed, prospective):
                 self._validate_discord_embed(embed)
 
             payload = {
@@ -1086,6 +1125,16 @@ class DiscordNotifier:
                 json={
                     "username": "Exhaustion Scanner • Research",
                     "embeds": [daily_regime_embed],
+                    "allowed_mentions": {"parse": []},
+                },
+            )
+            response.raise_for_status()
+
+            response = await self._client.post(
+                self._performance_webhook_url,
+                json={
+                    "username": "Exhaustion Scanner • Research",
+                    "embeds": [exposure_embed],
                     "allowed_mentions": {"parse": []},
                 },
             )

@@ -103,6 +103,12 @@ DAILY_CONFIRMED_CORE_V1_FREEZE_AT = datetime(2026, 9, 1, 21, 25, tzinfo=UTC)
 DAILY_CONFIRMED_CORE_V1_FLAGGED_POSITION_PCT = 0.025
 DAILY_CONFIRMED_CORE_V1_BASE_POSITION_PCT = 0.05
 
+# Frozen sizing-only shadow started after promoting the hard filter live.
+# Signal admission is unchanged; this isolates portfolio sizing/capacity only.
+DAILY_CORE_EXPOSURE_SHADOW_V1_VERSION = "daily_core_skip_exposure_shadow_v1"
+DAILY_CORE_EXPOSURE_SHADOW_V1_FREEZE_AT = datetime(2026, 9, 2, 7, 13, tzinfo=UTC)
+
+
 # Research-only persistent-pump continuation-risk candidate. These thresholds
 # were selected from the 26 Aug 2026 analysis and are frozen prospectively;
 # they MUST NOT affect subscriber strategy eligibility or TP5 execution.
@@ -540,6 +546,15 @@ class VolatilityResearchSummary:
     daily_confirmed_core_portfolio_core: PortfolioReplaySummary
     daily_confirmed_core_portfolio_de_risked: PortfolioReplaySummary
     daily_confirmed_core_portfolio_skip_flagged: PortfolioReplaySummary
+    daily_confirmed_core_portfolio_skip_5x75: PortfolioReplaySummary
+    daily_confirmed_core_portfolio_skip_5x10: PortfolioReplaySummary
+    daily_core_exposure_shadow_version: str
+    daily_core_exposure_shadow_freeze_at: datetime
+    prospective_daily_core_exposure_shadow_computable_signals: int
+    prospective_daily_core_exposure_shadow_flagged_signals: int
+    prospective_daily_core_exposure_shadow_allowed_signals: int
+    prospective_daily_core_exposure_shadow_6x5: PortfolioReplaySummary
+    prospective_daily_core_exposure_shadow_5x10: PortfolioReplaySummary
     hold_7d_daily_core_portfolio_fixed: PortfolioReplaySummary
     hold_7d_daily_core_portfolio_core: PortfolioReplaySummary
     hold_7d_daily_core_portfolio_de_risked: PortfolioReplaySummary
@@ -2538,6 +2553,61 @@ def _build_volatility_research(
         eligible_episode_ids=daily_confirmed_unflagged_ids,
     )
 
+    # Sizing-only challengers on the exact same hard-filtered admission set.
+    # These do not alter the live 6x5% / 30% configuration.
+    daily_confirmed_skip_5x75 = _portfolio_replay(
+        rows, strategy="tp5_sl75_challenger", generated_at=generated_at, path_rows=path_rows,
+        cohort="daily_confirmed_core_v1_skip_flagged_exposure_challenger",
+        strategy_name_override="tp5_sl75_skip_daily_core_5x7_5pct",
+        position_fraction_override=0.075, max_total_override=5,
+        max_exposure_fraction_override=0.375, eligible_episode_ids=daily_confirmed_unflagged_ids,
+    )
+    daily_confirmed_skip_5x10 = _portfolio_replay(
+        rows, strategy="tp5_sl75_challenger", generated_at=generated_at, path_rows=path_rows,
+        cohort="daily_confirmed_core_v1_skip_flagged_exposure_challenger",
+        strategy_name_override="tp5_sl75_skip_daily_core_5x10pct",
+        position_fraction_override=0.10, max_total_override=5,
+        max_exposure_fraction_override=0.50, eligible_episode_ids=daily_confirmed_unflagged_ids,
+    )
+
+    exposure_shadow_source_rows = [
+        row for row in rows
+        if row.get("confirmed_at") is not None
+        and row["confirmed_at"] > DAILY_CORE_EXPOSURE_SHADOW_V1_FREEZE_AT
+    ]
+    exposure_shadow_computable_rows = [
+        row for row in exposure_shadow_source_rows
+        if _daily_confirmed_core_v1_state(row) is not None
+    ]
+    exposure_shadow_flagged_rows = [
+        row for row in exposure_shadow_computable_rows
+        if _daily_confirmed_core_v1_state(row) is True
+    ]
+    exposure_shadow_allowed_rows = [
+        row for row in exposure_shadow_computable_rows
+        if _daily_confirmed_core_v1_state(row) is False
+    ]
+    exposure_shadow_allowed_ids = {
+        int(row["episode_id"]) for row in exposure_shadow_allowed_rows
+        if row.get("episode_id") is not None
+    }
+    exposure_shadow_6x5 = _portfolio_replay(
+        exposure_shadow_computable_rows, strategy="tp5_sl75_challenger",
+        generated_at=generated_at, path_rows=path_rows,
+        cohort="daily_core_exposure_shadow_v1_true_forward",
+        strategy_name_override="true_forward_daily_core_skip_live_6x5pct",
+        position_fraction_override=0.05, max_total_override=6,
+        max_exposure_fraction_override=0.30, eligible_episode_ids=exposure_shadow_allowed_ids,
+    )
+    exposure_shadow_5x10 = _portfolio_replay(
+        exposure_shadow_computable_rows, strategy="tp5_sl75_challenger",
+        generated_at=generated_at, path_rows=path_rows,
+        cohort="daily_core_exposure_shadow_v1_true_forward",
+        strategy_name_override="true_forward_daily_core_skip_shadow_5x10pct",
+        position_fraction_override=0.10, max_total_override=5,
+        max_exposure_fraction_override=0.50, eligible_episode_ids=exposure_shadow_allowed_ids,
+    )
+
     # Research-only 7D-cutoff replay on the exact same Daily-Confirmed Core
     # computable cohort.  This tests whether the frozen continuation-risk layer
     # improves the pure 168h hold strategy without changing its exit policy.
@@ -2741,6 +2811,15 @@ def _build_volatility_research(
         daily_confirmed_core_portfolio_core=daily_confirmed_core,
         daily_confirmed_core_portfolio_de_risked=daily_confirmed_book,
         daily_confirmed_core_portfolio_skip_flagged=daily_confirmed_skip_flagged,
+        daily_confirmed_core_portfolio_skip_5x75=daily_confirmed_skip_5x75,
+        daily_confirmed_core_portfolio_skip_5x10=daily_confirmed_skip_5x10,
+        daily_core_exposure_shadow_version=DAILY_CORE_EXPOSURE_SHADOW_V1_VERSION,
+        daily_core_exposure_shadow_freeze_at=DAILY_CORE_EXPOSURE_SHADOW_V1_FREEZE_AT,
+        prospective_daily_core_exposure_shadow_computable_signals=len(exposure_shadow_computable_rows),
+        prospective_daily_core_exposure_shadow_flagged_signals=len(exposure_shadow_flagged_rows),
+        prospective_daily_core_exposure_shadow_allowed_signals=len(exposure_shadow_allowed_rows),
+        prospective_daily_core_exposure_shadow_6x5=exposure_shadow_6x5,
+        prospective_daily_core_exposure_shadow_5x10=exposure_shadow_5x10,
         hold_7d_daily_core_portfolio_fixed=hold_7d_daily_fixed,
         hold_7d_daily_core_portfolio_core=hold_7d_daily_core,
         hold_7d_daily_core_portfolio_de_risked=hold_7d_daily_de_risked,
@@ -4052,6 +4131,11 @@ def research_volatility_csv(report: ResearchAnalyticsReport) -> bytes:
         ("daily_confirmed_common", v.daily_confirmed_core_portfolio_pcr),
         ("daily_confirmed_common", v.daily_confirmed_core_portfolio_core),
         ("daily_confirmed_common", v.daily_confirmed_core_portfolio_de_risked),
+        ("daily_confirmed_skip", v.daily_confirmed_core_portfolio_skip_flagged),
+        ("daily_confirmed_skip_exposure", v.daily_confirmed_core_portfolio_skip_5x75),
+        ("daily_confirmed_skip_exposure", v.daily_confirmed_core_portfolio_skip_5x10),
+        ("daily_core_exposure_shadow_true_forward", v.prospective_daily_core_exposure_shadow_6x5),
+        ("daily_core_exposure_shadow_true_forward", v.prospective_daily_core_exposure_shadow_5x10),
         ("hold_7d_daily_confirmed_common", v.hold_7d_daily_core_portfolio_fixed),
         ("hold_7d_daily_confirmed_common", v.hold_7d_daily_core_portfolio_core),
         ("hold_7d_daily_confirmed_common", v.hold_7d_daily_core_portfolio_de_risked),
