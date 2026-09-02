@@ -1208,7 +1208,7 @@ class PortfolioShortTrader:
         self._last_error_alert[key] = now
         await self._notify(
             "🚨 TRADER / SERVER ERROR",
-            f"**{key}** failed. The trader continues running and will retry automatically.\n`{type(exc).__name__}: {str(exc)[:700]}`",
+            f"**{key}** failed. The trader continues running. Recurring operations continue on the next cycle; this specific signal is recorded as an error if processing could not complete.\n`{type(exc).__name__}: {str(exc)[:700]}`",
             color=RED,
         )
 
@@ -1235,7 +1235,7 @@ class PortfolioShortTrader:
                 "max_total_exposure_pct": self.settings.max_total_exposure_pct,
                 "strategy": self.settings.execution_strategy,
                 "run_id": self._active_run_id,
-                "version": "1.3.49",
+                "version": "1.3.50",
             },
         )
 

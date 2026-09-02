@@ -1,4 +1,11 @@
-# MEXC Exhaustion Scanner + Multi-Slot Futures Trader v1.3.49
+# MEXC Exhaustion Scanner + Multi-Slot Futures Trader v1.3.50
+
+## v1.3.50 — Daily-Core trader decision constraint hotfix
+
+- Adds migration `017_daily_core_trader_decisions.sql` so PostgreSQL accepts `ignored_daily_core_filter` and `ignored_missing_daily_core_data`.
+- Repairs v1.3.49 `decision=error` rows caused specifically by the stale `trader_signal_decisions_decision_check`, restoring the intended Daily-Core skip decision (including already-processed signals such as AKE if present).
+- Corrects the trader error-alert wording: signal-processing exceptions advance the trader cursor and therefore are not necessarily retried; recurring scanner/trader work still continues normally.
+- No strategy, sizing, signal threshold, TP5/SL75, slot, exposure, subscriber admission, or research-shadow logic changed. Live/default remains `tp5_sl75_daily_core_skip_v1` at 6×5% / 30%.
 
 ## v1.3.49 — hard-filter exposure challengers + true-forward 5×10 shadow
 

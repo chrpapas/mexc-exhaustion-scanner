@@ -58,6 +58,7 @@
 ./migrations/014_tier_exit_strategy.sql
 ./migrations/015_tp5_trader_runs.sql
 ./migrations/016_tp5_sl75_exit_strategy.sql
+./migrations/017_daily_core_trader_decisions.sql
 ./pyproject.toml
 ./render.yaml
 ./scripts/verify_project.py
@@ -109,6 +110,7 @@
 ./tests/test_tp20_daily_core_v146.py
 ./tests/test_trader_config.py
 ./tests/test_trader_db.py
+./tests/test_trader_decision_migration_v150.py
 ./tests/test_trader_logic.py
 ./tests/test_trader_v120.py
 ./tests/test_trader_v122.py
