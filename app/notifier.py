@@ -940,6 +940,50 @@ class DiscordNotifier:
             "footer": {"text": "Sizing only: signal thresholds and hard-filter admission are frozen. Promote exposure only on forward return/DD evidence."},
         }
 
+        persistence = volatility.daily_bull_persistence
+        persistence_flagged = persistence.flagged_validation
+        persistence_baseline = persistence.portfolio_baseline
+        persistence_skip = persistence.portfolio_skip_flagged
+        persistence_forward_flagged = persistence.prospective_flagged_validation
+        persistence_forward_baseline = persistence.prospective_portfolio_baseline
+        persistence_forward_skip = persistence.prospective_portfolio_skip_flagged
+
+        persistence_retro_lines = [
+            (
+                f"Rule: current Daily-Core admits + Daily Bull + daily distance ≥ **{persistence.daily_distance_atr_min:.1f} ATR** + "
+                f"daily EMA20 one-day slope ≥ **{self._percent(persistence.ema20_slope_min)}** + run→breakdown ≤ **{persistence.run_to_breakdown_hours_max:.1f}h**."
+            ),
+            (
+                f"Flagged **{persistence_flagged.sample}**: TP5 **{persistence_flagged.target_exits}** • "
+                f"SL75 **{persistence_flagged.stop_exits}** • open **{persistence_flagged.waiting}** • "
+                f"avg marked **{self._signed_percent(persistence_flagged.avg_marked_return)}**."
+            ),
+            exposure_line("Current Daily-Core baseline", persistence_baseline),
+            exposure_line("+ Persistence V1 skip", persistence_skip),
+        ]
+        persistence_forward_lines = [
+            f"Frozen **{persistence.freeze_at.astimezone(tz).strftime('%d %b %Y • %H:%M %Z')}** after reviewing USELESS/PONS. Only later confirmations count as validation.",
+            (
+                f"Computable **{persistence.prospective_computable_signals}** • flagged **{persistence_forward_flagged.sample}**: "
+                f"TP5 **{persistence_forward_flagged.target_exits}** • SL75 **{persistence_forward_flagged.stop_exits}** • open **{persistence_forward_flagged.waiting}**."
+            ),
+            exposure_line("Forward Daily-Core baseline", persistence_forward_baseline),
+            exposure_line("Forward + Persistence V1 skip", persistence_forward_skip),
+        ]
+        persistence_embed = {
+            "title": "🧭 First-Entry Trend Persistence • V1",
+            "description": (
+                "Research-only challenger for the exact blind spot exposed by USELESS/PONS: a fast 15m breakdown inside an unusually extended, rapidly rising daily trend. "
+                "Live/default entry remains unchanged."
+            ),
+            "color": 0x9B59B6,
+            "fields": [
+                {"name": "Retrospective hypothesis", "value": "\n".join(persistence_retro_lines), "inline": False},
+                {"name": "True-forward evidence", "value": "\n".join(persistence_forward_lines), "inline": False},
+            ],
+            "footer": {"text": "Do not promote from retrospective improvement: V1 was defined after observing USELESS/PONS. Require clean post-freeze evidence."},
+        }
+
         daily_regime_embed = {
             "title": "🗓️ 1D Regime • Core Context",
             "description": (
@@ -1064,7 +1108,7 @@ class DiscordNotifier:
                         "**strategy-validation.csv** — decision table: all-signal economics, portfolio return/DD, 30D run-rate, capture and tails.\n"
                         "**research-signal-dataset.csv** — every signal with frozen features, full path statistics, adverse/target timestamps and explicit A/B/C outcomes.\n"
                         "**feature-lift / entry-research / token-regime / strategy-sweeps** — exploratory evidence retained for deeper LLM/human analysis.\n"
-                        "**volatility-research.csv** — frozen ATR% quartiles, tier splits, ATR sizing and parabolic continuation-risk sizing evidence."
+                        "**volatility-research.csv** — frozen ATR% quartiles, sizing, continuation-risk evidence, and the Daily Bull Persistence V1 shadow."
                     ),
                     "inline": False,
                 },
@@ -1075,7 +1119,7 @@ class DiscordNotifier:
         }
 
         try:
-            for embed in (intelligence, daily_regime_embed, exposure_embed, hold7d_daily_embed, tp20_embed, prospective):
+            for embed in (intelligence, daily_regime_embed, persistence_embed, exposure_embed, hold7d_daily_embed, tp20_embed, prospective):
                 self._validate_discord_embed(embed)
 
             payload = {
@@ -1125,6 +1169,16 @@ class DiscordNotifier:
                 json={
                     "username": "Exhaustion Scanner • Research",
                     "embeds": [daily_regime_embed],
+                    "allowed_mentions": {"parse": []},
+                },
+            )
+            response.raise_for_status()
+
+            response = await self._client.post(
+                self._performance_webhook_url,
+                json={
+                    "username": "Exhaustion Scanner • Research",
+                    "embeds": [persistence_embed],
                     "allowed_mentions": {"parse": []},
                 },
             )

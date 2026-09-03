@@ -1,4 +1,15 @@
-# MEXC Exhaustion Scanner + Multi-Slot Futures Trader v1.3.50
+# MEXC Exhaustion Scanner + Multi-Slot Futures Trader v1.3.51
+
+
+## v1.3.51 — first-entry Daily Bull Persistence V1 shadow
+
+- **Live/default strategy is unchanged:** `tp5_sl75_daily_core_skip_v1`, STANDARD+HIGH_RISK, 6×5% / 30%, TP5 + SL75, one position per symbol.
+- Adds a **research-only** challenger for the first-entry blind spot exposed by the 3 Sep USELESS/PONS review. It applies only after a signal already passes the current Daily-Confirmed Core hard filter.
+- Frozen V1 hypothesis: Daily Bull V1, Continuation Core V1 **false**, daily entry price `>=4.5 ATR` above EMA20D, one-day EMA20D slope `>=7.5%`, and run→breakdown `<=6h`.
+- The rule is deliberately **not live** because it was designed after observing USELESS/PONS. Retrospective results are hypothesis-generating only. A clean true-forward cohort starts **03 Sep 2026 20:53 CEST**.
+- Research Intelligence adds a **First-Entry Trend Persistence • V1** card comparing the current Daily-Core book against an additional persistence hard-skip shadow, including exact full-path MTM/DD when DB path rows are available.
+- `research-signal-dataset.csv` exports the V1 state and true-forward flag; `volatility-research.csv` exports the bucket and portfolio comparisons.
+- No database migration, env-var change, scanner threshold change, subscriber change, position resize, or live entry change.
 
 ## v1.3.50 — Daily-Core trader decision constraint hotfix
 

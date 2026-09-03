@@ -108,6 +108,16 @@ DAILY_CONFIRMED_CORE_V1_BASE_POSITION_PCT = 0.05
 DAILY_CORE_EXPOSURE_SHADOW_V1_VERSION = "daily_core_skip_exposure_shadow_v1"
 DAILY_CORE_EXPOSURE_SHADOW_V1_FREEZE_AT = datetime(2026, 9, 2, 7, 13, tzinfo=UTC)
 
+# Research-only first-entry higher-timeframe persistence challenger. Defined after
+# the 3 Sep 2026 USELESS/PONS review. It MUST NOT alter live/subscriber admission.
+# Retrospective results are hypothesis-generating because the rule was designed after
+# observing those positions; only signals strictly after this freeze are prospective.
+DAILY_BULL_PERSISTENCE_V1_VERSION = "daily_bull_persistence_v1"
+DAILY_BULL_PERSISTENCE_V1_FREEZE_AT = datetime(2026, 9, 3, 18, 53, tzinfo=UTC)
+DAILY_BULL_PERSISTENCE_V1_DAILY_DISTANCE_ATR_MIN = 4.5
+DAILY_BULL_PERSISTENCE_V1_EMA20_SLOPE_MIN = 0.075
+DAILY_BULL_PERSISTENCE_V1_RUN_TO_BREAKDOWN_HOURS_MAX = 6.0
+
 
 # Research-only persistent-pump continuation-risk candidate. These thresholds
 # were selected from the 26 Aug 2026 analysis and are frozen prospectively;
@@ -466,6 +476,25 @@ class VolatilityBucketSummary:
 
 
 @dataclass(frozen=True, slots=True)
+class DailyBullPersistenceSummary:
+    version: str
+    freeze_at: datetime
+    daily_distance_atr_min: float
+    ema20_slope_min: float
+    run_to_breakdown_hours_max: float
+    computable_signals: int
+    flagged_validation: StrategyValidationSummary
+    unflagged_validation: StrategyValidationSummary
+    portfolio_baseline: PortfolioReplaySummary
+    portfolio_skip_flagged: PortfolioReplaySummary
+    prospective_computable_signals: int
+    prospective_flagged_validation: StrategyValidationSummary
+    prospective_unflagged_validation: StrategyValidationSummary
+    prospective_portfolio_baseline: PortfolioReplaySummary
+    prospective_portfolio_skip_flagged: PortfolioReplaySummary
+
+
+@dataclass(frozen=True, slots=True)
 class VolatilityResearchSummary:
     freeze_at: datetime
     calibration_sample: int
@@ -569,6 +598,7 @@ class VolatilityResearchSummary:
     prospective_daily_confirmed_core_portfolio_pcr: PortfolioReplaySummary
     prospective_daily_confirmed_core_portfolio_core: PortfolioReplaySummary
     prospective_daily_confirmed_core_portfolio_de_risked: PortfolioReplaySummary
+    daily_bull_persistence: DailyBullPersistenceSummary
 
 
 @dataclass(frozen=True, slots=True)
@@ -2190,6 +2220,27 @@ def _daily_confirmed_core_v1_state(row: dict[str, Any]) -> bool | None:
     return daily_confirmed_core_v1_state(snapshot)
 
 
+def _daily_bull_persistence_v1_state(row: dict[str, Any]) -> bool | None:
+    """Research-only V1 veto candidate layered after Daily-Core admission."""
+    daily = _daily_regime_v1_state(row)
+    core = _continuation_core_v1_state(row)
+    if daily is None or core is None:
+        return None
+    if not daily or core:
+        return False
+    snapshot = json_object(row.get("feature_snapshot"))
+    distance = _float(snapshot.get("daily_distance_above_ema20_atr"))
+    slope = _float(snapshot.get("daily_ema20_slope"))
+    run_hours = _float(row.get("hours_run_to_breakdown"))
+    if distance is None or slope is None or run_hours is None:
+        return None
+    return (
+        distance >= DAILY_BULL_PERSISTENCE_V1_DAILY_DISTANCE_ATR_MIN
+        and slope >= DAILY_BULL_PERSISTENCE_V1_EMA20_SLOPE_MIN
+        and run_hours <= DAILY_BULL_PERSISTENCE_V1_RUN_TO_BREAKDOWN_HOURS_MAX
+    )
+
+
 def _daily_confirmed_core_v1_position_fractions(rows: list[dict[str, Any]]) -> dict[int, float]:
     result: dict[int, float] = {}
     for row in rows:
@@ -2570,6 +2621,64 @@ def _build_volatility_research(
         max_exposure_fraction_override=0.50, eligible_episode_ids=daily_confirmed_unflagged_ids,
     )
 
+    # Research-only first-entry trend-persistence challenger layered on top of the
+    # current Daily-Core admission set. The freeze is after the USELESS/PONS review,
+    # so retrospective results below are descriptive only.
+    persistence_rows = [
+        row for row in daily_confirmed_unflagged_rows
+        if _daily_bull_persistence_v1_state(row) is not None
+    ]
+    persistence_flagged_rows = [
+        row for row in persistence_rows if _daily_bull_persistence_v1_state(row) is True
+    ]
+    persistence_unflagged_rows = [
+        row for row in persistence_rows if _daily_bull_persistence_v1_state(row) is False
+    ]
+    persistence_allowed_ids = {
+        int(row["episode_id"]) for row in persistence_unflagged_rows
+        if row.get("episode_id") is not None
+    }
+    persistence_skip = _portfolio_replay(
+        rows, strategy="tp5_sl75_challenger", generated_at=generated_at, path_rows=path_rows,
+        cohort="daily_bull_persistence_v1_skip_flagged",
+        strategy_name_override="tp5_sl75_daily_core_plus_daily_bull_persistence_v1",
+        max_total_override=6, max_exposure_fraction_override=0.30,
+        eligible_episode_ids=persistence_allowed_ids,
+    )
+    persistence_forward_rows = [
+        row for row in persistence_rows
+        if isinstance(row.get("confirmed_at"), datetime)
+        and row["confirmed_at"] > DAILY_BULL_PERSISTENCE_V1_FREEZE_AT
+    ]
+    persistence_forward_flagged_rows = [
+        row for row in persistence_forward_rows if _daily_bull_persistence_v1_state(row) is True
+    ]
+    persistence_forward_unflagged_rows = [
+        row for row in persistence_forward_rows if _daily_bull_persistence_v1_state(row) is False
+    ]
+    persistence_forward_ids = {
+        int(row["episode_id"]) for row in persistence_forward_rows
+        if row.get("episode_id") is not None
+    }
+    persistence_forward_allowed_ids = {
+        int(row["episode_id"]) for row in persistence_forward_unflagged_rows
+        if row.get("episode_id") is not None
+    }
+    persistence_forward_baseline = _portfolio_replay(
+        persistence_forward_rows, strategy="tp5_sl75_challenger", generated_at=generated_at, path_rows=path_rows,
+        cohort="daily_bull_persistence_v1_true_forward",
+        strategy_name_override="true_forward_daily_core_baseline_for_persistence_v1",
+        max_total_override=6, max_exposure_fraction_override=0.30,
+        eligible_episode_ids=persistence_forward_ids,
+    )
+    persistence_forward_skip = _portfolio_replay(
+        persistence_forward_rows, strategy="tp5_sl75_challenger", generated_at=generated_at, path_rows=path_rows,
+        cohort="daily_bull_persistence_v1_true_forward",
+        strategy_name_override="true_forward_daily_core_plus_persistence_v1",
+        max_total_override=6, max_exposure_fraction_override=0.30,
+        eligible_episode_ids=persistence_forward_allowed_ids,
+    )
+
     exposure_shadow_source_rows = [
         row for row in rows
         if row.get("confirmed_at") is not None
@@ -2838,6 +2947,31 @@ def _build_volatility_research(
         prospective_daily_confirmed_core_portfolio_pcr=prospective_daily_pcr,
         prospective_daily_confirmed_core_portfolio_core=prospective_daily_core,
         prospective_daily_confirmed_core_portfolio_de_risked=prospective_daily_book,
+        daily_bull_persistence=DailyBullPersistenceSummary(
+            version=DAILY_BULL_PERSISTENCE_V1_VERSION,
+            freeze_at=DAILY_BULL_PERSISTENCE_V1_FREEZE_AT,
+            daily_distance_atr_min=DAILY_BULL_PERSISTENCE_V1_DAILY_DISTANCE_ATR_MIN,
+            ema20_slope_min=DAILY_BULL_PERSISTENCE_V1_EMA20_SLOPE_MIN,
+            run_to_breakdown_hours_max=DAILY_BULL_PERSISTENCE_V1_RUN_TO_BREAKDOWN_HOURS_MAX,
+            computable_signals=len(persistence_rows),
+            flagged_validation=_strategy_validation_summary(
+                persistence_flagged_rows, strategy="tp5_sl75_challenger", generated_at=generated_at
+            ),
+            unflagged_validation=_strategy_validation_summary(
+                persistence_unflagged_rows, strategy="tp5_sl75_challenger", generated_at=generated_at
+            ),
+            portfolio_baseline=daily_confirmed_skip_flagged,
+            portfolio_skip_flagged=persistence_skip,
+            prospective_computable_signals=len(persistence_forward_rows),
+            prospective_flagged_validation=_strategy_validation_summary(
+                persistence_forward_flagged_rows, strategy="tp5_sl75_challenger", generated_at=generated_at
+            ),
+            prospective_unflagged_validation=_strategy_validation_summary(
+                persistence_forward_unflagged_rows, strategy="tp5_sl75_challenger", generated_at=generated_at
+            ),
+            prospective_portfolio_baseline=persistence_forward_baseline,
+            prospective_portfolio_skip_flagged=persistence_forward_skip,
+        ),
     )
 
 
@@ -4031,6 +4165,9 @@ def research_volatility_csv(report: ResearchAnalyticsReport) -> bytes:
         "continuation_core_missing_signals",
         "daily_confirmed_core_freeze_at", "daily_confirmed_core_computable_signals",
         "daily_confirmed_core_missing_signals",
+        "daily_bull_persistence_freeze_at", "daily_bull_persistence_computable_signals",
+        "daily_bull_persistence_daily_distance_atr_min", "daily_bull_persistence_ema20_slope_min_pct",
+        "daily_bull_persistence_run_to_breakdown_hours_max",
     ]
     writer = csv.DictWriter(output, fieldnames=fields)
     writer.writeheader()
@@ -4122,6 +4259,25 @@ def research_volatility_csv(report: ResearchAnalyticsReport) -> bytes:
             "daily_confirmed_core_computable_signals": computable,
             "daily_confirmed_core_missing_signals": missing,
         })
+    p = v.daily_bull_persistence
+    for cohort, label, summary, computable in (
+        ("all_observed", "flagged", p.flagged_validation, p.computable_signals),
+        ("all_observed", "unflagged", p.unflagged_validation, p.computable_signals),
+        ("true_forward", "flagged", p.prospective_flagged_validation, p.prospective_computable_signals),
+        ("true_forward", "unflagged", p.prospective_unflagged_validation, p.prospective_computable_signals),
+    ):
+        writer.writerow({
+            "row_type": "daily_bull_persistence_v1_bucket", "cohort": cohort, "bucket": label,
+            "sample": summary.sample, "tp5": summary.target_exits, "sl75": summary.stop_exits,
+            "waiting": summary.waiting, "tp5_rate_to_date_pct": _csv_pct(summary.target_rate_to_date),
+            "avg_marked_return_pct": _csv_pct(summary.avg_marked_return),
+            "max_slots": 6, "max_exposure_pct": _csv_pct(0.30),
+            "daily_bull_persistence_freeze_at": p.freeze_at.isoformat(),
+            "daily_bull_persistence_computable_signals": computable,
+            "daily_bull_persistence_daily_distance_atr_min": f"{p.daily_distance_atr_min:.6f}",
+            "daily_bull_persistence_ema20_slope_min_pct": _csv_pct(p.ema20_slope_min),
+            "daily_bull_persistence_run_to_breakdown_hours_max": f"{p.run_to_breakdown_hours_max:.6f}",
+        })
     for cohort, portfolio in (
         ("all_observed", v.portfolio_fixed), ("all_observed", v.portfolio_normalized),
         ("all_observed", v.parabolic_portfolio_de_risked),
@@ -4132,6 +4288,10 @@ def research_volatility_csv(report: ResearchAnalyticsReport) -> bytes:
         ("daily_confirmed_common", v.daily_confirmed_core_portfolio_core),
         ("daily_confirmed_common", v.daily_confirmed_core_portfolio_de_risked),
         ("daily_confirmed_skip", v.daily_confirmed_core_portfolio_skip_flagged),
+        ("daily_bull_persistence", v.daily_bull_persistence.portfolio_baseline),
+        ("daily_bull_persistence", v.daily_bull_persistence.portfolio_skip_flagged),
+        ("daily_bull_persistence_true_forward", v.daily_bull_persistence.prospective_portfolio_baseline),
+        ("daily_bull_persistence_true_forward", v.daily_bull_persistence.prospective_portfolio_skip_flagged),
         ("daily_confirmed_skip_exposure", v.daily_confirmed_core_portfolio_skip_5x75),
         ("daily_confirmed_skip_exposure", v.daily_confirmed_core_portfolio_skip_5x10),
         ("daily_core_exposure_shadow_true_forward", v.prospective_daily_core_exposure_shadow_6x5),
@@ -4181,6 +4341,14 @@ def research_volatility_csv(report: ResearchAnalyticsReport) -> bytes:
                 v.prospective_daily_confirmed_core_missing_signals
                 if cohort == "daily_confirmed_true_forward" else v.daily_confirmed_core_missing_signals
             ),
+            "daily_bull_persistence_freeze_at": v.daily_bull_persistence.freeze_at.isoformat(),
+            "daily_bull_persistence_computable_signals": (
+                v.daily_bull_persistence.prospective_computable_signals
+                if cohort == "daily_bull_persistence_true_forward" else v.daily_bull_persistence.computable_signals
+            ),
+            "daily_bull_persistence_daily_distance_atr_min": f"{v.daily_bull_persistence.daily_distance_atr_min:.6f}",
+            "daily_bull_persistence_ema20_slope_min_pct": _csv_pct(v.daily_bull_persistence.ema20_slope_min),
+            "daily_bull_persistence_run_to_breakdown_hours_max": f"{v.daily_bull_persistence.run_to_breakdown_hours_max:.6f}",
         })
     return output.getvalue().encode("utf-8")
 
@@ -4219,6 +4387,8 @@ def research_signal_dataset_csv(rows: Iterable[dict[str, Any]], *, generated_at:
         "daily_confirmed_core_v1_version", "daily_confirmed_core_v1_computable",
         "daily_confirmed_core_v1_flagged", "daily_confirmed_core_v1_position_fraction",
         "daily_confirmed_core_v1_true_forward",
+        "daily_bull_persistence_v1_version", "daily_bull_persistence_v1_computable",
+        "daily_bull_persistence_v1_flagged", "daily_bull_persistence_v1_true_forward",
     ]
     strategy_fields: list[str] = []
     for prefix in ("tp5_indefinite", "tp5_sl75", "hold_7d"):
@@ -4332,6 +4502,13 @@ def research_signal_dataset_csv(rows: Iterable[dict[str, Any]], *, generated_at:
         )
         flattened["daily_confirmed_core_v1_true_forward"] = (
             isinstance(confirmed, datetime) and confirmed > DAILY_CONFIRMED_CORE_V1_FREEZE_AT
+        )
+        persistence_state = _daily_bull_persistence_v1_state(row)
+        flattened["daily_bull_persistence_v1_version"] = DAILY_BULL_PERSISTENCE_V1_VERSION
+        flattened["daily_bull_persistence_v1_computable"] = persistence_state is not None
+        flattened["daily_bull_persistence_v1_flagged"] = persistence_state
+        flattened["daily_bull_persistence_v1_true_forward"] = (
+            isinstance(confirmed, datetime) and confirmed > DAILY_BULL_PERSISTENCE_V1_FREEZE_AT
         )
         for strategy, prefix in (
             ("tp5_challenger", "tp5_indefinite"),
