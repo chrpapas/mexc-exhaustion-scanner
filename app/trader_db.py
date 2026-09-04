@@ -121,10 +121,12 @@ class TraderRepository:
     async def next_confirmed_signals(self, after_id: int, limit: int = 100) -> list[TradeSignal]:
         rows = await self.db.pool.fetch(
             """
-            SELECT id, symbol, signaled_at, episode_id, features
-            FROM run_signals
-            WHERE id > $1 AND level='confirmed_short'
-            ORDER BY id ASC
+            SELECT rs.id, rs.symbol, rs.signaled_at, rs.episode_id, rs.features,
+                   pe.started_at AS episode_started_at, pe.breakdown_at AS episode_breakdown_at
+            FROM run_signals rs
+            LEFT JOIN pump_episodes pe ON pe.id = rs.episode_id
+            WHERE rs.id > $1 AND rs.level='confirmed_short'
+            ORDER BY rs.id ASC
             LIMIT $2
             """,
             after_id,
@@ -133,6 +135,17 @@ class TraderRepository:
         result: list[TradeSignal] = []
         for row in rows:
             features = json_object(row["features"])
+            if features.get("episode_started_at") is None and row["episode_started_at"] is not None:
+                features["episode_started_at"] = row["episode_started_at"].isoformat()
+            if features.get("breakdown_at") is None and row["episode_breakdown_at"] is not None:
+                features["breakdown_at"] = row["episode_breakdown_at"].isoformat()
+            if features.get("hours_run_to_breakdown") is None:
+                started_at = row["episode_started_at"]
+                breakdown_at = row["episode_breakdown_at"]
+                if started_at is not None and breakdown_at is not None:
+                    features["hours_run_to_breakdown"] = max(
+                        0.0, (breakdown_at - started_at).total_seconds() / 3600.0
+                    )
             risk = str(features.get("risk_tier") or "").upper()
             entry_hint = features.get("retest_close")
             try:

@@ -14,6 +14,11 @@ from app.daily_core_strategy import (
     daily_confirmed_core_v1_missing_features,
     daily_confirmed_core_v1_state,
 )
+from app.daily_bull_persistence_strategy import (
+    DAILY_CORE_PERSISTENCE_SKIP_STRATEGY,
+    daily_bull_persistence_v1_missing_features,
+    daily_bull_persistence_v1_state,
+)
 from app.signal_ledger import SignalLedger, SignalLedgerItem
 from app.signal_ledger_table import LedgerTableImage
 from app.research_analytics import ResearchAnalyticsReport
@@ -62,7 +67,7 @@ class DiscordNotifier:
             return
 
         features = signal.features
-        if self._subscriber_signal_strategy == DAILY_CORE_SKIP_STRATEGY:
+        if self._subscriber_signal_strategy in {DAILY_CORE_SKIP_STRATEGY, DAILY_CORE_PERSISTENCE_SKIP_STRATEGY}:
             daily_core_state = daily_confirmed_core_v1_state(features)
             if daily_core_state is None:
                 missing = daily_confirmed_core_v1_missing_features(features)
@@ -75,6 +80,22 @@ class DiscordNotifier:
             if daily_core_state:
                 LOGGER.info(
                     "Subscriber signal hard-filtered by Daily-Confirmed Core V1: %s",
+                    signal.symbol,
+                )
+                return
+        if self._subscriber_signal_strategy == DAILY_CORE_PERSISTENCE_SKIP_STRATEGY:
+            persistence_state = daily_bull_persistence_v1_state(features)
+            if persistence_state is None:
+                missing = daily_bull_persistence_v1_missing_features(features)
+                LOGGER.warning(
+                    "Subscriber signal suppressed fail-closed for %s: missing Persistence V1 inputs=%s",
+                    signal.symbol,
+                    ",".join(missing) or "unknown",
+                )
+                return
+            if persistence_state:
+                LOGGER.info(
+                    "Subscriber signal hard-filtered by First-Entry Trend Persistence V1: %s",
                     signal.symbol,
                 )
                 return
@@ -181,16 +202,16 @@ class DiscordNotifier:
 
         strategies = [
             (
-                "🕰️ Previous active • TP5 + SL75 • PCR de-risk",
-                report.trader_strategy_tp5_sl75,
-                report.tp5_sl75_pcr_account_run_rate,
-                "PCR 2.5/5% account",
-            ),
-            (
-                "🛡️ Current • TP5 + SL75 • Daily-Core hard filter",
+                "🕰️ Previous active • TP5 + SL75 • Daily-Core hard filter",
                 report.trader_strategy_tp5_sl75,
                 report.tp5_sl75_daily_core_skip_account_run_rate,
                 "Daily-Core hard-filter account",
+            ),
+            (
+                "🛡️ Current • TP5 + SL75 • Daily-Core + Persistence V1",
+                report.trader_strategy_tp5_sl75,
+                report.tp5_sl75_daily_core_persistence_skip_account_run_rate,
+                "Daily-Core + Persistence hard-filter account",
             ),
         ]
 
@@ -973,15 +994,15 @@ class DiscordNotifier:
         persistence_embed = {
             "title": "🧭 First-Entry Trend Persistence • V1",
             "description": (
-                "Research-only challenger for the exact blind spot exposed by USELESS/PONS: a fast 15m breakdown inside an unusually extended, rapidly rising daily trend. "
-                "Live/default entry remains unchanged."
+                "Frozen first-entry continuation veto originally defined after the USELESS/PONS review: a fast 15m breakdown inside an unusually extended, rapidly rising daily trend. "
+                "Promoted in v1.3.52; the original post-freeze cohort remains the clean validation track."
             ),
             "color": 0x9B59B6,
             "fields": [
                 {"name": "Retrospective hypothesis", "value": "\n".join(persistence_retro_lines), "inline": False},
                 {"name": "True-forward evidence", "value": "\n".join(persistence_forward_lines), "inline": False},
             ],
-            "footer": {"text": "Do not promote from retrospective improvement: V1 was defined after observing USELESS/PONS. Require clean post-freeze evidence."},
+            "footer": {"text": "V1 was promoted by explicit operator choice despite limited forward evidence; keep judging it against the untouched post-freeze cohort."},
         }
 
         daily_regime_embed = {

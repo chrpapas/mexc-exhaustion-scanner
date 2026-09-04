@@ -14,6 +14,13 @@ from app.daily_core_strategy import (
     continuation_core_v1_state,
     daily_confirmed_core_v1_state,
 )
+from app.daily_bull_persistence_strategy import (
+    DAILY_BULL_PERSISTENCE_V1_DAILY_DISTANCE_ATR_MIN,
+    DAILY_BULL_PERSISTENCE_V1_EMA20_SLOPE_MIN,
+    DAILY_BULL_PERSISTENCE_V1_RUN_TO_BREAKDOWN_HOURS_MAX,
+    DAILY_BULL_PERSISTENCE_V1_VERSION,
+    daily_bull_persistence_v1_state,
+)
 from app.trader_logic import (
     HTF_BASE_POSITION_FRACTION,
     HTF_FLAGGED_POSITION_FRACTION,
@@ -108,15 +115,10 @@ DAILY_CONFIRMED_CORE_V1_BASE_POSITION_PCT = 0.05
 DAILY_CORE_EXPOSURE_SHADOW_V1_VERSION = "daily_core_skip_exposure_shadow_v1"
 DAILY_CORE_EXPOSURE_SHADOW_V1_FREEZE_AT = datetime(2026, 9, 2, 7, 13, tzinfo=UTC)
 
-# Research-only first-entry higher-timeframe persistence challenger. Defined after
-# the 3 Sep 2026 USELESS/PONS review. It MUST NOT alter live/subscriber admission.
-# Retrospective results are hypothesis-generating because the rule was designed after
-# observing those positions; only signals strictly after this freeze are prospective.
-DAILY_BULL_PERSISTENCE_V1_VERSION = "daily_bull_persistence_v1"
+# First-entry higher-timeframe persistence challenger. Defined after the
+# 3 Sep 2026 USELESS/PONS review. The threshold set remains frozen; only signals
+# strictly after this original research freeze count as prospective evidence.
 DAILY_BULL_PERSISTENCE_V1_FREEZE_AT = datetime(2026, 9, 3, 18, 53, tzinfo=UTC)
-DAILY_BULL_PERSISTENCE_V1_DAILY_DISTANCE_ATR_MIN = 4.5
-DAILY_BULL_PERSISTENCE_V1_EMA20_SLOPE_MIN = 0.075
-DAILY_BULL_PERSISTENCE_V1_RUN_TO_BREAKDOWN_HOURS_MAX = 6.0
 
 
 # Research-only persistent-pump continuation-risk candidate. These thresholds
@@ -2221,24 +2223,13 @@ def _daily_confirmed_core_v1_state(row: dict[str, Any]) -> bool | None:
 
 
 def _daily_bull_persistence_v1_state(row: dict[str, Any]) -> bool | None:
-    """Research-only V1 veto candidate layered after Daily-Core admission."""
-    daily = _daily_regime_v1_state(row)
-    core = _continuation_core_v1_state(row)
-    if daily is None or core is None:
-        return None
-    if not daily or core:
-        return False
+    """V1 persistence veto using the same shared classifier as promoted execution."""
     snapshot = json_object(row.get("feature_snapshot"))
-    distance = _float(snapshot.get("daily_distance_above_ema20_atr"))
-    slope = _float(snapshot.get("daily_ema20_slope"))
-    run_hours = _float(row.get("hours_run_to_breakdown"))
-    if distance is None or slope is None or run_hours is None:
-        return None
-    return (
-        distance >= DAILY_BULL_PERSISTENCE_V1_DAILY_DISTANCE_ATR_MIN
-        and slope >= DAILY_BULL_PERSISTENCE_V1_EMA20_SLOPE_MIN
-        and run_hours <= DAILY_BULL_PERSISTENCE_V1_RUN_TO_BREAKDOWN_HOURS_MAX
-    )
+    if snapshot.get("run_score") is None and row.get("run_score") is not None:
+        snapshot["run_score"] = row.get("run_score")
+    if snapshot.get("hours_run_to_breakdown") is None and row.get("hours_run_to_breakdown") is not None:
+        snapshot["hours_run_to_breakdown"] = row.get("hours_run_to_breakdown")
+    return daily_bull_persistence_v1_state(snapshot)
 
 
 def _daily_confirmed_core_v1_position_fractions(rows: list[dict[str, Any]]) -> dict[int, float]:
@@ -2621,7 +2612,7 @@ def _build_volatility_research(
         max_exposure_fraction_override=0.50, eligible_episode_ids=daily_confirmed_unflagged_ids,
     )
 
-    # Research-only first-entry trend-persistence challenger layered on top of the
+    # First-entry trend-persistence challenger layered on top of the
     # current Daily-Core admission set. The freeze is after the USELESS/PONS review,
     # so retrospective results below are descriptive only.
     persistence_rows = [

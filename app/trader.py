@@ -12,6 +12,10 @@ from app.daily_core_strategy import (
     daily_confirmed_core_v1_missing_features,
     daily_confirmed_core_v1_state,
 )
+from app.daily_bull_persistence_strategy import (
+    daily_bull_persistence_v1_missing_features,
+    daily_bull_persistence_v1_state,
+)
 from app.mexc_trade import MexcTradeClient, MexcTradeError
 from app.trader_config import TraderSettings
 from app.trader_db import TraderRepository
@@ -321,6 +325,35 @@ class PortfolioShortTrader:
                 event_fields=[
                     {"name": "Live admission", "value": "HARD SKIP", "inline": True},
                     {"name": "Rule", "value": "Continuation Core V1 AND Daily Bull V1", "inline": False},
+                ],
+            )
+            return
+
+        persistence_flagged = (
+            daily_bull_persistence_v1_state(signal.features)
+            if self.settings.uses_daily_bull_persistence_skip
+            else None
+        )
+        if self.settings.uses_daily_bull_persistence_skip and persistence_flagged is None:
+            missing = daily_bull_persistence_v1_missing_features(signal.features)
+            await self._ignore_signal(
+                signal,
+                "ignored_missing_persistence_data",
+                "First-Entry Trend Persistence V1 is fail-closed because required signal-time data is missing: "
+                + (", ".join(missing) or "unknown"),
+                event_fields=[
+                    {"name": "Missing Persistence inputs", "value": ", ".join(missing) or "unknown", "inline": False},
+                ],
+            )
+            return
+        if self.settings.uses_daily_bull_persistence_skip and persistence_flagged:
+            await self._ignore_signal(
+                signal,
+                "ignored_daily_bull_persistence_filter",
+                "First-Entry Trend Persistence V1 flagged an early local breakdown inside an extreme accelerating Daily-Bull trend; hard-filtered",
+                event_fields=[
+                    {"name": "Live admission", "value": "HARD SKIP", "inline": True},
+                    {"name": "Rule", "value": "Daily Bull + Core false + daily extension >=4.5 ATR + EMA20 slope >=7.5% + run→breakdown <=6h", "inline": False},
                 ],
             )
             return
@@ -1235,7 +1268,7 @@ class PortfolioShortTrader:
                 "max_total_exposure_pct": self.settings.max_total_exposure_pct,
                 "strategy": self.settings.execution_strategy,
                 "run_id": self._active_run_id,
-                "version": "1.3.51",
+                "version": "1.3.52",
             },
         )
 
@@ -1245,7 +1278,9 @@ class PortfolioShortTrader:
                 f" • catastrophic SL -{self.settings.catastrophic_stop_pct:g}%"
                 if self.settings.uses_catastrophic_stop else ""
             )
-            if self.settings.uses_daily_core_skip:
+            if self.settings.uses_daily_bull_persistence_skip:
+                sizing = "5.00% • Daily-Core + First-Entry Persistence flagged = HARD SKIP"
+            elif self.settings.uses_daily_core_skip:
                 sizing = "5.00% • Daily-Confirmed Core flagged = HARD SKIP"
             elif self.settings.uses_pcr_derisk:
                 sizing = "PCR 2.50% flagged / 5.00% otherwise"

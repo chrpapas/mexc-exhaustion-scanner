@@ -1,4 +1,17 @@
-# MEXC Exhaustion Scanner + Multi-Slot Futures Trader v1.3.51
+# MEXC Exhaustion Scanner + Multi-Slot Futures Trader v1.3.52
+
+
+## v1.3.52 — promote First-Entry Trend Persistence V1
+
+- New live/default execution strategy: `tp5_sl75_daily_core_persistence_skip_v1`. It retains the existing Daily-Confirmed Core hard skip and adds the frozen First-Entry Trend Persistence V1 hard veto for future entries.
+- Persistence V1 is unchanged from v1.3.51: after Daily-Core admits, skip only when Daily Bull V1 is true, Continuation Core V1 is false, daily distance above EMA20D is `>=4.5 ATR`, one-day EMA20D slope is `>=7.5%`, and run→breakdown is `<=6h`.
+- Sizing/exits are unchanged: STANDARD+HIGH_RISK, 6 generic slots, fixed 5% current-equity notional, 30% max exposure, one position per symbol, 1x cross, TP +5%, catastrophic SL -75%, no timeout.
+- The scanner now stores `hours_run_to_breakdown` in confirmed-signal features; the trader also reconstructs it from `pump_episodes` as a deployment-order fallback. Persistence inputs fail closed only on the branch where the persistence rule is applicable.
+- Subscriber admission supports the same promoted strategy so Discord trade alerts can remain aligned with trader eligibility.
+- Migration `018_daily_bull_persistence_trader_decisions.sql` adds `ignored_daily_bull_persistence_filter` and `ignored_missing_persistence_data` to the trader decision constraint.
+- Existing open positions are **not** reclassified, resized, or force-closed by the new filter. The supplied deployment keeps `TRADER_PAPER_RUN_ID=tp5_sl75_daily_core_skip_v1` specifically to preserve the current paper book and apply the new strategy only to future confirmations.
+- The original 03 Sep 2026 20:53 CEST research freeze remains untouched. USELESS/PONS and all earlier signals remain calibration; only later confirmations count as clean forward evidence even after promotion.
+- Subscriber/account performance now compares the previous Daily-Core hard-filter book with the current Daily-Core + Persistence V1 book.
 
 
 ## v1.3.51 — first-entry Daily Bull Persistence V1 shadow

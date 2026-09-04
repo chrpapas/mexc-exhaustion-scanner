@@ -10,6 +10,7 @@ from typing import Awaitable, Callable
 
 from app.config import Settings
 from app.daily_core_strategy import daily_confirmed_core_v1_snapshot_metadata
+from app.daily_bull_persistence_strategy import daily_bull_persistence_v1_snapshot_metadata
 from app.daily_regime import daily_regime_snapshot_metadata, reconstruct_daily_regime_features
 from app.db import Database
 from app.indicators import (
@@ -943,11 +944,18 @@ class ScannerWorker:
                                 ),
                             )
                             confirm_features.update(daily_features)
+                            run_to_breakdown_hours = (
+                                max(0.0, (episode.breakdown_at - episode.started_at).total_seconds() / 3600.0)
+                                if episode.breakdown_at is not None and episode.started_at is not None
+                                else None
+                            )
                             confirm_features.update(
                                 {
                                     "episode_peak_price": episode.peak_price,
+                                    "episode_started_at": episode.started_at,
                                     "broken_level": episode.broken_level,
                                     "breakdown_at": episode.breakdown_at,
+                                    "hours_run_to_breakdown": run_to_breakdown_hours,
                                     "retest_at": retest.retest_at,
                                     "retest_high": retest.retest_high,
                                     "retest_close": retest.retest_close,
@@ -957,6 +965,9 @@ class ScannerWorker:
                             )
                             confirm_features.update(
                                 daily_confirmed_core_v1_snapshot_metadata(confirm_features)
+                            )
+                            confirm_features.update(
+                                daily_bull_persistence_v1_snapshot_metadata(confirm_features)
                             )
                             episode = await self.db.update_episode(
                                 episode.id,

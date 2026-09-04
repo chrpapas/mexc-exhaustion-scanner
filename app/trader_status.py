@@ -14,7 +14,7 @@ async def main() -> None:
     if url.startswith("postgres://"):
         url = "postgresql://" + url.removeprefix("postgres://")
     mode = os.getenv("TRADING_MODE", "paper").strip().lower()
-    strategy = os.getenv("TRADER_EXECUTION_STRATEGY", "tp5_sl75_daily_core_skip_v1").strip().lower()
+    strategy = os.getenv("TRADER_EXECUTION_STRATEGY", "tp5_sl75_daily_core_persistence_skip_v1").strip().lower()
 
     db = Database(url)
     await db.connect()

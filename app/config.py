@@ -110,7 +110,7 @@ class Settings:
                 "confirmed_short",
             ),
             subscriber_signal_strategy=os.getenv(
-                "SUBSCRIBER_SIGNAL_STRATEGY", "tp5_sl75_daily_core_skip_v1"
+                "SUBSCRIBER_SIGNAL_STRATEGY", "tp5_sl75_daily_core_persistence_skip_v1"
             ).strip().lower(),
             mexc_base_url=os.getenv("MEXC_BASE_URL", "https://contract.mexc.com"),
             mexc_spot_base_url=os.getenv("MEXC_SPOT_BASE_URL", "https://api.mexc.com"),
@@ -184,9 +184,9 @@ class Settings:
             "breakdown_watch",
             "confirmed_short",
         }
-        if self.subscriber_signal_strategy not in {"tp5_sl75_daily_core_skip_v1", "all_confirmed"}:
+        if self.subscriber_signal_strategy not in {"tp5_sl75_daily_core_persistence_skip_v1", "tp5_sl75_daily_core_skip_v1", "all_confirmed"}:
             raise ValueError(
-                "SUBSCRIBER_SIGNAL_STRATEGY must be tp5_sl75_daily_core_skip_v1 or all_confirmed"
+                "SUBSCRIBER_SIGNAL_STRATEGY must be tp5_sl75_daily_core_persistence_skip_v1, tp5_sl75_daily_core_skip_v1 or all_confirmed"
             )
         unknown_signal_levels = self.discord_signal_levels - allowed_signal_levels
         if unknown_signal_levels:

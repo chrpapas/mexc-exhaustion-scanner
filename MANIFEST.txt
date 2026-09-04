@@ -8,6 +8,7 @@
 ./UPLOAD-INSTRUCTIONS.txt
 ./app/__init__.py
 ./app/config.py
+./app/daily_bull_persistence_strategy.py
 ./app/daily_core_strategy.py
 ./app/daily_regime.py
 ./app/db.py
@@ -59,6 +60,7 @@
 ./migrations/015_tp5_trader_runs.sql
 ./migrations/016_tp5_sl75_exit_strategy.sql
 ./migrations/017_daily_core_trader_decisions.sql
+./migrations/018_daily_bull_persistence_trader_decisions.sql
 ./pyproject.toml
 ./render.yaml
 ./scripts/verify_project.py
@@ -70,6 +72,8 @@
 ./tests/test_cleanup_v1318.py
 ./tests/test_cleanup_v1319.py
 ./tests/test_continuation_core_v141.py
+./tests/test_daily_bull_persistence_live_v152.py
+./tests/test_daily_bull_persistence_v151.py
 ./tests/test_daily_confirmed_core_v144.py
 ./tests/test_daily_core_live_v148.py
 ./tests/test_daily_regime_v143.py

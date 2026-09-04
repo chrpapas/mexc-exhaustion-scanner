@@ -75,15 +75,15 @@ class TraderSettings:
             or os.getenv("DISCORD_TRADER_WEBHOOK_URL")
             or None
         )
-        execution_strategy = os.getenv("TRADER_EXECUTION_STRATEGY", "tp5_sl75_daily_core_skip_v1").strip().lower()
+        execution_strategy = os.getenv("TRADER_EXECUTION_STRATEGY", "tp5_sl75_daily_core_persistence_skip_v1").strip().lower()
         allowed_risk_tiers = _csv_upper("TRADER_ALLOWED_RISK_TIERS", "STANDARD,HIGH_RISK")
         max_open_positions = int(os.getenv("TRADER_MAX_OPEN_POSITIONS", "6"))
         if max_open_positions < 1:
             raise ValueError("TRADER_MAX_OPEN_POSITIONS must be >= 1")
 
-        default_exposure = "30" if execution_strategy in {"tp5_v1", "tp5_sl75_v1", "tp5_sl75_pcr_v1", "tp5_sl75_htf_v1", "tp5_sl75_daily_core_skip_v1"} else "20"
+        default_exposure = "30" if execution_strategy in {"tp5_v1", "tp5_sl75_v1", "tp5_sl75_pcr_v1", "tp5_sl75_htf_v1", "tp5_sl75_daily_core_skip_v1", "tp5_sl75_daily_core_persistence_skip_v1"} else "20"
         max_total_exposure_pct = float(os.getenv("TRADER_MAX_TOTAL_EXPOSURE_PCT", default_exposure))
-        default_slot_pct = "5" if execution_strategy in {"tp5_v1", "tp5_sl75_v1", "tp5_sl75_pcr_v1", "tp5_sl75_htf_v1", "tp5_sl75_daily_core_skip_v1"} else str(
+        default_slot_pct = "5" if execution_strategy in {"tp5_v1", "tp5_sl75_v1", "tp5_sl75_pcr_v1", "tp5_sl75_htf_v1", "tp5_sl75_daily_core_skip_v1", "tp5_sl75_daily_core_persistence_skip_v1"} else str(
             max_total_exposure_pct / max_open_positions
         )
         slot_allocation_pct = float(os.getenv("TRADER_SLOT_ALLOCATION_PCT", default_slot_pct))
@@ -147,9 +147,9 @@ class TraderSettings:
     def validate(self) -> None:
         if self.trading_mode not in {"paper", "live"}:
             raise ValueError("TRADING_MODE must be paper or live")
-        if self.execution_strategy not in {"tp5_sl75_daily_core_skip_v1", "tp5_sl75_pcr_v1", "tp5_sl75_htf_v1", "tp5_sl75_v1", "tp5_v1", "tier_v1"}:
+        if self.execution_strategy not in {"tp5_sl75_daily_core_persistence_skip_v1", "tp5_sl75_daily_core_skip_v1", "tp5_sl75_pcr_v1", "tp5_sl75_htf_v1", "tp5_sl75_v1", "tp5_v1", "tier_v1"}:
             raise ValueError(
-                "TRADER_EXECUTION_STRATEGY must be tp5_sl75_daily_core_skip_v1, tp5_sl75_pcr_v1, tp5_sl75_htf_v1, tp5_sl75_v1, tp5_v1 or tier_v1"
+                "TRADER_EXECUTION_STRATEGY must be tp5_sl75_daily_core_persistence_skip_v1, tp5_sl75_daily_core_skip_v1, tp5_sl75_pcr_v1, tp5_sl75_htf_v1, tp5_sl75_v1, tp5_v1 or tier_v1"
             )
         if not self.paper_run_id or len(self.paper_run_id) > 80:
             raise ValueError("TRADER_PAPER_RUN_ID must be a non-empty identifier up to 80 characters")
@@ -164,7 +164,7 @@ class TraderSettings:
         unknown = set(self.allowed_risk_tiers) - {"STANDARD", "HIGH_RISK", "EXTREME_RISK"}
         if unknown:
             raise ValueError(f"unsupported risk tiers: {sorted(unknown)}")
-        if self.execution_strategy in {"tp5_v1", "tp5_sl75_v1", "tp5_sl75_pcr_v1", "tp5_sl75_htf_v1", "tp5_sl75_daily_core_skip_v1"} and "EXTREME_RISK" in self.allowed_risk_tiers:
+        if self.execution_strategy in {"tp5_v1", "tp5_sl75_v1", "tp5_sl75_pcr_v1", "tp5_sl75_htf_v1", "tp5_sl75_daily_core_skip_v1", "tp5_sl75_daily_core_persistence_skip_v1"} and "EXTREME_RISK" in self.allowed_risk_tiers:
             raise ValueError("TP5 strategies intentionally exclude EXTREME_RISK")
         if self.max_open_positions < 1:
             raise ValueError("TRADER_MAX_OPEN_POSITIONS must be >= 1")
@@ -225,12 +225,12 @@ class TraderSettings:
 
     @property
     def uses_generic_slots(self) -> bool:
-        return self.execution_strategy in {"tp5_v1", "tp5_sl75_v1", "tp5_sl75_pcr_v1", "tp5_sl75_htf_v1", "tp5_sl75_daily_core_skip_v1"}
+        return self.execution_strategy in {"tp5_v1", "tp5_sl75_v1", "tp5_sl75_pcr_v1", "tp5_sl75_htf_v1", "tp5_sl75_daily_core_skip_v1", "tp5_sl75_daily_core_persistence_skip_v1"}
 
 
     @property
     def uses_catastrophic_stop(self) -> bool:
-        return self.execution_strategy in {"tp5_sl75_v1", "tp5_sl75_pcr_v1", "tp5_sl75_htf_v1", "tp5_sl75_daily_core_skip_v1"}
+        return self.execution_strategy in {"tp5_sl75_v1", "tp5_sl75_pcr_v1", "tp5_sl75_htf_v1", "tp5_sl75_daily_core_skip_v1", "tp5_sl75_daily_core_persistence_skip_v1"}
 
     @property
     def uses_pcr_derisk(self) -> bool:
@@ -242,7 +242,14 @@ class TraderSettings:
 
     @property
     def uses_daily_core_skip(self) -> bool:
-        return self.execution_strategy == "tp5_sl75_daily_core_skip_v1"
+        return self.execution_strategy in {
+            "tp5_sl75_daily_core_skip_v1",
+            "tp5_sl75_daily_core_persistence_skip_v1",
+        }
+
+    @property
+    def uses_daily_bull_persistence_skip(self) -> bool:
+        return self.execution_strategy == "tp5_sl75_daily_core_persistence_skip_v1"
 
     @property
     def slot_fraction(self) -> float:
