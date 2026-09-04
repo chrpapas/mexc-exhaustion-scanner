@@ -37,7 +37,7 @@ def test_tp5_sl75_pcr_v1_defaults_are_frozen(monkeypatch):
     ):
         monkeypatch.delenv(key, raising=False)
     settings = TraderSettings.from_env()
-    assert settings.execution_strategy == "tp5_sl75_daily_core_skip_v1"
+    assert settings.execution_strategy == "tp5_sl75_daily_core_persistence_skip_v1"
     assert settings.paper_run_id == "tp5_sl75_daily_core_skip_v1"
     assert settings.max_open_positions == 6
     assert settings.slot_allocation_pct == pytest.approx(5.0)

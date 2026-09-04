@@ -71,7 +71,7 @@ def test_htf_strategy_supported_but_daily_core_skip_remains_default(monkeypatch)
     monkeypatch.setenv("DATABASE_URL", "postgresql://example")
     monkeypatch.delenv("TRADER_EXECUTION_STRATEGY", raising=False)
     default = TraderSettings.from_env()
-    assert default.execution_strategy == "tp5_sl75_daily_core_skip_v1"
+    assert default.execution_strategy == "tp5_sl75_daily_core_persistence_skip_v1"
     assert default.uses_daily_core_skip
     assert not default.uses_pcr_derisk
     assert not default.uses_htf_derisk

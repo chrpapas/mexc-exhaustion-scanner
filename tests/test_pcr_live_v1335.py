@@ -47,7 +47,7 @@ def test_daily_core_skip_is_new_default_but_pcr_and_fixed_sl75_remain_supported(
     monkeypatch.delenv("TRADER_EXECUTION_STRATEGY", raising=False)
     monkeypatch.delenv("TRADER_PAPER_RUN_ID", raising=False)
     settings = TraderSettings.from_env()
-    assert settings.execution_strategy == "tp5_sl75_daily_core_skip_v1"
+    assert settings.execution_strategy == "tp5_sl75_daily_core_persistence_skip_v1"
     assert settings.paper_run_id == "tp5_sl75_daily_core_skip_v1"
     assert settings.uses_daily_core_skip
     assert not settings.uses_pcr_derisk

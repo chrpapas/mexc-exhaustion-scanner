@@ -1,31 +1,29 @@
-MEXC Exhaustion Scanner + Multi-Slot Futures Trader v1.3.15
+MEXC Exhaustion Scanner + Multi-Slot Futures Trader v1.3.52
 
-Deploy the entire project/ZIP together. v1.3.15 is a REPORTING release; frozen TP5 trader execution is unchanged.
+Deploy the entire project/ZIP together. v1.3.52 promotes First-Entry Trend Persistence V1 on top of the existing Daily-Core hard filter.
 
-Public Discord strategy choices:
-- TP5 Frequent: STANDARD + HIGH_RISK, full +5% exit.
-- TP20 High Risk: HIGH_RISK only, +20% target or 4-day timeout. Metrics use the strict paired 10-day cohort used in research.
-- 7D Swing: STANDARD only, fixed 7-day hold.
+Current promoted strategy:
+- tp5_sl75_daily_core_persistence_skip_v1
+- STANDARD + HIGH_RISK
+- 6 generic slots × 5% / 30% max exposure
+- TP +5% / catastrophic SL -75%
+- one position per symbol / 1x cross / no timeout
+- Daily-Core hard skip remains active
+- additional Persistence V1 hard skip: Daily Bull + Core false + daily distance >=4.5 ATR + EMA20D slope >=7.5% + run-to-breakdown <=6h
 
-All three show decision-grade W/L and return metrics where meaningful. EXTREME_RISK remains hard-suppressed. Exploratory TP1/TP2/hybrids/EntryGate/token-regime/feature sweeps remain internal.
+Render changes:
+Scanner: SUBSCRIBER_SIGNAL_STRATEGY=tp5_sl75_daily_core_persistence_skip_v1
+Trader:  TRADER_EXECUTION_STRATEGY=tp5_sl75_daily_core_persistence_skip_v1
 
-No new DB migration. Latest remains 015_tp5_trader_runs.sql.
+IMPORTANT: keep TRADER_PAPER_RUN_ID=tp5_sl75_daily_core_skip_v1 for this promotion so current paper positions are not force-closed/reset. Existing positions retain their persisted TP5/SL75 management; the new filter affects only future confirmed signals.
 
-Frozen TP5_V1 paper strategy remains:
-- STANDARD + HIGH_RISK only
-- 6 generic slots
-- 5% current equity per slot
-- 30% aggregate cap
-- 1x cross
-- immediate entry; one open position per symbol
-- full exit at +5% favorable short return
+Migration 018_daily_bull_persistence_trader_decisions.sql is automatic.
 
-Reports:
-python -m app.report_now
-python -m app.research_analytics_now
-python -m app.signal_ledger_now
+The original Persistence V1 research freeze remains 03 Sep 2026 20:53 CEST. Promotion does not turn calibration data into validation data.
 
 Verification:
 pytest -q
 python scripts/verify_project.py
 python -m app.trader_status
+python -m app.report_now
+python -m app.research_analytics_now

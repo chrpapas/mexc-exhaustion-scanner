@@ -26,7 +26,7 @@ def test_strategy_one_is_new_default(monkeypatch):
     assert s.margin_mode == "cross"
     assert s.allowed_risk_tiers == ("STANDARD", "HIGH_RISK")
     assert s.max_open_positions == 6
-    assert s.execution_strategy == "tp5_sl75_pcr_v1"
+    assert s.execution_strategy == "tp5_sl75_daily_core_persistence_skip_v1"
     assert s.slot_allocation_pct == pytest.approx(5.0)
     assert s.max_total_exposure_pct == 30
     assert s.tp5_target_pct == 5

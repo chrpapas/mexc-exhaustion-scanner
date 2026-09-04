@@ -190,6 +190,14 @@ def _report() -> PerformanceSummary:
             "tp5_sl75_pcr", datetime(2026, 8, 1, tzinfo=UTC), datetime(2026, 8, 12, tzinfo=UTC),
             11.0, 20, 18, 16, 2, 0, 1, 1, 0.091, 0.2482, 2482.0, 0.10, 0.275, 26.4, 0.041, 0.091 / 0.041,
         ),
+        tp5_sl75_daily_core_skip_account_run_rate=AccountRunRateSummary(
+            "tp5_sl75_daily_core_skip", datetime(2026, 8, 1, tzinfo=UTC), datetime(2026, 8, 12, tzinfo=UTC),
+            11.0, 15, 14, 12, 2, 0, 1, 0, 0.105, 0.2864, 2864.0, 0.09, 0.25, 22.0, 0.036, 0.105 / 0.036,
+        ),
+        tp5_sl75_daily_core_persistence_skip_account_run_rate=AccountRunRateSummary(
+            "tp5_sl75_daily_core_persistence_skip", datetime(2026, 8, 1, tzinfo=UTC), datetime(2026, 8, 12, tzinfo=UTC),
+            11.0, 13, 12, 11, 1, 0, 1, 0, 0.116, 0.3164, 3164.0, 0.08, 0.25, 19.0, 0.031, 0.116 / 0.031,
+        ),
         tp20_account_run_rate=AccountRunRateSummary(
             "tp20", datetime(2026, 8, 1, tzinfo=UTC), datetime(2026, 8, 12, tzinfo=UTC),
             11.0, 10, 8, 5, 3, 0, 2, 0, 0.031, 0.0845, 845.0, 0.07, 0.10, 38.5, 0.12, 0.031 / 0.12,
@@ -232,9 +240,9 @@ def test_performance_report_uses_dedicated_stats_webhook_and_embeds():
     assert "Performance & Playbook" in all_text
     assert "Suggested execution" in all_text
     assert "Previous active" in all_text
-    assert "Current • TP5 + SL75 • Daily-Core hard filter" in all_text
+    assert "Current • TP5 + SL75 • Daily-Core + Persistence V1" in all_text
     assert "Daily-Core hard-filter account" in all_text
-    assert "PCR 2.5/5% account" in all_text
+    assert "Daily-Core + Persistence hard-filter account" in all_text
     assert "Est. monthly" in all_text
     assert "max DD" in all_text
     assert "captured" in all_text

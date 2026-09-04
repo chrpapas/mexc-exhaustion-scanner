@@ -17,8 +17,8 @@ def test_pcr_sl75_default_configuration(monkeypatch):
     ):
         monkeypatch.delenv(key, raising=False)
     settings = TraderSettings.from_env()
-    assert settings.execution_strategy == "tp5_sl75_pcr_v1"
-    assert settings.paper_run_id == "tp5_sl75_pcr_v1"
+    assert settings.execution_strategy == "tp5_sl75_daily_core_persistence_skip_v1"
+    assert settings.paper_run_id == "tp5_sl75_daily_core_skip_v1"
     assert settings.uses_generic_slots is True
     assert settings.uses_catastrophic_stop is True
     assert settings.max_open_positions == 6

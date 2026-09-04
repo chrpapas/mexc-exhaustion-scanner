@@ -1,31 +1,69 @@
-# Trader deployment — v1.3.29
+# Trader deployment — v1.3.52
 
-v1.3.29 keeps **`TP5_SL75_V1`** as the default trader strategy. Execution is unchanged from v1.3.28; this release fixes the on-demand research analytics timeout and the same scaling risk in performance/ledger reporting by moving expensive per-path aggregation out of PostgreSQL.  Reporting still compares TP5 indefinite, TP5+SL75, and a **pure 7D hold** (no TP/no SL; close exactly at 168h) on the same STANDARD+HIGH_RISK signal stream and 6×5% / 30% portfolio assumptions. Subscriber stats separate all-signal economics from the capacity-constrained account replay, while research adds tail/capacity/forward interpretation and richer LLM-ready exports. EXTREME_RISK remains suppressed before signal creation.
+v1.3.52 promotes the frozen **First-Entry Trend Persistence V1** veto into trader/subscriber admission. The underlying exhaustion confirmation, TP5/SL75 exits, sizing and capacity remain unchanged.
 
-## Default TP5_SL75_V1 execution
+## Current promoted strategy
 
-- `STANDARD` + `HIGH_RISK` only; `EXTREME_RISK` excluded.
-- 6 generic slots; there is no 5-Standard/1-High split under TP5.
-- exactly 5% of current account equity notional per new position.
-- 30% maximum aggregate exposure.
-- cross margin, 1x leverage.
-- immediate entry on confirmed short.
-- one open position per symbol.
-- full close at **+5% favorable short return**.
-- full catastrophic close at **-75% short return** if reached first.
-- paper mode closes on the first observed trader tick at/beyond the threshold; live mode places an exchange-side MEXC stop immediately after entry, so actual fill can be worse than exactly -75% during gaps/slippage.
-- adverse excursion telemetry remains active.
-- paper fee model remains 0.08% per fill for consistency with research.
+`tp5_sl75_daily_core_persistence_skip_v1`
 
-## Recommended Render environment
+A confirmed STANDARD or HIGH_RISK short is admitted only if it passes **both** hard filters:
+
+1. **Daily-Confirmed Core V1** must be false.
+2. **First-Entry Trend Persistence V1** must be false.
+
+Daily-Core V1 remains:
 
 ```text
-MEXC_BASE_URL=https://api.mexc.com
-MEXC_WS_URL=wss://contract.mexc.com/edge
-TRADING_MODE=paper
-TRADER_EXECUTION_STRATEGY=tp5_sl75_v1
-TRADER_PAPER_RUN_ID=tp5_sl75_v1
-PAPER_STARTING_EQUITY_USDT=2000
+Continuation Core V1:
+run_score >= 5
+AND distance_above_ema20_atr_4h >= 3
+AND (previous_momentum_1h > 0 OR cross_section_percentile >= 0.99)
+
+AND
+
+Daily Bull V1:
+last completed Day1 close > EMA20D
+AND EMA20D slope > 0
+AND 3D momentum > 0
+```
+
+Persistence V1 is evaluated only after Daily-Core admits. It hard-skips when:
+
+```text
+Daily Bull V1 = true
+AND Continuation Core V1 = false
+AND daily distance above EMA20D >= 4.5 ATR
+AND one-day EMA20D slope >= 7.5%
+AND run -> breakdown <= 6h
+```
+
+The thresholds are exactly the v1.3.51 frozen rule; promotion does not retune them.
+
+## Execution remains unchanged
+
+- STANDARD + HIGH_RISK only
+- fixed 5% of current equity per admitted position
+- 6 generic slots
+- 30% max aggregate exposure
+- one open position per symbol
+- 1x cross
+- TP +5%
+- catastrophic SL -75%
+- no time expiry
+
+## Render values
+
+Scanner service:
+
+```text
+SUBSCRIBER_SIGNAL_STRATEGY=tp5_sl75_daily_core_persistence_skip_v1
+```
+
+Trader service:
+
+```text
+TRADER_EXECUTION_STRATEGY=tp5_sl75_daily_core_persistence_skip_v1
+TRADER_PAPER_RUN_ID=tp5_sl75_daily_core_skip_v1
 TRADER_ALLOWED_RISK_TIERS=STANDARD,HIGH_RISK
 TRADER_MAX_OPEN_POSITIONS=6
 TRADER_SLOT_ALLOCATION_PCT=5
@@ -35,95 +73,82 @@ TRADER_CATASTROPHIC_STOP_PCT=75
 TRADER_ALLOW_SAME_SYMBOL_PARALLEL=false
 TRADER_MARGIN_MODE=cross
 TRADER_LEVERAGE=1
-TRADER_PAPER_TAKER_FEE_RATE=0.0008
-TRADER_POLL_SECONDS=5
 TRADER_PROCESS_EXISTING_SIGNALS=false
 TRADER_MAX_SIGNAL_AGE_SECONDS=900
-TRADER_DISCORD_HEARTBEAT_SECONDS=900
-TRADER_ERROR_ALERT_COOLDOWN_SECONDS=300
-MEXC_LIVE_ORDER_API_ENABLED=false
 ```
 
-Legacy variables such as `TRADER_MAX_STANDARD_POSITIONS`, `TRADER_MAX_HIGH_RISK_POSITIONS`, `TRADER_STANDARD_HOLD_DAYS`, `TRADER_HIGH_RISK_TIMEOUT_DAYS`, and `TRADER_PROFIT_TARGET_PCT` may remain in Render for rollback compatibility. They are ignored by new `tp5_sl75_v1` entries.
+### Important: keep the current paper run ID
 
-## Paper deployment / reset behavior
-
-`TRADER_PAPER_RUN_ID` is the experiment identity. With the default `tp5_sl75_v1`:
-
-1. The trader archives/closes any open paper positions belonging to the previous run for historical bookkeeping.
-2. Their historical rows are retained; nothing is deleted.
-3. The new `tp5_sl75_v1` paper run starts at `PAPER_STARTING_EQUITY_USDT` (default **$2,000**).
-4. The signal cursor advances to the latest confirmed signal when `TRADER_PROCESS_EXISTING_SIGNALS=false`, so the new run does not retroactively trade old signals.
-5. Normal redeploys with the same `TRADER_PAPER_RUN_ID` resume the same positions/equity and **do not reset again**.
-6. An archived run ID cannot be reused. For a deliberate future reset, choose a fresh ID such as `tp5_v2`; the configured paper starting equity can also be changed at that time.
-
-Check the current run with:
-
-```bash
-python -m app.trader_status
-```
-
-## Switching to live later
-
-Paper starting equity is **never** used as live capital. Live mode reads the MEXC Futures USDT account.
-
-For `tp5_sl75_v1`, live startup and sizing remain the same; additionally every new live position must receive its exchange-side catastrophic stop. The intended live sizing semantics are:
-
-- startup validates positive Futures account equity and exchange-reported **available USDT balance**;
-- each TP5 position targets 5% of **current Futures account equity**, preserving equal slot sizing even after other positions reserve margin;
-- immediately before an order, the trader also checks exchange-reported available USDT (with an execution buffer) and refuses to open a partial slot if a full 5% slot cannot be funded;
-- the 30% aggregate exposure cap and 6-slot cap still apply.
-
-Before live execution:
-
-```bash
-python -m app.trader_preflight
-```
-
-Then explicitly set:
+Do **not** change `TRADER_PAPER_RUN_ID` during this promotion. Keeping:
 
 ```text
-TRADING_MODE=live
-MEXC_LIVE_ORDER_API_ENABLED=true
-LIVE_TRADING_CONFIRM=I_UNDERSTAND_LIVE_TRADING
-MEXC_API_KEY=<futures-enabled key>
-MEXC_API_SECRET=<secret>
+TRADER_PAPER_RUN_ID=tp5_sl75_daily_core_skip_v1
 ```
 
-Prefer an IP-bound API key and ensure no unmanaged/manual Futures positions exist before enabling live mode. Live execution remains fail-closed if preflight/account reconciliation is not safe.
+prevents the paper-run reset logic from closing the currently open positions and resetting equity. Existing ARB/USELESS/etc. positions keep their persisted TP5/SL75 management. Persistence V1 affects only future confirmed signals.
 
-## Migration
+For a later clean A/B experiment you may deliberately start a new run ID, but doing that archives/closes the old paper book by design.
 
-Migration `015_tp5_trader_runs.sql` remains the latest schema migration. `tp5_sl75_full` is stored in the existing text exit-strategy column, so no new migration is required. Previous migrations remain required and valid.
+## Fail-closed decisions
 
-## Research / reporting
+The trader records distinct decisions:
 
-v1.3.22 adds a **research-only persistent-run continuation-risk tracker**. It freezes two signal-time flags at 26 Aug 2026 15:22 CEST: run-to-breakdown >=36h, and a stricter >=36h + <=3 ATR above 4h EMA20. The endpoint is a -100% adverse move within 120h, evaluated with censor-safe rules. This tracker does **not** filter scanner signals or trader entries.
+```text
+ignored_daily_core_filter
+ignored_missing_daily_core_data
+ignored_daily_bull_persistence_filter
+ignored_missing_persistence_data
+```
 
-v1.3.21 keeps the strategy-aware ledger but separates primary outcome color from breach warnings: completed targets/wins stay green, open positions are amber/blue, and only realized closed losses use a red primary cell. Breaches remain visible as secondary red warnings. The ledger now shows all three outcome lenses for both STANDARD and HIGH_RISK signals: TP5, TP20 No Timeout, and 7D hold. Subscriber recommendations are now TP5 Frequent and STANDARD-only 7D Swing. TP20 remains observational in the ledger/research layer and is not currently promoted on the subscriber board.
+Migration `018_daily_bull_persistence_trader_decisions.sql` extends the PostgreSQL CHECK constraint to allow the two new Persistence V1 decisions. It is applied by the normal migration runner.
+
+The scanner embeds `hours_run_to_breakdown` in new confirmed signals. The trader also derives it from `pump_episodes.started_at` and `pump_episodes.breakdown_at` if necessary, making scanner/trader rolling deploy order safe.
+
+## Research integrity
+
+Persistence V1 was designed after reviewing USELESS/PONS. Its original research freeze stays:
+
+```text
+03 Sep 2026 20:53 CEST
+```
+
+Promotion does **not** rewrite that boundary. All earlier results remain retrospective calibration. The existing Research Intelligence card continues tracking the untouched post-freeze cohort.
+
+## Rollback
+
+Restore plain Daily-Core only:
+
+```text
+TRADER_EXECUTION_STRATEGY=tp5_sl75_daily_core_skip_v1
+SUBSCRIBER_SIGNAL_STRATEGY=tp5_sl75_daily_core_skip_v1
+```
+
+PCR remains available as the older rollback:
+
+```text
+TRADER_EXECUTION_STRATEGY=tp5_sl75_pcr_v1
+```
+
+## Verification after deploy
 
 Run:
 
 ```bash
+python -m app.trader_status
 python -m app.report_now
 python -m app.research_analytics_now
-python -m app.signal_ledger_now
 ```
 
-`python -m app.report_now` publishes the canonical **Strategy Comparison**:
-- **TP5 Frequent:** STANDARD + HIGH_RISK, +5% target, no forced timeout.
-- **TP20 High Risk:** HIGH_RISK only, +20% target, no forced timeout.
-- **7D Swing:** STANDARD only, fixed seven-day exit.
+`trader_status` should show:
 
-The report now has two deliberately separate layers:
-- **Account-Level Return:** chronological portfolio replay using the suggested sizing/capacity, actual exit rule, 0.08% fee per fill, and report-time MTM for open positions. It shows observed account return, a linear **30-Day Equivalent Run-Rate**, equivalent P&L per $10k, entered/open trades, capacity misses, and average/peak exposure. TP20 remains open beyond day 7 until +20%. Funding/slippage are not modeled.
-- **168h Signal Evidence:** all three strategies are still valued on the same seven-day signal horizon for path comparison. A target strategy contributes its locked target return when hit before day 7; otherwise it contributes its day-7 mark-to-market. This supporting table shows `Σ signal`, average/median, breach counts while exposed, worst adverse excursion, and capital time.
+```text
+Strategy: tp5_sl75_daily_core_persistence_skip_v1
+```
 
-Suggested exposure shown to subscribers:
-- TP5: **5% per trade × 6 / 30% account cap** — portfolio-tested frozen setup.
-- TP20: **2% per trade × 5 / 10% account cap** — risk-based suggestion because HIGH_RISK positions can remain unresolved and experience much wider adverse paths.
-- STANDARD 7D: **3% per trade × 5 / 15% account cap** — risk-based suggestion for fixed week-long capital occupancy.
+A future persistence-flagged confirmation should appear in trader logs as:
 
-The Research Validation Discord board now shows **TP5 no-stop** as the research baseline and **TP5 + SL75** as the default-trader comparison, alongside evidence health and the prospective TP5 tracker. Historical TP1/TP2/hybrid/EntryGate/token-behaviour/feature-sweep calculations remain internal.
+```text
+decision=IGNORED_DAILY_BULL_PERSISTENCE_FILTER
+```
 
-No new database migration is required in v1.3.29.
+while a safe signal continues to open at 5% current equity subject to the same slot, symbol and 30% exposure limits.
