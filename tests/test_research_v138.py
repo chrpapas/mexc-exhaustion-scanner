@@ -204,7 +204,8 @@ def test_v1326_path_sync_continues_past_fixed_horizon_until_tp5():
     import inspect
 
     source = inspect.getsource(Database.sync_research_signal_paths)
-    assert "min(candle_close_at) FILTER (WHERE favorable_return_pct >= 0.05)" in source
+    assert "min(candle_close_at) AS target_5_at" in source
+    assert "WHERE favorable_return_pct >= 0.05" in source
     assert "WHEN p.target_5_at IS NULL THEN now()" in source
     assert "GREATEST(" in source
     assert "p.confirmed_at + ($2::double precision * interval '1 hour')" in source
