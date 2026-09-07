@@ -109,6 +109,7 @@ def test_persistence_v1_discord_card_marks_rule_research_only():
         for embed in embeds
     )
     assert "First-Entry Trend Persistence • V1" in text
-    assert any("Promoted in v1.3.52" in embed.get("description", "") for embed in embeds)
+    assert "current live rule" in text
+    assert "True-forward evidence" in text
     for embed in embeds:
         notifier._validate_discord_embed(embed)

@@ -174,10 +174,10 @@ def test_v133_notifier_reports_four_way_replay_and_prospective_freeze():
         for embed in embeds
     )
     assert "Research Intelligence" in text
-    assert "TP5 indefinite" in text
-    assert "TP5 + SL75" in text
-    assert "7D hold" in text
-    assert "Forward Evidence" in text
+    assert "Current Strategy" in text
+    assert "TP5 indefinite" not in text
+    assert "7D hold" not in text
+    assert "True-forward evidence" in text
     assert "EntryGate-v1" not in text
     assert "Post-freeze score buckets" not in text
     assert "entrygate_v1__tp5_challenger_6x5pct" not in text

@@ -155,6 +155,7 @@ def test_v1322_notifier_surfaces_research_only_calibration_and_forward_tracker()
     assert report.persistent_run_risk.buckets
     assert "Persistent-run continuation risk" not in text
     assert "Research Intelligence" in text
-    assert "Forward Evidence" in text
+    assert "Current Strategy" in text
+    assert "True-forward evidence" in text
     for embed in embeds:
         notifier._validate_discord_embed(embed)

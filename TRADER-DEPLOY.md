@@ -1,6 +1,14 @@
-# Trader deployment — v1.3.53
+# Trader deployment — v1.3.55
 
-v1.3.52 promotes the frozen **First-Entry Trend Persistence V1** veto into trader/subscriber admission. The underlying exhaustion confirmation, TP5/SL75 exits, sizing and capacity remain unchanged.
+## v1.3.55 deployment note
+
+This release is a **reporting/research cleanup only**. It does not change live entry/exit logic or paper positions.
+
+- Subscriber Discord: current Daily-Core + Persistence V1 strategy only.
+- Research Discord: current strategy retrospective + true-forward evidence only.
+- Routine on-demand research no longer computes legacy PCR/HTF/TP20/7D/sizing-challenger boards.
+- Keep all existing trader/scanner environment variables unchanged.
+- Do **not** reset `TRADER_PAPER_RUN_ID` for this deployment.
 
 ## Current promoted strategy
 
