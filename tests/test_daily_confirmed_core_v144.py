@@ -95,8 +95,9 @@ def test_daily_regime_card_includes_daily_confirmed_core_replay_and_forward_bloc
         "\n".join(field.get("name", "") + " " + field.get("value", "") for field in embed.get("fields", []))
         for embed in embeds
     )
-    assert "Daily-Confirmed Core V1 • retrospective replay" in text
-    assert "Daily-Confirmed Core V1 • true forward" in text
-    assert "Daily-Confirmed Core V1 • hard skip" in text
+    assert "Daily-Confirmed Core hard skip" in text
+    assert "Retrospective current-strategy replay" in text
+    assert "True-forward evidence" in text
+    assert "Persistence V1" in text
     for embed in embeds:
         notifier._validate_discord_embed(embed)

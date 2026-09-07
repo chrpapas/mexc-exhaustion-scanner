@@ -497,6 +497,29 @@ class DailyBullPersistenceSummary:
 
 
 @dataclass(frozen=True, slots=True)
+class CurrentStrategyResearchSummary:
+    generated_at: datetime
+    strategy: str
+    total_signals: int
+    daily_core_flagged: int
+    daily_core_missing: int
+    persistence_flagged: int
+    persistence_missing: int
+    admitted_signals: int
+    admitted_validation: StrategyValidationSummary
+    portfolio: PortfolioReplaySummary
+    freeze_at: datetime
+    prospective_total_signals: int
+    prospective_daily_core_flagged: int
+    prospective_daily_core_missing: int
+    prospective_persistence_flagged: int
+    prospective_persistence_missing: int
+    prospective_admitted_signals: int
+    prospective_validation: StrategyValidationSummary
+    prospective_portfolio: PortfolioReplaySummary
+
+
+@dataclass(frozen=True, slots=True)
 class VolatilityResearchSummary:
     freeze_at: datetime
     calibration_sample: int
@@ -3376,6 +3399,193 @@ def _cohort_score_buckets(rows: list[dict[str, Any]], cohort: str) -> tuple[Coho
         )
         for item in _build_score_buckets(complete)
     )
+
+
+def build_current_strategy_research(
+    raw_rows: Iterable[dict[str, Any]],
+    *,
+    generated_at: datetime,
+    portfolio_path_rows: Iterable[dict[str, Any]] = (),
+) -> CurrentStrategyResearchSummary:
+    """Build only the currently promoted Daily-Core + Persistence V1 research book.
+
+    This is the lightweight v1.3.55 path used by the Discord research command.
+    Legacy research builders remain available for offline/backward analysis, but
+    they are no longer computed for the routine on-demand Discord report.
+    """
+    rows = [dict(row) for row in raw_rows]
+    rows = [
+        row for row in rows
+        if str(row.get("risk_tier") or "standard") in PUBLIC_RESEARCH_RISK_TIERS
+        and row.get("confirmed_at") is not None
+        and row["confirmed_at"] <= generated_at
+    ]
+    path_rows = list(portfolio_path_rows)
+
+    def classify(source_rows: list[dict[str, Any]]):
+        daily_core_flagged = daily_core_missing = persistence_flagged = persistence_missing = 0
+        admitted: list[dict[str, Any]] = []
+        for row in source_rows:
+            core = _daily_confirmed_core_v1_state(row)
+            if core is None:
+                daily_core_missing += 1
+                continue
+            if core:
+                daily_core_flagged += 1
+                continue
+            persistence = _daily_bull_persistence_v1_state(row)
+            if persistence is None:
+                persistence_missing += 1
+                continue
+            if persistence:
+                persistence_flagged += 1
+                continue
+            admitted.append(row)
+        return (
+            admitted,
+            daily_core_flagged,
+            daily_core_missing,
+            persistence_flagged,
+            persistence_missing,
+        )
+
+    admitted, core_flagged, core_missing, persistence_flagged, persistence_missing = classify(rows)
+    admitted_ids = {int(row["episode_id"]) for row in admitted if row.get("episode_id") is not None}
+    portfolio = _portfolio_replay(
+        rows,
+        strategy="tp5_sl75_challenger",
+        generated_at=generated_at,
+        path_rows=path_rows,
+        cohort="current_daily_core_persistence_v1",
+        strategy_name_override="tp5_sl75_daily_core_persistence_skip_v1",
+        position_fraction_override=0.05,
+        max_total_override=6,
+        max_exposure_fraction_override=0.30,
+        eligible_episode_ids=admitted_ids,
+    )
+    validation = _strategy_validation_summary(
+        admitted, strategy="tp5_sl75_challenger", generated_at=generated_at
+    )
+
+    forward_rows = [row for row in rows if row["confirmed_at"] > DAILY_BULL_PERSISTENCE_V1_FREEZE_AT]
+    (
+        forward_admitted,
+        forward_core_flagged,
+        forward_core_missing,
+        forward_persistence_flagged,
+        forward_persistence_missing,
+    ) = classify(forward_rows)
+    forward_ids = {
+        int(row["episode_id"]) for row in forward_admitted if row.get("episode_id") is not None
+    }
+    forward_portfolio = _portfolio_replay(
+        forward_rows,
+        strategy="tp5_sl75_challenger",
+        generated_at=generated_at,
+        path_rows=path_rows,
+        cohort="current_daily_core_persistence_v1_true_forward",
+        strategy_name_override="tp5_sl75_daily_core_persistence_skip_v1_true_forward",
+        position_fraction_override=0.05,
+        max_total_override=6,
+        max_exposure_fraction_override=0.30,
+        eligible_episode_ids=forward_ids,
+    )
+    forward_validation = _strategy_validation_summary(
+        forward_admitted, strategy="tp5_sl75_challenger", generated_at=generated_at
+    )
+
+    return CurrentStrategyResearchSummary(
+        generated_at=generated_at,
+        strategy="tp5_sl75_daily_core_persistence_skip_v1",
+        total_signals=len(rows),
+        daily_core_flagged=core_flagged,
+        daily_core_missing=core_missing,
+        persistence_flagged=persistence_flagged,
+        persistence_missing=persistence_missing,
+        admitted_signals=len(admitted),
+        admitted_validation=validation,
+        portfolio=portfolio,
+        freeze_at=DAILY_BULL_PERSISTENCE_V1_FREEZE_AT,
+        prospective_total_signals=len(forward_rows),
+        prospective_daily_core_flagged=forward_core_flagged,
+        prospective_daily_core_missing=forward_core_missing,
+        prospective_persistence_flagged=forward_persistence_flagged,
+        prospective_persistence_missing=forward_persistence_missing,
+        prospective_admitted_signals=len(forward_admitted),
+        prospective_validation=forward_validation,
+        prospective_portfolio=forward_portfolio,
+    )
+
+
+def research_current_strategy_csv(report: CurrentStrategyResearchSummary) -> bytes:
+    """Two-row machine-readable current strategy audit: retrospective + true-forward."""
+    output = io.StringIO(newline="")
+    fields = [
+        "cohort", "strategy", "freeze_at", "raw_signals", "daily_core_flagged",
+        "daily_core_missing", "persistence_flagged", "persistence_missing", "admitted_signals",
+        "tp5", "sl75", "open", "entered", "closed", "open_positions", "capacity_misses",
+        "same_symbol_misses", "capture_rate_pct", "realized_account_return_pct",
+        "marked_account_return_pct", "thirty_day_run_rate_pct", "max_mtm_drawdown_pct",
+        "return_over_drawdown", "avg_exposure_pct", "peak_exposure_pct", "rule",
+    ]
+    writer = csv.DictWriter(output, fieldnames=fields)
+    writer.writeheader()
+
+    def emit(
+        cohort: str, *, raw_signals: int, core_flagged: int, core_missing: int,
+        persistence_flagged: int, persistence_missing: int, admitted_signals: int,
+        validation: StrategyValidationSummary, portfolio: PortfolioReplaySummary,
+    ) -> None:
+        capture = (portfolio.entered / portfolio.eligible_signals) if portfolio.eligible_signals else None
+        run_rate = (
+            portfolio.marked_return * 30.0 / portfolio.replay_span_days
+            if portfolio.replay_span_days else None
+        )
+        writer.writerow({
+            "cohort": cohort,
+            "strategy": report.strategy,
+            "freeze_at": report.freeze_at.isoformat(),
+            "raw_signals": raw_signals,
+            "daily_core_flagged": core_flagged,
+            "daily_core_missing": core_missing,
+            "persistence_flagged": persistence_flagged,
+            "persistence_missing": persistence_missing,
+            "admitted_signals": admitted_signals,
+            "tp5": validation.target_exits,
+            "sl75": validation.stop_exits,
+            "open": validation.waiting,
+            "entered": portfolio.entered,
+            "closed": portfolio.closed,
+            "open_positions": portfolio.open_positions,
+            "capacity_misses": portfolio.missed_capacity,
+            "same_symbol_misses": portfolio.missed_same_symbol,
+            "capture_rate_pct": _csv_pct(capture),
+            "realized_account_return_pct": _csv_pct(portfolio.realized_return),
+            "marked_account_return_pct": _csv_pct(portfolio.marked_return),
+            "thirty_day_run_rate_pct": _csv_pct(run_rate),
+            "max_mtm_drawdown_pct": _csv_pct(portfolio.max_mtm_drawdown),
+            "return_over_drawdown": "" if portfolio.return_over_max_drawdown is None else f"{portfolio.return_over_max_drawdown:.6f}",
+            "avg_exposure_pct": _csv_pct(portfolio.avg_exposure_pct),
+            "peak_exposure_pct": _csv_pct(portfolio.max_observed_exposure_pct),
+            "rule": "Daily-Core hard skip + Persistence V1 hard skip; 6x5%/30%; TP5/SL75; no timeout",
+        })
+
+    emit(
+        "retrospective", raw_signals=report.total_signals, core_flagged=report.daily_core_flagged,
+        core_missing=report.daily_core_missing, persistence_flagged=report.persistence_flagged,
+        persistence_missing=report.persistence_missing, admitted_signals=report.admitted_signals,
+        validation=report.admitted_validation, portfolio=report.portfolio,
+    )
+    emit(
+        "true_forward", raw_signals=report.prospective_total_signals,
+        core_flagged=report.prospective_daily_core_flagged,
+        core_missing=report.prospective_daily_core_missing,
+        persistence_flagged=report.prospective_persistence_flagged,
+        persistence_missing=report.prospective_persistence_missing,
+        admitted_signals=report.prospective_admitted_signals,
+        validation=report.prospective_validation, portfolio=report.prospective_portfolio,
+    )
+    return output.getvalue().encode("utf-8")
 
 
 def build_research_analytics(

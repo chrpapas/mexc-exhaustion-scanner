@@ -118,8 +118,8 @@ def test_v135_notifier_adds_calendar_throughput_board_without_short_window_proje
         for embed in embeds
     )
     assert "Research Intelligence" in text
-    assert "Strategy evidence" in text
-    assert "True 30d empty-book comparison not available yet" in text
-    assert "capture **100.00%**" in text
+    assert "Current Strategy" in text
+    assert "Strategy evidence" not in text
+    assert "True 30d empty-book comparison not available yet" not in text
     for embed in embeds:
         notifier._validate_discord_embed(embed)

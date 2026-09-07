@@ -1632,9 +1632,20 @@ class Database:
             ORDER BY st.confirmed_at ASC
             """
         )
-        episode_ids = [int(row["episode_id"]) for row in base_rows]
-        raw_path_rows = []
-        if episode_ids:
+        # Do not request every persisted 15m path row in one asyncpg fetch.
+        # At ~14 days of 15m candles, a few hundred signals already means
+        # hundreds of thousands of rows; one monolithic transfer can exceed the
+        # pool's command_timeout even when PostgreSQL itself is using the PK
+        # index efficiently.  Batch by episode so each DB command remains small
+        # and aggregate/release raw rows incrementally.
+        episode_ids = list(dict.fromkeys(int(row["episode_id"]) for row in base_rows))
+        confirmed_by_episode = {
+            int(row["episode_id"]): row.get("confirmed_at") for row in base_rows
+        }
+        metrics_by_episode: dict[int, dict[str, Any]] = {}
+        path_episode_batch_size = 16
+        for offset in range(0, len(episode_ids), path_episode_batch_size):
+            batch_episode_ids = episode_ids[offset : offset + path_episode_batch_size]
             raw_path_rows = await self.pool.fetch(
                 """
                 SELECT
@@ -1643,22 +1654,22 @@ class Database:
                 FROM research_signal_path_15m
                 WHERE episode_id = ANY($1::bigint[])
                 """,
-                episode_ids,
+                batch_episode_ids,
             )
-
-        by_episode: dict[int, list[dict[str, Any]]] = {}
-        for record in raw_path_rows:
-            path_row = dict(record)
-            by_episode.setdefault(int(path_row["episode_id"]), []).append(path_row)
+            by_episode: dict[int, list[dict[str, Any]]] = {}
+            for record in raw_path_rows:
+                path_row = dict(record)
+                by_episode.setdefault(int(path_row["episode_id"]), []).append(path_row)
+            for episode_id in batch_episode_ids:
+                metrics_by_episode[episode_id] = _aggregate_performance_path_metrics(
+                    confirmed_by_episode.get(episode_id),
+                    by_episode.get(episode_id, []),
+                )
 
         result: list[dict[str, Any]] = []
         for record in base_rows:
             row = dict(record)
-            metrics = _aggregate_performance_path_metrics(
-                row.get("confirmed_at"),
-                by_episode.get(int(row["episode_id"]), []),
-            )
-            row.update(metrics)
+            row.update(metrics_by_episode.get(int(row["episode_id"]), {}))
             result.append(row)
         return result
 

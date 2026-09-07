@@ -8,14 +8,9 @@ from app.config import Settings
 from app.db import Database
 from app.notifier import DiscordNotifier
 from app.research_analytics import (
-    build_research_analytics,
+    build_current_strategy_research as build_research_analytics,
+    research_current_strategy_csv,
     research_signal_dataset_csv,
-    research_strategy_validation_csv,
-    research_feature_lift_csv,
-    research_strategy_sweeps_csv,
-    research_entry_research_csv,
-    research_token_regime_csv,
-    research_volatility_csv,
 )
 
 
@@ -75,23 +70,15 @@ async def main() -> None:
             generated_at=now,
             portfolio_path_rows=portfolio_path_rows,
         )
+        # Keep the raw signal dataset for future analysis, but stop generating and
+        # uploading legacy strategy-sweep/feature/regime bundles on every Discord run.
         dataset_csv = research_signal_dataset_csv(rows, generated_at=now)
-        strategy_csv = research_strategy_validation_csv(report)
-        feature_csv = research_feature_lift_csv(report)
-        sweeps_csv = research_strategy_sweeps_csv(report)
-        entry_csv = research_entry_research_csv(report)
-        regime_csv = research_token_regime_csv(report)
-        volatility_csv = research_volatility_csv(report) if hasattr(report, "volatility") else None
+        strategy_csv = research_current_strategy_csv(report) if hasattr(report, "strategy") else None
 
         sent = await notifier.send_research_analytics(
             report,
             dataset_csv=dataset_csv,
             strategy_csv=strategy_csv,
-            feature_csv=feature_csv,
-            sweeps_csv=sweeps_csv,
-            entry_csv=entry_csv,
-            regime_csv=regime_csv,
-            volatility_csv=volatility_csv,
             as_of=now,
             timezone_name=settings.performance_report_timezone,
         )
@@ -101,13 +88,21 @@ async def main() -> None:
                 "(or DISCORD_WEBHOOK_URL fallback) in Render."
             )
 
-        b = report.baseline
-        print(
-            "On-demand research analytics sent to Discord: "
-            f"signals={b.total_signals} matured7d={b.matured_7d} "
-            f"complete_paths7d={b.complete_paths_7d} complete_paths14d={b.complete_paths_14d} "
-            f"target20_7d={b.target_20_rate_7d} positive7d={b.positive_7d_rate}"
-        )
+        if hasattr(report, "total_signals"):
+            print(
+                "On-demand current-strategy research sent to Discord: "
+                f"signals={report.total_signals} admitted={report.admitted_signals} "
+                f"daily_core_filtered={report.daily_core_flagged + report.daily_core_missing} "
+                f"persistence_filtered={report.persistence_flagged + report.persistence_missing} "
+                f"forward_signals={report.prospective_total_signals} "
+                f"forward_admitted={report.prospective_admitted_signals}"
+            )
+        else:
+            b = report.baseline
+            print(
+                "On-demand current-strategy research sent to Discord: "
+                f"signals={b.total_signals}"
+            )
     finally:
         await notifier.close()
         await db.close()

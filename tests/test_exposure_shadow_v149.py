@@ -97,4 +97,5 @@ def test_research_discord_includes_exposure_shadow_card():
         elif isinstance(payload, dict) and payload.get("data"):
             embeds = json.loads(payload["data"]["payload_json"])["embeds"]
             titles.extend(embed.get("title", "") for embed in embeds)
-    assert "📐 Exposure Shadow • Hard Filter" in titles
+    assert "🧠 Exhaustion Scanner • Research Intelligence • Current Strategy" in titles
+    assert "📐 Exposure Shadow • Hard Filter" not in titles

@@ -186,11 +186,10 @@ def test_v134_notifier_adds_prospective_monitor_embed():
         "\n".join(field.get("name", "") + " " + field.get("value", "") for field in embed.get("fields", []))
         for embed in embeds
     )
-    assert "Forward Evidence" in text
-    assert "Post-freeze A/B/C" in text
-    assert "Continuation Core V1 • true forward" in text
+    assert "True-forward evidence" in text
+    assert "Post-freeze A/B/C" not in text
+    assert "Continuation Core V1 • true forward" not in text
     assert "failed after complete 7d" not in text
-    assert "open >7d" in text
     assert "EntryGate-v1 acceptance" not in text
     assert "Regime drift" not in text
     for embed in embeds:

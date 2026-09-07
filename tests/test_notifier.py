@@ -238,21 +238,20 @@ def test_performance_report_uses_dedicated_stats_webhook_and_embeds():
         field["name"] + " " + field["value"] for field in embed.get("fields", [])
     )
     assert "Performance & Playbook" in all_text
-    assert "Suggested execution" in all_text
-    assert "Previous active" in all_text
-    assert "Current • TP5 + SL75 • Daily-Core + Persistence V1" in all_text
-    assert "Daily-Core hard-filter account" in all_text
-    assert "Daily-Core + Persistence hard-filter account" in all_text
-    assert "Est. monthly" in all_text
+    assert "Current Strategy" in all_text
+    assert "Live/default • Daily-Core + Persistence V1" in all_text
+    assert "Current account replay" in all_text
+    assert "30D run-rate" in all_text
     assert "max DD" in all_text
-    assert "captured" in all_text
     assert "avg/peak exposure" in all_text
     assert "max **6** open positions" in all_text
     assert "30%" in all_text
     assert "0.08% fee per fill" in all_text
+    assert "Previous active" not in all_text
+    assert "PCR" in all_text  # only mentioned as intentionally omitted
     assert "TP5 indefinite" not in all_text
     assert "7D hold" not in all_text
-    assert "TP20" not in all_text
+    assert "TP20" in all_text  # only mentioned as intentionally omitted
     assert "EntryGate" not in all_text
 
 

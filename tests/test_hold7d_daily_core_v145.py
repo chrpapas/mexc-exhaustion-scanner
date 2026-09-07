@@ -70,8 +70,8 @@ def test_7d_daily_core_card_is_emitted_and_discord_valid():
         "\n".join(field.get("name", "") + " " + field.get("value", "") for field in embed.get("fields", []))
         for embed in embeds
     )
-    assert "7D Hold • Daily-Confirmed Core Replay" in text
-    assert "7D + Daily-Confirmed Core sizing" in text
-    assert "7D + skip Daily-Confirmed Core" in text
+    assert "Current Strategy" in text
+    assert "7D Hold • Daily-Confirmed Core Replay" not in text
+    assert "TP20" not in text
     for embed in embeds:
         notifier._validate_discord_embed(embed)

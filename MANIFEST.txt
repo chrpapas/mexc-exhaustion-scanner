@@ -1,6 +1,5 @@
 ./.gitignore
 ./.python-version
-./MANIFEST.txt
 ./README.md
 ./README_v0.8.8.md
 ./TRADER-DEPLOY.md
@@ -91,6 +90,7 @@
 ./tests/test_pcr_live_v1335.py
 ./tests/test_performance.py
 ./tests/test_report_now.py
+./tests/test_reporting_cleanup_v155.py
 ./tests/test_research_analytics_v127.py
 ./tests/test_research_analytics_v128.py
 ./tests/test_research_analytics_v129.py
@@ -107,6 +107,7 @@
 ./tests/test_research_v126.py
 ./tests/test_research_v138.py
 ./tests/test_research_v153.py
+./tests/test_research_v154.py
 ./tests/test_signal_ledger.py
 ./tests/test_signals.py
 ./tests/test_standard_scaling_v1330.py

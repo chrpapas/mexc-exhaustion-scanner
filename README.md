@@ -1,5 +1,23 @@
-# MEXC Exhaustion Scanner + Multi-Slot Futures Trader v1.3.53
+# MEXC Exhaustion Scanner + Multi-Slot Futures Trader v1.3.55
 
+
+## v1.3.55 — lean current-strategy Discord reporting
+
+- Subscriber performance Discord now shows **only the current live/default strategy**: Daily-Core + Persistence V1, TP5/SL75, 6×5% / 30%.
+- Removed Previous/PCR/HTF/TP20/7D/sizing-challenger comparisons from the subscriber board.
+- On-demand research now uses a dedicated **current-strategy-only builder** instead of computing the legacy A/B/C, PCR, HTF, 7D, TP20, ATR-sizing and exposure-shadow report stack.
+- Research Discord sends one current-strategy embed plus only two attachments: the raw research signal dataset and a compact `current-strategy-validation` CSV.
+- Historical strategy code/data remain available for rollback/offline analysis; this release removes routine computation/rendering, not historical evidence.
+- No migration, no environment-variable change, no trader reset, and no strategy-rule change.
+
+## v1.3.54 — on-demand performance path-fetch timeout hardening
+
+- No trading-strategy, sizing, admission, TP/SL, subscriber, or paper-run behavior changes.
+- Fixes `TimeoutError` in `Database.performance_rows()` used by `signal_ledger_now`, `report_now`, and the scheduled daily performance report.
+- The 15m path table is no longer returned for every historical episode in one monolithic `asyncpg.fetch()`. It is fetched in bounded 16-episode batches using the existing `(episode_id, candle_close_at)` index.
+- Raw path rows are aggregated and released batch-by-batch while preserving the exact per-signal path timestamps/returns required by chronological portfolio MTM/DD replay.
+- Retains the v1.3.53 set-based research-sync optimization and migration `019_research_path_progress_indexes.sql`.
+- No timeout increase is required; the fix reduces the size of each DB command instead.
 
 ## v1.3.53 — research path-sync timeout hardening
 
@@ -8,7 +26,6 @@
 - Adds targeted newest-path and TP5 partial indexes via migration `019_research_path_progress_indexes.sql`.
 - Keeps the existing bounded episode/candle batch and research-only statement timeout.
 - A research timeout remains non-fatal: the periodic loop logs it and retries later while scanner/trader loops continue.
-
 
 ## v1.3.52 — promote First-Entry Trend Persistence V1
 

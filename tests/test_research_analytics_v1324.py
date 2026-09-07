@@ -88,15 +88,15 @@ def test_strategy_validation_report_shows_sl75_outcome_race():
         else:
             body = payload
         for embed in body.get("embeds", []):
-            if embed.get("title") == "🧠 Exhaustion Scanner • Research Intelligence":
+            if embed.get("title") == "🧠 Exhaustion Scanner • Research Intelligence • Current Strategy":
                 text += embed.get("description", "") + "\n"
                 text += "\n".join(
                     field.get("name", "") + " " + field.get("value", "")
                     for field in embed.get("fields", [])
                 )
 
-    assert "TP5 + SL75" in text
-    assert "TP5 **1**" in text
-    assert "SL75 **1**" in text
-    assert "7D hold" in text
-    assert "open **0**" in text
+    assert "raw signals **2**" in text
+    assert "admitted **0**" in text
+    assert "Daily-Core" in text
+    assert "7D hold" not in text
+    assert "Current Strategy" in text or "Persistence V1" in text
