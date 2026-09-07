@@ -987,26 +987,40 @@ class Database:
         scanner hot path.
         """
         query = """
-            WITH progress AS (
+            WITH last_progress AS MATERIALIZED (
+                -- Resolve the newest persisted candle once for the whole path table.
+                -- The dedicated (episode_id, candle_close_at DESC) index keeps this
+                -- from degenerating into one aggregate scan per shadow trade.
+                SELECT DISTINCT ON (episode_id)
+                    episode_id,
+                    candle_close_at AS last_recorded_close
+                FROM research_signal_path_15m
+                ORDER BY episode_id, candle_close_at DESC
+            ),
+            target_progress AS MATERIALIZED (
+                -- TP5 rows are sparse. A partial index on this predicate lets us
+                -- find the first TP5 candle without rescanning every path row.
+                SELECT
+                    episode_id,
+                    min(candle_close_at) AS target_5_at
+                FROM research_signal_path_15m
+                WHERE favorable_return_pct >= 0.05
+                GROUP BY episode_id
+            ),
+            progress AS (
                 SELECT
                     st.episode_id,
                     st.symbol,
                     st.confirmed_at,
                     st.entry_price,
                     COALESCE(
-                        rp.last_recorded_close,
+                        lp.last_recorded_close,
                         st.confirmed_at - interval '1 microsecond'
                     ) AS last_recorded_close,
-                    rp.target_5_at
+                    tp.target_5_at
                 FROM shadow_trades st
-                LEFT JOIN LATERAL (
-                    SELECT
-                        max(candle_close_at) AS last_recorded_close,
-                        min(candle_close_at) FILTER (WHERE favorable_return_pct >= 0.05)
-                            AS target_5_at
-                    FROM research_signal_path_15m
-                    WHERE episode_id = st.episode_id
-                ) rp ON true
+                LEFT JOIN last_progress lp ON lp.episode_id = st.episode_id
+                LEFT JOIN target_progress tp ON tp.episode_id = st.episode_id
             ),
             bounds AS MATERIALIZED (
                 SELECT p.*

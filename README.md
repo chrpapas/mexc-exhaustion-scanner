@@ -1,4 +1,13 @@
-# MEXC Exhaustion Scanner + Multi-Slot Futures Trader v1.3.52
+# MEXC Exhaustion Scanner + Multi-Slot Futures Trader v1.3.53
+
+
+## v1.3.53 — research path-sync timeout hardening
+
+- No trading-strategy, sizing, admission, TP/SL, or subscriber behavior changes.
+- Reworks `sync_research_signal_paths()` so path progress is computed set-wise instead of running a path aggregate once per shadow trade.
+- Adds targeted newest-path and TP5 partial indexes via migration `019_research_path_progress_indexes.sql`.
+- Keeps the existing bounded episode/candle batch and research-only statement timeout.
+- A research timeout remains non-fatal: the periodic loop logs it and retries later while scanner/trader loops continue.
 
 
 ## v1.3.52 — promote First-Entry Trend Persistence V1

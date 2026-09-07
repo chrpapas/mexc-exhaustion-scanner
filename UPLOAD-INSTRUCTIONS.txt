@@ -1,4 +1,4 @@
-MEXC Exhaustion Scanner + Multi-Slot Futures Trader v1.3.52
+MEXC Exhaustion Scanner + Multi-Slot Futures Trader v1.3.53
 
 Deploy the entire project/ZIP together. v1.3.52 promotes First-Entry Trend Persistence V1 on top of the existing Daily-Core hard filter.
 

@@ -1,4 +1,4 @@
-# Trader deployment — v1.3.52
+# Trader deployment — v1.3.53
 
 v1.3.52 promotes the frozen **First-Entry Trend Persistence V1** veto into trader/subscriber admission. The underlying exhaustion confirmation, TP5/SL75 exits, sizing and capacity remain unchanged.
 

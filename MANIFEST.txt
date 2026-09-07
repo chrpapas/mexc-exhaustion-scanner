@@ -1,6 +1,5 @@
 ./.gitignore
 ./.python-version
-./CHECKSUMS.sha256
 ./MANIFEST.txt
 ./README.md
 ./README_v0.8.8.md
@@ -61,6 +60,7 @@
 ./migrations/016_tp5_sl75_exit_strategy.sql
 ./migrations/017_daily_core_trader_decisions.sql
 ./migrations/018_daily_bull_persistence_trader_decisions.sql
+./migrations/019_research_path_progress_indexes.sql
 ./pyproject.toml
 ./render.yaml
 ./scripts/verify_project.py
@@ -106,6 +106,7 @@
 ./tests/test_research_analytics_v137.py
 ./tests/test_research_v126.py
 ./tests/test_research_v138.py
+./tests/test_research_v153.py
 ./tests/test_signal_ledger.py
 ./tests/test_signals.py
 ./tests/test_standard_scaling_v1330.py
