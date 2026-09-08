@@ -239,7 +239,7 @@ def test_performance_report_uses_dedicated_stats_webhook_and_embeds():
     )
     assert "Performance & Playbook" in all_text
     assert "Current Strategy" in all_text
-    assert "Live/default • Daily-Core + Persistence V1" in all_text
+    assert "Live/default • Daily-Core + Persistence V2" in all_text
     assert "Current account replay" in all_text
     assert "30D run-rate" in all_text
     assert "max DD" in all_text

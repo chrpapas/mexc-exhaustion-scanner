@@ -1,25 +1,26 @@
-MEXC Exhaustion Scanner + Multi-Slot Futures Trader v1.3.55
+MEXC Exhaustion Scanner + Multi-Slot Futures Trader v1.3.56
 
-Deploy the entire project/ZIP together. v1.3.55 keeps the promoted Daily-Core + First-Entry Trend Persistence V1 strategy unchanged and slims subscriber/research Discord reporting to the current strategy only.
+Deploy the entire project/ZIP together.
 
-Current promoted strategy:
-- tp5_sl75_daily_core_persistence_skip_v1
-- STANDARD + HIGH_RISK
-- 6 generic slots × 5% / 30% max exposure
-- TP +5% / catastrophic SL -75%
-- one position per symbol / 1x cross / no timeout
-- Daily-Core hard skip remains active
-- additional Persistence V1 hard skip: Daily Bull + Core false + daily distance >=4.5 ATR + EMA20D slope >=7.5% + run-to-breakdown <=6h
+v1.3.56 PROMOTES TREND PERSISTENCE V2
+- Daily-Core hard skip remains unchanged.
+- Frozen Persistence V1 early branch remains unchanged.
+- New Mature-Run Weak-Breakdown V1 branch hard-skips when:
+  Daily Bull=true AND Continuation Core=false AND run-to-breakdown>=24h AND
+  previous 1h momentum>0 AND lower_high_and_close=false AND structural_break_15m=false.
+- V2 frozen 08 Sep 2026 08:29 CEST after the SOPH review. Forward validation starts strictly after this time.
+- STANDARD + HIGH_RISK; 6 generic slots x 5%; 30% max exposure; TP5; catastrophic SL75; 1x cross; no timeout.
 
-Render changes:
-Scanner: SUBSCRIBER_SIGNAL_STRATEGY=tp5_sl75_daily_core_persistence_skip_v1
-Trader:  TRADER_EXECUTION_STRATEGY=tp5_sl75_daily_core_persistence_skip_v1
+Required Render strategy changes:
+Scanner: SUBSCRIBER_SIGNAL_STRATEGY=tp5_sl75_daily_core_persistence_skip_v2
+Trader:  TRADER_EXECUTION_STRATEGY=tp5_sl75_daily_core_persistence_skip_v2
 
-IMPORTANT: keep TRADER_PAPER_RUN_ID=tp5_sl75_daily_core_skip_v1 for this promotion so current paper positions are not force-closed/reset. Existing positions retain their persisted TP5/SL75 management; the new filter affects only future confirmed signals.
+For a clean paper-trader forward cohort, set:
+TRADER_PAPER_RUN_ID=tp5_sl75_daily_core_persistence_skip_v2
+PAPER_STARTING_EQUITY_USDT=2000   # if you want the same clean $2,000 baseline
 
-Migration 018_daily_bull_persistence_trader_decisions.sql is automatic.
-
-The original Persistence V1 research freeze remains 03 Sep 2026 20:53 CEST. Promotion does not turn calibration data into validation data.
+Migration 020_persistence_v2_trader_decisions.sql runs automatically.
+Do not change sizing/TP/SL environment values for this promotion.
 
 Verification:
 pytest -q

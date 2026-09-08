@@ -108,7 +108,7 @@ def test_persistence_v1_discord_card_marks_rule_research_only():
         "\n".join(field.get("name", "") + " " + field.get("value", "") for field in embed.get("fields", []))
         for embed in embeds
     )
-    assert "First-Entry Trend Persistence • V1" in text
+    assert "Trend Persistence • V2" in text
     assert "current live rule" in text
     assert "True-forward evidence" in text
     for embed in embeds:

@@ -99,4 +99,4 @@ def test_strategy_validation_report_shows_sl75_outcome_race():
     assert "admitted **0**" in text
     assert "Daily-Core" in text
     assert "7D hold" not in text
-    assert "Current Strategy" in text or "Persistence V1" in text
+    assert "Current Strategy" in text or "Persistence V2" in text

@@ -8,6 +8,7 @@ import pytest
 
 from app.daily_bull_persistence_strategy import (
     DAILY_CORE_PERSISTENCE_SKIP_STRATEGY,
+    DAILY_CORE_PERSISTENCE_SKIP_STRATEGY_V2,
     daily_bull_persistence_v1_missing_features,
     daily_bull_persistence_v1_state,
 )
@@ -50,11 +51,11 @@ def test_persistence_strategy_is_default_without_resetting_existing_paper_run(mo
     monkeypatch.delenv("TRADER_EXECUTION_STRATEGY", raising=False)
     monkeypatch.delenv("TRADER_PAPER_RUN_ID", raising=False)
     settings = TraderSettings.from_env()
-    assert settings.execution_strategy == DAILY_CORE_PERSISTENCE_SKIP_STRATEGY
+    assert settings.execution_strategy == DAILY_CORE_PERSISTENCE_SKIP_STRATEGY_V2
     assert settings.uses_daily_core_skip
     assert settings.uses_daily_bull_persistence_skip
     # Intentionally retained so promotion applies to future entries without closing the current paper book.
-    assert settings.paper_run_id == "tp5_sl75_daily_core_skip_v1"
+    assert settings.paper_run_id == "tp5_sl75_daily_core_persistence_skip_v2"
     assert settings.slot_allocation_pct == pytest.approx(5.0)
     assert settings.max_total_exposure_pct == pytest.approx(30.0)
 

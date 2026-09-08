@@ -98,6 +98,6 @@ def test_daily_regime_card_includes_daily_confirmed_core_replay_and_forward_bloc
     assert "Daily-Confirmed Core hard skip" in text
     assert "Retrospective current-strategy replay" in text
     assert "True-forward evidence" in text
-    assert "Persistence V1" in text
+    assert "Persistence V2" in text
     for embed in embeds:
         notifier._validate_discord_embed(embed)
