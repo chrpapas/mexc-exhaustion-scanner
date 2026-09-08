@@ -8,7 +8,7 @@ from zoneinfo import ZoneInfo
 
 from app.trader_logic import pcr_position_fraction
 from app.daily_core_strategy import daily_confirmed_core_v1_state
-from app.daily_bull_persistence_strategy import daily_bull_persistence_v1_state
+from app.daily_bull_persistence_strategy import daily_bull_persistence_v1_state, daily_bull_persistence_v2_state
 
 PUBLIC_PERFORMANCE_RISK_TIERS = frozenset({"standard", "high_risk"})
 SHADOW_FEE_PER_FILL = 0.0008
@@ -1167,6 +1167,7 @@ def build_performance_summary(
         pcr_sizing: bool = False,
         daily_core_skip: bool = False,
         daily_bull_persistence_skip: bool = False,
+        daily_bull_persistence_v2_skip: bool = False,
     ) -> AccountRunRateSummary:
         ordered = sorted(
             [row for row in rows if row.get("confirmed_at") is not None and row["confirmed_at"] <= now_utc],
@@ -1198,8 +1199,13 @@ def build_performance_summary(
             snapshot = dict(feature_snapshot(row))
             if snapshot.get("run_score") is None and row.get("run_score") is not None:
                 snapshot["run_score"] = row.get("run_score")
-            if snapshot.get("hours_run_to_breakdown") is None and row.get("hours_run_to_breakdown") is not None:
-                snapshot["hours_run_to_breakdown"] = row.get("hours_run_to_breakdown")
+            for key in (
+                "hours_run_to_breakdown", "previous_momentum_1h",
+                "lower_high_and_close", "structural_break_15m",
+                "daily_distance_above_ema20_atr", "daily_ema20_slope",
+            ):
+                if snapshot.get(key) is None and row.get(key) is not None:
+                    snapshot[key] = row.get(key)
             return snapshot
 
         def signal_position_fraction(row: dict[str, Any]) -> float:
@@ -1268,9 +1274,12 @@ def build_performance_summary(
                 # signals are not subscriber/trader eligible.
                 if daily_confirmed_core_v1_state(admission_features(row)) is not False:
                     continue
-            if daily_bull_persistence_skip:
-                # Promoted V1 is also fail-closed on the branch where its extra
-                # signal-time inputs are required.
+            if daily_bull_persistence_v2_skip:
+                # Promoted V2 is fail-closed and includes both the frozen early
+                # V1 branch and Mature-Run Weak-Breakdown V1.
+                if daily_bull_persistence_v2_state(admission_features(row)) is not False:
+                    continue
+            elif daily_bull_persistence_skip:
                 if daily_bull_persistence_v1_state(admission_features(row)) is not False:
                     continue
             eligible_signals += 1
@@ -1458,7 +1467,7 @@ def build_performance_summary(
         risk_tiers={"standard", "high_risk"},
         exposure=tp5_exposure,
         daily_core_skip=True,
-        daily_bull_persistence_skip=True,
+        daily_bull_persistence_v2_skip=True,
     )
     hold_7d_account_run_rate = account_run_rate(
         strategy="hold_7d", risk_tiers={"standard", "high_risk"}, exposure=tp5_exposure

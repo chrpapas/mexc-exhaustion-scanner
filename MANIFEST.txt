@@ -60,6 +60,7 @@
 ./migrations/017_daily_core_trader_decisions.sql
 ./migrations/018_daily_bull_persistence_trader_decisions.sql
 ./migrations/019_research_path_progress_indexes.sql
+./migrations/020_persistence_v2_trader_decisions.sql
 ./pyproject.toml
 ./render.yaml
 ./scripts/verify_project.py
@@ -89,6 +90,7 @@
 ./tests/test_parabolic_risk_v1333.py
 ./tests/test_pcr_live_v1335.py
 ./tests/test_performance.py
+./tests/test_persistence_v2_v156.py
 ./tests/test_report_now.py
 ./tests/test_reporting_cleanup_v155.py
 ./tests/test_research_analytics_v127.py

@@ -16,8 +16,11 @@ from app.daily_core_strategy import (
 )
 from app.daily_bull_persistence_strategy import (
     DAILY_CORE_PERSISTENCE_SKIP_STRATEGY,
+    DAILY_CORE_PERSISTENCE_SKIP_STRATEGY_V2,
     daily_bull_persistence_v1_missing_features,
     daily_bull_persistence_v1_state,
+    daily_bull_persistence_v2_missing_features,
+    daily_bull_persistence_v2_state,
 )
 from app.signal_ledger import SignalLedger, SignalLedgerItem
 from app.signal_ledger_table import LedgerTableImage
@@ -67,7 +70,7 @@ class DiscordNotifier:
             return
 
         features = signal.features
-        if self._subscriber_signal_strategy in {DAILY_CORE_SKIP_STRATEGY, DAILY_CORE_PERSISTENCE_SKIP_STRATEGY}:
+        if self._subscriber_signal_strategy in {DAILY_CORE_SKIP_STRATEGY, DAILY_CORE_PERSISTENCE_SKIP_STRATEGY, DAILY_CORE_PERSISTENCE_SKIP_STRATEGY_V2}:
             daily_core_state = daily_confirmed_core_v1_state(features)
             if daily_core_state is None:
                 missing = daily_confirmed_core_v1_missing_features(features)
@@ -83,20 +86,25 @@ class DiscordNotifier:
                     signal.symbol,
                 )
                 return
-        if self._subscriber_signal_strategy == DAILY_CORE_PERSISTENCE_SKIP_STRATEGY:
-            persistence_state = daily_bull_persistence_v1_state(features)
-            if persistence_state is None:
+        if self._subscriber_signal_strategy in {DAILY_CORE_PERSISTENCE_SKIP_STRATEGY, DAILY_CORE_PERSISTENCE_SKIP_STRATEGY_V2}:
+            if self._subscriber_signal_strategy == DAILY_CORE_PERSISTENCE_SKIP_STRATEGY_V2:
+                persistence_state = daily_bull_persistence_v2_state(features)
+                missing = daily_bull_persistence_v2_missing_features(features)
+                version = "V2"
+            else:
+                persistence_state = daily_bull_persistence_v1_state(features)
                 missing = daily_bull_persistence_v1_missing_features(features)
+                version = "V1"
+            if persistence_state is None:
                 LOGGER.warning(
-                    "Subscriber signal suppressed fail-closed for %s: missing Persistence V1 inputs=%s",
-                    signal.symbol,
-                    ",".join(missing) or "unknown",
+                    "Subscriber signal suppressed fail-closed for %s: missing Persistence %s inputs=%s",
+                    signal.symbol, version, ",".join(missing) or "unknown",
                 )
                 return
             if persistence_state:
                 LOGGER.info(
-                    "Subscriber signal hard-filtered by First-Entry Trend Persistence V1: %s",
-                    signal.symbol,
+                    "Subscriber signal hard-filtered by Trend Persistence %s: %s",
+                    version, signal.symbol,
                 )
                 return
         run_score = features.get("run_score", signal.score)
@@ -183,10 +191,10 @@ class DiscordNotifier:
     ) -> bool:
         """Send a lean subscriber board for the one current live strategy.
 
-        v1.3.55 intentionally removes historical strategy competitors from the
+        v1.3.56 retains the lean current-strategy-only subscriber surface from the
         subscriber surface.  Research/rollback history remains in storage, but
         the public board answers one operational question only: how is the
-        currently promoted Daily-Core + Persistence V1 TP5/SL75 account doing?
+        currently promoted Daily-Core + Persistence V2 TP5/SL75 account doing?
         """
         if not self._performance_webhook_url:
             return False
@@ -233,14 +241,14 @@ class DiscordNotifier:
             "color": 0x5865F2,
             "fields": [
                 {
-                    "name": "▶️ Live/default • Daily-Core + Persistence V1",
+                    "name": "▶️ Live/default • Daily-Core + Persistence V2",
                     "value": (
                         "**TP5 + SL75** • STANDARD + HIGH_RISK confirmed shorts • **1× cross** • "
                         "**5% of current equity per admitted entry** • max **6** open positions / **30%** aggregate exposure • "
                         "one position per symbol • TP **+5%** • catastrophic SL **-75%** • no timeout.\n"
                         "Admission is fail-closed: skip Daily-Confirmed Core V1 flagged/non-computable signals, then skip "
-                        "First-Entry Trend Persistence V1 flagged/non-computable signals on its reachable branch. "
-                        "Persistence V1 = Daily Bull + Core-false + daily distance ≥4.5 ATR + EMA20 1D slope ≥7.5% + run→breakdown ≤6h."
+                        "Trend Persistence V2 flagged/non-computable signals on its reachable branch. "
+                        "V2 keeps the frozen early V1 branch and adds Mature-Run Weak-Breakdown V1: Daily Bull + Core-false + run→breakdown ≥24h + previous 1h momentum >0 + no lower-high/lower-close + no 15m structural break."
                     ),
                     "inline": False,
                 },
@@ -265,7 +273,7 @@ class DiscordNotifier:
                 },
             ],
             "footer": {
-                "text": "Current strategy only • Daily-Core + Persistence V1 • 6×5% / 30% • TP5 / SL75"
+                "text": "Current strategy only • Daily-Core + Persistence V2 • 6×5% / 30% • TP5 / SL75"
             },
         }
 
@@ -458,10 +466,10 @@ class DiscordNotifier:
     ) -> bool:
         """Send a lean current-strategy research board.
 
-        v1.3.55 removes legacy PCR/HTF/TP20/7D/exposure-challenger embeds from
+        v1.3.56 retains the lean current-only research surface and removes legacy PCR/HTF/TP20/7D/exposure-challenger embeds from
         routine Discord research.  The old full ResearchAnalyticsReport is still
         accepted for backwards-compatible tests/offline callers, but only its
-        current Daily-Core + Persistence V1 slice is rendered.
+        current Daily-Core + Persistence V2 slice is rendered.
         """
         if not self._performance_webhook_url:
             return False
@@ -541,17 +549,17 @@ class DiscordNotifier:
             "title": "🧠 Exhaustion Scanner • Research Intelligence • Current Strategy",
             "description": (
                 f"Updated **{display_time.strftime('%d %b %Y • %H:%M %Z')}** • raw signals **{total_signals}**.\n"
-                "Only the promoted **Daily-Core + Persistence V1 • TP5/SL75 • 6×5% / 30%** strategy is shown. Legacy challenger sections are no longer rendered."
+                "Only the promoted **Daily-Core + Persistence V2 • TP5/SL75 • 6×5% / 30%** strategy is shown. Legacy challenger sections are no longer rendered."
             ),
             "color": 0x5865F2,
             "fields": [
                 {
-                    "name": "🧭 First-Entry Trend Persistence • V1 • current live rule",
+                    "name": "🧭 Trend Persistence • V2 • current live rule",
                     "value": (
                         "STANDARD + HIGH_RISK confirmed shorts • Daily-Confirmed Core hard skip (fail closed) • "
-                        "First-Entry Trend Persistence V1 hard skip (fail closed on its reachable branch) • "
+                        "Trend Persistence V2 hard skip (fail closed on its reachable branch) • "
                         "6 slots × 5% • 30% max exposure • TP +5% • SL -75% • no timeout.\n"
-                        "Persistence V1: Daily Bull + Core-false + ≥4.5 daily ATR above EMA20 + EMA20 1D slope ≥7.5% + run→breakdown ≤6h."
+                        "V2 = early V1 branch (≤6h + extreme daily extension/acceleration) OR mature-run weak-breakdown branch (≥24h + previous 1h momentum >0 + no lower-high/lower-close + no 15m structural break)."
                     ),
                     "inline": False,
                 },

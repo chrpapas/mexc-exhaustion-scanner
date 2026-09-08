@@ -10,7 +10,7 @@ from typing import Awaitable, Callable
 
 from app.config import Settings
 from app.daily_core_strategy import daily_confirmed_core_v1_snapshot_metadata
-from app.daily_bull_persistence_strategy import daily_bull_persistence_v1_snapshot_metadata
+from app.daily_bull_persistence_strategy import daily_bull_persistence_v1_snapshot_metadata, daily_bull_persistence_v2_snapshot_metadata
 from app.daily_regime import daily_regime_snapshot_metadata, reconstruct_daily_regime_features
 from app.db import Database
 from app.indicators import (
@@ -968,6 +968,9 @@ class ScannerWorker:
                             )
                             confirm_features.update(
                                 daily_bull_persistence_v1_snapshot_metadata(confirm_features)
+                            )
+                            confirm_features.update(
+                                daily_bull_persistence_v2_snapshot_metadata(confirm_features)
                             )
                             episode = await self.db.update_episode(
                                 episode.id,

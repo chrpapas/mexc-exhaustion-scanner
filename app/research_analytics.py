@@ -20,6 +20,11 @@ from app.daily_bull_persistence_strategy import (
     DAILY_BULL_PERSISTENCE_V1_RUN_TO_BREAKDOWN_HOURS_MAX,
     DAILY_BULL_PERSISTENCE_V1_VERSION,
     daily_bull_persistence_v1_state,
+    DAILY_BULL_PERSISTENCE_V2_VERSION,
+    DAILY_BULL_PERSISTENCE_V2_FREEZE_AT,
+    MATURE_RUN_WEAK_BREAKDOWN_V1_VERSION,
+    daily_bull_persistence_v2_state,
+    mature_run_weak_breakdown_v1_state,
 )
 from app.trader_logic import (
     HTF_BASE_POSITION_FRACTION,
@@ -2255,6 +2260,26 @@ def _daily_bull_persistence_v1_state(row: dict[str, Any]) -> bool | None:
     return daily_bull_persistence_v1_state(snapshot)
 
 
+def _persistence_v2_snapshot(row: dict[str, Any]) -> dict[str, Any]:
+    snapshot = json_object(row.get("feature_snapshot"))
+    for key in (
+        "run_score", "hours_run_to_breakdown", "previous_momentum_1h",
+        "lower_high_and_close", "structural_break_15m",
+        "daily_distance_above_ema20_atr", "daily_ema20_slope",
+    ):
+        if snapshot.get(key) is None and row.get(key) is not None:
+            snapshot[key] = row.get(key)
+    return snapshot
+
+
+def _daily_bull_persistence_v2_state(row: dict[str, Any]) -> bool | None:
+    return daily_bull_persistence_v2_state(_persistence_v2_snapshot(row))
+
+
+def _mature_run_weak_breakdown_v1_state(row: dict[str, Any]) -> bool | None:
+    return mature_run_weak_breakdown_v1_state(_persistence_v2_snapshot(row))
+
+
 def _daily_confirmed_core_v1_position_fractions(rows: list[dict[str, Any]]) -> dict[int, float]:
     result: dict[int, float] = {}
     for row in rows:
@@ -3407,9 +3432,9 @@ def build_current_strategy_research(
     generated_at: datetime,
     portfolio_path_rows: Iterable[dict[str, Any]] = (),
 ) -> CurrentStrategyResearchSummary:
-    """Build only the currently promoted Daily-Core + Persistence V1 research book.
+    """Build only the currently promoted Daily-Core + Persistence V2 research book.
 
-    This is the lightweight v1.3.55 path used by the Discord research command.
+    This is the lightweight v1.3.56 path used by the Discord research command.
     Legacy research builders remain available for offline/backward analysis, but
     they are no longer computed for the routine on-demand Discord report.
     """
@@ -3433,7 +3458,7 @@ def build_current_strategy_research(
             if core:
                 daily_core_flagged += 1
                 continue
-            persistence = _daily_bull_persistence_v1_state(row)
+            persistence = _daily_bull_persistence_v2_state(row)
             if persistence is None:
                 persistence_missing += 1
                 continue
@@ -3456,8 +3481,8 @@ def build_current_strategy_research(
         strategy="tp5_sl75_challenger",
         generated_at=generated_at,
         path_rows=path_rows,
-        cohort="current_daily_core_persistence_v1",
-        strategy_name_override="tp5_sl75_daily_core_persistence_skip_v1",
+        cohort="current_daily_core_persistence_v2",
+        strategy_name_override="tp5_sl75_daily_core_persistence_skip_v2",
         position_fraction_override=0.05,
         max_total_override=6,
         max_exposure_fraction_override=0.30,
@@ -3467,7 +3492,7 @@ def build_current_strategy_research(
         admitted, strategy="tp5_sl75_challenger", generated_at=generated_at
     )
 
-    forward_rows = [row for row in rows if row["confirmed_at"] > DAILY_BULL_PERSISTENCE_V1_FREEZE_AT]
+    forward_rows = [row for row in rows if row["confirmed_at"] > DAILY_BULL_PERSISTENCE_V2_FREEZE_AT]
     (
         forward_admitted,
         forward_core_flagged,
@@ -3483,8 +3508,8 @@ def build_current_strategy_research(
         strategy="tp5_sl75_challenger",
         generated_at=generated_at,
         path_rows=path_rows,
-        cohort="current_daily_core_persistence_v1_true_forward",
-        strategy_name_override="tp5_sl75_daily_core_persistence_skip_v1_true_forward",
+        cohort="current_daily_core_persistence_v2_true_forward",
+        strategy_name_override="tp5_sl75_daily_core_persistence_skip_v2_true_forward",
         position_fraction_override=0.05,
         max_total_override=6,
         max_exposure_fraction_override=0.30,
@@ -3496,7 +3521,7 @@ def build_current_strategy_research(
 
     return CurrentStrategyResearchSummary(
         generated_at=generated_at,
-        strategy="tp5_sl75_daily_core_persistence_skip_v1",
+        strategy="tp5_sl75_daily_core_persistence_skip_v2",
         total_signals=len(rows),
         daily_core_flagged=core_flagged,
         daily_core_missing=core_missing,
@@ -3505,7 +3530,7 @@ def build_current_strategy_research(
         admitted_signals=len(admitted),
         admitted_validation=validation,
         portfolio=portfolio,
-        freeze_at=DAILY_BULL_PERSISTENCE_V1_FREEZE_AT,
+        freeze_at=DAILY_BULL_PERSISTENCE_V2_FREEZE_AT,
         prospective_total_signals=len(forward_rows),
         prospective_daily_core_flagged=forward_core_flagged,
         prospective_daily_core_missing=forward_core_missing,
@@ -3567,7 +3592,7 @@ def research_current_strategy_csv(report: CurrentStrategyResearchSummary) -> byt
             "return_over_drawdown": "" if portfolio.return_over_max_drawdown is None else f"{portfolio.return_over_max_drawdown:.6f}",
             "avg_exposure_pct": _csv_pct(portfolio.avg_exposure_pct),
             "peak_exposure_pct": _csv_pct(portfolio.max_observed_exposure_pct),
-            "rule": "Daily-Core hard skip + Persistence V1 hard skip; 6x5%/30%; TP5/SL75; no timeout",
+            "rule": "Daily-Core hard skip + Persistence V2 hard skip (early V1 OR Mature-Run Weak-Breakdown V1); 6x5%/30%; TP5/SL75; no timeout",
         })
 
     emit(
@@ -4590,6 +4615,9 @@ def research_signal_dataset_csv(rows: Iterable[dict[str, Any]], *, generated_at:
         "daily_confirmed_core_v1_true_forward",
         "daily_bull_persistence_v1_version", "daily_bull_persistence_v1_computable",
         "daily_bull_persistence_v1_flagged", "daily_bull_persistence_v1_true_forward",
+        "daily_bull_persistence_v2_version", "daily_bull_persistence_v2_computable",
+        "daily_bull_persistence_v2_flagged", "daily_bull_persistence_v2_true_forward",
+        "mature_run_weak_breakdown_v1_version", "mature_run_weak_breakdown_v1_flagged",
     ]
     strategy_fields: list[str] = []
     for prefix in ("tp5_indefinite", "tp5_sl75", "hold_7d"):
@@ -4711,6 +4739,15 @@ def research_signal_dataset_csv(rows: Iterable[dict[str, Any]], *, generated_at:
         flattened["daily_bull_persistence_v1_true_forward"] = (
             isinstance(confirmed, datetime) and confirmed > DAILY_BULL_PERSISTENCE_V1_FREEZE_AT
         )
+        persistence_v2_state = _daily_bull_persistence_v2_state(row)
+        flattened["daily_bull_persistence_v2_version"] = DAILY_BULL_PERSISTENCE_V2_VERSION
+        flattened["daily_bull_persistence_v2_computable"] = persistence_v2_state is not None
+        flattened["daily_bull_persistence_v2_flagged"] = persistence_v2_state
+        flattened["daily_bull_persistence_v2_true_forward"] = (
+            isinstance(confirmed, datetime) and confirmed > DAILY_BULL_PERSISTENCE_V2_FREEZE_AT
+        )
+        flattened["mature_run_weak_breakdown_v1_version"] = MATURE_RUN_WEAK_BREAKDOWN_V1_VERSION
+        flattened["mature_run_weak_breakdown_v1_flagged"] = _mature_run_weak_breakdown_v1_state(row)
         for strategy, prefix in (
             ("tp5_challenger", "tp5_indefinite"),
             ("tp5_sl75_challenger", "tp5_sl75"),

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Any
+from datetime import UTC, datetime
 
 from app.daily_core_strategy import continuation_core_v1_state
 from app.daily_regime import daily_regime_state
@@ -83,4 +84,120 @@ def daily_bull_persistence_v1_snapshot_metadata(features: dict[str, Any]) -> dic
         "daily_bull_persistence_v1_computable": state is not None,
         "daily_bull_persistence_v1_flagged": state,
         "daily_bull_persistence_v1_missing_fields": list(missing),
+    }
+
+# Persistence V2 adds a second, separately interpretable veto branch discovered
+# after the 8 Sep 2026 SOPH review. V1 remains frozen unchanged for rollback and
+# historical attribution. V2 = V1 early-continuation veto OR the mature-run
+# weak-breakdown veto below. The V2 freeze is the operator promotion time.
+DAILY_BULL_PERSISTENCE_V2_VERSION = "daily_bull_persistence_v2"
+DAILY_BULL_PERSISTENCE_V2_FREEZE_AT = datetime(2026, 9, 8, 6, 29, tzinfo=UTC)
+MATURE_RUN_WEAK_BREAKDOWN_V1_VERSION = "mature_run_weak_breakdown_v1"
+MATURE_RUN_WEAK_BREAKDOWN_V1_RUN_HOURS_MIN = 24.0
+MATURE_RUN_WEAK_BREAKDOWN_V1_PREVIOUS_MOMENTUM_MIN = 0.0
+
+DAILY_CORE_PERSISTENCE_SKIP_STRATEGY_V2 = "tp5_sl75_daily_core_persistence_skip_v2"
+
+
+def mature_run_weak_breakdown_v1_missing_features(features: dict[str, Any]) -> tuple[str, ...]:
+    """Missing inputs only when the mature-run branch is actually reachable."""
+    daily = daily_regime_state(features)
+    core = continuation_core_v1_state(features)
+    if daily is None or core is None or not daily or core:
+        return ()
+    run_hours = _number(features.get("hours_run_to_breakdown"))
+    if run_hours is None or run_hours < MATURE_RUN_WEAK_BREAKDOWN_V1_RUN_HOURS_MIN:
+        return ()
+    missing: list[str] = []
+    if _number(features.get("previous_momentum_1h")) is None:
+        missing.append("previous_momentum_1h")
+    if features.get("lower_high_and_close") is None:
+        missing.append("lower_high_and_close")
+    if features.get("structural_break_15m") is None:
+        missing.append("structural_break_15m")
+    return tuple(missing)
+
+
+def mature_run_weak_breakdown_v1_state(features: dict[str, Any]) -> bool | None:
+    """Flag a very mature Daily-Bull run whose local breakdown lacks structure.
+
+    Exact frozen rule:
+      Daily Bull AND Core-false AND run->breakdown >=24h AND
+      previous 1h momentum >0 AND lower-high/lower-close is false AND
+      15m structural break is false.
+    """
+    daily = daily_regime_state(features)
+    core = continuation_core_v1_state(features)
+    if daily is None or core is None:
+        return None
+    if not daily or core:
+        return False
+    run_hours = _number(features.get("hours_run_to_breakdown"))
+    if run_hours is None:
+        return None
+    if run_hours < MATURE_RUN_WEAK_BREAKDOWN_V1_RUN_HOURS_MIN:
+        return False
+    previous_momentum = _number(features.get("previous_momentum_1h"))
+    lower_high = features.get("lower_high_and_close")
+    structural_break = features.get("structural_break_15m")
+    if previous_momentum is None or lower_high is None or structural_break is None:
+        return None
+    return (
+        previous_momentum > MATURE_RUN_WEAK_BREAKDOWN_V1_PREVIOUS_MOMENTUM_MIN
+        and lower_high is False
+        and structural_break is False
+    )
+
+
+def daily_bull_persistence_v2_missing_features(features: dict[str, Any]) -> tuple[str, ...]:
+    """Return missing inputs for the V2 branch that is reachable at signal time."""
+    daily = daily_regime_state(features)
+    core = continuation_core_v1_state(features)
+    if daily is None or core is None:
+        return ()
+    if not daily or core:
+        return ()
+    run_hours = _number(features.get("hours_run_to_breakdown"))
+    if run_hours is None:
+        return ("hours_run_to_breakdown",)
+    if run_hours <= DAILY_BULL_PERSISTENCE_V1_RUN_TO_BREAKDOWN_HOURS_MAX:
+        return tuple(
+            key for key in ("daily_distance_above_ema20_atr", "daily_ema20_slope")
+            if _number(features.get(key)) is None
+        )
+    if run_hours >= MATURE_RUN_WEAK_BREAKDOWN_V1_RUN_HOURS_MIN:
+        return mature_run_weak_breakdown_v1_missing_features(features)
+    return ()
+
+
+def daily_bull_persistence_v2_state(features: dict[str, Any]) -> bool | None:
+    """Combined promoted persistence veto: frozen V1 early branch + mature branch."""
+    daily = daily_regime_state(features)
+    core = continuation_core_v1_state(features)
+    if daily is None or core is None:
+        return None
+    if not daily or core:
+        return False
+
+    run_hours = _number(features.get("hours_run_to_breakdown"))
+    if run_hours is None:
+        return None
+    if run_hours <= DAILY_BULL_PERSISTENCE_V1_RUN_TO_BREAKDOWN_HOURS_MAX:
+        return daily_bull_persistence_v1_state(features)
+    if run_hours >= MATURE_RUN_WEAK_BREAKDOWN_V1_RUN_HOURS_MIN:
+        return mature_run_weak_breakdown_v1_state(features)
+    return False
+
+
+def daily_bull_persistence_v2_snapshot_metadata(features: dict[str, Any]) -> dict[str, Any]:
+    state = daily_bull_persistence_v2_state(features)
+    mature_state = mature_run_weak_breakdown_v1_state(features)
+    missing = daily_bull_persistence_v2_missing_features(features)
+    return {
+        "daily_bull_persistence_v2_version": DAILY_BULL_PERSISTENCE_V2_VERSION,
+        "daily_bull_persistence_v2_computable": state is not None,
+        "daily_bull_persistence_v2_flagged": state,
+        "daily_bull_persistence_v2_missing_fields": list(missing),
+        "mature_run_weak_breakdown_v1_version": MATURE_RUN_WEAK_BREAKDOWN_V1_VERSION,
+        "mature_run_weak_breakdown_v1_flagged": mature_state,
     }

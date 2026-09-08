@@ -15,6 +15,9 @@ from app.daily_core_strategy import (
 from app.daily_bull_persistence_strategy import (
     daily_bull_persistence_v1_missing_features,
     daily_bull_persistence_v1_state,
+    daily_bull_persistence_v2_missing_features,
+    daily_bull_persistence_v2_state,
+    mature_run_weak_breakdown_v1_state,
 )
 from app.mexc_trade import MexcTradeClient, MexcTradeError
 from app.trader_config import TraderSettings
@@ -329,34 +332,52 @@ class PortfolioShortTrader:
             )
             return
 
-        persistence_flagged = (
-            daily_bull_persistence_v1_state(signal.features)
-            if self.settings.uses_daily_bull_persistence_skip
-            else None
-        )
-        if self.settings.uses_daily_bull_persistence_skip and persistence_flagged is None:
-            missing = daily_bull_persistence_v1_missing_features(signal.features)
-            await self._ignore_signal(
-                signal,
-                "ignored_missing_persistence_data",
-                "First-Entry Trend Persistence V1 is fail-closed because required signal-time data is missing: "
-                + (", ".join(missing) or "unknown"),
-                event_fields=[
-                    {"name": "Missing Persistence inputs", "value": ", ".join(missing) or "unknown", "inline": False},
-                ],
-            )
-            return
-        if self.settings.uses_daily_bull_persistence_skip and persistence_flagged:
-            await self._ignore_signal(
-                signal,
-                "ignored_daily_bull_persistence_filter",
-                "First-Entry Trend Persistence V1 flagged an early local breakdown inside an extreme accelerating Daily-Bull trend; hard-filtered",
-                event_fields=[
-                    {"name": "Live admission", "value": "HARD SKIP", "inline": True},
-                    {"name": "Rule", "value": "Daily Bull + Core false + daily extension >=4.5 ATR + EMA20 slope >=7.5% + run→breakdown <=6h", "inline": False},
-                ],
-            )
-            return
+        if self.settings.uses_daily_bull_persistence_skip:
+            if self.settings.uses_daily_bull_persistence_v2_skip:
+                persistence_flagged = daily_bull_persistence_v2_state(signal.features)
+                missing = daily_bull_persistence_v2_missing_features(signal.features)
+            else:
+                persistence_flagged = daily_bull_persistence_v1_state(signal.features)
+                missing = daily_bull_persistence_v1_missing_features(signal.features)
+
+            if persistence_flagged is None:
+                await self._ignore_signal(
+                    signal,
+                    "ignored_missing_persistence_data",
+                    "Trend Persistence admission is fail-closed because required signal-time data is missing: "
+                    + (", ".join(missing) or "unknown"),
+                    event_fields=[
+                        {"name": "Missing Persistence inputs", "value": ", ".join(missing) or "unknown", "inline": False},
+                    ],
+                )
+                return
+            if persistence_flagged:
+                mature = (
+                    mature_run_weak_breakdown_v1_state(signal.features)
+                    if self.settings.uses_daily_bull_persistence_v2_skip
+                    else False
+                )
+                if mature:
+                    await self._ignore_signal(
+                        signal,
+                        "ignored_mature_run_weak_breakdown_filter",
+                        "Persistence V2 mature-run branch flagged a stale Daily-Bull run with renewed momentum but insufficient bearish structure; hard-filtered",
+                        event_fields=[
+                            {"name": "Live admission", "value": "HARD SKIP", "inline": True},
+                            {"name": "Rule", "value": "Daily Bull + Core false + run→breakdown >=24h + previous 1h momentum >0 + no lower-high/lower-close + no 15m structural break", "inline": False},
+                        ],
+                    )
+                else:
+                    await self._ignore_signal(
+                        signal,
+                        "ignored_daily_bull_persistence_filter",
+                        "First-Entry Trend Persistence V1 flagged an early local breakdown inside an extreme accelerating Daily-Bull trend; hard-filtered",
+                        event_fields=[
+                            {"name": "Live admission", "value": "HARD SKIP", "inline": True},
+                            {"name": "Rule", "value": "Daily Bull + Core false + daily extension >=4.5 ATR + EMA20 slope >=7.5% + run→breakdown <=6h", "inline": False},
+                        ],
+                    )
+                return
 
         active = await self._active_positions()
         if len(active) >= self.settings.max_open_positions:
@@ -1268,7 +1289,7 @@ class PortfolioShortTrader:
                 "max_total_exposure_pct": self.settings.max_total_exposure_pct,
                 "strategy": self.settings.execution_strategy,
                 "run_id": self._active_run_id,
-                "version": "1.3.55",
+                "version": "1.3.56",
             },
         )
 
@@ -1278,8 +1299,10 @@ class PortfolioShortTrader:
                 f" • catastrophic SL -{self.settings.catastrophic_stop_pct:g}%"
                 if self.settings.uses_catastrophic_stop else ""
             )
-            if self.settings.uses_daily_bull_persistence_skip:
-                sizing = "5.00% • Daily-Core + First-Entry Persistence flagged = HARD SKIP"
+            if self.settings.uses_daily_bull_persistence_v2_skip:
+                sizing = "5.00% • Daily-Core + Persistence V2 (early + mature-run) flagged = HARD SKIP"
+            elif self.settings.uses_daily_bull_persistence_skip:
+                sizing = "5.00% • Daily-Core + First-Entry Persistence V1 flagged = HARD SKIP"
             elif self.settings.uses_daily_core_skip:
                 sizing = "5.00% • Daily-Confirmed Core flagged = HARD SKIP"
             elif self.settings.uses_pcr_derisk:
