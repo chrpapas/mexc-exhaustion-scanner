@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import json
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, AsyncIterator
 
 from app.db import Database
 from app.json_utils import json_object
@@ -23,8 +24,43 @@ def paper_run_reset_cursor(runtime: dict[str, Any], *, process_existing: bool) -
 
 
 class TraderRepository:
+    # Two-key PostgreSQL advisory-lock namespace reserved for signal consumption.
+    # The lock is held only while a trader cycle consumes scanner signals; it
+    # therefore serializes overlapping Render instances without blocking price
+    # monitoring or heartbeats.
+    _SIGNAL_CONSUMER_LOCK_NAMESPACE = 1296388931
+    _SIGNAL_CONSUMER_LOCK_KEY = 1
+
     def __init__(self, db: Database) -> None:
         self.db = db
+
+    @asynccontextmanager
+    async def signal_consumer_lock(self) -> AsyncIterator[bool]:
+        """Try to become the sole confirmed-signal consumer across processes.
+
+        Render rolling deploys can briefly run the old and new trader instances
+        together. A database advisory lock makes signal admission, capacity
+        checks, and position creation single-consumer across those instances.
+        The lock is non-blocking: a loser simply skips signal consumption for
+        this tick and can retry on the next one.
+        """
+        async with self.db.pool.acquire() as conn:
+            locked = bool(
+                await conn.fetchval(
+                    "SELECT pg_try_advisory_lock($1::integer,$2::integer)",
+                    self._SIGNAL_CONSUMER_LOCK_NAMESPACE,
+                    self._SIGNAL_CONSUMER_LOCK_KEY,
+                )
+            )
+            try:
+                yield locked
+            finally:
+                if locked:
+                    await conn.fetchval(
+                        "SELECT pg_advisory_unlock($1::integer,$2::integer)",
+                        self._SIGNAL_CONSUMER_LOCK_NAMESPACE,
+                        self._SIGNAL_CONSUMER_LOCK_KEY,
+                    )
 
     async def initialize_runtime(self, *, starting_equity: float, process_existing: bool) -> None:
         current = await self.db.pool.fetchrow(
@@ -74,6 +110,37 @@ class TraderRepository:
             "UPDATE trader_runtime SET paper_equity_usdt=$1, updated_at=now() WHERE singleton=true",
             equity,
         )
+
+    async def adjust_paper_equity(self, delta: float) -> float:
+        value = await self.db.pool.fetchval(
+            """
+            UPDATE trader_runtime
+            SET paper_equity_usdt=GREATEST(0,paper_equity_usdt+$1), updated_at=now()
+            WHERE singleton=true
+            RETURNING paper_equity_usdt
+            """,
+            delta,
+        )
+        return float(value or 0.0)
+
+    async def expected_paper_equity(self, run_id: str) -> float | None:
+        """Rebuild realized paper cash from the immutable run start plus booked rows."""
+        value = await self.db.pool.fetchval(
+            """
+            SELECT tr.starting_equity_usdt
+                 + COALESCE(SUM(CASE WHEN tp.status IN ('closed','liquidated')
+                                     THEN tp.realized_pnl_usdt ELSE 0 END),0)
+                 - COALESCE(SUM(tp.entry_fee_usdt),0)
+                 - COALESCE(SUM(CASE WHEN tp.status IN ('closed','liquidated')
+                                     THEN tp.exit_fee_usdt ELSE 0 END),0)
+            FROM trader_runs tr
+            LEFT JOIN trader_positions tp ON tp.run_id=tr.run_id
+            WHERE tr.run_id=$1 AND tr.mode='paper'
+            GROUP BY tr.run_id, tr.starting_equity_usdt
+            """,
+            run_id,
+        )
+        return None if value is None else float(value)
 
     async def latest_confirmed_signal_id(self) -> int:
         return int(

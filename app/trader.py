@@ -83,6 +83,7 @@ class PortfolioShortTrader:
         )
         if self.settings.trading_mode == "paper":
             await self._ensure_paper_run()
+            await self._reconcile_paper_cash()
         else:
             self._active_run_id = f"live_{self.settings.execution_strategy}"
             await self._live_preflight()
@@ -99,6 +100,20 @@ class PortfolioShortTrader:
         # Discord is intentionally quiet: normal startup is logged/heartbeated in DB only.
         self._last_discord_heartbeat = time.monotonic()
         await self._write_db_heartbeat()
+
+    async def _reconcile_paper_cash(self) -> None:
+        expected = await self.repo.expected_paper_equity(self._active_run_id)
+        if expected is None:
+            return
+        runtime = await self.repo.runtime()
+        actual = float(runtime["paper_equity_usdt"])
+        if abs(actual - expected) <= 1e-9:
+            return
+        await self.repo.set_paper_equity(expected)
+        LOGGER.warning(
+            "Paper cash reconciled run=%s old=%.6f expected=%.6f delta=%+.6f",
+            self._active_run_id, actual, expected, expected - actual,
+        )
 
     async def _active_positions(self) -> list[TraderPosition]:
         # Keep paper and live books isolated even when they share the same PostgreSQL database.
@@ -259,41 +274,51 @@ class PortfolioShortTrader:
             )
 
     async def _consume_new_signals(self) -> None:
-        # Defensive catch-up for the deployment/run-reset race fixed in v1.3.59.
-        # Only fresh confirmed signals with neither a prior decision nor a
-        # position are eligible, so this cannot duplicate an already handled trade.
-        recovered = await self.repo.recent_unprocessed_confirmed_signals(
-            max_age_seconds=self.settings.max_signal_age_seconds
-        )
-        if recovered:
-            LOGGER.warning(
-                "Recovering %s fresh confirmed signal(s) without trader decision/position: ids=%s symbols=%s",
-                len(recovered),
-                ",".join(str(item.id) for item in recovered),
-                ",".join(item.symbol for item in recovered),
+        # Render rolling deploys may overlap trader instances for a few seconds.
+        # Serialize the whole signal-consumption section across processes so the
+        # same confirmed short cannot be admitted twice and portfolio capacity
+        # is evaluated from one coherent book.
+        async with self.repo.signal_consumer_lock() as consumer_acquired:
+            if not consumer_acquired:
+                LOGGER.debug("Signal consumer lease busy; skipping this cycle")
+                return
+
+            # Defensive catch-up for the deployment/run-reset race fixed in v1.3.59.
+            # Only fresh confirmed signals with neither a prior decision nor a
+            # position are eligible. The cross-instance consumer lock added in
+            # v1.3.60 makes the check-and-handle sequence race-free.
+            recovered = await self.repo.recent_unprocessed_confirmed_signals(
+                max_age_seconds=self.settings.max_signal_age_seconds
             )
-            for signal in recovered:
+            if recovered:
+                LOGGER.warning(
+                    "Recovering %s fresh confirmed signal(s) without trader decision/position: ids=%s symbols=%s",
+                    len(recovered),
+                    ",".join(str(item.id) for item in recovered),
+                    ",".join(item.symbol for item in recovered),
+                )
+                for signal in recovered:
+                    try:
+                        await self._handle_signal(signal)
+                    except Exception as exc:
+                        LOGGER.exception("Could not recover signal id=%s symbol=%s", signal.id, signal.symbol)
+                        await self.repo.decision(signal.id, "error", str(exc))
+                        await self._alert_error(f"signal:{signal.symbol}", exc)
+                    finally:
+                        await self.repo.set_cursor(signal.id)
+
+            runtime = await self.repo.runtime()
+            cursor = int(runtime["last_signal_id"])
+            signals = await self.repo.next_confirmed_signals(cursor)
+            for signal in signals:
                 try:
                     await self._handle_signal(signal)
                 except Exception as exc:
-                    LOGGER.exception("Could not recover signal id=%s symbol=%s", signal.id, signal.symbol)
+                    LOGGER.exception("Could not process signal id=%s symbol=%s", signal.id, signal.symbol)
                     await self.repo.decision(signal.id, "error", str(exc))
                     await self._alert_error(f"signal:{signal.symbol}", exc)
                 finally:
                     await self.repo.set_cursor(signal.id)
-
-        runtime = await self.repo.runtime()
-        cursor = int(runtime["last_signal_id"])
-        signals = await self.repo.next_confirmed_signals(cursor)
-        for signal in signals:
-            try:
-                await self._handle_signal(signal)
-            except Exception as exc:
-                LOGGER.exception("Could not process signal id=%s symbol=%s", signal.id, signal.symbol)
-                await self.repo.decision(signal.id, "error", str(exc))
-                await self._alert_error(f"signal:{signal.symbol}", exc)
-            finally:
-                await self.repo.set_cursor(signal.id)
 
     async def _handle_signal(self, signal: TradeSignal) -> None:
         age = max(0.0, (datetime.now(UTC) - signal.signaled_at).total_seconds())
@@ -611,8 +636,6 @@ class PortfolioShortTrader:
         price = await self.mexc.last_price(signal.symbol)
         quantity = notional / price
         entry_fee = notional * self.settings.paper_taker_fee_rate
-        runtime = await self.repo.runtime()
-        await self.repo.set_paper_equity(max(0.0, float(runtime["paper_equity_usdt"]) - entry_fee))
         if self.settings.uses_generic_slots:
             exit_strategy = "tp5_sl75_full" if self.settings.uses_catastrophic_stop else "tp5_full"
             position_maturity = "profit_5"
@@ -623,7 +646,7 @@ class PortfolioShortTrader:
                 if signal.risk_tier == "STANDARD"
                 else f"{self.settings.high_risk_timeout_days}d"
             )
-        return await self.repo.create_position(
+        position = await self.repo.create_position(
             signal=signal,
             run_id=self._active_run_id,
             slot_no=slot_no,
@@ -662,6 +685,9 @@ class PortfolioShortTrader:
                 "catastrophic_stop_pct": self.settings.catastrophic_stop_pct if self.settings.uses_catastrophic_stop else None,
             },
         )
+        await self.repo.adjust_paper_equity(-entry_fee)
+        return position
+
 
     async def _open_live(self, signal: TradeSignal, slot_no: int, equity: float, notional: float) -> TraderPosition:
         price = await self.mexc.last_price(signal.symbol)
@@ -1052,9 +1078,8 @@ class PortfolioShortTrader:
             mexc_close_order_id=close_order_id,
         )
         if position.mode == "paper":
-            runtime = await self.repo.runtime()
             pnl = position.quantity_base * (position.entry_price - price)
-            await self.repo.set_paper_equity(max(0.0, float(runtime["paper_equity_usdt"]) + pnl - exit_fee))
+            await self.repo.adjust_paper_equity(pnl - exit_fee)
         await self.mexc.ticker_stream.remove(position.symbol)
         realized = short_return_pct(position.entry_price, price)
         gross_pnl = position.quantity_base * (position.entry_price - price)
@@ -1312,7 +1337,7 @@ class PortfolioShortTrader:
                 "max_total_exposure_pct": self.settings.max_total_exposure_pct,
                 "strategy": self.settings.execution_strategy,
                 "run_id": self._active_run_id,
-                "version": "1.3.56",
+                "version": "1.3.60",
             },
         )
 
@@ -1323,11 +1348,11 @@ class PortfolioShortTrader:
                 if self.settings.uses_catastrophic_stop else ""
             )
             if self.settings.uses_daily_bull_persistence_v2_skip:
-                sizing = "5.00% • Daily-Core + Persistence V2 (early + mature-run) flagged = HARD SKIP"
+                sizing = f"{self.settings.slot_allocation_pct:.2f}% • Daily-Core + Persistence V2 (early + mature-run) flagged = HARD SKIP"
             elif self.settings.uses_daily_bull_persistence_skip:
-                sizing = "5.00% • Daily-Core + First-Entry Persistence V1 flagged = HARD SKIP"
+                sizing = f"{self.settings.slot_allocation_pct:.2f}% • Daily-Core + First-Entry Persistence V1 flagged = HARD SKIP"
             elif self.settings.uses_daily_core_skip:
-                sizing = "5.00% • Daily-Confirmed Core flagged = HARD SKIP"
+                sizing = f"{self.settings.slot_allocation_pct:.2f}% • Daily-Confirmed Core flagged = HARD SKIP"
             elif self.settings.uses_pcr_derisk:
                 sizing = "PCR 2.50% flagged / 5.00% otherwise"
             elif self.settings.uses_htf_derisk:

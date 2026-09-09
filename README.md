@@ -1,4 +1,9 @@
-# MEXC Exhaustion Scanner + Multi-Slot Futures Trader v1.3.59
+# MEXC Exhaustion Scanner + Multi-Slot Futures Trader v1.3.60
+
+
+## v1.3.60 — Cross-instance trader signal lease
+
+Render rolling deploys can briefly overlap trader processes. v1.3.60 serializes the entire confirmed-signal consumption section with a PostgreSQL advisory lock, so only one trader instance can recover/admit/create positions at a time. This prevents duplicate orphan recovery, duplicate ignore decisions, duplicate fee debits, and capacity races during deploy overlap. No schema migration is required. The strategy label now reports the configured slot allocation dynamically (8.33% for the current 6-slot / 50% setup) instead of the stale hard-coded 5.00% text. Paper fee/cash bookkeeping is now atomic, and startup reconciles realized paper cash from the active run ledger, automatically repairing any duplicate fee debits left by the v1.3.59 overlap race.
 
 
 ## v1.3.59 — Trader restart catch-up + Armed Runner memory + 50% six-slot allocation

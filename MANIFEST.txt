@@ -118,6 +118,7 @@ tests/test_strategy_validation_v1327.py
 tests/test_subscriber_pcr_report_v1337.py
 tests/test_tp20_daily_core_v146.py
 tests/test_trader_config.py
+tests/test_trader_cross_instance_lock_v1360.py
 tests/test_trader_cursor_v1359.py
 tests/test_trader_db.py
 tests/test_trader_decision_migration_v150.py
