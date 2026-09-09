@@ -40,8 +40,8 @@ def test_tp5_sl75_pcr_v1_defaults_are_frozen(monkeypatch):
     assert settings.execution_strategy == "tp5_sl75_daily_core_persistence_skip_v2"
     assert settings.paper_run_id == "tp5_sl75_daily_core_persistence_skip_v2"
     assert settings.max_open_positions == 6
-    assert settings.slot_allocation_pct == pytest.approx(5.0)
-    assert settings.max_total_exposure_pct == pytest.approx(30.0)
+    assert settings.slot_allocation_pct == pytest.approx(50.0 / 6.0)
+    assert settings.max_total_exposure_pct == pytest.approx(50.0)
     assert settings.tp5_target_pct == pytest.approx(5.0)
     assert settings.catastrophic_stop_pct == pytest.approx(75.0)
     assert settings.uses_catastrophic_stop is True

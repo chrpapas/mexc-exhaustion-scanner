@@ -79,6 +79,10 @@ services:
         value: "0.5"
       - key: REARM_NEW_HIGH_PCT
         value: "0.05"
+      - key: ARMED_RUNNER_MEMORY_HOURS
+        value: "48"
+      - key: CONFIRMED_REARM_HOURS
+        value: "48"
       - key: EPISODE_MAX_AGE_HOURS
         value: "240"
       - key: PERFORMANCE_POLL_SECONDS
@@ -155,9 +159,9 @@ services:
       - key: TRADER_MAX_OPEN_POSITIONS
         value: "6"
       - key: TRADER_SLOT_ALLOCATION_PCT
-        value: "5"
+        value: "8.333333333333"
       - key: TRADER_MAX_TOTAL_EXPOSURE_PCT
-        value: "30"
+        value: "50"
       - key: TRADER_TP5_TARGET_PCT
         value: "5"
       - key: TRADER_CATASTROPHIC_STOP_PCT

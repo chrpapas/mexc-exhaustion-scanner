@@ -73,6 +73,8 @@ class Settings:
     retest_window_candles: int
     retest_tolerance_atr: float
     rearm_new_high_pct: float
+    armed_runner_memory_hours: int
+    confirmed_rearm_hours: int
     episode_max_age_hours: int
 
     performance_poll_seconds: int
@@ -156,6 +158,8 @@ class Settings:
             retest_window_candles=int(os.getenv("RETEST_WINDOW_CANDLES", "6")),
             retest_tolerance_atr=float(os.getenv("RETEST_TOLERANCE_ATR", "0.5")),
             rearm_new_high_pct=float(os.getenv("REARM_NEW_HIGH_PCT", "0.05")),
+            armed_runner_memory_hours=int(os.getenv("ARMED_RUNNER_MEMORY_HOURS", "48")),
+            confirmed_rearm_hours=int(os.getenv("CONFIRMED_REARM_HOURS", "48")),
             episode_max_age_hours=int(os.getenv("EPISODE_MAX_AGE_HOURS", "240")),
             performance_poll_seconds=int(os.getenv("PERFORMANCE_POLL_SECONDS", "300")),
             performance_report_check_seconds=int(
@@ -205,6 +209,8 @@ class Settings:
             ("FUNDING_REFRESH_SECONDS", self.funding_refresh_seconds),
             ("WIDE_SCAN_SECONDS", self.wide_scan_seconds),
             ("RETEST_WINDOW_CANDLES", self.retest_window_candles),
+            ("ARMED_RUNNER_MEMORY_HOURS", self.armed_runner_memory_hours),
+            ("CONFIRMED_REARM_HOURS", self.confirmed_rearm_hours),
             ("EPISODE_MAX_AGE_HOURS", self.episode_max_age_hours),
             ("PERFORMANCE_POLL_SECONDS", self.performance_poll_seconds),
             ("PERFORMANCE_REPORT_CHECK_SECONDS", self.performance_report_check_seconds),
@@ -241,6 +247,10 @@ class Settings:
             raise ValueError("RETEST_TOLERANCE_ATR must be positive")
         if self.rearm_new_high_pct <= 0:
             raise ValueError("REARM_NEW_HIGH_PCT must be positive")
+        if self.armed_runner_memory_hours > self.episode_max_age_hours:
+            raise ValueError("ARMED_RUNNER_MEMORY_HOURS cannot exceed EPISODE_MAX_AGE_HOURS")
+        if self.confirmed_rearm_hours > self.episode_max_age_hours:
+            raise ValueError("CONFIRMED_REARM_HOURS cannot exceed EPISODE_MAX_AGE_HOURS")
         if not 0 <= self.performance_report_hour <= 23:
             raise ValueError("PERFORMANCE_REPORT_HOUR must be between 0 and 23")
         try:

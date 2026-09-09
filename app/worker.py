@@ -38,6 +38,7 @@ from app.signals import (
     RunThresholds,
     classify_execution_risk,
     classify_market_state,
+    armed_runner_exhaustion_ready,
     evaluate_failed_retest,
     score_exhaustion,
     score_run,
@@ -679,6 +680,13 @@ class ScannerWorker:
         breakdown_waiting = 0
         confirmed_shorts = 0
         rearmed_episodes = 0
+        rearmed_new_high = 0
+        rearmed_timeout = 0
+        confirmed_locked = 0
+        armed_memory_kept = 0
+        armed_memory_exhaustion = 0
+        armed_memory_expired = 0
+        late_prior_state_admissions = 0
 
         loop = asyncio.get_running_loop()
         evaluation_started = loop.time()
@@ -700,6 +708,13 @@ class ScannerWorker:
             nonlocal breakdown_waiting
             nonlocal confirmed_shorts
             nonlocal rearmed_episodes
+            nonlocal rearmed_new_high
+            nonlocal rearmed_timeout
+            nonlocal confirmed_locked
+            nonlocal armed_memory_kept
+            nonlocal armed_memory_exhaustion
+            nonlocal armed_memory_expired
+            nonlocal late_prior_state_admissions
             async with semaphore:
                 ticker = self.latest_tickers[symbol]
                 candles_15m, candles_4h = await asyncio.gather(
@@ -863,6 +878,8 @@ class ScannerWorker:
                 base_features.update(htf_snapshot_metadata(base_features))
 
                 episode = await self.db.get_active_episode(symbol)
+                peak_candle = max(completed_15m[-289:], key=lambda item: item.high)
+                normal_state_valid = scorable and state is not None
 
                 # Close very old episodes so a later, unrelated pump can be tracked.
                 if episode is not None and (
@@ -876,8 +893,28 @@ class ScannerWorker:
                     )
                     episode = None
 
-                # A confirmed episode is locked. It may only re-arm after a later
-                # completed candle establishes a materially higher high.
+                # Track a newer peak for every unconfirmed episode even when the
+                # current run score/state has faded. This is the core of Armed
+                # Runner memory: peak freshness, not current runner score, controls
+                # the memory TTL.
+                if (
+                    episode is not None
+                    and episode.confirmed_short_at is None
+                    and peak_candle.high > episode.peak_price
+                ):
+                    episode = await self.db.update_episode(
+                        episode.id,
+                        peak_price=peak_candle.high,
+                        peak_at=peak_candle.open_time,
+                        run_score=run_score,
+                        exhaustion_score=exhaustion_score,
+                    )
+
+                # A confirmed episode remains locked against duplicate signals, but
+                # can now re-arm in either of two ways:
+                #   1) the existing materially-higher-high rule; or
+                #   2) after a 48h cooldown when the symbol independently qualifies
+                #      for a valid current market state again.
                 if episode is not None and episode.confirmed_short_at is not None:
                     post_confirm = [
                         candle
@@ -887,25 +924,40 @@ class ScannerWorker:
                     new_high = max(
                         (candle.high for candle in post_confirm), default=0.0
                     )
-                    can_rearm = (
-                        scorable
-                        and run_score >= self.settings.state_min_run_score
-                        and state is not None
+                    rearm_by_new_high = (
+                        normal_state_valid
                         and new_high
                         >= episode.peak_price * (1.0 + self.settings.rearm_new_high_pct)
                     )
-                    if can_rearm:
+                    hours_since_confirm = max(
+                        0.0, (now - episode.confirmed_short_at).total_seconds() / 3600.0
+                    )
+                    rearm_by_timeout = (
+                        normal_state_valid
+                        and hours_since_confirm >= self.settings.confirmed_rearm_hours
+                    )
+                    if rearm_by_new_high or rearm_by_timeout:
+                        if rearm_by_new_high:
+                            reason = (
+                                "rearmed after new high >= "
+                                f"{self.settings.rearm_new_high_pct:.1%} above prior episode peak"
+                            )
+                            rearmed_new_high += 1
+                        else:
+                            reason = (
+                                "rearmed after confirmed cooldown >= "
+                                f"{self.settings.confirmed_rearm_hours}h with independent current qualification"
+                            )
+                            rearmed_timeout += 1
                         await self.db.close_episode(
                             episode.id,
                             closed_at=now,
-                            reason=(
-                                "rearmed after new high >= "
-                                f"{self.settings.rearm_new_high_pct:.1%} above prior episode peak"
-                            ),
+                            reason=reason,
                         )
                         episode = None
                         rearmed_episodes += 1
                     else:
+                        confirmed_locked += 1
                         return
 
                 # An active breakdown must keep being evaluated even if run_score
@@ -1064,15 +1116,92 @@ class ScannerWorker:
                         )
                         return
 
-                # Discovery is intentionally independent of execution liquidity.
-                if (
-                    not scorable
-                    or run_score < self.settings.state_min_run_score
-                    or state is None
-                ):
+                # The classifier already owns the run-score requirement and its
+                # intended late-prior-runner exception. Do not re-impose the raw
+                # STATE_MIN_RUN_SCORE here, or the exception is silently defeated.
+                if normal_state_valid and run_score < self.settings.state_min_run_score:
+                    late_prior_state_admissions += 1
+
+                # Armed Runner V1: once a legitimate unconfirmed pump episode exists,
+                # remember it for a fixed period after the latest tracked peak. During
+                # that window current run_score/r72 no longer have to remain elevated.
+                # We still require the SAME intraday exhaustion structure before a
+                # structural break can arm the failed-retest confirmation.
+                if episode is not None and not normal_state_valid:
+                    memory_anchor = max(episode.started_at, episode.peak_at)
+                    memory_age_hours = max(0.0, (now - memory_anchor).total_seconds() / 3600.0)
+                    memory_active = memory_age_hours <= self.settings.armed_runner_memory_hours
+                    if not memory_active:
+                        await self.db.close_episode(
+                            episode.id,
+                            closed_at=now,
+                            reason=(
+                                "armed runner memory expired after "
+                                f"{self.settings.armed_runner_memory_hours}h without fresh qualification"
+                            ),
+                        )
+                        armed_memory_expired += 1
+                        episode = None
+                        return
+
+                    armed_memory_kept += 1
+                    persisted_exhaustion = episode.state == "exhaustion_watch"
+                    fresh_memory_exhaustion = armed_runner_exhaustion_ready(
+                        exhaustion, exhaustion_score, self.state_thresholds
+                    )
+                    if persisted_exhaustion or fresh_memory_exhaustion:
+                        old_state = episode.state
+                        state = "exhaustion_watch"
+                        state_reasons = [
+                            (
+                                f"armed runner memory active ({memory_age_hours:.1f}h <= "
+                                f"{self.settings.armed_runner_memory_hours}h from latest peak/detection)"
+                            ),
+                            "prior legitimate pump retained after current runner metrics faded",
+                        ]
+                        if fresh_memory_exhaustion:
+                            state_reasons.append(
+                                "current intraday reversal evidence satisfies armed-memory exhaustion gate"
+                            )
+                        episode = await self.db.update_episode(
+                            episode.id,
+                            state="exhaustion_watch",
+                            run_score=run_score,
+                            exhaustion_score=exhaustion_score,
+                            metadata={
+                                "armed_memory_active": True,
+                                "armed_memory_age_hours": memory_age_hours,
+                            },
+                        )
+                        armed_memory_exhaustion += 1
+                        if old_state != "exhaustion_watch":
+                            sent = await self._emit_watch_transition(
+                                symbol=symbol,
+                                state="exhaustion_watch",
+                                signaled_at=signaled_at,
+                                run_score=run_score,
+                                exhaustion_score=exhaustion_score,
+                                features=base_features,
+                                reasons=state_reasons + exhaustion_reasons,
+                                episode=episode,
+                            )
+                            if sent == "exhaustion_watch":
+                                exhaustion_watches += 1
+                    else:
+                        await self.db.update_episode(
+                            episode.id,
+                            run_score=run_score,
+                            exhaustion_score=exhaustion_score,
+                            metadata={
+                                "armed_memory_active": True,
+                                "armed_memory_age_hours": memory_age_hours,
+                            },
+                        )
+                        return
+
+                if episode is None and not normal_state_valid:
                     return
 
-                peak_candle = max(completed_15m[-289:], key=lambda item: item.high)
                 if episode is None:
                     episode = await self.db.create_episode(
                         symbol=symbol,
@@ -1226,7 +1355,9 @@ class ScannerWorker:
         LOGGER.info(
             "Signal evaluation complete: symbols=%d evaluated=%d standard=%d high_risk=%d "
             "extreme_risk=%d run_watches=%d exhaustion_watches=%d breakdown_watches=%d "
-            "breakdown_waiting=%d confirmed_shorts=%d rearmed=%d failures=%d duration=%.1fs",
+            "breakdown_waiting=%d confirmed_shorts=%d rearmed=%d rearm_new_high=%d "
+            "rearm_timeout=%d confirmed_locked=%d armed_kept=%d armed_exhaustion=%d "
+            "armed_expired=%d late_prior_admissions=%d failures=%d duration=%.1fs",
             len(symbols),
             evaluated,
             standard_evaluated,
@@ -1238,6 +1369,13 @@ class ScannerWorker:
             breakdown_waiting,
             confirmed_shorts,
             rearmed_episodes,
+            rearmed_new_high,
+            rearmed_timeout,
+            confirmed_locked,
+            armed_memory_kept,
+            armed_memory_exhaustion,
+            armed_memory_expired,
+            late_prior_state_admissions,
             failures,
             loop.time() - evaluation_started,
         )

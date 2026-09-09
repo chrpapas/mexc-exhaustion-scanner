@@ -219,6 +219,24 @@ def score_exhaustion(
     return len(reasons), reasons
 
 
+def armed_runner_exhaustion_ready(
+    exhaustion_features: ExhaustionFeatures,
+    exhaustion_score: int,
+    thresholds: MarketStateThresholds,
+) -> bool:
+    """Return True when a remembered runner shows the same intraday reversal evidence
+    used by the normal active-reversal branch, without requiring current run metrics.
+    """
+    return (
+        exhaustion_score >= thresholds.active_exhaustion_min_score
+        and exhaustion_features.momentum_decelerating
+        and (
+            exhaustion_features.below_ema9_15m
+            or exhaustion_features.lower_high_and_close
+        )
+    )
+
+
 def classify_market_state(
     run_features: RunFeatures,
     run_score: int,
@@ -258,9 +276,9 @@ def classify_market_state(
     active_reversal = (
         prior_run
         and r24 > thresholds.exhaustion_watch_max_24h
-        and exhaustion_score >= thresholds.active_exhaustion_min_score
-        and exhaustion_features.momentum_decelerating
-        and (exhaustion_features.below_ema9_15m or exhaustion_features.lower_high_and_close)
+        and armed_runner_exhaustion_ready(
+            exhaustion_features, exhaustion_score, thresholds
+        )
     )
     if active_reversal:
         return "exhaustion_watch", [

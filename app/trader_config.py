@@ -81,10 +81,17 @@ class TraderSettings:
         if max_open_positions < 1:
             raise ValueError("TRADER_MAX_OPEN_POSITIONS must be >= 1")
 
-        default_exposure = "30" if execution_strategy in {"tp5_v1", "tp5_sl75_v1", "tp5_sl75_pcr_v1", "tp5_sl75_htf_v1", "tp5_sl75_daily_core_skip_v1", "tp5_sl75_daily_core_persistence_skip_v1", "tp5_sl75_daily_core_persistence_skip_v2"} else "20"
+        current_strategy = execution_strategy == "tp5_sl75_daily_core_persistence_skip_v2"
+        legacy_tp5_strategy = execution_strategy in {
+            "tp5_v1", "tp5_sl75_v1", "tp5_sl75_pcr_v1", "tp5_sl75_htf_v1",
+            "tp5_sl75_daily_core_skip_v1", "tp5_sl75_daily_core_persistence_skip_v1",
+        }
+        default_exposure = "50" if current_strategy else ("30" if legacy_tp5_strategy else "20")
         max_total_exposure_pct = float(os.getenv("TRADER_MAX_TOTAL_EXPOSURE_PCT", default_exposure))
-        default_slot_pct = "5" if execution_strategy in {"tp5_v1", "tp5_sl75_v1", "tp5_sl75_pcr_v1", "tp5_sl75_htf_v1", "tp5_sl75_daily_core_skip_v1", "tp5_sl75_daily_core_persistence_skip_v1", "tp5_sl75_daily_core_persistence_skip_v2"} else str(
-            max_total_exposure_pct / max_open_positions
+        default_slot_pct = (
+            str(max_total_exposure_pct / max_open_positions)
+            if current_strategy
+            else ("5" if legacy_tp5_strategy else str(max_total_exposure_pct / max_open_positions))
         )
         slot_allocation_pct = float(os.getenv("TRADER_SLOT_ALLOCATION_PCT", default_slot_pct))
 

@@ -48,8 +48,8 @@ def test_daily_core_skip_is_default_and_pcr_is_rollback(monkeypatch):
     assert default.paper_run_id == "tp5_sl75_daily_core_persistence_skip_v2"
     assert default.uses_daily_core_skip
     assert default.uses_catastrophic_stop
-    assert default.slot_allocation_pct == pytest.approx(5.0)
-    assert default.max_total_exposure_pct == pytest.approx(30.0)
+    assert default.slot_allocation_pct == pytest.approx(50.0 / 6.0)
+    assert default.max_total_exposure_pct == pytest.approx(50.0)
 
     monkeypatch.setenv("TRADER_EXECUTION_STRATEGY", "tp5_sl75_pcr_v1")
     rollback = TraderSettings.from_env()

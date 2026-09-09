@@ -54,7 +54,7 @@ def test_daily_core_skip_is_new_default_but_pcr_and_fixed_sl75_remain_supported(
     assert settings.uses_catastrophic_stop
     assert settings.uses_generic_slots
     assert settings.max_open_positions == 6
-    assert settings.max_total_exposure_pct == pytest.approx(30.0)
+    assert settings.max_total_exposure_pct == pytest.approx(50.0)
 
     monkeypatch.setenv("TRADER_EXECUTION_STRATEGY", "tp5_sl75_v1")
     fixed = TraderSettings.from_env()

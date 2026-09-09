@@ -54,7 +54,7 @@ STOP_THRESHOLDS_PCT: tuple[int, ...] = (10, 20, 30, 50, 75, 100)
 DELAYED_ENTRY_MINUTES: tuple[int, ...] = (0, 15, 30, 60, 120, 240, 480)
 TP5_ADVERSE_THRESHOLDS_PCT: tuple[int, ...] = (10, 20, 30, 50, 75, 100)
 SHADOW_FEE_PER_FILL = 0.0008
-CURRENT_TOTAL_EXPOSURE_PCT = 0.20
+CURRENT_TOTAL_EXPOSURE_PCT = 0.50
 CURRENT_SLOT_PCT = CURRENT_TOTAL_EXPOSURE_PCT / 6.0
 TP5_CHALLENGER_SLOT_PCT = 0.05
 TP5_CHALLENGER_MAX_SLOTS = 6
@@ -72,7 +72,7 @@ STANDARD_TP5_SCALE_MAX_SLOTS = 10
 STANDARD_TP5_SCALE_TOTAL_EXPOSURE_PCT = STANDARD_TP5_SCALE_SLOT_PCT * STANDARD_TP5_SCALE_MAX_SLOTS
 # Research-only volatility-normalized sizing. The volatility anchor is frozen
 # from the pre-OOS discovery cohort, then reused unchanged for post-freeze
-# evaluation. Live/default trader sizing remains fixed at 5% / 6 slots / 30%.
+# evaluation. Live/default trader sizing is 50% / 6 slots (~8.33% each).
 VOLATILITY_BASE_SLOT_PCT = 0.05
 VOLATILITY_MIN_SLOT_PCT = 0.025
 VOLATILITY_MAX_SLOT_PCT = 0.075
@@ -3592,7 +3592,7 @@ def research_current_strategy_csv(report: CurrentStrategyResearchSummary) -> byt
             "return_over_drawdown": "" if portfolio.return_over_max_drawdown is None else f"{portfolio.return_over_max_drawdown:.6f}",
             "avg_exposure_pct": _csv_pct(portfolio.avg_exposure_pct),
             "peak_exposure_pct": _csv_pct(portfolio.max_observed_exposure_pct),
-            "rule": "Daily-Core hard skip + Persistence V2 hard skip (early V1 OR Mature-Run Weak-Breakdown V1); 6x5%/30%; TP5/SL75; no timeout",
+            "rule": "Daily-Core hard skip + Persistence V2 hard skip (early V1 OR Mature-Run Weak-Breakdown V1); 6x8.33%/50%; TP5/SL75; no timeout",
         })
 
     emit(

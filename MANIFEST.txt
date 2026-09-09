@@ -64,6 +64,7 @@
 ./pyproject.toml
 ./render.yaml
 ./scripts/verify_project.py
+./tests/test_armed_runner_v157.py
 ./tests/test_cleanup_v1313.py
 ./tests/test_cleanup_v1314.py
 ./tests/test_cleanup_v1315.py

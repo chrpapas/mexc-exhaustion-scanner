@@ -1,4 +1,15 @@
-# MEXC Exhaustion Scanner + Multi-Slot Futures Trader v1.3.56
+# MEXC Exhaustion Scanner + Multi-Slot Futures Trader v1.3.57
+
+
+## v1.3.57 — Armed Runner memory + 48h re-arm + 50% six-slot allocation
+
+- **Armed Runner V1:** once a legitimate unconfirmed pump episode exists, its pump qualification remains usable for **48h after the latest tracked peak/detection**, even if current run score / 72h return later fades. The scanner still requires the existing intraday exhaustion structure, a 15m structural break, and the same failed-retest confirmation before a short is emitted.
+- **Confirmed episode re-arm:** the existing `+5% above prior episode peak` re-arm remains. A second path now allows a fresh episode after **48h from the previous confirmed short** when the symbol independently qualifies for a valid current market state again.
+- **Late-runner gate fix:** `classify_market_state()` already allowed a strongly exhausted prior runner below `STATE_MIN_RUN_SCORE`; the worker previously rejected it again afterward. v1.3.57 removes that contradictory second gate so the intended classifier exception can actually operate.
+- **Telemetry:** evaluation summaries now expose confirmed locks, new-high vs timeout re-arms, armed-memory keeps/exhaustion/expiry, and late-prior admissions.
+- **Trader allocation:** current TP5/SL75 trader is now **6 generic slots × 8.3333% current equity = 50% max aggregate exposure**. STANDARD/HIGH_RISK capacity remains 5+1, one open position per symbol, 1x cross, TP +5%, catastrophic SL -75%. Existing open positions are not resized.
+- **Unchanged quality gates:** Daily-Confirmed Core + Trend Persistence V2 hard skips, structural-break + failed-retest confirmation, TP5, SL75, risk-tier policy, and subscriber admission strategy are unchanged.
+- No database migration is required. New scanner envs are `ARMED_RUNNER_MEMORY_HOURS=48` and `CONFIRMED_REARM_HOURS=48`.
 
 
 ## v1.3.56 — Trend Persistence V2: SOPH mature-run weak-breakdown veto
