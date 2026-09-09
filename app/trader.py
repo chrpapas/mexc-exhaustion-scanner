@@ -259,6 +259,29 @@ class PortfolioShortTrader:
             )
 
     async def _consume_new_signals(self) -> None:
+        # Defensive catch-up for the deployment/run-reset race fixed in v1.3.59.
+        # Only fresh confirmed signals with neither a prior decision nor a
+        # position are eligible, so this cannot duplicate an already handled trade.
+        recovered = await self.repo.recent_unprocessed_confirmed_signals(
+            max_age_seconds=self.settings.max_signal_age_seconds
+        )
+        if recovered:
+            LOGGER.warning(
+                "Recovering %s fresh confirmed signal(s) without trader decision/position: ids=%s symbols=%s",
+                len(recovered),
+                ",".join(str(item.id) for item in recovered),
+                ",".join(item.symbol for item in recovered),
+            )
+            for signal in recovered:
+                try:
+                    await self._handle_signal(signal)
+                except Exception as exc:
+                    LOGGER.exception("Could not recover signal id=%s symbol=%s", signal.id, signal.symbol)
+                    await self.repo.decision(signal.id, "error", str(exc))
+                    await self._alert_error(f"signal:{signal.symbol}", exc)
+                finally:
+                    await self.repo.set_cursor(signal.id)
+
         runtime = await self.repo.runtime()
         cursor = int(runtime["last_signal_id"])
         signals = await self.repo.next_confirmed_signals(cursor)

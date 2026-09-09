@@ -9,6 +9,19 @@ from app.json_utils import json_object
 from app.trader_models import TradeSignal, TraderPosition
 
 
+def paper_run_reset_cursor(runtime: dict[str, Any], *, process_existing: bool) -> int:
+    """Choose the cursor for a new paper strategy run.
+
+    A run switch must not silently skip confirmed signals emitted while the trader
+    process is restarting. Preserve the previous trader cursor and let the normal
+    max-signal-age admission reject stale signals. Only an explicit
+    process_existing=True request rewinds to the beginning.
+    """
+    if process_existing:
+        return 0
+    return int(runtime.get("last_signal_id") or 0)
+
+
 class TraderRepository:
     def __init__(self, db: Database) -> None:
         self.db = db
@@ -90,7 +103,7 @@ class TraderRepository:
             raise RuntimeError(
                 f"TRADER_PAPER_RUN_ID {run_id!r} was already used; choose a new unique run ID"
             )
-        cursor = 0 if process_existing else await self.latest_confirmed_signal_id()
+        cursor = paper_run_reset_cursor(runtime, process_existing=process_existing)
         old_run = str(runtime.get("active_run_id") or "legacy_pre_v136")
         async with self.db.pool.acquire() as conn:
             async with conn.transaction():
@@ -118,20 +131,8 @@ class TraderRepository:
                 )
         return True
 
-    async def next_confirmed_signals(self, after_id: int, limit: int = 100) -> list[TradeSignal]:
-        rows = await self.db.pool.fetch(
-            """
-            SELECT rs.id, rs.symbol, rs.signaled_at, rs.episode_id, rs.features,
-                   pe.started_at AS episode_started_at, pe.breakdown_at AS episode_breakdown_at
-            FROM run_signals rs
-            LEFT JOIN pump_episodes pe ON pe.id = rs.episode_id
-            WHERE rs.id > $1 AND rs.level='confirmed_short'
-            ORDER BY rs.id ASC
-            LIMIT $2
-            """,
-            after_id,
-            limit,
-        )
+    @staticmethod
+    def _trade_signals_from_rows(rows: list[Any]) -> list[TradeSignal]:
         result: list[TradeSignal] = []
         for row in rows:
             features = json_object(row["features"])
@@ -164,6 +165,50 @@ class TraderRepository:
                 )
             )
         return result
+
+    async def recent_unprocessed_confirmed_signals(
+        self, *, max_age_seconds: int, limit: int = 100
+    ) -> list[TradeSignal]:
+        """Return fresh confirmed shorts skipped by a cursor/run-reset race.
+
+        Only rows with neither a trader decision nor a trader position are
+        returned, making recovery idempotent and duplicate-safe.
+        """
+        rows = await self.db.pool.fetch(
+            """
+            SELECT rs.id, rs.symbol, rs.signaled_at, rs.episode_id, rs.features,
+                   pe.started_at AS episode_started_at, pe.breakdown_at AS episode_breakdown_at
+            FROM run_signals rs
+            LEFT JOIN pump_episodes pe ON pe.id = rs.episode_id
+            LEFT JOIN trader_signal_decisions td ON td.signal_id = rs.id
+            LEFT JOIN trader_positions tp ON tp.signal_id = rs.id
+            WHERE rs.level='confirmed_short'
+              AND rs.signaled_at >= now() - ($1::double precision * interval '1 second')
+              AND td.signal_id IS NULL
+              AND tp.signal_id IS NULL
+            ORDER BY rs.id ASC
+            LIMIT $2
+            """,
+            float(max_age_seconds),
+            limit,
+        )
+        return self._trade_signals_from_rows(rows)
+
+    async def next_confirmed_signals(self, after_id: int, limit: int = 100) -> list[TradeSignal]:
+        rows = await self.db.pool.fetch(
+            """
+            SELECT rs.id, rs.symbol, rs.signaled_at, rs.episode_id, rs.features,
+                   pe.started_at AS episode_started_at, pe.breakdown_at AS episode_breakdown_at
+            FROM run_signals rs
+            LEFT JOIN pump_episodes pe ON pe.id = rs.episode_id
+            WHERE rs.id > $1 AND rs.level='confirmed_short'
+            ORDER BY rs.id ASC
+            LIMIT $2
+            """,
+            after_id,
+            limit,
+        )
+        return self._trade_signals_from_rows(rows)
 
     async def decision(self, signal_id: int, decision: str, reason: str, position_id: int | None = None) -> None:
         await self.db.pool.execute(

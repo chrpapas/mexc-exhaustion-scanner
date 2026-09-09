@@ -1,13 +1,15 @@
-# MEXC Exhaustion Scanner + Multi-Slot Futures Trader v1.3.58
+# MEXC Exhaustion Scanner + Multi-Slot Futures Trader v1.3.59
 
 
-## v1.3.58 — Armed Runner memory + 48h re-arm + 50% six-slot allocation
+## v1.3.59 — Trader restart catch-up + Armed Runner memory + 50% six-slot allocation
 
-**v1.3.58 startup fix:** uses a fresh paper-run ID `tp5_sl75_persist_v2_armed48_50pct_v1` so the trader safety guard does not attempt to reuse an archived experiment ID. This intentionally starts a clean paper run for the new 50% sizing.
+**v1.3.59 trader catch-up fix:** when switching to a fresh paper run, the trader now preserves the previous `last_signal_id` cursor instead of jumping to the latest scanner signal. Confirmed shorts emitted while the trader is restarting are therefore consumed after startup and are still protected by `TRADER_MAX_SIGNAL_AGE_SECONDS=900`. This prevents Discord-only signals during deploy races. v1.3.59 also performs an idempotent 15-minute orphan catch-up for confirmed shorts with no trader decision and no position, so a just-missed deployment-race signal can still be processed without chasing stale entries.
+
+**v1.3.59 startup fix:** uses a fresh paper-run ID `tp5_sl75_persist_v2_armed48_50pct_v1` so the trader safety guard does not attempt to reuse an archived experiment ID. This intentionally starts a clean paper run for the new 50% sizing.
 
 - **Armed Runner V1:** once a legitimate unconfirmed pump episode exists, its pump qualification remains usable for **48h after the latest tracked peak/detection**, even if current run score / 72h return later fades. The scanner still requires the existing intraday exhaustion structure, a 15m structural break, and the same failed-retest confirmation before a short is emitted.
 - **Confirmed episode re-arm:** the existing `+5% above prior episode peak` re-arm remains. A second path now allows a fresh episode after **48h from the previous confirmed short** when the symbol independently qualifies for a valid current market state again.
-- **Late-runner gate fix:** `classify_market_state()` already allowed a strongly exhausted prior runner below `STATE_MIN_RUN_SCORE`; the worker previously rejected it again afterward. v1.3.58 removes that contradictory second gate so the intended classifier exception can actually operate.
+- **Late-runner gate fix:** `classify_market_state()` already allowed a strongly exhausted prior runner below `STATE_MIN_RUN_SCORE`; the worker previously rejected it again afterward. v1.3.59 removes that contradictory second gate so the intended classifier exception can actually operate.
 - **Telemetry:** evaluation summaries now expose confirmed locks, new-high vs timeout re-arms, armed-memory keeps/exhaustion/expiry, and late-prior admissions.
 - **Trader allocation:** current TP5/SL75 trader is now **6 generic slots × 8.3333% current equity = 50% max aggregate exposure**. STANDARD/HIGH_RISK capacity remains 5+1, one open position per symbol, 1x cross, TP +5%, catastrophic SL -75%. Existing open positions are not resized.
 - **Unchanged quality gates:** Daily-Confirmed Core + Trend Persistence V2 hard skips, structural-break + failed-retest confirmation, TP5, SL75, risk-tier policy, and subscriber admission strategy are unchanged.
