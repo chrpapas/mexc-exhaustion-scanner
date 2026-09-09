@@ -1,4 +1,9 @@
-# Trader deployment — v1.3.59
+# Trader deployment — v1.3.60
+
+## v1.3.60 rolling-deploy concurrency fix
+
+Confirmed-signal consumption is guarded by a non-blocking PostgreSQL advisory lock. During Render overlap only one trader process may recover or consume signals; other instances skip that consumption tick and retry later. This eliminates the duplicate `trader_positions_signal_id_key` errors seen with orphan recovery while preserving the existing paper run ID and positions. No migration is required. Paper equity adjustments are atomic, entry fees are booked only after a position row is created, and startup rebuilds realized paper cash from the run ledger to repair any extra fee debit caused by the prior race.
+
 
 ## v1.3.59 opportunity recall + allocation
 
