@@ -1,4 +1,21 @@
-# Trader deployment — v1.3.56
+# Trader deployment — v1.3.57
+
+## v1.3.57 opportunity recall + allocation
+
+Scanner lifecycle changes:
+- `ARMED_RUNNER_MEMORY_HOURS=48`: unconfirmed runner episodes retain prior pump qualification for 48h after their latest tracked peak/detection.
+- `CONFIRMED_REARM_HOURS=48`: after 48h, a previously confirmed symbol may create a fresh episode when it independently qualifies again; the existing +5% new-high re-arm remains active.
+- The worker no longer overrides the classifier's intended late-prior-runner exception with a second raw run-score gate.
+- Entry confirmation remains exhaustion -> structural break -> failed retest -> Daily-Core/Persistence V2 admission.
+
+Trader sizing changes for **new entries only**:
+- 6 generic slots
+- 8.333333333333% current equity per slot
+- 50% max aggregate exposure
+- 5 STANDARD slots + 1 HIGH_RISK slot
+- TP +5%, catastrophic SL -75%, 1x cross unchanged
+
+Existing open positions are not resized. Keep the current paper-run ID if you do not want deployment to archive/reset the current paper book.
 
 ## v1.3.56 strategy promotion
 
@@ -52,6 +69,10 @@ The mature-run branch is frozen **08 Sep 2026 08:29 CEST**. Do not retune this t
 Scanner:
 ```text
 SUBSCRIBER_SIGNAL_STRATEGY=tp5_sl75_daily_core_persistence_skip_v2
+ARMED_RUNNER_MEMORY_HOURS=48
+CONFIRMED_REARM_HOURS=48
+REARM_NEW_HIGH_PCT=0.05
+EPISODE_MAX_AGE_HOURS=240
 ```
 
 Trader:
@@ -60,8 +81,8 @@ TRADER_EXECUTION_STRATEGY=tp5_sl75_daily_core_persistence_skip_v2
 TRADER_PAPER_RUN_ID=tp5_sl75_daily_core_persistence_skip_v2
 TRADER_ALLOWED_RISK_TIERS=STANDARD,HIGH_RISK
 TRADER_MAX_OPEN_POSITIONS=6
-TRADER_SLOT_ALLOCATION_PCT=5
-TRADER_MAX_TOTAL_EXPOSURE_PCT=30
+TRADER_SLOT_ALLOCATION_PCT=8.333333333333
+TRADER_MAX_TOTAL_EXPOSURE_PCT=50
 TRADER_TP5_TARGET_PCT=5
 TRADER_CATASTROPHIC_STOP_PCT=75
 TRADER_ALLOW_SAME_SYMBOL_PARALLEL=false

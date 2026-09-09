@@ -22,8 +22,8 @@ def test_pcr_sl75_default_configuration(monkeypatch):
     assert settings.uses_generic_slots is True
     assert settings.uses_catastrophic_stop is True
     assert settings.max_open_positions == 6
-    assert settings.slot_allocation_pct == pytest.approx(5.0)
-    assert settings.max_total_exposure_pct == pytest.approx(30.0)
+    assert settings.slot_allocation_pct == pytest.approx(50.0 / 6.0)
+    assert settings.max_total_exposure_pct == pytest.approx(50.0)
     assert settings.tp5_target_pct == pytest.approx(5.0)
     assert settings.catastrophic_stop_pct == pytest.approx(75.0)
 

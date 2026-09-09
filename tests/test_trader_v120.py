@@ -27,8 +27,8 @@ def test_strategy_one_is_new_default(monkeypatch):
     assert s.allowed_risk_tiers == ("STANDARD", "HIGH_RISK")
     assert s.max_open_positions == 6
     assert s.execution_strategy == "tp5_sl75_daily_core_persistence_skip_v2"
-    assert s.slot_allocation_pct == pytest.approx(5.0)
-    assert s.max_total_exposure_pct == 30
+    assert s.slot_allocation_pct == pytest.approx(50.0 / 6.0)
+    assert s.max_total_exposure_pct == 50
     assert s.tp5_target_pct == 5
     # Legacy tier caps remain configured for rollback but are ignored by TP5 generic slots.
     assert s.max_standard_positions == 5
