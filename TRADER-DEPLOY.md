@@ -1,6 +1,10 @@
-# Trader deployment — v1.3.58
+# Trader deployment — v1.3.59
 
-## v1.3.58 opportunity recall + allocation
+## v1.3.59 opportunity recall + allocation
+
+### Restart catch-up semantics
+On a paper-run switch, v1.3.59 preserves the prior trader cursor. Signals emitted by the scanner during the trader restart are consumed after startup and then pass the normal 15-minute freshness/admission checks. The trader no longer jumps its cursor to the latest confirmed signal during a run reset. It also checks the last `TRADER_MAX_SIGNAL_AGE_SECONDS` window for confirmed shorts with no trader decision and no position, recovering them exactly once.
+
 
 Scanner lifecycle changes:
 - `ARMED_RUNNER_MEMORY_HOURS=48`: unconfirmed runner episodes retain prior pump qualification for 48h after their latest tracked peak/detection.
@@ -107,4 +111,4 @@ python -m app.research_analytics_now
 Expected research Discord wording: **Daily-Core + Persistence V2**, with true-forward evidence frozen at **08 Sep 2026 08:29 CEST**.
 
 
-Current v1.3.58 paper run ID: tp5_sl75_persist_v2_armed48_50pct_v1
+Current v1.3.59 paper run ID: tp5_sl75_persist_v2_armed48_50pct_v1
