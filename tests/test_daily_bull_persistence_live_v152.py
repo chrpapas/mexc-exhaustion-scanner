@@ -55,7 +55,7 @@ def test_persistence_strategy_is_default_without_resetting_existing_paper_run(mo
     assert settings.uses_daily_core_skip
     assert settings.uses_daily_bull_persistence_skip
     # Intentionally retained so promotion applies to future entries without closing the current paper book.
-    assert settings.paper_run_id == "tp5_sl75_daily_core_persistence_skip_v2"
+    assert settings.paper_run_id == "tp5_sl75_persist_v2_armed48_50pct_v1"
     assert settings.slot_allocation_pct == pytest.approx(50.0 / 6.0)
     assert settings.max_total_exposure_pct == pytest.approx(50.0)
 

@@ -1,6 +1,6 @@
-# Trader deployment — v1.3.57
+# Trader deployment — v1.3.58
 
-## v1.3.57 opportunity recall + allocation
+## v1.3.58 opportunity recall + allocation
 
 Scanner lifecycle changes:
 - `ARMED_RUNNER_MEMORY_HOURS=48`: unconfirmed runner episodes retain prior pump qualification for 48h after their latest tracked peak/detection.
@@ -105,3 +105,6 @@ python -m app.research_analytics_now
 ```
 
 Expected research Discord wording: **Daily-Core + Persistence V2**, with true-forward evidence frozen at **08 Sep 2026 08:29 CEST**.
+
+
+Current v1.3.58 paper run ID: tp5_sl75_persist_v2_armed48_50pct_v1

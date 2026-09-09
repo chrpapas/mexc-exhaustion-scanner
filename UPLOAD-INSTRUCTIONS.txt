@@ -1,8 +1,8 @@
-MEXC Exhaustion Scanner + Multi-Slot Futures Trader v1.3.57
+MEXC Exhaustion Scanner + Multi-Slot Futures Trader v1.3.58
 
 Deploy the entire project/ZIP together.
 
-v1.3.57 IMPROVES OPPORTUNITY RECALL WITHOUT LOOSENING ENTRY CONFIRMATION
+v1.3.58 IMPROVES OPPORTUNITY RECALL WITHOUT LOOSENING ENTRY CONFIRMATION
 - Armed Runner V1 remembers a legitimate unconfirmed pump for 48h after the latest tracked peak/detection.
 - Current run_score / 72h return may fade during that memory window; the short still requires exhaustion structure, structural break, failed retest, then Daily-Core + Persistence V2 admission.
 - Confirmed episodes keep the existing +5% new-high re-arm and add a 48h time-based re-arm when the symbol independently qualifies again.
@@ -58,3 +58,6 @@ Expected scanner evaluation summary now includes fields such as:
   armed_exhaustion=...
   armed_expired=...
   late_prior_admissions=...
+
+
+Current v1.3.58 paper run ID: tp5_sl75_persist_v2_armed48_50pct_v1
