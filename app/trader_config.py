@@ -114,7 +114,7 @@ class TraderSettings:
             mexc_ws_url=os.getenv("MEXC_WS_URL", "wss://contract.mexc.com/edge").strip(),
             trading_mode=os.getenv("TRADING_MODE", "paper").strip().lower(),
             execution_strategy=execution_strategy,
-            paper_run_id=os.getenv("TRADER_PAPER_RUN_ID", "tp5_sl75_daily_core_persistence_skip_v2").strip(),
+            paper_run_id=os.getenv("TRADER_PAPER_RUN_ID", "tp5_sl75_persist_v2_armed48_50pct_v1").strip(),
             margin_mode=os.getenv("TRADER_MARGIN_MODE", "cross").strip().lower(),
             legacy_position_maturity=os.getenv("TRADER_POSITION_MATURITY", "profit_20").strip().lower(),
             leverage=int(os.getenv("TRADER_LEVERAGE", "1")),

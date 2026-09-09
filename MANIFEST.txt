@@ -1,5 +1,6 @@
 ./.gitignore
 ./.python-version
+./MANIFEST.txt
 ./README.md
 ./README_v0.8.8.md
 ./TRADER-DEPLOY.md
