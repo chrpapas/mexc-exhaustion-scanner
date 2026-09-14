@@ -125,3 +125,19 @@ Current v1.3.59 paper run ID: tp5_sl75_persist_v2_armed48_50pct_v1
 `TRADER_CATASTROPHIC_STOP_PCT=100`
 
 Existing open positions retain persisted legacy exit metadata/protection. New positions use SL100 + LAE10/24-Q1.
+
+
+### v1.3.71 historical-universe research
+Do not run the universe reconstruction while the candle collector is active; both commands intentionally share the same lock and the second command will refuse to start. After the current candle fetch completes, run the universe reconstruction, then seed a follow-up candle fetch with `research-history/universe-history/historical-seed-symbols.txt`. This research path does not access the production database or change live strategy/trader settings.
+
+
+### v1.3.71 one-shot historical research
+This remains isolated from the live DB/trader. Start it once with:
+
+```bash
+python -m app.historical_pipeline run --cache-dir ./research-history-v2 --months 6
+```
+
+The controller freezes the time window, checkpoints every 15 minutes, automatically
+continues until current candles are complete, reconstructs delisted/historical symbols,
+then downloads their missing candles and exits. If interrupted, re-run the same command.
