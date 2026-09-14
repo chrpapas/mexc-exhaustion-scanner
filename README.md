@@ -1,6 +1,20 @@
-# MEXC Exhaustion Scanner + Multi-Slot Futures Trader v1.3.64
+# MEXC Exhaustion Scanner + Multi-Slot Futures Trader v1.3.66
 
 
+
+
+
+## v1.3.66 — TP20 indefinite strict slots × exposure matrix
+
+Live/default remains unchanged: TP5/SL100 + LAE10/24-Q1, 6×8.33% / 50%.
+The performance board now adds a research-only strict chronological TP20-indefinite
+matrix across 6, 8, 10 and 12 slots at 50%, 75% and 100% max exposure, using the
+same current Daily-Core + Persistence V2 admission, same-symbol blocking, capacity,
+compounding, fees and endpoint MTM.
+
+## v1.3.65 — Promote TP5/SL100 + LAE10/24-Q1
+
+Live/default is now Daily-Core + Persistence V2, 6×8.33% / 50%, TP +5%, catastrophic SL -100%, plus LAE10/24-Q1. Q1 closes entry-quality <=1 positions at -10% once age is >=24h. The rule and quality score are persisted at entry, so positions already open before deployment retain their previous exit/protection semantics.
 
 ## v1.3.64 — Catastrophic-stop plateau shadow replay
 

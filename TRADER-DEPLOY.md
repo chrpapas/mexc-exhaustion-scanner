@@ -117,3 +117,11 @@ Expected research Discord wording: **Daily-Core + Persistence V2**, with true-fo
 
 
 Current v1.3.59 paper run ID: tp5_sl75_persist_v2_armed48_50pct_v1
+
+
+### v1.3.65 promoted strategy
+`TRADER_EXECUTION_STRATEGY=tp5_sl100_lae10_24_q1_daily_core_persistence_skip_v2`
+
+`TRADER_CATASTROPHIC_STOP_PCT=100`
+
+Existing open positions retain persisted legacy exit metadata/protection. New positions use SL100 + LAE10/24-Q1.

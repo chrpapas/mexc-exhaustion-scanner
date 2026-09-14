@@ -234,7 +234,7 @@ class DiscordNotifier:
 
         def tail_challenger_economics() -> str:
             variants = [
-                ("SL75 live", report.tp5_sl75_daily_core_persistence_skip_account_run_rate),
+                ("SL75 legacy baseline", report.tp5_sl75_daily_core_persistence_skip_account_run_rate),
                 ("SL80", report.tp5_sl80_daily_core_persistence_skip_account_run_rate),
                 ("SL85", report.tp5_sl85_daily_core_persistence_skip_account_run_rate),
                 ("SL90", report.tp5_sl90_daily_core_persistence_skip_account_run_rate),
@@ -256,7 +256,36 @@ class DiscordNotifier:
                 )
 
             return "\n".join(compact(label, result) for label, result in variants) + (
-                "\nShadow research only — **live/default remains TP5/SL75 with no LAE exit**."
+                "\nResearch comparison — **live/default is now TP5/SL100 + LAE10/24-Q1**."
+            )
+
+        def tp20_matrix_economics() -> str:
+            lines = []
+            for slots in (6, 8, 10, 12):
+                row = []
+                for exposure in (50, 75, 100):
+                    result = getattr(
+                        report,
+                        f"tp20_indefinite_{slots}slots_{exposure}pct_account_run_rate",
+                        None,
+                    )
+                    if result is None:
+                        row.append(f"{exposure}% n/a")
+                        continue
+                    dd = (
+                        f"-{self._percent(result.max_mtm_drawdown)}"
+                        if result.max_mtm_drawdown is not None
+                        else "n/a"
+                    )
+                    row.append(
+                        f"{exposure}%: {self._signed_percent(result.observed_account_return)} "
+                        f"(30D {self._signed_percent(result.thirty_day_equivalent_return)}, "
+                        f"DD {dd}, {result.entered} entered)"
+                    )
+                lines.append(f"**{slots} slots:** " + " • ".join(row))
+            return (
+                "\n".join(lines)
+                + "\nTP20 indefinite research only; open positions are marked to endpoint MTM."
             )
 
         def all_signal_economics() -> str:
@@ -306,9 +335,9 @@ class DiscordNotifier:
                 {
                     "name": "▶️ Live/default • Daily-Core + Persistence V2",
                     "value": (
-                        "**TP5 + SL75** • STANDARD + HIGH_RISK confirmed shorts • **1× cross** • "
+                        "**TP5 + SL100 + LAE10/24-Q1** • STANDARD + HIGH_RISK confirmed shorts • **1× cross** • "
                         "**8.33% of current equity per admitted entry** • max **6** open positions / **50%** aggregate exposure • "
-                        "one position per symbol • TP **+5%** • catastrophic SL **-75%** • no timeout.\n"
+                        "one position per symbol • TP **+5%** • catastrophic SL **-100%** • Q1 stale-tail exit **-10% at ≥24h for entry quality ≤1** • no timeout.\n"
                         "Admission is fail-closed: skip Daily-Confirmed Core V1 flagged/non-computable signals, then skip "
                         "Trend Persistence V2 flagged/non-computable signals on its reachable branch. "
                         "V2 keeps the frozen early V1 branch and adds Mature-Run Weak-Breakdown V1: Daily Bull + Core-false + run→breakdown ≥24h + previous 1h momentum >0 + no lower-high/lower-close + no 15m structural break."
@@ -323,6 +352,11 @@ class DiscordNotifier:
                 {
                     "name": "🧪 Catastrophic-stop plateau • strict shadow replay",
                     "value": tail_challenger_economics(),
+                    "inline": False,
+                },
+                {
+                    "name": "🧭 TP20 indefinite • slots × exposure strict matrix",
+                    "value": tp20_matrix_economics(),
                     "inline": False,
                 },
                 {
@@ -356,7 +390,7 @@ class DiscordNotifier:
                 },
             ],
             "footer": {
-                "text": "Current strategy only • Daily-Core + Persistence V2 • 6×8.33% / 50% • TP5 / SL75"
+                "text": "Current strategy only • Daily-Core + Persistence V2 + LAE10/24-Q1 • 6×8.33% / 50% • TP5 / SL100"
             },
         }
 

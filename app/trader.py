@@ -53,6 +53,31 @@ PURPLE = 0x9B59B6
 ORANGE = 0xE67E22
 
 
+def _lae_q1_entry_quality(features: dict[str, Any]) -> int:
+    """Frozen signal-time Entry Quality score used by LAE10/24-Q1."""
+    def f(name: str) -> float | None:
+        try:
+            value = features.get(name)
+            return float(value) if value is not None else None
+        except (TypeError, ValueError):
+            return None
+
+    exhaustion, run_score = f("exhaustion_score"), f("run_score")
+    amount, volume_z = f("amount_24h"), f("volume_zscore_15m")
+    premium, r24, r72 = f("fair_index_premium_pct"), f("return_24h"), f("return_72h")
+    momentum = f("momentum_1h")
+    q = 0
+    q += 2 if exhaustion is not None and 4 < exhaustion <= 5 else 0
+    q += 2 if run_score is not None and 3.667 < run_score <= 5 else 0
+    q += 1 if amount is not None and amount > 12_310_000 else 0
+    q += 1 if volume_z is not None and volume_z <= -0.2796 else 0
+    q += 1 if premium is not None and premium <= -0.04249 else 0
+    q += 1 if r24 is not None and r24 > 0.2482 else 0
+    q += 1 if r72 is not None and r72 > 0.5629 else 0
+    q += 1 if momentum is not None and momentum <= -0.04472 else 0
+    return min(10, q)
+
+
 class PortfolioShortTrader:
     def __init__(self, settings: TraderSettings) -> None:
         self.settings = settings
@@ -683,6 +708,8 @@ class PortfolioShortTrader:
                 "htf_v1_previous_momentum_threshold": HTF_PREVIOUS_MOMENTUM_1H_THRESHOLD if self.settings.uses_htf_derisk else None,
                 "tp_target_pct": self.settings.tp5_target_pct if self.settings.uses_generic_slots else self.settings.profit_target_pct,
                 "catastrophic_stop_pct": self.settings.catastrophic_stop_pct if self.settings.uses_catastrophic_stop else None,
+                "lae10_24_q1_enabled": self.settings.uses_lae10_24_q1,
+                "lae10_24_q1_entry_quality": _lae_q1_entry_quality(signal.features) if self.settings.uses_lae10_24_q1 else None,
             },
         )
         await self.repo.adjust_paper_equity(-entry_fee)
@@ -773,6 +800,8 @@ class PortfolioShortTrader:
                 "htf_v1_previous_momentum_threshold": HTF_PREVIOUS_MOMENTUM_1H_THRESHOLD if self.settings.uses_htf_derisk else None,
                 "tp_target_pct": self.settings.tp5_target_pct if self.settings.uses_generic_slots else self.settings.profit_target_pct,
                 "catastrophic_stop_pct": self.settings.catastrophic_stop_pct if self.settings.uses_catastrophic_stop else None,
+                "lae10_24_q1_enabled": self.settings.uses_lae10_24_q1,
+                "lae10_24_q1_entry_quality": _lae_q1_entry_quality(signal.features) if self.settings.uses_lae10_24_q1 else None,
             },
         )
         if self.settings.uses_catastrophic_stop:
@@ -852,6 +881,18 @@ class PortfolioShortTrader:
 
         if position.exit_strategy in {"tp5_full", "tp5_sl75_full"}:
             target_pct = float(position.metadata.get("tp_target_pct") or self.settings.tp5_target_pct)
+
+            # Persisted per position: deployment never silently changes legacy/open trades.
+            if bool(position.metadata.get("lae10_24_q1_enabled")):
+                raw_quality = position.metadata.get("lae10_24_q1_entry_quality")
+                try:
+                    q1_quality = float(raw_quality) if raw_quality is not None else None
+                except (TypeError, ValueError):
+                    q1_quality = None
+                age_hours = max(0.0, (datetime.now(UTC) - position.opened_at).total_seconds() / 3600.0)
+                if q1_quality is not None and q1_quality <= 1.0 and age_hours >= 24.0 and current_return <= -10.0:
+                    await self._close(position, price, "lae10_24_q1")
+                    return
             if position.exit_strategy == "tp5_sl75_full":
                 stop_pct = float(position.metadata.get("catastrophic_stop_pct") or self.settings.catastrophic_stop_pct)
                 if current_return <= -stop_pct:
@@ -1337,7 +1378,7 @@ class PortfolioShortTrader:
                 "max_total_exposure_pct": self.settings.max_total_exposure_pct,
                 "strategy": self.settings.execution_strategy,
                 "run_id": self._active_run_id,
-                "version": "1.3.64",
+                "version": "1.3.66",
             },
         )
 

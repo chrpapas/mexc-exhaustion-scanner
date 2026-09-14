@@ -431,6 +431,18 @@ class PerformanceSummary:
     tp5_sl75_daily_core_persistence_skip_account_run_rate: AccountRunRateSummary | None = None
     tp5_sl100_daily_core_persistence_skip_account_run_rate: AccountRunRateSummary | None = None
     tp5_sl100_lae10_24_q1_daily_core_persistence_skip_account_run_rate: AccountRunRateSummary | None = None
+    tp20_indefinite_6slots_50pct_account_run_rate: AccountRunRateSummary | None = None
+    tp20_indefinite_6slots_75pct_account_run_rate: AccountRunRateSummary | None = None
+    tp20_indefinite_6slots_100pct_account_run_rate: AccountRunRateSummary | None = None
+    tp20_indefinite_8slots_50pct_account_run_rate: AccountRunRateSummary | None = None
+    tp20_indefinite_8slots_75pct_account_run_rate: AccountRunRateSummary | None = None
+    tp20_indefinite_8slots_100pct_account_run_rate: AccountRunRateSummary | None = None
+    tp20_indefinite_10slots_50pct_account_run_rate: AccountRunRateSummary | None = None
+    tp20_indefinite_10slots_75pct_account_run_rate: AccountRunRateSummary | None = None
+    tp20_indefinite_10slots_100pct_account_run_rate: AccountRunRateSummary | None = None
+    tp20_indefinite_12slots_50pct_account_run_rate: AccountRunRateSummary | None = None
+    tp20_indefinite_12slots_75pct_account_run_rate: AccountRunRateSummary | None = None
+    tp20_indefinite_12slots_100pct_account_run_rate: AccountRunRateSummary | None = None
     tp5_sl80_daily_core_persistence_skip_account_run_rate: AccountRunRateSummary | None = None
     tp5_sl85_daily_core_persistence_skip_account_run_rate: AccountRunRateSummary | None = None
     tp5_sl90_daily_core_persistence_skip_account_run_rate: AccountRunRateSummary | None = None
@@ -545,6 +557,18 @@ class PerformanceSummary:
             "tp5_sl75_daily_core_persistence_skip_account_run_rate": self.tp5_sl75_daily_core_persistence_skip_account_run_rate.as_dict() if self.tp5_sl75_daily_core_persistence_skip_account_run_rate else None,
             "tp5_sl100_daily_core_persistence_skip_account_run_rate": self.tp5_sl100_daily_core_persistence_skip_account_run_rate.as_dict() if self.tp5_sl100_daily_core_persistence_skip_account_run_rate else None,
             "tp5_sl100_lae10_24_q1_daily_core_persistence_skip_account_run_rate": self.tp5_sl100_lae10_24_q1_daily_core_persistence_skip_account_run_rate.as_dict() if self.tp5_sl100_lae10_24_q1_daily_core_persistence_skip_account_run_rate else None,
+            "tp20_indefinite_6slots_50pct_account_run_rate": self.tp20_indefinite_6slots_50pct_account_run_rate.as_dict() if self.tp20_indefinite_6slots_50pct_account_run_rate else None,
+            "tp20_indefinite_6slots_75pct_account_run_rate": self.tp20_indefinite_6slots_75pct_account_run_rate.as_dict() if self.tp20_indefinite_6slots_75pct_account_run_rate else None,
+            "tp20_indefinite_6slots_100pct_account_run_rate": self.tp20_indefinite_6slots_100pct_account_run_rate.as_dict() if self.tp20_indefinite_6slots_100pct_account_run_rate else None,
+            "tp20_indefinite_8slots_50pct_account_run_rate": self.tp20_indefinite_8slots_50pct_account_run_rate.as_dict() if self.tp20_indefinite_8slots_50pct_account_run_rate else None,
+            "tp20_indefinite_8slots_75pct_account_run_rate": self.tp20_indefinite_8slots_75pct_account_run_rate.as_dict() if self.tp20_indefinite_8slots_75pct_account_run_rate else None,
+            "tp20_indefinite_8slots_100pct_account_run_rate": self.tp20_indefinite_8slots_100pct_account_run_rate.as_dict() if self.tp20_indefinite_8slots_100pct_account_run_rate else None,
+            "tp20_indefinite_10slots_50pct_account_run_rate": self.tp20_indefinite_10slots_50pct_account_run_rate.as_dict() if self.tp20_indefinite_10slots_50pct_account_run_rate else None,
+            "tp20_indefinite_10slots_75pct_account_run_rate": self.tp20_indefinite_10slots_75pct_account_run_rate.as_dict() if self.tp20_indefinite_10slots_75pct_account_run_rate else None,
+            "tp20_indefinite_10slots_100pct_account_run_rate": self.tp20_indefinite_10slots_100pct_account_run_rate.as_dict() if self.tp20_indefinite_10slots_100pct_account_run_rate else None,
+            "tp20_indefinite_12slots_50pct_account_run_rate": self.tp20_indefinite_12slots_50pct_account_run_rate.as_dict() if self.tp20_indefinite_12slots_50pct_account_run_rate else None,
+            "tp20_indefinite_12slots_75pct_account_run_rate": self.tp20_indefinite_12slots_75pct_account_run_rate.as_dict() if self.tp20_indefinite_12slots_75pct_account_run_rate else None,
+            "tp20_indefinite_12slots_100pct_account_run_rate": self.tp20_indefinite_12slots_100pct_account_run_rate.as_dict() if self.tp20_indefinite_12slots_100pct_account_run_rate else None,
             "tp5_sl80_daily_core_persistence_skip_account_run_rate": self.tp5_sl80_daily_core_persistence_skip_account_run_rate.as_dict() if self.tp5_sl80_daily_core_persistence_skip_account_run_rate else None,
             "tp5_sl85_daily_core_persistence_skip_account_run_rate": self.tp5_sl85_daily_core_persistence_skip_account_run_rate.as_dict() if self.tp5_sl85_daily_core_persistence_skip_account_run_rate else None,
             "tp5_sl90_daily_core_persistence_skip_account_run_rate": self.tp5_sl90_daily_core_persistence_skip_account_run_rate.as_dict() if self.tp5_sl90_daily_core_persistence_skip_account_run_rate else None,
@@ -1734,6 +1758,91 @@ def build_performance_summary(
         catastrophic_stop_pct=1.00,
         lae10_24_q1=True,
     )
+
+    tp20_indefinite_6slots_50pct_account_run_rate = account_run_rate(
+        strategy="tp20",
+        risk_tiers={"standard", "high_risk"},
+        exposure=ExposureRecommendation(0.08333333333333333, 6, 0.5, "TP20 indefinite 6 slots / 50% exposure"),
+        daily_core_skip=True,
+        daily_bull_persistence_v2_skip=True,
+    )
+    tp20_indefinite_6slots_75pct_account_run_rate = account_run_rate(
+        strategy="tp20",
+        risk_tiers={"standard", "high_risk"},
+        exposure=ExposureRecommendation(0.125, 6, 0.75, "TP20 indefinite 6 slots / 75% exposure"),
+        daily_core_skip=True,
+        daily_bull_persistence_v2_skip=True,
+    )
+    tp20_indefinite_6slots_100pct_account_run_rate = account_run_rate(
+        strategy="tp20",
+        risk_tiers={"standard", "high_risk"},
+        exposure=ExposureRecommendation(0.16666666666666666, 6, 1.0, "TP20 indefinite 6 slots / 100% exposure"),
+        daily_core_skip=True,
+        daily_bull_persistence_v2_skip=True,
+    )
+    tp20_indefinite_8slots_50pct_account_run_rate = account_run_rate(
+        strategy="tp20",
+        risk_tiers={"standard", "high_risk"},
+        exposure=ExposureRecommendation(0.0625, 8, 0.5, "TP20 indefinite 8 slots / 50% exposure"),
+        daily_core_skip=True,
+        daily_bull_persistence_v2_skip=True,
+    )
+    tp20_indefinite_8slots_75pct_account_run_rate = account_run_rate(
+        strategy="tp20",
+        risk_tiers={"standard", "high_risk"},
+        exposure=ExposureRecommendation(0.09375, 8, 0.75, "TP20 indefinite 8 slots / 75% exposure"),
+        daily_core_skip=True,
+        daily_bull_persistence_v2_skip=True,
+    )
+    tp20_indefinite_8slots_100pct_account_run_rate = account_run_rate(
+        strategy="tp20",
+        risk_tiers={"standard", "high_risk"},
+        exposure=ExposureRecommendation(0.125, 8, 1.0, "TP20 indefinite 8 slots / 100% exposure"),
+        daily_core_skip=True,
+        daily_bull_persistence_v2_skip=True,
+    )
+    tp20_indefinite_10slots_50pct_account_run_rate = account_run_rate(
+        strategy="tp20",
+        risk_tiers={"standard", "high_risk"},
+        exposure=ExposureRecommendation(0.05, 10, 0.5, "TP20 indefinite 10 slots / 50% exposure"),
+        daily_core_skip=True,
+        daily_bull_persistence_v2_skip=True,
+    )
+    tp20_indefinite_10slots_75pct_account_run_rate = account_run_rate(
+        strategy="tp20",
+        risk_tiers={"standard", "high_risk"},
+        exposure=ExposureRecommendation(0.075, 10, 0.75, "TP20 indefinite 10 slots / 75% exposure"),
+        daily_core_skip=True,
+        daily_bull_persistence_v2_skip=True,
+    )
+    tp20_indefinite_10slots_100pct_account_run_rate = account_run_rate(
+        strategy="tp20",
+        risk_tiers={"standard", "high_risk"},
+        exposure=ExposureRecommendation(0.1, 10, 1.0, "TP20 indefinite 10 slots / 100% exposure"),
+        daily_core_skip=True,
+        daily_bull_persistence_v2_skip=True,
+    )
+    tp20_indefinite_12slots_50pct_account_run_rate = account_run_rate(
+        strategy="tp20",
+        risk_tiers={"standard", "high_risk"},
+        exposure=ExposureRecommendation(0.041666666666666664, 12, 0.5, "TP20 indefinite 12 slots / 50% exposure"),
+        daily_core_skip=True,
+        daily_bull_persistence_v2_skip=True,
+    )
+    tp20_indefinite_12slots_75pct_account_run_rate = account_run_rate(
+        strategy="tp20",
+        risk_tiers={"standard", "high_risk"},
+        exposure=ExposureRecommendation(0.0625, 12, 0.75, "TP20 indefinite 12 slots / 75% exposure"),
+        daily_core_skip=True,
+        daily_bull_persistence_v2_skip=True,
+    )
+    tp20_indefinite_12slots_100pct_account_run_rate = account_run_rate(
+        strategy="tp20",
+        risk_tiers={"standard", "high_risk"},
+        exposure=ExposureRecommendation(0.08333333333333333, 12, 1.0, "TP20 indefinite 12 slots / 100% exposure"),
+        daily_core_skip=True,
+        daily_bull_persistence_v2_skip=True,
+    )
     tp5_sl80_daily_core_persistence_skip_account_run_rate = account_run_rate(
         strategy="tp5_sl75",
         risk_tiers={"standard", "high_risk"},
@@ -1836,6 +1945,18 @@ def build_performance_summary(
         tp5_sl75_daily_core_persistence_skip_account_run_rate=tp5_sl75_daily_core_persistence_skip_account_run_rate,
         tp5_sl100_daily_core_persistence_skip_account_run_rate=tp5_sl100_daily_core_persistence_skip_account_run_rate,
         tp5_sl100_lae10_24_q1_daily_core_persistence_skip_account_run_rate=tp5_sl100_lae10_24_q1_daily_core_persistence_skip_account_run_rate,
+        tp20_indefinite_6slots_50pct_account_run_rate=tp20_indefinite_6slots_50pct_account_run_rate,
+        tp20_indefinite_6slots_75pct_account_run_rate=tp20_indefinite_6slots_75pct_account_run_rate,
+        tp20_indefinite_6slots_100pct_account_run_rate=tp20_indefinite_6slots_100pct_account_run_rate,
+        tp20_indefinite_8slots_50pct_account_run_rate=tp20_indefinite_8slots_50pct_account_run_rate,
+        tp20_indefinite_8slots_75pct_account_run_rate=tp20_indefinite_8slots_75pct_account_run_rate,
+        tp20_indefinite_8slots_100pct_account_run_rate=tp20_indefinite_8slots_100pct_account_run_rate,
+        tp20_indefinite_10slots_50pct_account_run_rate=tp20_indefinite_10slots_50pct_account_run_rate,
+        tp20_indefinite_10slots_75pct_account_run_rate=tp20_indefinite_10slots_75pct_account_run_rate,
+        tp20_indefinite_10slots_100pct_account_run_rate=tp20_indefinite_10slots_100pct_account_run_rate,
+        tp20_indefinite_12slots_50pct_account_run_rate=tp20_indefinite_12slots_50pct_account_run_rate,
+        tp20_indefinite_12slots_75pct_account_run_rate=tp20_indefinite_12slots_75pct_account_run_rate,
+        tp20_indefinite_12slots_100pct_account_run_rate=tp20_indefinite_12slots_100pct_account_run_rate,
         tp5_sl80_daily_core_persistence_skip_account_run_rate=tp5_sl80_daily_core_persistence_skip_account_run_rate,
         tp5_sl85_daily_core_persistence_skip_account_run_rate=tp5_sl85_daily_core_persistence_skip_account_run_rate,
         tp5_sl90_daily_core_persistence_skip_account_run_rate=tp5_sl90_daily_core_persistence_skip_account_run_rate,

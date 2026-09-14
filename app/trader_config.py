@@ -75,13 +75,13 @@ class TraderSettings:
             or os.getenv("DISCORD_TRADER_WEBHOOK_URL")
             or None
         )
-        execution_strategy = os.getenv("TRADER_EXECUTION_STRATEGY", "tp5_sl75_daily_core_persistence_skip_v2").strip().lower()
+        execution_strategy = os.getenv("TRADER_EXECUTION_STRATEGY", "tp5_sl100_lae10_24_q1_daily_core_persistence_skip_v2").strip().lower()
         allowed_risk_tiers = _csv_upper("TRADER_ALLOWED_RISK_TIERS", "STANDARD,HIGH_RISK")
         max_open_positions = int(os.getenv("TRADER_MAX_OPEN_POSITIONS", "6"))
         if max_open_positions < 1:
             raise ValueError("TRADER_MAX_OPEN_POSITIONS must be >= 1")
 
-        current_strategy = execution_strategy == "tp5_sl75_daily_core_persistence_skip_v2"
+        current_strategy = execution_strategy in {"tp5_sl75_daily_core_persistence_skip_v2", "tp5_sl100_lae10_24_q1_daily_core_persistence_skip_v2"}
         legacy_tp5_strategy = execution_strategy in {
             "tp5_v1", "tp5_sl75_v1", "tp5_sl75_pcr_v1", "tp5_sl75_htf_v1",
             "tp5_sl75_daily_core_skip_v1", "tp5_sl75_daily_core_persistence_skip_v1",
@@ -133,7 +133,7 @@ class TraderSettings:
             process_existing_signals=_bool("TRADER_PROCESS_EXISTING_SIGNALS", False),
             max_signal_age_seconds=int(os.getenv("TRADER_MAX_SIGNAL_AGE_SECONDS", "900")),
             tp5_target_pct=float(os.getenv("TRADER_TP5_TARGET_PCT", "5")),
-            catastrophic_stop_pct=float(os.getenv("TRADER_CATASTROPHIC_STOP_PCT", "75")),
+            catastrophic_stop_pct=float(os.getenv("TRADER_CATASTROPHIC_STOP_PCT", "100" if execution_strategy == "tp5_sl100_lae10_24_q1_daily_core_persistence_skip_v2" else "75")),
             profit_target_pct=float(os.getenv("TRADER_PROFIT_TARGET_PCT", "20")),
             protection_arm_pct=float(os.getenv("TRADER_PROTECTION_ARM_PCT", "25")),
             trail_callback_pct=float(os.getenv("TRADER_TRAIL_CALLBACK_PCT", "15")),
@@ -154,9 +154,9 @@ class TraderSettings:
     def validate(self) -> None:
         if self.trading_mode not in {"paper", "live"}:
             raise ValueError("TRADING_MODE must be paper or live")
-        if self.execution_strategy not in {"tp5_sl75_daily_core_persistence_skip_v2", "tp5_sl75_daily_core_persistence_skip_v1", "tp5_sl75_daily_core_skip_v1", "tp5_sl75_pcr_v1", "tp5_sl75_htf_v1", "tp5_sl75_v1", "tp5_v1", "tier_v1"}:
+        if self.execution_strategy not in {"tp5_sl100_lae10_24_q1_daily_core_persistence_skip_v2", "tp5_sl75_daily_core_persistence_skip_v2", "tp5_sl75_daily_core_persistence_skip_v1", "tp5_sl75_daily_core_skip_v1", "tp5_sl75_pcr_v1", "tp5_sl75_htf_v1", "tp5_sl75_v1", "tp5_v1", "tier_v1"}:
             raise ValueError(
-                "TRADER_EXECUTION_STRATEGY must be tp5_sl75_daily_core_persistence_skip_v2, tp5_sl75_daily_core_persistence_skip_v1, tp5_sl75_daily_core_skip_v1, tp5_sl75_pcr_v1, tp5_sl75_htf_v1, tp5_sl75_v1, tp5_v1 or tier_v1"
+                "TRADER_EXECUTION_STRATEGY must be tp5_sl100_lae10_24_q1_daily_core_persistence_skip_v2, tp5_sl75_daily_core_persistence_skip_v2, tp5_sl75_daily_core_persistence_skip_v1, tp5_sl75_daily_core_skip_v1, tp5_sl75_pcr_v1, tp5_sl75_htf_v1, tp5_sl75_v1, tp5_v1 or tier_v1"
             )
         if not self.paper_run_id or len(self.paper_run_id) > 80:
             raise ValueError("TRADER_PAPER_RUN_ID must be a non-empty identifier up to 80 characters")
@@ -171,7 +171,7 @@ class TraderSettings:
         unknown = set(self.allowed_risk_tiers) - {"STANDARD", "HIGH_RISK", "EXTREME_RISK"}
         if unknown:
             raise ValueError(f"unsupported risk tiers: {sorted(unknown)}")
-        if self.execution_strategy in {"tp5_v1", "tp5_sl75_v1", "tp5_sl75_pcr_v1", "tp5_sl75_htf_v1", "tp5_sl75_daily_core_skip_v1", "tp5_sl75_daily_core_persistence_skip_v1", "tp5_sl75_daily_core_persistence_skip_v2"} and "EXTREME_RISK" in self.allowed_risk_tiers:
+        if self.execution_strategy in {"tp5_v1", "tp5_sl75_v1", "tp5_sl75_pcr_v1", "tp5_sl75_htf_v1", "tp5_sl75_daily_core_skip_v1", "tp5_sl75_daily_core_persistence_skip_v1", "tp5_sl75_daily_core_persistence_skip_v2", "tp5_sl100_lae10_24_q1_daily_core_persistence_skip_v2"} and "EXTREME_RISK" in self.allowed_risk_tiers:
             raise ValueError("TP5 strategies intentionally exclude EXTREME_RISK")
         if self.max_open_positions < 1:
             raise ValueError("TRADER_MAX_OPEN_POSITIONS must be >= 1")
@@ -232,12 +232,12 @@ class TraderSettings:
 
     @property
     def uses_generic_slots(self) -> bool:
-        return self.execution_strategy in {"tp5_v1", "tp5_sl75_v1", "tp5_sl75_pcr_v1", "tp5_sl75_htf_v1", "tp5_sl75_daily_core_skip_v1", "tp5_sl75_daily_core_persistence_skip_v1", "tp5_sl75_daily_core_persistence_skip_v2"}
+        return self.execution_strategy in {"tp5_v1", "tp5_sl75_v1", "tp5_sl75_pcr_v1", "tp5_sl75_htf_v1", "tp5_sl75_daily_core_skip_v1", "tp5_sl75_daily_core_persistence_skip_v1", "tp5_sl75_daily_core_persistence_skip_v2", "tp5_sl100_lae10_24_q1_daily_core_persistence_skip_v2"}
 
 
     @property
     def uses_catastrophic_stop(self) -> bool:
-        return self.execution_strategy in {"tp5_sl75_v1", "tp5_sl75_pcr_v1", "tp5_sl75_htf_v1", "tp5_sl75_daily_core_skip_v1", "tp5_sl75_daily_core_persistence_skip_v1", "tp5_sl75_daily_core_persistence_skip_v2"}
+        return self.execution_strategy in {"tp5_sl75_v1", "tp5_sl75_pcr_v1", "tp5_sl75_htf_v1", "tp5_sl75_daily_core_skip_v1", "tp5_sl75_daily_core_persistence_skip_v1", "tp5_sl75_daily_core_persistence_skip_v2", "tp5_sl100_lae10_24_q1_daily_core_persistence_skip_v2"}
 
     @property
     def uses_pcr_derisk(self) -> bool:
@@ -253,15 +253,20 @@ class TraderSettings:
             "tp5_sl75_daily_core_skip_v1",
             "tp5_sl75_daily_core_persistence_skip_v1",
             "tp5_sl75_daily_core_persistence_skip_v2",
+            "tp5_sl100_lae10_24_q1_daily_core_persistence_skip_v2",
         }
 
     @property
     def uses_daily_bull_persistence_skip(self) -> bool:
-        return self.execution_strategy in {"tp5_sl75_daily_core_persistence_skip_v1", "tp5_sl75_daily_core_persistence_skip_v2"}
+        return self.execution_strategy in {"tp5_sl75_daily_core_persistence_skip_v1", "tp5_sl75_daily_core_persistence_skip_v2", "tp5_sl100_lae10_24_q1_daily_core_persistence_skip_v2"}
 
     @property
     def uses_daily_bull_persistence_v2_skip(self) -> bool:
-        return self.execution_strategy == "tp5_sl75_daily_core_persistence_skip_v2"
+        return self.execution_strategy in {"tp5_sl75_daily_core_persistence_skip_v2", "tp5_sl100_lae10_24_q1_daily_core_persistence_skip_v2"}
+
+    @property
+    def uses_lae10_24_q1(self) -> bool:
+        return self.execution_strategy == "tp5_sl100_lae10_24_q1_daily_core_persistence_skip_v2"
 
     @property
     def slot_fraction(self) -> float:
