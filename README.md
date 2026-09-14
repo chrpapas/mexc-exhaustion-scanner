@@ -1,8 +1,24 @@
-# MEXC Exhaustion Scanner + Multi-Slot Futures Trader v1.3.66
+# MEXC Exhaustion Scanner + Multi-Slot Futures Trader v1.3.68
 
 
 
 
+
+
+
+## v1.3.68 — Promoted TP5 six-slot exposure curve + headline replay fix
+
+Live/default remains TP5/SL100 + LAE10/24-Q1 at 6×8.33% / 50%.
+The performance headline is corrected to use the promoted replay instead of the
+legacy SL75 baseline. A strict research curve now compares the promoted strategy
+at 50%, 60%, 70%, 75%, 80%, 90% and 100% max exposure with six slots.
+
+## v1.3.67 — TP20 six-slot exposure curve
+
+Live/default is unchanged. The strict TP20-indefinite research replay now expands the
+six-slot branch to 50%, 60%, 70%, 75%, 80%, 90% and 100% max exposure, while the
+8/10/12-slot branches retain 50/75/100 anchors. This isolates the return/drawdown
+frontier for the historically strongest TP20 slot count.
 
 ## v1.3.66 — TP20 indefinite strict slots × exposure matrix
 

@@ -208,7 +208,10 @@ class DiscordNotifier:
             else report.report_date.strftime("%d %b %Y")
         )
 
-        account = report.tp5_sl75_daily_core_persistence_skip_account_run_rate
+        account = (
+            report.tp5_sl100_lae10_24_q1_daily_core_persistence_skip_account_run_rate
+            or report.tp5_sl75_daily_core_persistence_skip_account_run_rate
+        )
 
         def account_economics() -> str:
             if account is None:
@@ -263,7 +266,8 @@ class DiscordNotifier:
             lines = []
             for slots in (6, 8, 10, 12):
                 row = []
-                for exposure in (50, 75, 100):
+                exposures = (50, 60, 70, 75, 80, 90, 100) if slots == 6 else (50, 75, 100)
+                for exposure in exposures:
                     result = getattr(
                         report,
                         f"tp20_indefinite_{slots}slots_{exposure}pct_account_run_rate",
@@ -286,6 +290,37 @@ class DiscordNotifier:
             return (
                 "\n".join(lines)
                 + "\nTP20 indefinite research only; open positions are marked to endpoint MTM."
+            )
+
+        def tp5_exposure_curve_economics() -> str:
+            lines = []
+            for exposure in (50, 60, 70, 75, 80, 90, 100):
+                if exposure == 50:
+                    result = report.tp5_sl100_lae10_24_q1_daily_core_persistence_skip_account_run_rate
+                else:
+                    result = getattr(
+                        report,
+                        f"tp5_sl100_lae10_24_q1_6slots_{exposure}pct_account_run_rate",
+                        None,
+                    )
+                if result is None:
+                    lines.append(f"**{exposure}%:** n/a")
+                    continue
+                dd = (
+                    f"-{self._percent(result.max_mtm_drawdown)}"
+                    if result.max_mtm_drawdown is not None
+                    else "n/a"
+                )
+                lines.append(
+                    f"**{exposure}%:** {self._signed_percent(result.observed_account_return)} "
+                    f"• 30D {self._signed_percent(result.thirty_day_equivalent_return)} "
+                    f"• DD {dd} • {result.closed_wins}W/{result.closed_losses}L "
+                    f"• {result.entered} entered"
+                )
+            return (
+                "\n".join(lines)
+                + "\nStrict promoted-strategy replay • 6 slots • TP5/SL100 + LAE10/24-Q1. "
+                  "Research only above the deployed 50% exposure."
             )
 
         def all_signal_economics() -> str:
@@ -355,6 +390,11 @@ class DiscordNotifier:
                     "inline": False,
                 },
                 {
+                    "name": "📐 TP5 promoted strategy • 6-slot exposure curve",
+                    "value": tp5_exposure_curve_economics(),
+                    "inline": False,
+                },
+                {
                     "name": "🧭 TP20 indefinite • slots × exposure strict matrix",
                     "value": tp20_matrix_economics(),
                     "inline": False,
@@ -382,7 +422,7 @@ class DiscordNotifier:
                 {
                     "name": "How to read it",
                     "value": (
-                        "Historical trader replay applies today's promoted strategy to the recorded signal history and uses **6×8.33% / 50%** sizing, 6-slot capacity, one-position-per-symbol, compounding and "
+                        "Historical trader replay applies today's promoted **TP5/SL100 + LAE10/24-Q1** strategy to the recorded signal history and uses **6×8.33% / 50%** sizing, 6-slot capacity, one-position-per-symbol, compounding and "
                         "**0.08% fee per fill** plus current MTM. **30D run-rate*** linearly scales the observed period and is not a forecast. "
                         "Funding and real execution slippage are not modeled."
                     ),
