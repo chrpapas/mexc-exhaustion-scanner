@@ -328,6 +328,10 @@ async def fetch_history(config: HistoricalFetchConfig, *, dry_run: bool = False)
     max_bytes = int(config.max_cache_gb * (1024**3))
 
     with CacheLock(config.cache_dir):
+        # Compute cache size once per batch. v1.3.71 recalculated this by walking
+        # the entire cache before every planned chunk, which became O(N^2) as
+        # the cache grew and made resume progressively slower.
+        cache_bytes = _cache_size_bytes(config.cache_dir)
         client = HistoricalPublicClient(config, stats)
         try:
             universe = await _discover_universe(client, config)
@@ -364,7 +368,7 @@ async def fetch_history(config: HistoricalFetchConfig, *, dry_run: bool = False)
                 if asyncio.get_running_loop().time() >= deadline:
                     stats.stop_reason = "runtime_budget_reached"
                     break
-                if _cache_size_bytes(config.cache_dir) >= max_bytes:
+                if cache_bytes >= max_bytes:
                     stats.stop_reason = "cache_size_guard_reached"
                     break
                 if _is_valid_cached_chunk(path):
@@ -384,6 +388,12 @@ async def fetch_history(config: HistoricalFetchConfig, *, dry_run: bool = False)
                         "data": data,
                     }
                     _atomic_gzip_json(path, record)
+                    try:
+                        cache_bytes += path.stat().st_size
+                    except OSError:
+                        # The cache-size guard is a safety backstop; failure to stat
+                        # one newly written file should not destroy valid progress.
+                        pass
                     stats.completed_chunks += 1
                     stats.fetched_candles += count
                 except Exception as exc:  # preserve progress; never delete good cache files
