@@ -1337,7 +1337,7 @@ class PortfolioShortTrader:
                 "max_total_exposure_pct": self.settings.max_total_exposure_pct,
                 "strategy": self.settings.execution_strategy,
                 "run_id": self._active_run_id,
-                "version": "1.3.63",
+                "version": "1.3.64",
             },
         )
 

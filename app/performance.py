@@ -431,6 +431,11 @@ class PerformanceSummary:
     tp5_sl75_daily_core_persistence_skip_account_run_rate: AccountRunRateSummary | None = None
     tp5_sl100_daily_core_persistence_skip_account_run_rate: AccountRunRateSummary | None = None
     tp5_sl100_lae10_24_q1_daily_core_persistence_skip_account_run_rate: AccountRunRateSummary | None = None
+    tp5_sl80_daily_core_persistence_skip_account_run_rate: AccountRunRateSummary | None = None
+    tp5_sl85_daily_core_persistence_skip_account_run_rate: AccountRunRateSummary | None = None
+    tp5_sl90_daily_core_persistence_skip_account_run_rate: AccountRunRateSummary | None = None
+    tp5_sl125_daily_core_persistence_skip_account_run_rate: AccountRunRateSummary | None = None
+    tp5_nostop_daily_core_persistence_skip_account_run_rate: AccountRunRateSummary | None = None
     hold_7d_account_run_rate: AccountRunRateSummary | None = None
     tp20_account_run_rate: AccountRunRateSummary | None = None
     standard_7d_account_run_rate: AccountRunRateSummary | None = None
@@ -540,6 +545,11 @@ class PerformanceSummary:
             "tp5_sl75_daily_core_persistence_skip_account_run_rate": self.tp5_sl75_daily_core_persistence_skip_account_run_rate.as_dict() if self.tp5_sl75_daily_core_persistence_skip_account_run_rate else None,
             "tp5_sl100_daily_core_persistence_skip_account_run_rate": self.tp5_sl100_daily_core_persistence_skip_account_run_rate.as_dict() if self.tp5_sl100_daily_core_persistence_skip_account_run_rate else None,
             "tp5_sl100_lae10_24_q1_daily_core_persistence_skip_account_run_rate": self.tp5_sl100_lae10_24_q1_daily_core_persistence_skip_account_run_rate.as_dict() if self.tp5_sl100_lae10_24_q1_daily_core_persistence_skip_account_run_rate else None,
+            "tp5_sl80_daily_core_persistence_skip_account_run_rate": self.tp5_sl80_daily_core_persistence_skip_account_run_rate.as_dict() if self.tp5_sl80_daily_core_persistence_skip_account_run_rate else None,
+            "tp5_sl85_daily_core_persistence_skip_account_run_rate": self.tp5_sl85_daily_core_persistence_skip_account_run_rate.as_dict() if self.tp5_sl85_daily_core_persistence_skip_account_run_rate else None,
+            "tp5_sl90_daily_core_persistence_skip_account_run_rate": self.tp5_sl90_daily_core_persistence_skip_account_run_rate.as_dict() if self.tp5_sl90_daily_core_persistence_skip_account_run_rate else None,
+            "tp5_sl125_daily_core_persistence_skip_account_run_rate": self.tp5_sl125_daily_core_persistence_skip_account_run_rate.as_dict() if self.tp5_sl125_daily_core_persistence_skip_account_run_rate else None,
+            "tp5_nostop_daily_core_persistence_skip_account_run_rate": self.tp5_nostop_daily_core_persistence_skip_account_run_rate.as_dict() if self.tp5_nostop_daily_core_persistence_skip_account_run_rate else None,
             "hold_7d_account_run_rate": self.hold_7d_account_run_rate.as_dict() if self.hold_7d_account_run_rate else None,
             "tp20_account_run_rate": self.tp20_account_run_rate.as_dict() if self.tp20_account_run_rate else None,
             "standard_7d_account_run_rate": self.standard_7d_account_run_rate.as_dict() if self.standard_7d_account_run_rate else None,
@@ -1203,7 +1213,7 @@ def build_performance_summary(
         daily_core_skip: bool = False,
         daily_bull_persistence_skip: bool = False,
         daily_bull_persistence_v2_skip: bool = False,
-        catastrophic_stop_pct: float = 0.75,
+        catastrophic_stop_pct: float | None = 0.75,
         lae10_24_q1: bool = False,
     ) -> AccountRunRateSummary:
         ordered = sorted(
@@ -1271,7 +1281,9 @@ def build_performance_summary(
                     return ts
             return None
 
-        def adverse_event(row: dict[str, Any], stop_pct: float) -> datetime | None:
+        def adverse_event(row: dict[str, Any], stop_pct: float | None) -> datetime | None:
+            if stop_pct is None:
+                return None
             threshold = -abs(float(stop_pct))
             # Use the dedicated adverse event when the requested threshold is an
             # integer percentage represented by the research schema; otherwise
@@ -1319,7 +1331,7 @@ def build_performance_summary(
                 candidates: list[tuple[datetime, float, int]] = []
                 # Priority on exact timestamp ties is conservative: catastrophic
                 # stop first, then LAE, then TP5.
-                if stop is not None and stop <= now_utc:
+                if stop is not None and stop <= now_utc and catastrophic_stop_pct is not None:
                     candidates.append((stop, -abs(float(catastrophic_stop_pct)), 0))
                 if lae is not None and lae <= now_utc:
                     candidates.append((lae, -0.10, 1))
@@ -1722,6 +1734,46 @@ def build_performance_summary(
         catastrophic_stop_pct=1.00,
         lae10_24_q1=True,
     )
+    tp5_sl80_daily_core_persistence_skip_account_run_rate = account_run_rate(
+        strategy="tp5_sl75",
+        risk_tiers={"standard", "high_risk"},
+        exposure=current_live_exposure,
+        daily_core_skip=True,
+        daily_bull_persistence_v2_skip=True,
+        catastrophic_stop_pct=0.80,
+    )
+    tp5_sl85_daily_core_persistence_skip_account_run_rate = account_run_rate(
+        strategy="tp5_sl75",
+        risk_tiers={"standard", "high_risk"},
+        exposure=current_live_exposure,
+        daily_core_skip=True,
+        daily_bull_persistence_v2_skip=True,
+        catastrophic_stop_pct=0.85,
+    )
+    tp5_sl90_daily_core_persistence_skip_account_run_rate = account_run_rate(
+        strategy="tp5_sl75",
+        risk_tiers={"standard", "high_risk"},
+        exposure=current_live_exposure,
+        daily_core_skip=True,
+        daily_bull_persistence_v2_skip=True,
+        catastrophic_stop_pct=0.90,
+    )
+    tp5_sl125_daily_core_persistence_skip_account_run_rate = account_run_rate(
+        strategy="tp5_sl75",
+        risk_tiers={"standard", "high_risk"},
+        exposure=current_live_exposure,
+        daily_core_skip=True,
+        daily_bull_persistence_v2_skip=True,
+        catastrophic_stop_pct=1.25,
+    )
+    tp5_nostop_daily_core_persistence_skip_account_run_rate = account_run_rate(
+        strategy="tp5_sl75",
+        risk_tiers={"standard", "high_risk"},
+        exposure=current_live_exposure,
+        daily_core_skip=True,
+        daily_bull_persistence_v2_skip=True,
+        catastrophic_stop_pct=None,
+    )
     hold_7d_account_run_rate = account_run_rate(
         strategy="hold_7d", risk_tiers={"standard", "high_risk"}, exposure=tp5_exposure
     )
@@ -1784,6 +1836,11 @@ def build_performance_summary(
         tp5_sl75_daily_core_persistence_skip_account_run_rate=tp5_sl75_daily_core_persistence_skip_account_run_rate,
         tp5_sl100_daily_core_persistence_skip_account_run_rate=tp5_sl100_daily_core_persistence_skip_account_run_rate,
         tp5_sl100_lae10_24_q1_daily_core_persistence_skip_account_run_rate=tp5_sl100_lae10_24_q1_daily_core_persistence_skip_account_run_rate,
+        tp5_sl80_daily_core_persistence_skip_account_run_rate=tp5_sl80_daily_core_persistence_skip_account_run_rate,
+        tp5_sl85_daily_core_persistence_skip_account_run_rate=tp5_sl85_daily_core_persistence_skip_account_run_rate,
+        tp5_sl90_daily_core_persistence_skip_account_run_rate=tp5_sl90_daily_core_persistence_skip_account_run_rate,
+        tp5_sl125_daily_core_persistence_skip_account_run_rate=tp5_sl125_daily_core_persistence_skip_account_run_rate,
+        tp5_nostop_daily_core_persistence_skip_account_run_rate=tp5_nostop_daily_core_persistence_skip_account_run_rate,
         hold_7d_account_run_rate=hold_7d_account_run_rate,
         tp20_account_run_rate=tp20_account_run_rate,
         standard_7d_account_run_rate=standard_7d_account_run_rate,

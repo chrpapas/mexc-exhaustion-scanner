@@ -1,6 +1,10 @@
-# MEXC Exhaustion Scanner + Multi-Slot Futures Trader v1.3.63
+# MEXC Exhaustion Scanner + Multi-Slot Futures Trader v1.3.64
 
 
+
+## v1.3.64 — Catastrophic-stop plateau shadow replay
+
+Adds strict production-DB shadow replays for SL80, SL85, SL90, SL100, SL125 and no catastrophic stop, alongside the live SL75 baseline and SL100+LAE10/24-Q1. Live/default trading remains unchanged. The purpose is to test whether the apparent benefit of widening SL75 is a robust plateau rather than an exact-threshold artifact.
 
 ## v1.3.63 — Strict tail-challenger shadow replay
 

@@ -233,25 +233,30 @@ class DiscordNotifier:
             )
 
         def tail_challenger_economics() -> str:
-            sl100 = report.tp5_sl100_daily_core_persistence_skip_account_run_rate
-            sl100_lae = report.tp5_sl100_lae10_24_q1_daily_core_persistence_skip_account_run_rate
-            if sl100 is None or sl100_lae is None:
+            variants = [
+                ("SL75 live", report.tp5_sl75_daily_core_persistence_skip_account_run_rate),
+                ("SL80", report.tp5_sl80_daily_core_persistence_skip_account_run_rate),
+                ("SL85", report.tp5_sl85_daily_core_persistence_skip_account_run_rate),
+                ("SL90", report.tp5_sl90_daily_core_persistence_skip_account_run_rate),
+                ("SL100", report.tp5_sl100_daily_core_persistence_skip_account_run_rate),
+                ("SL125", report.tp5_sl125_daily_core_persistence_skip_account_run_rate),
+                ("No catastrophic stop", report.tp5_nostop_daily_core_persistence_skip_account_run_rate),
+                ("SL100 + LAE-Q1", report.tp5_sl100_lae10_24_q1_daily_core_persistence_skip_account_run_rate),
+            ]
+            if any(result is None for _label, result in variants):
                 return "Tail-challenger replay unavailable"
 
             def compact(label: str, result) -> str:
                 dd = f"-{self._percent(result.max_mtm_drawdown)}" if result.max_mtm_drawdown is not None else "n/a"
                 return (
-                    f"**{label}:** {self._signed_percent(result.observed_account_return)} observed • "
+                    f"**{label}:** {self._signed_percent(result.observed_account_return)} • "
                     f"30D {self._signed_percent(result.thirty_day_equivalent_return)} • "
                     f"DD {dd} • {result.closed_wins}W/{result.closed_losses}L • "
                     f"{result.open_positions} open • {result.entered} entered"
                 )
 
-            return (
-                compact("SL100", sl100)
-                + "\n"
-                + compact("SL100 + LAE10/24-Q1", sl100_lae)
-                + "\nShadow research only — **live/default remains TP5/SL75 with no LAE exit**."
+            return "\n".join(compact(label, result) for label, result in variants) + (
+                "\nShadow research only — **live/default remains TP5/SL75 with no LAE exit**."
             )
 
         def all_signal_economics() -> str:
@@ -316,7 +321,7 @@ class DiscordNotifier:
                     "inline": False,
                 },
                 {
-                    "name": "🧪 Tail challengers • strict shadow replay",
+                    "name": "🧪 Catastrophic-stop plateau • strict shadow replay",
                     "value": tail_challenger_economics(),
                     "inline": False,
                 },
