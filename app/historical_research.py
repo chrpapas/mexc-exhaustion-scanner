@@ -109,7 +109,7 @@ class HistoricalPublicClient:
         self.config = config
         self.stats = stats
         timeout = httpx.Timeout(config.request_timeout_seconds)
-        headers = {"User-Agent": "mexc-exhaustion-historical-research/1.3.69"}
+        headers = {"User-Agent": "mexc-exhaustion-historical-research/1.3.71"}
         self._futures = httpx.AsyncClient(
             base_url=config.futures_base_url.rstrip("/"), timeout=timeout, headers=headers
         )
@@ -449,6 +449,55 @@ def _default_start(months: int) -> datetime:
     return _utc(datetime.now(UTC) - timedelta(days=max(1, months) * 30 + 3))
 
 
+def resolve_frozen_window(
+    cache_dir: Path,
+    *,
+    months: int,
+    start_value: str | None = None,
+    end_value: str | None = None,
+) -> tuple[datetime, datetime]:
+    """Resolve a stable research window and persist it once per cache directory.
+
+    This prevents resumable chunk filenames from drifting when a multi-batch job is
+    restarted. Explicit --start/--end always win for that invocation; when neither
+    is supplied an existing frozen window is reused, otherwise a new one is created.
+    """
+    cache_dir = cache_dir.expanduser().resolve()
+    plan_path = cache_dir / "research-window.json"
+
+    if start_value or end_value:
+        end = _parse_dt(end_value) if end_value else _utc(datetime.now(UTC))
+        start = _parse_dt(start_value) if start_value else _utc(end - timedelta(days=max(1, months) * 30 + 3))
+        if start >= end:
+            raise ValueError("start must be before end")
+        return start, end
+
+    if plan_path.exists():
+        try:
+            payload = json.loads(plan_path.read_text(encoding="utf-8"))
+            start = _parse_dt(str(payload["start"]))
+            end = _parse_dt(str(payload["end"]))
+            if start < end:
+                return start, end
+        except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError):
+            LOGGER.warning("Ignoring invalid frozen research window at %s", plan_path)
+
+    end = _utc(datetime.now(UTC))
+    start = _utc(end - timedelta(days=max(1, months) * 30 + 3))
+    _atomic_json(
+        plan_path,
+        {
+            "schema": 1,
+            "created_at": datetime.now(UTC).isoformat(),
+            "months": months,
+            "start": start.isoformat(),
+            "end": end.isoformat(),
+            "note": "Frozen once so resumable historical chunk filenames remain stable across runs.",
+        },
+    )
+    return start, end
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Isolated, resumable historical MEXC research collector")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -477,11 +526,13 @@ async def _async_main(args: argparse.Namespace) -> int:
         print(json.dumps(audit_cache(Path(args.cache_dir)), indent=2, sort_keys=True))
         return 0
 
-    end = _parse_dt(args.end) if args.end else _utc(datetime.now(UTC))
-    start = _parse_dt(args.start) if args.start else _default_start(args.months)
+    cache_dir = Path(args.cache_dir).expanduser().resolve()
+    start, end = resolve_frozen_window(
+        cache_dir, months=args.months, start_value=args.start, end_value=args.end
+    )
     intervals = tuple(part.strip() for part in args.intervals.split(",") if part.strip())
     config = HistoricalFetchConfig(
-        cache_dir=Path(args.cache_dir).expanduser().resolve(),
+        cache_dir=cache_dir,
         start=start,
         end=end,
         intervals=intervals,

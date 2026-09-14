@@ -7,6 +7,23 @@
 
 
 
+
+## v1.3.71 — One-shot six-month historical research pipeline
+
+Adds `python -m app.historical_pipeline run` as a single safe orchestration command.
+It freezes the research window once, repeatedly checkpoints/resumes current-universe
+candle downloads, reconstructs historical/delisted crypto futures from cached official
+MEXC evidence, then automatically fetches only the additional seeded symbols. The
+pipeline never imports or writes the production DB/trader, preserves the conservative
+request limits, shares the historical cache lock, and writes an atomic state file after
+each internal batch. Re-running the same command after a crash/power loss resumes the
+recorded stage/window. Direct `historical_research fetch` also now reuses a frozen
+`research-window.json` when no explicit dates are supplied, fixing timestamp drift.
+
+## v1.3.71 — Historical contract-universe reconstruction
+
+Adds a second isolated research command, `python -m app.historical_universe reconstruct`, to recover crypto futures that existed during the historical window but may no longer appear in today's contract list. It combines the current active crypto-futures universe, optional archived signal CSVs, and official MEXC Futures delisting announcements. Stock Futures and Index Futures announcements are conservatively excluded. The universe crawler shares the same cache lock as the candle collector, so it refuses to run concurrently and cannot double MEXC request pressure. Default announcement crawl rate is 0.20 req/s with a hard cap of 0.5 req/s; pages are cached and runs are resumable. Outputs include `universe-history/historical-seed-symbols.txt` (only extra symbols) and `historical-universe.json` with provenance. No production DB access is used.
+
 ## v1.3.69 — Safe six-month historical research collector
 
 This release adds `python -m app.historical_research` as a **separate public-market-data process**.
