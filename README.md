@@ -1,10 +1,56 @@
-# MEXC Exhaustion Scanner + Multi-Slot Futures Trader v1.3.68
+# MEXC Exhaustion Scanner + Multi-Slot Futures Trader v1.3.69
 
 
 
 
 
 
+
+
+## v1.3.69 — Safe six-month historical research collector
+
+This release adds `python -m app.historical_research` as a **separate public-market-data process**.
+It does not import the production DB layer and never reads or writes `DATABASE_URL`. The live/default
+scanner/trader strategy and exposure are unchanged.
+
+Safety defaults:
+
+- MEXC public endpoints only; no API key or order endpoint.
+- New futures API domain `https://api.mexc.com` by default.
+- One request at a time at **1 request/second** by default; hard configuration cap is 2 req/s.
+- 15-minute wall-clock budget per run, then a clean exit. Re-run the same command to resume.
+- Every kline chunk is stored as an atomic `.json.gz`; completed chunks are skipped on restart.
+- 403/418/429 responses trigger long exponential cooldowns; three protection responses abort the run.
+- File lock prevents two collectors from using the same cache concurrently.
+- 10 GB default cache-size guard.
+- No production Postgres migrations, tables, locks, deletes, updates, or inserts.
+
+Recommended first pass:
+
+```bash
+python -m app.historical_research fetch \
+  --cache-dir ./research-history \
+  --months 6 \
+  --rate 1.0 \
+  --max-runtime-minutes 15 \
+  --dry-run
+```
+
+Then remove `--dry-run`. Run the same command repeatedly; it resumes from existing atomic chunks.
+For a low-impact server job, run it with OS niceness, for example `nice -n 10 python -m ...`.
+
+Audit locally without any network or DB access:
+
+```bash
+python -m app.historical_research audit --cache-dir ./research-history
+```
+
+### Historical-universe limitation
+
+`contract/detail` exposes the **current** active contract universe. That is not sufficient to eliminate
+survivorship bias over a six-month test. `--seed-symbols-file` accepts one `SYMBOL_USDT` per line so
+delisted / no-longer-active symbols can be added as we recover them from historical MEXC listing and
+delisting records. Do not treat a six-month backtest as decision-grade until that universe is populated.
 
 ## v1.3.68 — Promoted TP5 six-slot exposure curve + headline replay fix
 

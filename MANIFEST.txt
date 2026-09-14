@@ -10,6 +10,7 @@ app/daily_bull_persistence_strategy.py
 app/daily_core_strategy.py
 app/daily_regime.py
 app/db.py
+app/historical_research.py
 app/htf_backfill.py
 app/indicators.py
 app/json_utils.py
@@ -80,6 +81,7 @@ tests/test_daily_core_live_v148.py
 tests/test_daily_regime_v143.py
 tests/test_db_research_aggregation_v1329.py
 tests/test_exposure_shadow_v149.py
+tests/test_historical_research_v1369.py
 tests/test_hold7d_daily_core_v145.py
 tests/test_htf_backfill_v1340.py
 tests/test_htf_regime_v138.py
@@ -91,6 +93,9 @@ tests/test_notifier.py
 tests/test_parabolic_risk_v1333.py
 tests/test_pcr_live_v1335.py
 tests/test_performance.py
+tests/test_performance_v1366_tp20_matrix.py
+tests/test_performance_v1367_tp20_exposure_curve.py
+tests/test_performance_v1368_tp5_exposure_curve.py
 tests/test_persistence_v2_v156.py
 tests/test_report_now.py
 tests/test_reporting_cleanup_v155.py
@@ -130,6 +135,7 @@ tests/test_trader_v123.py
 tests/test_trader_v130.py
 tests/test_trader_v1324.py
 tests/test_trader_v136.py
+tests/test_trader_v1365.py
 tests/test_volatility_research_v1332.py
 tests/test_worker_v125.py
 tests/test_worker_v137.py
