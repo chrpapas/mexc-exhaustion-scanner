@@ -1,5 +1,15 @@
-# MEXC Exhaustion Scanner + Multi-Slot Futures Trader v1.3.62
+# MEXC Exhaustion Scanner + Multi-Slot Futures Trader v1.3.63
 
+
+
+## v1.3.63 — Strict tail-challenger shadow replay
+
+The live/default strategy is unchanged (TP5/SL75, Daily-Core + Persistence V2, 6×8.33% / 50%).
+The subscriber performance board now also runs two capacity-aware, chronological shadow challengers
+against the same production DB history: SL100 and SL100 + LAE10/24-Q1. LAE10/24-Q1 exits a
+quality<=1 position at -10% when it remains unresolved and reaches that adverse level at/after 24h.
+These shadow results include the same six-slot capacity, same-symbol blocking, compounding, fees,
+current MTM and downstream slot-recycling effects as the headline historical trader replay.
 
 ## v1.3.61 — Subscriber performance truth report
 

@@ -429,6 +429,8 @@ class PerformanceSummary:
     tp5_sl75_pcr_account_run_rate: AccountRunRateSummary | None = None
     tp5_sl75_daily_core_skip_account_run_rate: AccountRunRateSummary | None = None
     tp5_sl75_daily_core_persistence_skip_account_run_rate: AccountRunRateSummary | None = None
+    tp5_sl100_daily_core_persistence_skip_account_run_rate: AccountRunRateSummary | None = None
+    tp5_sl100_lae10_24_q1_daily_core_persistence_skip_account_run_rate: AccountRunRateSummary | None = None
     hold_7d_account_run_rate: AccountRunRateSummary | None = None
     tp20_account_run_rate: AccountRunRateSummary | None = None
     standard_7d_account_run_rate: AccountRunRateSummary | None = None
@@ -536,6 +538,8 @@ class PerformanceSummary:
             "tp5_sl75_pcr_account_run_rate": self.tp5_sl75_pcr_account_run_rate.as_dict() if self.tp5_sl75_pcr_account_run_rate else None,
             "tp5_sl75_daily_core_skip_account_run_rate": self.tp5_sl75_daily_core_skip_account_run_rate.as_dict() if self.tp5_sl75_daily_core_skip_account_run_rate else None,
             "tp5_sl75_daily_core_persistence_skip_account_run_rate": self.tp5_sl75_daily_core_persistence_skip_account_run_rate.as_dict() if self.tp5_sl75_daily_core_persistence_skip_account_run_rate else None,
+            "tp5_sl100_daily_core_persistence_skip_account_run_rate": self.tp5_sl100_daily_core_persistence_skip_account_run_rate.as_dict() if self.tp5_sl100_daily_core_persistence_skip_account_run_rate else None,
+            "tp5_sl100_lae10_24_q1_daily_core_persistence_skip_account_run_rate": self.tp5_sl100_lae10_24_q1_daily_core_persistence_skip_account_run_rate.as_dict() if self.tp5_sl100_lae10_24_q1_daily_core_persistence_skip_account_run_rate else None,
             "hold_7d_account_run_rate": self.hold_7d_account_run_rate.as_dict() if self.hold_7d_account_run_rate else None,
             "tp20_account_run_rate": self.tp20_account_run_rate.as_dict() if self.tp20_account_run_rate else None,
             "standard_7d_account_run_rate": self.standard_7d_account_run_rate.as_dict() if self.standard_7d_account_run_rate else None,
@@ -1199,6 +1203,8 @@ def build_performance_summary(
         daily_core_skip: bool = False,
         daily_bull_persistence_skip: bool = False,
         daily_bull_persistence_v2_skip: bool = False,
+        catastrophic_stop_pct: float = 0.75,
+        lae10_24_q1: bool = False,
     ) -> AccountRunRateSummary:
         ordered = sorted(
             [row for row in rows if row.get("confirmed_at") is not None and row["confirmed_at"] <= now_utc],
@@ -1247,6 +1253,58 @@ def build_performance_summary(
                 return exposure.per_trade_pct
             return pcr_position_fraction(feature_snapshot(row))
 
+        def first_path_crossing(
+            row: dict[str, Any],
+            *,
+            threshold_return: float,
+            not_before: datetime | None = None,
+        ) -> datetime | None:
+            confirmed = row["confirmed_at"]
+            lower_bound = max(confirmed, not_before) if not_before is not None else confirmed
+            for ts, ret in zip(
+                list(row.get("path_times") or ()),
+                list(row.get("path_returns") or ()),
+            ):
+                if ts is None or ret is None:
+                    continue
+                if lower_bound <= ts <= now_utc and float(ret) <= threshold_return:
+                    return ts
+            return None
+
+        def adverse_event(row: dict[str, Any], stop_pct: float) -> datetime | None:
+            threshold = -abs(float(stop_pct))
+            # Use the dedicated adverse event when the requested threshold is an
+            # integer percentage represented by the research schema; otherwise
+            # derive the first crossing from the stored post-entry path.
+            pct = abs(float(stop_pct)) * 100.0
+            explicit = None
+            if abs(pct - round(pct)) < 1e-9:
+                explicit = earliest_event(row, f"adverse_{int(round(pct))}_at")
+            path_hit = first_path_crossing(row, threshold_return=threshold)
+            candidates = [ts for ts in (explicit, path_hit) if ts is not None and ts <= now_utc]
+            return min(candidates) if candidates else None
+
+        def entry_quality(row: dict[str, Any]) -> float | None:
+            value = row.get("shadow_entry_quality_score")
+            if value is None:
+                value = feature_snapshot(row).get("shadow_entry_quality_score")
+            try:
+                return float(value) if value is not None else None
+            except (TypeError, ValueError):
+                return None
+
+        def lae_exit(row: dict[str, Any]) -> datetime | None:
+            if not lae10_24_q1:
+                return None
+            quality = entry_quality(row)
+            if quality is None or quality > 1.0:
+                return None
+            return first_path_crossing(
+                row,
+                threshold_return=-0.10,
+                not_before=row["confirmed_at"] + timedelta(hours=24),
+            )
+
         def known_exit(row: dict[str, Any]) -> tuple[datetime | None, float | None]:
             confirmed = row["confirmed_at"]
             if strategy == "tp5":
@@ -1256,11 +1314,20 @@ def build_performance_summary(
                 return None, None
             if strategy == "tp5_sl75":
                 target = earliest_event(row, "target_5_at")
-                stop = earliest_event(row, "adverse_75_at")
-                if stop is not None and stop <= now_utc and (target is None or stop <= target):
-                    return stop, -0.75
+                stop = adverse_event(row, catastrophic_stop_pct)
+                lae = lae_exit(row)
+                candidates: list[tuple[datetime, float, int]] = []
+                # Priority on exact timestamp ties is conservative: catastrophic
+                # stop first, then LAE, then TP5.
+                if stop is not None and stop <= now_utc:
+                    candidates.append((stop, -abs(float(catastrophic_stop_pct)), 0))
+                if lae is not None and lae <= now_utc:
+                    candidates.append((lae, -0.10, 1))
                 if target is not None and target <= now_utc:
-                    return target, 0.05
+                    candidates.append((target, 0.05, 2))
+                if candidates:
+                    exit_at, exit_return, _priority = min(candidates, key=lambda item: (item[0], item[2]))
+                    return exit_at, exit_return
                 return None, None
             if strategy == "hold_7d":
                 cutoff = confirmed + timedelta(hours=168)
@@ -1638,6 +1705,23 @@ def build_performance_summary(
         daily_core_skip=True,
         daily_bull_persistence_v2_skip=True,
     )
+    tp5_sl100_daily_core_persistence_skip_account_run_rate = account_run_rate(
+        strategy="tp5_sl75",
+        risk_tiers={"standard", "high_risk"},
+        exposure=current_live_exposure,
+        daily_core_skip=True,
+        daily_bull_persistence_v2_skip=True,
+        catastrophic_stop_pct=1.00,
+    )
+    tp5_sl100_lae10_24_q1_daily_core_persistence_skip_account_run_rate = account_run_rate(
+        strategy="tp5_sl75",
+        risk_tiers={"standard", "high_risk"},
+        exposure=current_live_exposure,
+        daily_core_skip=True,
+        daily_bull_persistence_v2_skip=True,
+        catastrophic_stop_pct=1.00,
+        lae10_24_q1=True,
+    )
     hold_7d_account_run_rate = account_run_rate(
         strategy="hold_7d", risk_tiers={"standard", "high_risk"}, exposure=tp5_exposure
     )
@@ -1698,6 +1782,8 @@ def build_performance_summary(
         tp5_sl75_pcr_account_run_rate=tp5_sl75_pcr_account_run_rate,
         tp5_sl75_daily_core_skip_account_run_rate=tp5_sl75_daily_core_skip_account_run_rate,
         tp5_sl75_daily_core_persistence_skip_account_run_rate=tp5_sl75_daily_core_persistence_skip_account_run_rate,
+        tp5_sl100_daily_core_persistence_skip_account_run_rate=tp5_sl100_daily_core_persistence_skip_account_run_rate,
+        tp5_sl100_lae10_24_q1_daily_core_persistence_skip_account_run_rate=tp5_sl100_lae10_24_q1_daily_core_persistence_skip_account_run_rate,
         hold_7d_account_run_rate=hold_7d_account_run_rate,
         tp20_account_run_rate=tp20_account_run_rate,
         standard_7d_account_run_rate=standard_7d_account_run_rate,

@@ -232,6 +232,28 @@ class DiscordNotifier:
                 f"avg/peak exposure **{self._percent(account.avg_exposure_pct)} / {self._percent(account.peak_exposure_pct)}**"
             )
 
+        def tail_challenger_economics() -> str:
+            sl100 = report.tp5_sl100_daily_core_persistence_skip_account_run_rate
+            sl100_lae = report.tp5_sl100_lae10_24_q1_daily_core_persistence_skip_account_run_rate
+            if sl100 is None or sl100_lae is None:
+                return "Tail-challenger replay unavailable"
+
+            def compact(label: str, result) -> str:
+                dd = f"-{self._percent(result.max_mtm_drawdown)}" if result.max_mtm_drawdown is not None else "n/a"
+                return (
+                    f"**{label}:** {self._signed_percent(result.observed_account_return)} observed • "
+                    f"30D {self._signed_percent(result.thirty_day_equivalent_return)} • "
+                    f"DD {dd} • {result.closed_wins}W/{result.closed_losses}L • "
+                    f"{result.open_positions} open • {result.entered} entered"
+                )
+
+            return (
+                compact("SL100", sl100)
+                + "\n"
+                + compact("SL100 + LAE10/24-Q1", sl100_lae)
+                + "\nShadow research only — **live/default remains TP5/SL75 with no LAE exit**."
+            )
+
         def all_signal_economics() -> str:
             if account is None:
                 return "Signal-quality view unavailable"
@@ -291,6 +313,11 @@ class DiscordNotifier:
                 {
                     "name": "💰 Historical trader replay • achievable",
                     "value": account_economics(),
+                    "inline": False,
+                },
+                {
+                    "name": "🧪 Tail challengers • strict shadow replay",
+                    "value": tail_challenger_economics(),
                     "inline": False,
                 },
                 {
