@@ -127,11 +127,11 @@ Current v1.3.59 paper run ID: tp5_sl75_persist_v2_armed48_50pct_v1
 Existing open positions retain persisted legacy exit metadata/protection. New positions use SL100 + LAE10/24-Q1.
 
 
-### v1.3.71 historical-universe research
+### v1.3.72 historical-universe research
 Do not run the universe reconstruction while the candle collector is active; both commands intentionally share the same lock and the second command will refuse to start. After the current candle fetch completes, run the universe reconstruction, then seed a follow-up candle fetch with `research-history/universe-history/historical-seed-symbols.txt`. This research path does not access the production database or change live strategy/trader settings.
 
 
-### v1.3.71 one-shot historical research
+### v1.3.72 one-shot historical research
 This remains isolated from the live DB/trader. Start it once with:
 
 ```bash
