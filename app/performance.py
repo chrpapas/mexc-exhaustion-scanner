@@ -322,6 +322,12 @@ class AccountRunRateSummary:
     all_signal_win_rate: float | None = None
     all_signal_sum_return: float | None = None
     all_signal_avg_return: float | None = None
+    full_universe_sample: int = 0
+    full_universe_wins: int = 0
+    full_universe_losses: int = 0
+    full_universe_open: int = 0
+    full_universe_win_rate: float | None = None
+    filtered_sl75: int = 0
     breach_10: int = 0
     breach_20: int = 0
     breach_30: int = 0
@@ -1450,6 +1456,22 @@ def build_performance_summary(
             if observed_return is not None and max_mtm_drawdown > 0 else None
         )
 
+        # Full scanner universe: every STANDARD/HIGH_RISK confirmed signal before
+        # current Daily-Core/Persistence admission filters and before account capacity.
+        # Outcomes use the same first-event TP5/SL75 semantics as the trader replay.
+        full_universe_wins = full_universe_losses = full_universe_open = 0
+        for raw_row in ordered:
+            tier = str(raw_row.get("risk_tier") or "standard")
+            if tier not in risk_tiers:
+                continue
+            raw_exit_at, raw_exit_return = known_exit(raw_row)
+            if raw_exit_at is None or raw_exit_return is None:
+                full_universe_open += 1
+            elif float(raw_exit_return) > 0:
+                full_universe_wins += 1
+            else:
+                full_universe_losses += 1
+
         # All-signal view: what the current admission rule produced ignoring
         # portfolio capacity/same-symbol blocking. Closed signals use TP5/SL75;
         # unresolved signals are marked to the report timestamp. This is a gross
@@ -1487,8 +1509,25 @@ def build_performance_summary(
             elif target is not None and target <= effective_end:
                 effective_end = target
 
+            path_times = list(admitted_row.get("path_times") or ())
+            path_returns = list(admitted_row.get("path_returns") or ())
+
+            def first_adverse_crossing(threshold: int) -> datetime | None:
+                explicit = earliest_event(admitted_row, f"adverse_{threshold}_at")
+                path_hit = next(
+                    (
+                        ts for ts, ret in zip(path_times, path_returns)
+                        if ts is not None and ret is not None
+                        and admitted_row["confirmed_at"] <= ts <= now_utc
+                        and float(ret) <= -(threshold / 100.0)
+                    ),
+                    None,
+                )
+                candidates = [ts for ts in (explicit, path_hit) if ts is not None]
+                return min(candidates) if candidates else None
+
             for threshold in (10, 20, 30, 50, 75):
-                adverse = earliest_event(admitted_row, f"adverse_{threshold}_at")
+                adverse = first_adverse_crossing(threshold)
                 if adverse is None or adverse > now_utc:
                     continue
                 # Only count adverse movement that happened before the winning TP.
@@ -1498,8 +1537,6 @@ def build_performance_summary(
                 if threshold != 75 and target is not None and adverse < target <= now_utc:
                     breach_recoveries[threshold] += 1
 
-            path_times = list(admitted_row.get("path_times") or ())
-            path_returns = list(admitted_row.get("path_returns") or ())
             values = [
                 float(ret) for ts, ret in zip(path_times, path_returns)
                 if ts is not None and ret is not None
@@ -1549,6 +1586,12 @@ def build_performance_summary(
             all_signal_win_rate=(all_signal_wins / (all_signal_wins + all_signal_losses)) if (all_signal_wins + all_signal_losses) else None,
             all_signal_sum_return=sum(all_signal_marks) if all_signal_marks else None,
             all_signal_avg_return=(sum(all_signal_marks) / len(all_signal_marks)) if all_signal_marks else None,
+            full_universe_sample=full_universe_wins + full_universe_losses + full_universe_open,
+            full_universe_wins=full_universe_wins,
+            full_universe_losses=full_universe_losses,
+            full_universe_open=full_universe_open,
+            full_universe_win_rate=(full_universe_wins / (full_universe_wins + full_universe_losses)) if (full_universe_wins + full_universe_losses) else None,
+            filtered_sl75=max(0, full_universe_losses - all_signal_losses),
             breach_10=breach_counts[10],
             breach_20=breach_counts[20],
             breach_30=breach_counts[30],

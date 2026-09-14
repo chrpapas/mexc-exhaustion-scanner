@@ -1,4 +1,4 @@
-# MEXC Exhaustion Scanner + Multi-Slot Futures Trader v1.3.61
+# MEXC Exhaustion Scanner + Multi-Slot Futures Trader v1.3.62
 
 
 ## v1.3.61 — Subscriber performance truth report

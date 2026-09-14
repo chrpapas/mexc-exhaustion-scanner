@@ -223,7 +223,7 @@ class DiscordNotifier:
                 if account.thirty_day_pnl_per_10k is not None else "n/a"
             )
             return (
-                f"Account MTM **{self._signed_percent(account.observed_account_return)}** over **{account.span_days:.1f}d** • "
+                f"Historical account MTM **{self._signed_percent(account.observed_account_return)}** over **{account.span_days:.1f}d** • "
                 f"30D run-rate **{self._signed_percent(account.thirty_day_equivalent_return)}*** ≈ **{monthly_dollars}** • "
                 f"max DD **{dd}**\n"
                 f"closed **{account.closed_wins}W / {account.closed_losses}L** • resolved win rate **{self._percent(account.closed_win_rate)}** • "
@@ -241,6 +241,19 @@ class DiscordNotifier:
                 f"Gross marked signal sum **{self._signed_percent(account.all_signal_sum_return)}** • "
                 f"average marked signal **{self._signed_percent(account.all_signal_avg_return)}**. "
                 "This is a signal-quality sum, **not** an achievable account return."
+            )
+
+        def full_universe_economics() -> str:
+            if account is None:
+                return "Full-universe view unavailable"
+            resolved = account.full_universe_wins + account.full_universe_losses
+            return (
+                f"Before active filters/capacity: **{account.full_universe_sample} signals** • "
+                f"**{account.full_universe_wins} TP5 / {account.full_universe_losses} SL75 / {account.full_universe_open} open** • "
+                f"resolved win rate **{self._percent(account.full_universe_win_rate)}**\n"
+                f"Current admission filters removed **{account.filtered_sl75}/{account.full_universe_losses} historical SL75**; "
+                f"**{account.all_signal_losses} SL75** remains in the unlimited admitted universe. "
+                "Research context only — **not account performance**."
             )
 
         def adverse_profile() -> str:
@@ -276,29 +289,34 @@ class DiscordNotifier:
                     "inline": False,
                 },
                 {
-                    "name": "📈 Current account replay",
+                    "name": "💰 Historical trader replay • achievable",
                     "value": account_economics(),
                     "inline": False,
                 },
                 {
-                    "name": "🎯 All admitted signals • quality",
+                    "name": "🎯 Current strategy • unlimited signal quality",
                     "value": all_signal_economics(),
                     "inline": False,
                 },
                 {
-                    "name": "⚠️ Adverse path & breaches",
+                    "name": "🔬 Full scanner universe • before active filters",
+                    "value": full_universe_economics(),
+                    "inline": False,
+                },
+                {
+                    "name": "⚠️ Historical trader replay • adverse risk",
                     "value": adverse_profile(),
                     "inline": False,
                 },
                 {
                     "name": "Today",
-                    "value": f"Published confirmed shorts **{report.confirmed_today}** • signals currently tracked **{report.open_count}**",
+                    "value": f"Published confirmed shorts today **{report.confirmed_today}**",
                     "inline": False,
                 },
                 {
                     "name": "How to read it",
                     "value": (
-                        "The chronological account replay uses the promoted **6×8.33% / 50%** sizing, 6-slot capacity, one-position-per-symbol, compounding and "
+                        "Historical trader replay applies today's promoted strategy to the recorded signal history and uses **6×8.33% / 50%** sizing, 6-slot capacity, one-position-per-symbol, compounding and "
                         "**0.08% fee per fill** plus current MTM. **30D run-rate*** linearly scales the observed period and is not a forecast. "
                         "Funding and real execution slippage are not modeled."
                     ),
