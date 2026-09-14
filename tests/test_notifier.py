@@ -244,8 +244,12 @@ def test_performance_report_uses_dedicated_stats_webhook_and_embeds():
     assert "30D run-rate" in all_text
     assert "max DD" in all_text
     assert "avg/peak exposure" in all_text
+    assert "All admitted signals" in all_text
+    assert "Adverse path & breaches" in all_text
+    assert "resolved win rate" in all_text
+    assert "per $10k" in all_text
     assert "max **6** open positions" in all_text
-    assert "30%" in all_text
+    assert "50%" in all_text
     assert "0.08% fee per fill" in all_text
     assert "Previous active" not in all_text
     assert "PCR" in all_text  # only mentioned as intentionally omitted

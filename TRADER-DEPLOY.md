@@ -1,4 +1,4 @@
-# Trader deployment — v1.3.60
+# Trader deployment — v1.3.61
 
 ## v1.3.60 rolling-deploy concurrency fix
 
