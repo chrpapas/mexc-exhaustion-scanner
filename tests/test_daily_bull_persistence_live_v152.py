@@ -51,7 +51,7 @@ def test_persistence_strategy_is_default_without_resetting_existing_paper_run(mo
     monkeypatch.delenv("TRADER_EXECUTION_STRATEGY", raising=False)
     monkeypatch.delenv("TRADER_PAPER_RUN_ID", raising=False)
     settings = TraderSettings.from_env()
-    assert settings.execution_strategy == DAILY_CORE_PERSISTENCE_SKIP_STRATEGY_V2
+    assert settings.execution_strategy == "tp5_sl100_lae10_24_q1_daily_core_persistence_skip_v2"
     assert settings.uses_daily_core_skip
     assert settings.uses_daily_bull_persistence_skip
     # Intentionally retained so promotion applies to future entries without closing the current paper book.

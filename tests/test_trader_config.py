@@ -20,7 +20,7 @@ def test_paper_cross_defaults(monkeypatch):
     assert settings.capital_strategy == "cross_20"
     assert settings.position_maturity == "profit_20"
     assert settings.profit_target_pct == 20.0
-    assert settings.execution_strategy == "tp5_sl75_daily_core_persistence_skip_v2"
+    assert settings.execution_strategy == "tp5_sl100_lae10_24_q1_daily_core_persistence_skip_v2"
     assert settings.tp5_target_pct == 5.0
     assert settings.slot_allocation_pct == pytest.approx(50.0 / 6.0)
     assert settings.max_total_exposure_pct == 50.0
