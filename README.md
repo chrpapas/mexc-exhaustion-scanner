@@ -1,5 +1,9 @@
-# MEXC Exhaustion Scanner + Multi-Slot Futures Trader v1.3.60
+# MEXC Exhaustion Scanner + Multi-Slot Futures Trader v1.3.61
 
+
+## v1.3.61 — Subscriber performance truth report
+
+The current-strategy Discord performance report now replays the promoted 6-slot allocation at 8.33% per slot / 50% maximum aggregate exposure, rather than the stale 5% / 30% public benchmark. It separates all-eligible-signal quality from achievable chronological account performance and reports resolved win rate, TP5/SL75/open counts, capacity and symbol misses, fees/current MTM, 30-day run-rate with dollar-equivalent per $10k, and adverse-path breach/recovery statistics at -10%, -20%, -30%, -50%, and -75% plus median/worst MAE. Trading/admission logic is unchanged.
 
 ## v1.3.60 — Cross-instance trader signal lease
 

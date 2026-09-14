@@ -308,6 +308,31 @@ class AccountRunRateSummary:
     max_mtm_drawdown: float | None = None
     return_over_max_drawdown: float | None = None
     fee_per_fill: float = SHADOW_FEE_PER_FILL
+    # Subscriber-facing diagnostics for the currently promoted strategy.
+    # These are deliberately additive/defaulted so older research/test callers
+    # can still construct AccountRunRateSummary positionally.
+    closed_wins: int = 0
+    closed_losses: int = 0
+    closed_win_rate: float | None = None
+    all_signal_sample: int = 0
+    all_signal_resolved: int = 0
+    all_signal_wins: int = 0
+    all_signal_losses: int = 0
+    all_signal_open: int = 0
+    all_signal_win_rate: float | None = None
+    all_signal_sum_return: float | None = None
+    all_signal_avg_return: float | None = None
+    breach_10: int = 0
+    breach_20: int = 0
+    breach_30: int = 0
+    breach_50: int = 0
+    breach_75: int = 0
+    recovered_after_breach_10: int = 0
+    recovered_after_breach_20: int = 0
+    recovered_after_breach_30: int = 0
+    recovered_after_breach_50: int = 0
+    median_mae: float | None = None
+    worst_mae: float | None = None
 
     def as_dict(self) -> dict[str, Any]:
         data = {name: getattr(self, name) for name in self.__dataclass_fields__}
@@ -1183,6 +1208,9 @@ def build_performance_summary(
         holds_hours: list[float] = []
         exposure_hour_fractions: list[float] = []
         eligible_signals = entered = closed = missed_capacity = missed_same_symbol = 0
+        closed_wins = closed_losses = 0
+        admitted_rows: list[dict[str, Any]] = []
+        eligible_rows: list[dict[str, Any]] = []
         max_open = 0
         max_exposure_fraction = 0.0
 
@@ -1250,7 +1278,7 @@ def build_performance_summary(
             raise ValueError(f"unsupported account replay strategy: {strategy}")
 
         def close_due(cutoff: datetime) -> None:
-            nonlocal equity, closed
+            nonlocal equity, closed, closed_wins, closed_losses
             due = sorted(
                 [pos for pos in positions if pos["exit_at"] is not None and pos["exit_at"] <= cutoff],
                 key=lambda pos: pos["exit_at"],
@@ -1262,6 +1290,10 @@ def build_performance_summary(
                 exposure_hour_fractions.append(hold_hours * float(pos["position_fraction"]))
                 positions.remove(pos)
                 closed += 1
+                if float(pos["exit_return"]) > 0:
+                    closed_wins += 1
+                else:
+                    closed_losses += 1
 
         for row in ordered:
             entry_at = row["confirmed_at"]
@@ -1283,6 +1315,7 @@ def build_performance_summary(
                 if daily_bull_persistence_v1_state(admission_features(row)) is not False:
                     continue
             eligible_signals += 1
+            eligible_rows.append(row)
             symbol = str(row.get("symbol") or "")
             if any(pos["symbol"] == symbol for pos in positions):
                 missed_same_symbol += 1
@@ -1315,6 +1348,7 @@ def build_performance_summary(
             }
             positions.append(position)
             all_positions.append(position)
+            admitted_rows.append(row)
             entered += 1
             max_open = max(max_open, len(positions))
             max_exposure_fraction = max(
@@ -1415,6 +1449,75 @@ def build_performance_summary(
             observed_return / max_mtm_drawdown
             if observed_return is not None and max_mtm_drawdown > 0 else None
         )
+
+        # All-signal view: what the current admission rule produced ignoring
+        # portfolio capacity/same-symbol blocking. Closed signals use TP5/SL75;
+        # unresolved signals are marked to the report timestamp. This is a gross
+        # signal-quality statistic, not an achievable account return.
+        all_signal_marks: list[float] = []
+        all_signal_wins = all_signal_losses = all_signal_open = 0
+        for eligible_row in eligible_rows:
+            exit_at, exit_return = known_exit(eligible_row)
+            if exit_at is not None and exit_return is not None:
+                all_signal_marks.append(float(exit_return))
+                if float(exit_return) > 0:
+                    all_signal_wins += 1
+                else:
+                    all_signal_losses += 1
+            else:
+                mark = eligible_row.get("current_return_pct")
+                all_signal_open += 1
+                if mark is not None:
+                    all_signal_marks.append(float(mark))
+
+        # Adverse/breach view for positions that the account replay actually
+        # admitted. A breach only counts when it occurred before TP5 (or while
+        # the trade is still unresolved), so post-TP5 research-path movement is
+        # never misrepresented as live-account risk. Recovery counts trades that
+        # subsequently reached TP5 after first breaching the threshold.
+        breach_counts = {10: 0, 20: 0, 30: 0, 50: 0, 75: 0}
+        breach_recoveries = {10: 0, 20: 0, 30: 0, 50: 0}
+        admitted_mae: list[float] = []
+        for admitted_row in admitted_rows:
+            target = earliest_event(admitted_row, "target_5_at")
+            stop = earliest_event(admitted_row, "adverse_75_at")
+            effective_end = now_utc
+            if stop is not None and stop <= effective_end and (target is None or stop <= target):
+                effective_end = stop
+            elif target is not None and target <= effective_end:
+                effective_end = target
+
+            for threshold in (10, 20, 30, 50, 75):
+                adverse = earliest_event(admitted_row, f"adverse_{threshold}_at")
+                if adverse is None or adverse > now_utc:
+                    continue
+                # Only count adverse movement that happened before the winning TP.
+                if target is not None and target <= adverse:
+                    continue
+                breach_counts[threshold] += 1
+                if threshold != 75 and target is not None and adverse < target <= now_utc:
+                    breach_recoveries[threshold] += 1
+
+            path_times = list(admitted_row.get("path_times") or ())
+            path_returns = list(admitted_row.get("path_returns") or ())
+            values = [
+                float(ret) for ts, ret in zip(path_times, path_returns)
+                if ts is not None and ret is not None
+                and admitted_row["confirmed_at"] <= ts <= effective_end
+            ]
+            if values:
+                admitted_mae.append(min(values))
+
+        median_mae = None
+        if admitted_mae:
+            ordered_mae = sorted(admitted_mae)
+            mid = len(ordered_mae) // 2
+            median_mae = (
+                ordered_mae[mid]
+                if len(ordered_mae) % 2
+                else (ordered_mae[mid - 1] + ordered_mae[mid]) / 2.0
+            )
+
         return AccountRunRateSummary(
             strategy=strategy,
             start_at=account_start_at,
@@ -1435,13 +1538,36 @@ def build_performance_summary(
             max_mtm_drawdown=max_mtm_drawdown if event_times else None,
             return_over_max_drawdown=return_over_drawdown,
             slot_days=slot_days,
+            closed_wins=closed_wins,
+            closed_losses=closed_losses,
+            closed_win_rate=(closed_wins / closed) if closed else None,
+            all_signal_sample=eligible_signals,
+            all_signal_resolved=all_signal_wins + all_signal_losses,
+            all_signal_wins=all_signal_wins,
+            all_signal_losses=all_signal_losses,
+            all_signal_open=all_signal_open,
+            all_signal_win_rate=(all_signal_wins / (all_signal_wins + all_signal_losses)) if (all_signal_wins + all_signal_losses) else None,
+            all_signal_sum_return=sum(all_signal_marks) if all_signal_marks else None,
+            all_signal_avg_return=(sum(all_signal_marks) / len(all_signal_marks)) if all_signal_marks else None,
+            breach_10=breach_counts[10],
+            breach_20=breach_counts[20],
+            breach_30=breach_counts[30],
+            breach_50=breach_counts[50],
+            breach_75=breach_counts[75],
+            recovered_after_breach_10=breach_recoveries[10],
+            recovered_after_breach_20=breach_recoveries[20],
+            recovered_after_breach_30=breach_recoveries[30],
+            recovered_after_breach_50=breach_recoveries[50],
+            median_mae=median_mae,
+            worst_mae=min(admitted_mae) if admitted_mae else None,
         )
 
     trader_strategy_tp5 = trader_strategy_summary("tp5")
     trader_strategy_tp5_sl75 = trader_strategy_summary("tp5_sl75")
     trader_strategy_hold_7d = trader_strategy_summary("hold_7d")
 
-    tp5_exposure = ExposureRecommendation(0.05, 6, 0.30, "portfolio-tested frozen TP5 configuration")
+    tp5_exposure = ExposureRecommendation(0.05, 6, 0.30, "legacy/research frozen TP5 configuration")
+    current_live_exposure = ExposureRecommendation(1.0 / 12.0, 6, 0.50, "promoted 6×8.33% / 50% configuration")
     tp20_exposure = ExposureRecommendation(0.02, 5, 0.10, "risk-based suggestion from observed HIGH_RISK adverse paths")
     standard_7d_exposure = ExposureRecommendation(0.03, 5, 0.15, "risk-based suggestion for fixed 7-day STANDARD holds")
     tp5_account_run_rate = account_run_rate(
@@ -1465,7 +1591,7 @@ def build_performance_summary(
     tp5_sl75_daily_core_persistence_skip_account_run_rate = account_run_rate(
         strategy="tp5_sl75",
         risk_tiers={"standard", "high_risk"},
-        exposure=tp5_exposure,
+        exposure=current_live_exposure,
         daily_core_skip=True,
         daily_bull_persistence_v2_skip=True,
     )

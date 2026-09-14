@@ -217,20 +217,43 @@ class DiscordNotifier:
                 f"-{self._percent(account.max_mtm_drawdown)}"
                 if account.max_mtm_drawdown is not None else "n/a"
             )
-            ratio = (
-                f"{account.return_over_max_drawdown:.2f}×"
-                if account.return_over_max_drawdown is not None else "n/a"
-            )
             capture = (account.entered / account.eligible_signals) if account.eligible_signals else None
+            monthly_dollars = (
+                f"${account.thirty_day_pnl_per_10k:,.0f} per $10k"
+                if account.thirty_day_pnl_per_10k is not None else "n/a"
+            )
             return (
-                f"Observed **{self._signed_percent(account.observed_account_return)}** over **{account.span_days:.1f}d** • "
-                f"30D run-rate **{self._signed_percent(account.thirty_day_equivalent_return)}*** • "
-                f"max DD **{dd}** • R/DD **{ratio}**\n"
-                f"entered **{account.entered}/{account.eligible_signals} ({self._percent(capture)})** admitted signals • "
-                f"closed/open **{account.closed}/{account.open_positions}** • "
-                f"capacity/symbol misses **{account.missed_capacity}/{account.missed_same_symbol}** • "
+                f"Account MTM **{self._signed_percent(account.observed_account_return)}** over **{account.span_days:.1f}d** • "
+                f"30D run-rate **{self._signed_percent(account.thirty_day_equivalent_return)}*** ≈ **{monthly_dollars}** • "
+                f"max DD **{dd}**\n"
+                f"closed **{account.closed_wins}W / {account.closed_losses}L** • resolved win rate **{self._percent(account.closed_win_rate)}** • "
+                f"open **{account.open_positions}** • entered **{account.entered}/{account.eligible_signals} ({self._percent(capture)})** • "
+                f"capacity/symbol misses **{account.missed_capacity}/{account.missed_same_symbol}**\n"
                 f"avg/peak exposure **{self._percent(account.avg_exposure_pct)} / {self._percent(account.peak_exposure_pct)}**"
             )
+
+        def all_signal_economics() -> str:
+            if account is None:
+                return "Signal-quality view unavailable"
+            return (
+                f"If every admitted signal were tracked independently (ignoring slot capacity): **{account.all_signal_wins} TP5 / {account.all_signal_losses} SL75 / {account.all_signal_open} open** • "
+                f"resolved win rate **{self._percent(account.all_signal_win_rate)}**\n"
+                f"Gross marked signal sum **{self._signed_percent(account.all_signal_sum_return)}** • "
+                f"average marked signal **{self._signed_percent(account.all_signal_avg_return)}**. "
+                "This is a signal-quality sum, **not** an achievable account return."
+            )
+
+        def adverse_profile() -> str:
+            if account is None:
+                return "Adverse-path view unavailable"
+            return (
+                f"Before TP5: **-10% {account.breach_10}** (recovered {account.recovered_after_breach_10}) • "
+                f"**-20% {account.breach_20}** (recovered {account.recovered_after_breach_20}) • "
+                f"**-30% {account.breach_30}** (recovered {account.recovered_after_breach_30})\n"
+                f"**-50% {account.breach_50}** (recovered {account.recovered_after_breach_50}) • "
+                f"**-75% {account.breach_75}** • median/worst MAE **{self._signed_percent(account.median_mae)} / {self._signed_percent(account.worst_mae)}**"
+            )
+
 
         board = {
             "title": "📊 Exhaustion Scanner • Performance & Playbook • Current Strategy",
@@ -244,7 +267,7 @@ class DiscordNotifier:
                     "name": "▶️ Live/default • Daily-Core + Persistence V2",
                     "value": (
                         "**TP5 + SL75** • STANDARD + HIGH_RISK confirmed shorts • **1× cross** • "
-                        "**5% of current equity per admitted entry** • max **6** open positions / **30%** aggregate exposure • "
+                        "**8.33% of current equity per admitted entry** • max **6** open positions / **50%** aggregate exposure • "
                         "one position per symbol • TP **+5%** • catastrophic SL **-75%** • no timeout.\n"
                         "Admission is fail-closed: skip Daily-Confirmed Core V1 flagged/non-computable signals, then skip "
                         "Trend Persistence V2 flagged/non-computable signals on its reachable branch. "
@@ -258,6 +281,16 @@ class DiscordNotifier:
                     "inline": False,
                 },
                 {
+                    "name": "🎯 All admitted signals • quality",
+                    "value": all_signal_economics(),
+                    "inline": False,
+                },
+                {
+                    "name": "⚠️ Adverse path & breaches",
+                    "value": adverse_profile(),
+                    "inline": False,
+                },
+                {
                     "name": "Today",
                     "value": f"Published confirmed shorts **{report.confirmed_today}** • signals currently tracked **{report.open_count}**",
                     "inline": False,
@@ -265,7 +298,7 @@ class DiscordNotifier:
                 {
                     "name": "How to read it",
                     "value": (
-                        "The chronological account replay respects 6-slot capacity, one-position-per-symbol, compounding and "
+                        "The chronological account replay uses the promoted **6×8.33% / 50%** sizing, 6-slot capacity, one-position-per-symbol, compounding and "
                         "**0.08% fee per fill** plus current MTM. **30D run-rate*** linearly scales the observed period and is not a forecast. "
                         "Funding and real execution slippage are not modeled."
                     ),
@@ -273,7 +306,7 @@ class DiscordNotifier:
                 },
             ],
             "footer": {
-                "text": "Current strategy only • Daily-Core + Persistence V2 • 6×5% / 30% • TP5 / SL75"
+                "text": "Current strategy only • Daily-Core + Persistence V2 • 6×8.33% / 50% • TP5 / SL75"
             },
         }
 
