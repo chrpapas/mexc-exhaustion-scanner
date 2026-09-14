@@ -240,12 +240,12 @@ def test_performance_report_uses_dedicated_stats_webhook_and_embeds():
     assert "Performance & Playbook" in all_text
     assert "Current Strategy" in all_text
     assert "Live/default • Daily-Core + Persistence V2" in all_text
-    assert "Current account replay" in all_text
+    assert "Historical trader replay" in all_text
     assert "30D run-rate" in all_text
     assert "max DD" in all_text
     assert "avg/peak exposure" in all_text
-    assert "All admitted signals" in all_text
-    assert "Adverse path & breaches" in all_text
+    assert "Current strategy" in all_text
+    assert "adverse risk" in all_text
     assert "resolved win rate" in all_text
     assert "per $10k" in all_text
     assert "max **6** open positions" in all_text
