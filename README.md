@@ -8,7 +8,18 @@
 
 
 
-## v1.3.72 — Historical collector resume-performance fix
+## v1.3.73 — six-month as-if-live backtest engine
+
+Adds `app.historical_backtest`, a DB-isolated offline engine that waits for the historical pipeline to finish, reconstructs the scanner causally from cached 15m/1h/4h/1d candles, applies Daily-Core + Persistence V2 admission, and replays TP5/SL100 + LAE10/24-Q1 chronologically at configurable slot counts and exposures. It never imports the production DB/trader repositories. Historical bid/ask spread and fair/index premium are not present in the candle archive; the report explicitly records those fidelity gaps and uses an amount-only liquidity proxy plus conservative missing-premium LAE scoring.
+
+Commands:
+
+```bash
+python -m app.historical_backtest readiness --cache-dir ./research-history-v2
+python -m app.historical_backtest run --cache-dir ./research-history-v2 --slots 6 --exposures 50,75,100
+```
+
+## v1.3.73 — Historical collector resume-performance fix
 
 Fixes the v1.3.71 historical pipeline slowdown. Cache-size accounting is now computed once per internal batch and incremented as new chunks are written, instead of recursively walking the full cache before every planned chunk. Existing cached candle chunks and the frozen research window remain fully reusable; no production database or live strategy behavior is changed.
 
