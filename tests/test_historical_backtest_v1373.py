@@ -20,3 +20,15 @@ def test_readiness_requires_completed_pipeline(tmp_path:Path):
     r=readiness(tmp_path)
     assert r["ready"] is False
     assert "historical_bid_ask_spread" in r["fidelity"]
+
+
+def test_historical_backtest_candle_cache_is_memory_bounded():
+    from app import historical_backtest as hb
+    assert hb.CANDLE_CACHE_SYMBOLS <= 4
+    assert hb._min15_candles.cache_info().maxsize <= 4
+    assert hb._day_candles.cache_info().maxsize <= 4
+
+
+def test_historical_backtest_sqlite_cache_is_small():
+    from app import historical_backtest as hb
+    assert hb.BACKTEST_SQLITE_CACHE_KIB <= 16 * 1024
