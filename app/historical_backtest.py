@@ -5,6 +5,8 @@ import bisect
 import collections
 import functools
 import gzip
+import gc
+import resource
 import json
 import logging
 import math
@@ -37,7 +39,9 @@ from app.signals import (
 
 LOGGER = logging.getLogger(__name__)
 FEE_PER_FILL = 0.0008
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
+BACKTEST_SQLITE_CACHE_KIB = 16 * 1024
+CANDLE_CACHE_SYMBOLS = 4
 
 # Frozen live defaults. This module deliberately does not import app.config,
 # app.db, app.trader_db or app.trader and therefore never needs DATABASE_URL.
@@ -151,6 +155,20 @@ def _ts(value: datetime) -> int:
     return int(value.timestamp())
 
 
+def _rss_mb() -> float:
+    """Best-effort peak RSS for progress diagnostics (Linux reports KiB)."""
+    try:
+        return float(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss) / 1024.0
+    except Exception:
+        return 0.0
+
+
+def _release_candle_caches() -> None:
+    _day_candles.cache_clear()
+    _min15_candles.cache_clear()
+    gc.collect()
+
+
 def _parse_iso(value: str) -> datetime:
     d = datetime.fromisoformat(value.replace("Z", "+00:00"))
     if d.tzinfo is None:
@@ -215,8 +233,12 @@ def _open_db(cache_dir: Path) -> sqlite3.Connection:
     db = sqlite3.connect(path, timeout=60)
     db.execute("PRAGMA journal_mode=WAL")
     db.execute("PRAGMA synchronous=NORMAL")
-    db.execute("PRAGMA temp_store=MEMORY")
-    db.execute("PRAGMA cache_size=-131072")  # ~128MB page cache
+    # Keep the research job comfortably below small Render instance limits.
+    # SQLite temp work and large page caches previously competed with Python
+    # candle objects and could push a 512MB service into an OOM restart.
+    db.execute("PRAGMA temp_store=FILE")
+    db.execute(f"PRAGMA cache_size=-{BACKTEST_SQLITE_CACHE_KIB}")  # ~16MB page cache
+    db.execute("PRAGMA mmap_size=0")
     db.executescript(
         """
         CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -431,8 +453,10 @@ def prepare_features(cache_dir: Path, *, force: bool = False) -> dict[str, Any]:
                     (symbol, len(rows), datetime.now(UTC).isoformat()),
                 )
             total_rows += len(rows)
-            if pos % 10 == 0 or rows:
-                LOGGER.info("Backtest prepare %d/%d symbol=%s rows=%d total_rows=%d", pos, len(symbols), symbol, len(rows), total_rows)
+            del rows
+            gc.collect()
+            if pos % 10 == 0:
+                LOGGER.info("Backtest prepare %d/%d symbol=%s total_rows=%d peak_rss_mb=%.1f", pos, len(symbols), symbol, total_rows, _rss_mb())
         db.execute("INSERT OR REPLACE INTO meta(key,value) VALUES('prepare_schema',?)", (str(SCHEMA_VERSION),))
         db.commit()
         return {
@@ -479,19 +503,23 @@ def _episodes_from_json(raw: str | None) -> dict[str, Episode]:
     return out
 
 
-@functools.lru_cache(maxsize=96)
+@functools.lru_cache(maxsize=CANDLE_CACHE_SYMBOLS)
 def _day_candles(cache_dir_s: str, symbol: str) -> tuple[Candle, ...]:
     return tuple(_chunk_candles(Path(cache_dir_s), symbol, "Day1"))
 
 
-@functools.lru_cache(maxsize=96)
+@functools.lru_cache(maxsize=CANDLE_CACHE_SYMBOLS)
 def _min15_candles(cache_dir_s: str, symbol: str) -> tuple[Candle, ...]:
     return tuple(_chunk_candles(Path(cache_dir_s), symbol, "Min15"))
 
 
 def _retest_from_cache(cache_dir: Path, symbol: str, breakdown_at: datetime, level: float, atr15: float, now: datetime):
-    candles = [c for c in _min15_candles(str(cache_dir), symbol) if c.open_time + timedelta(minutes=15) <= now]
-    return evaluate_failed_retest(candles[-400:], breakdown_at=breakdown_at, broken_level=level, atr_15m=atr15, tolerance_atr=RETEST_TOLERANCE_ATR, window_candles=RETEST_WINDOW_CANDLES)
+    # Never materialize a second six-month candle list just to trim it.
+    candles = _min15_candles(str(cache_dir), symbol)
+    times = [c.open_time for c in candles]
+    end_i = bisect.bisect_right(times, now - timedelta(minutes=15))
+    start_i = max(0, end_i - 400)
+    return evaluate_failed_retest(candles[start_i:end_i], breakdown_at=breakdown_at, broken_level=level, atr_15m=atr15, tolerance_atr=RETEST_TOLERANCE_ATR, window_candles=RETEST_WINDOW_CANDLES)
 
 
 def reconstruct_signals(cache_dir: Path, *, force: bool = False) -> tuple[list[ReconstructedSignal], ReconstructionStats]:
@@ -640,7 +668,8 @@ def reconstruct_signals(cache_dir: Path, *, force: bool = False) -> tuple[list[R
                 with db:
                     db.execute("INSERT OR REPLACE INTO meta VALUES('reconstruct_next_ts',?)", (str(next_ts),))
                     db.execute("INSERT OR REPLACE INTO meta VALUES('reconstruct_episodes',?)", (_episodes_to_json(episodes),))
-                LOGGER.info("Signal reconstruction progress %d/%d ts=%s signals=%d", step_i+1, len(all_times), when.isoformat(), db.execute("SELECT COUNT(*) FROM reconstructed_signals").fetchone()[0])
+                _release_candle_caches()
+                LOGGER.info("Signal reconstruction progress %d/%d ts=%s signals=%d peak_rss_mb=%.1f", step_i+1, len(all_times), when.isoformat(), db.execute("SELECT COUNT(*) FROM reconstructed_signals").fetchone()[0], _rss_mb())
 
         with db:
             db.execute("DELETE FROM meta WHERE key='reconstruct_next_ts'")
@@ -649,6 +678,7 @@ def reconstruct_signals(cache_dir: Path, *, force: bool = False) -> tuple[list[R
         stats.admitted_after_filters = db.execute("SELECT COUNT(*) FROM reconstructed_signals").fetchone()[0]
         signals = [ReconstructedSignal(str(r[0]), _dt(r[1]), float(r[2]), str(r[3]), json.loads(r[4])) for r in db.execute("SELECT symbol,confirmed_ts,entry_price,risk_tier,features_json FROM reconstructed_signals ORDER BY confirmed_ts,symbol")]
         _atomic_json(cache_dir / "backtest" / "reconstruction-summary.json", {"schema": SCHEMA_VERSION, "created_at": datetime.now(UTC).isoformat(), "stats": asdict(stats)})
+        _release_candle_caches()
         return signals, stats
     finally:
         db.close()
@@ -744,7 +774,11 @@ def run_backtest(cache_dir:Path, exposures:list[float], slots:int, force_reconst
     ready=readiness(cache_dir)
     if not ready["ready"]: raise RuntimeError("historical data collection is not complete yet")
     prep=prepare_features(cache_dir); signals,stats=reconstruct_signals(cache_dir,force=force_reconstruct)
-    results=[replay(cache_dir,signals,exposure_pct=e,slots=slots) for e in exposures]
+    results=[]
+    for e in exposures:
+        results.append(replay(cache_dir, signals, exposure_pct=e, slots=slots))
+        _release_candle_caches()
+        LOGGER.info("Backtest exposure %.1f%% complete peak_rss_mb=%.1f", e, _rss_mb())
     report={"schema":SCHEMA_VERSION,"created_at":datetime.now(UTC).isoformat(),"strategy":"TP5 / SL100 + LAE10/24-Q1 / Daily-Core + Persistence V2","slots":slots,"exposures_pct":exposures,"preparation":prep,"reconstruction":asdict(stats),"fidelity":ready["fidelity"],"results":[asdict(r) for r in results]}
     _atomic_json(cache_dir/"backtest"/"six-month-backtest.json",report); return report
 
