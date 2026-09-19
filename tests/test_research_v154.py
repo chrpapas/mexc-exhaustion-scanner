@@ -46,7 +46,7 @@ async def test_v154_performance_rows_batches_path_fetches_by_episode():
     class Pool:
         async def fetch(self, query: str, *args):
             calls.append((query, args))
-            if "FROM shadow_trades st" in query:
+            if "FROM research_signal_features_enriched f" in query:
                 return base_rows
             episode_ids = args[0]
             assert len(episode_ids) <= 16

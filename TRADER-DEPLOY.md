@@ -1,4 +1,4 @@
-# Trader deployment — v1.3.77
+# Trader deployment — v1.3.79
 
 ## v1.3.75 promoted production candidate
 
@@ -116,7 +116,7 @@ The mature-run branch is frozen **08 Sep 2026 08:29 CEST**. Do not retune this t
 
 Scanner:
 ```text
-SUBSCRIBER_SIGNAL_STRATEGY=tp5_sl75_daily_core_persistence_skip_v2
+SUBSCRIBER_SIGNAL_STRATEGY=tp5_nostop_adv30_runner50_trail1_daily_core_persistence_skip_v2
 ARMED_RUNNER_MEMORY_HOURS=48
 CONFIRMED_REARM_HOURS=48
 REARM_NEW_HIGH_PCT=0.05
@@ -185,6 +185,18 @@ then downloads their missing candles and exits. If interrupted, re-run the same 
 The new historical fetcher is offline research only and does not place orders or require MEXC credentials. Run it in a separate local process/service from the production worker. See `README.md` for `app.historical_live_store` and `app.historical_live_validate` commands. Do not promote six-month replay results unless the production-overlap validation gate passes.
 
 
-## v1.3.77 reporting
+
+## v1.3.79 alignment
+
+Use the same canonical strategy id on scanner and trader:
+
+```text
+SUBSCRIBER_SIGNAL_STRATEGY=tp5_nostop_adv30_runner50_trail1_daily_core_persistence_skip_v2
+TRADER_EXECUTION_STRATEGY=tp5_nostop_adv30_runner50_trail1_daily_core_persistence_skip_v2
+```
+
+The old scanner `tp5_sl75_daily_core_persistence_skip_v2` value is still accepted as a compatibility alias, but should no longer be used for new deployments. The subscriber August replay is fail-closed against the frozen 473/366 reference universe.
+
+## v1.3.78 reporting
 
 `python -m app.report_now` now sends the subscriber three-layer board: actual active trader run, current production strategy replay since the retained August data begins, and the capacity-independent arithmetic sum of all eligible current-strategy signals. `python -m app.research_analytics_now` is research-diagnostics only and no longer uploads legacy strategy-comparison CSVs.
