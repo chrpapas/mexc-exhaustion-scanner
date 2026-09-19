@@ -1,4 +1,4 @@
-# MEXC Exhaustion Scanner + Multi-Slot Futures Trader v1.3.69
+# MEXC Exhaustion Scanner + Multi-Slot Futures Trader v1.3.77
 
 
 
@@ -7,6 +7,29 @@
 
 
 
+
+
+## v1.3.77 — subscriber reporting cleanup + exact current-strategy replay
+
+Subscriber reporting is now intentionally split into three non-overlapping views: **Live Trader since the active run/restart**, **the exact current 10-slot recovery-runner strategy replayed from the start of the retained August dataset**, and **all eligible current-strategy signals ignoring portfolio capacity**. The third view reports the arithmetic sum/average of per-signal returns and is explicitly not presented as an achievable account return.
+
+The August replay now models the production policy directly: 10 slots × 10% MTM equity, 100% max nominal exposure, Daily-Core + Persistence V2 fail-closed admissions, no pre-TP stop, full TP5 for ordinary trades, and the ≥30% adverse recovery rule that realizes 50% at TP5 and trails the remaining 50% by one return percentage point while retaining the slot. Research analytics Discord output is reduced to dataset/filter/forward-evidence diagnostics so legacy SL75/TP20/exposure matrices no longer compete with the subscriber performance board.
+
+The historical live-store writer also closes the temporary file descriptor returned by `tempfile.mkstemp()` before writing each gzip chunk, fixing the macOS `Errno 24: Too many open files` failure while preserving resumable caches.
+
+
+## v1.3.75 — Promote 10-slot / 100% TP5 recovery runner
+
+The production trader default is now `tp5_nostop_adv30_runner50_trail1_daily_core_persistence_skip_v2`. New entries use Daily-Core + Persistence V2 fail-closed admission, STANDARD + HIGH_RISK, **10 generic slots × 10% of current MTM equity**, **100% max nominal exposure**, 1× cross, one position per symbol, and **no pre-TP stop-loss**.
+
+Exit policy for new positions:
+- ordinary trade: close 100% at +5%;
+- if the trade first reaches at least **-30% adverse return** and later recovers to TP5: realize **50% at +5%**, keep **50% in the same slot**, and protect that remainder with a **1 return-percentage-point trailing floor** behind the best post-TP5 short return;
+- partial TP5 P/L and fees are persisted on the original position row; existing open positions keep the exit strategy frozen when they were opened.
+
+Migration `021_recovery_runner_exit_strategy.sql` adds the persisted runner exit strategy. `render.yaml` contains the promoted portfolio/strategy values but deliberately remains fail-closed in paper mode; live execution still requires explicit MEXC Futures credentials plus the live arming flags documented in `TRADER-DEPLOY.md`.
+
+The Discord performance board explicitly labels its existing account replay as **legacy research context** until the analytics engine supports first-class partial-runner replay; it no longer mislabels the old 6-slot SL100 replay as the production policy.
 
 ## v1.3.73 — six-month as-if-live backtest engine
 
@@ -966,3 +989,54 @@ Restores concise trader-event Discord milestones without bringing back routine n
 ## v1.2.2 — quiet trader Discord
 
 Discord is restricted to OPEN / CLOSE / ERROR events. All other trader decisions and milestones remain fully logged in Render/PostgreSQL without Discord noise. No migration is required.
+
+## v1.3.76 — historical live-schema replay store
+
+The historical research path now has a second, stricter data layer that reconstructs MEXC history in the same `Ticker` shape used by the live scanner.
+
+Public historical sources used:
+
+- 5-minute contract klines (`/api/v1/contract/kline/{symbol}`)
+- 5-minute index-price klines (`/api/v1/contract/kline/index_price/{symbol}`)
+- 5-minute fair-price klines (`/api/v1/contract/kline/fair_price/{symbol}`)
+- funding-rate history (`/api/v1/contract/funding_rate/history`)
+- the existing reconstructed historical crypto-perpetual universe
+
+MEXC does not expose historical bid/ask snapshots. For the only production decision that needs spread (execution-risk tier), v1.3.76 uses an explicitly calibrated amount-band spread proxy. Against the exported live `ticker.sqlite` used during development (3,835,001 snapshots, 660 symbols), this proxy reproduced the live execution tier 99.82% overall, with 100% STANDARD recall, 99.44% HIGH_RISK recall, and 99.87% EXTREME_RISK recall. This is still marked as reconstructed provenance; it is never presented as an exact historical order book.
+
+The new store writes `ticker_snapshots` with the same columns as the production ticker database plus a provenance table. The historical fetch is resumable: existing raw chunks are not downloaded again.
+
+Example workflow:
+
+```bash
+# 1. Existing historical-universe reconstruction must be complete first.
+#    Use the same cache directory as the six-month research archive.
+
+# 2. Calibrate the one unavailable historical field (spread) from the exported live ticker DB.
+python -m app.historical_live_store calibrate-spread \
+  --ticker-db /path/to/ticker.sqlite \
+  --output /path/to/spread-calibration.json
+
+# 3. Refetch the six-month live-schema source data from MEXC.
+python -m app.historical_live_store fetch \
+  --cache-dir /path/to/research-history-v2 \
+  --start 2026-03-18T00:00:00Z \
+  --end 2026-09-18T23:00:00Z \
+  --requests-per-second 2
+
+# 4. Materialize the same ticker_snapshots schema as production.
+python -m app.historical_live_store build \
+  --cache-dir /path/to/research-history-v2 \
+  --output-db /path/to/historical-live.sqlite \
+  --start 2026-03-18T00:00:00Z \
+  --end 2026-09-18T23:00:00Z \
+  --spread-model-json /path/to/spread-calibration.json
+
+# 5. Before any six-month signal replay, validate the overlap against production.
+python -m app.historical_live_validate \
+  --reference-db /path/to/ticker.sqlite \
+  --replay-db /path/to/historical-live.sqlite \
+  --output /path/to/historical-live-validation.json
+```
+
+The ticker validation gate requires at least 95% recall, 95% precision, 98% execution-risk agreement, and <=0.25% median absolute last-price difference. A failed gate means the six-month signal replay must not be treated as production-faithful.

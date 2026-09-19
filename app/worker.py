@@ -1671,7 +1671,8 @@ class ScannerWorker:
         )
         report_date = report.report_date
 
-        sent = await self.notifier.send_performance_report(report)
+        live_trader = await TraderRepository(self.db).active_run_performance()
+        sent = await self.notifier.send_performance_report(report, live_trader=live_trader)
         if not sent:
             LOGGER.warning("Daily performance report not sent; will retry on next performance cycle")
             return

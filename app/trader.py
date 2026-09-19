@@ -580,7 +580,13 @@ class PortfolioShortTrader:
             position.notional_usdt,
             equity,
         )
-        if self.settings.uses_catastrophic_stop:
+        if self.settings.uses_recovery_runner:
+            exit_text = (
+                f"Full close at +{self.settings.tp5_target_pct:.0f}% unless max adverse first reaches "
+                f"-{self.settings.recovery_runner_adverse_pct:.0f}%; then realize 50% at TP5 and trail the "
+                f"remaining 50% by {self.settings.recovery_runner_trail_gap_pct:.1f} return percentage point"
+            )
+        elif self.settings.uses_catastrophic_stop:
             exit_text = (
                 f"Full close at +{self.settings.tp5_target_pct:.0f}% favorable short return "
                 f"or catastrophic stop at -{self.settings.catastrophic_stop_pct:.0f}%"
@@ -662,7 +668,10 @@ class PortfolioShortTrader:
         quantity = notional / price
         entry_fee = notional * self.settings.paper_taker_fee_rate
         if self.settings.uses_generic_slots:
-            exit_strategy = "tp5_sl75_full" if self.settings.uses_catastrophic_stop else "tp5_full"
+            if self.settings.uses_recovery_runner:
+                exit_strategy = "tp5_adv30_runner50_trail1"
+            else:
+                exit_strategy = "tp5_sl75_full" if self.settings.uses_catastrophic_stop else "tp5_full"
             position_maturity = "profit_5"
         else:
             exit_strategy = "fixed_time_standard" if signal.risk_tier == "STANDARD" else "tp20_or_timeout"
@@ -692,6 +701,13 @@ class PortfolioShortTrader:
                 "risk_tier": signal.risk_tier,
                 "paper_taker_fee_rate": self.settings.paper_taker_fee_rate,
                 "execution_strategy": self.settings.execution_strategy,
+                "original_notional_usdt": notional,
+                "original_quantity_base": quantity,
+                "recovery_runner_enabled": self.settings.uses_recovery_runner,
+                "recovery_runner_adverse_pct": self.settings.recovery_runner_adverse_pct if self.settings.uses_recovery_runner else None,
+                "recovery_runner_fraction": self.settings.recovery_runner_fraction if self.settings.uses_recovery_runner else None,
+                "recovery_runner_trail_gap_pct": self.settings.recovery_runner_trail_gap_pct if self.settings.uses_recovery_runner else None,
+                "recovery_runner_update_step_pct": self.settings.recovery_runner_update_step_pct if self.settings.uses_recovery_runner else None,
                 "pcr_flagged": self.settings.uses_pcr_derisk and parabolic_continuation_risk(signal.features),
                 "pcr_return_24h": signal.features.get("return_24h") if self.settings.uses_pcr_derisk else None,
                 "pcr_ema_distance_atr_4h": signal.features.get("distance_above_ema20_atr_4h") if self.settings.uses_pcr_derisk else None,
@@ -751,7 +767,10 @@ class PortfolioShortTrader:
         hold_contracts = float(live_position.get("holdVol") or contracts)
         entry_fee = float(order.get("takerFee") or order.get("makerFee") or 0.0)
         if self.settings.uses_generic_slots:
-            exit_strategy = "tp5_sl75_full" if self.settings.uses_catastrophic_stop else "tp5_full"
+            if self.settings.uses_recovery_runner:
+                exit_strategy = "tp5_adv30_runner50_trail1"
+            else:
+                exit_strategy = "tp5_sl75_full" if self.settings.uses_catastrophic_stop else "tp5_full"
             position_maturity = "profit_5"
         else:
             exit_strategy = "fixed_time_standard" if signal.risk_tier == "STANDARD" else "tp20_or_timeout"
@@ -779,11 +798,19 @@ class PortfolioShortTrader:
             metadata={
                 "contracts": hold_contracts,
                 "contract_size": spec.contract_size,
+                "original_contracts": hold_contracts,
+                "original_notional_usdt": hold_contracts * spec.contract_size * entry_price,
+                "original_quantity_base": hold_contracts * spec.contract_size,
                 "position_fraction": notional / equity,
                 "leverage": self.settings.leverage,
                 "risk_tier": signal.risk_tier,
                 "mexc_liquidate_price": live_position.get("liquidatePrice"),
                 "execution_strategy": self.settings.execution_strategy,
+                "recovery_runner_enabled": self.settings.uses_recovery_runner,
+                "recovery_runner_adverse_pct": self.settings.recovery_runner_adverse_pct if self.settings.uses_recovery_runner else None,
+                "recovery_runner_fraction": self.settings.recovery_runner_fraction if self.settings.uses_recovery_runner else None,
+                "recovery_runner_trail_gap_pct": self.settings.recovery_runner_trail_gap_pct if self.settings.uses_recovery_runner else None,
+                "recovery_runner_update_step_pct": self.settings.recovery_runner_update_step_pct if self.settings.uses_recovery_runner else None,
                 "pcr_flagged": self.settings.uses_pcr_derisk and parabolic_continuation_risk(signal.features),
                 "pcr_return_24h": signal.features.get("return_24h") if self.settings.uses_pcr_derisk else None,
                 "pcr_ema_distance_atr_4h": signal.features.get("distance_above_ema20_atr_4h") if self.settings.uses_pcr_derisk else None,
@@ -874,10 +901,118 @@ class PortfolioShortTrader:
                         {"name": "Max adverse", "value": f"-{adverse:.2f}%", "inline": True},
                         {"name": "Current price", "value": f"{price:.10g}", "inline": True},
                         {"name": "Entry", "value": f"{position.entry_price:.10g}", "inline": True},
-                        {"name": "Exit target", "value": (f"+{float(position.metadata.get('tp_target_pct') or self.settings.tp5_target_pct):g}%" if position.exit_strategy == "tp5_full" else f"+{self.settings.profit_target_pct:.0f}%"), "inline": True},
+                        {"name": "Exit target", "value": (f"+{float(position.metadata.get('tp_target_pct') or self.settings.tp5_target_pct):g}%" if position.exit_strategy in {"tp5_full", "tp5_sl75_full", "tp5_adv30_runner50_trail1"} else f"+{self.settings.profit_target_pct:.0f}%"), "inline": True},
                     ],
                     color=breach_colors[threshold],
                 )
+
+        if position.exit_strategy == "tp5_adv30_runner50_trail1":
+            target_pct = float(position.metadata.get("tp_target_pct") or self.settings.tp5_target_pct)
+            partial_done = bool(position.metadata.get("recovery_runner_partial_done"))
+            adverse_threshold = float(
+                position.metadata.get("recovery_runner_adverse_pct")
+                or self.settings.recovery_runner_adverse_pct
+            )
+
+            if not partial_done:
+                if current_return < target_pct:
+                    return
+                # The validated candidate only creates a runner after the trade first
+                # carried at least 30% adverse return and subsequently recovered to TP5.
+                # All other positions retain the ordinary full TP5 close.
+                if adverse < adverse_threshold:
+                    await self._close(position, price, f"tp5_profit_target_{target_pct:g}")
+                    return
+                position = await self._partial_close_recovery_runner(
+                    position,
+                    price=price,
+                    current_return=current_return,
+                )
+                if position is None:
+                    return
+
+                gap = float(
+                    position.metadata.get("recovery_runner_trail_gap_pct")
+                    or self.settings.recovery_runner_trail_gap_pct
+                )
+                floor = max(0.0, max(position.peak_profit_pct, current_return) - gap)
+                try:
+                    order_id = await self._place_live_protection(position, floor) if position.mode == "live" else None
+                    await self.repo.mark_protection_armed(
+                        position.id,
+                        order_id=order_id,
+                        floor_pct=floor,
+                        price=price,
+                        return_pct=current_return,
+                    )
+                    await self.repo.patch_metadata(
+                        position.id,
+                        {
+                            "recovery_runner_armed_at": datetime.now(UTC).isoformat(),
+                            "recovery_runner_initial_floor_pct": floor,
+                        },
+                    )
+                    position = (await self.repo.position(position.id)) or position
+                except Exception:
+                    LOGGER.exception(
+                        "Recovery-runner protection failed; closing remainder id=%s symbol=%s",
+                        position.id,
+                        position.symbol,
+                    )
+                    await self._close(position, price, "recovery_runner_protection_setup_failed")
+                    return
+
+                await self._notify(
+                    "🎯 TP5 PARTIAL • RECOVERY RUNNER ARMED",
+                    f"**{position.symbol}** recovered from at least -{adverse_threshold:g}% adverse return. Half was realized at TP5 and the remaining runner is protected.",
+                    [
+                        {"name": "Max adverse", "value": f"-{adverse:.2f}%", "inline": True},
+                        {"name": "TP5 fill return", "value": f"{current_return:+.2f}%", "inline": True},
+                        {"name": "Runner", "value": f"{float(position.metadata.get('recovery_runner_fraction') or 0.5) * 100:.0f}%", "inline": True},
+                        {"name": "Initial floor", "value": f"+{floor:.2f}%", "inline": True},
+                        {"name": "Trail", "value": f"{gap:.2f} return percentage point behind peak", "inline": False},
+                    ],
+                    color=GREEN,
+                )
+                return
+
+            gap = float(
+                position.metadata.get("recovery_runner_trail_gap_pct")
+                or self.settings.recovery_runner_trail_gap_pct
+            )
+            update_step = float(
+                position.metadata.get("recovery_runner_update_step_pct")
+                or self.settings.recovery_runner_update_step_pct
+            )
+            floor = max(0.0, peak - gap)
+            existing_floor = position.profit_floor_pct
+
+            if position.protection_armed_at is None:
+                order_id = await self._place_live_protection(position, floor) if position.mode == "live" else None
+                await self.repo.mark_protection_armed(
+                    position.id,
+                    order_id=order_id,
+                    floor_pct=floor,
+                    price=price,
+                    return_pct=current_return,
+                )
+                position = (await self.repo.position(position.id)) or position
+                existing_floor = floor
+            elif existing_floor is None or floor >= existing_floor + update_step:
+                if position.mode == "live":
+                    await self._update_live_protection(position, floor)
+                await self.repo.set_protection(
+                    position.id,
+                    order_id=position.mexc_protection_order_id,
+                    floor_pct=floor,
+                )
+                existing_floor = floor
+
+            effective_floor = max(existing_floor if existing_floor is not None else 0.0, floor)
+            if position.mode == "paper" and current_return <= effective_floor:
+                await self._close(position, price, "recovery_runner_trailing_exit")
+                return
+            return
 
         if position.exit_strategy in {"tp5_full", "tp5_sl75_full"}:
             target_pct = float(position.metadata.get("tp_target_pct") or self.settings.tp5_target_pct)
@@ -1058,6 +1193,162 @@ class PortfolioShortTrader:
             color=ORANGE,
         )
 
+    async def _partial_close_recovery_runner(
+        self,
+        position: TraderPosition,
+        *,
+        price: float,
+        current_return: float,
+    ) -> TraderPosition | None:
+        runner_fraction = float(
+            position.metadata.get("recovery_runner_fraction")
+            or self.settings.recovery_runner_fraction
+        )
+        close_fraction = 1.0 - runner_fraction
+        if not 0.0 < runner_fraction < 1.0:
+            raise RuntimeError("recovery runner fraction must be between 0 and 1")
+
+        exit_fee = 0.0
+        fill_price = price
+        remaining_quantity: float
+        closed_quantity: float
+        metadata_patch: dict[str, Any]
+
+        if position.mode == "live":
+            spec = await self.mexc.contract_spec(position.symbol)
+            current_contracts = float(
+                position.metadata.get("contracts")
+                or position.quantity_base / spec.contract_size
+            )
+            raw_close = current_contracts * close_fraction
+            close_units = int(raw_close / spec.vol_unit + 1e-12)
+            close_contracts = close_units * spec.vol_unit
+            remaining_contracts = current_contracts - close_contracts
+
+            # If the contract is too small to split safely, preserve the core strategy:
+            # realize the complete TP5 instead of leaving an untradeable dust runner.
+            if close_contracts < spec.min_vol or remaining_contracts < spec.min_vol:
+                LOGGER.warning(
+                    "Recovery runner split unavailable; full TP5 close id=%s symbol=%s contracts=%s min_vol=%s",
+                    position.id,
+                    position.symbol,
+                    current_contracts,
+                    spec.min_vol,
+                )
+                await self._close(position, price, "tp5_full_runner_split_unavailable")
+                return None
+
+            close_order_id = await self.mexc.close_market_short(
+                symbol=position.symbol,
+                contracts=close_contracts,
+                open_type=2 if "cross" in position.capital_strategy else 1,
+                reference_price=price,
+                position_id=position.mexc_position_id,
+                external_oid=f"exh-partial-{position.id}-{int(datetime.now(UTC).timestamp())}",
+                leverage=self.settings.leverage,
+            )
+            await asyncio.sleep(0.6)
+            order = await self.mexc.order(close_order_id)
+            fill_price = float(order.get("dealAvgPrice") or price)
+            exit_fee = float(order.get("takerFee") or order.get("makerFee") or 0.0)
+
+            live_position: dict[str, Any] | None = None
+            # A partial market close changes the exchange position in place. Give MEXC
+            # the same generous confirmation window used for fresh live entries before
+            # deciding that no remainder exists. This avoids treating a briefly stale
+            # open-position response as an unintended full close.
+            for _ in range(16):
+                rows = await self.mexc.open_positions(position.symbol)
+                live_position = next(
+                    (r for r in rows if int(r.get("positionId") or 0) == int(position.mexc_position_id or 0)),
+                    None,
+                )
+                if live_position is not None:
+                    break
+                await asyncio.sleep(0.5)
+
+            if live_position is None:
+                # Unexpectedly no remainder exists. Treat the exchange result as a full TP5
+                # close rather than attempting another market order on a missing position.
+                closed = await self.repo.close_position(
+                    position,
+                    exit_price=fill_price,
+                    status="closed",
+                    reason="tp5_exchange_closed_during_runner_split",
+                    exit_fee_usdt=exit_fee,
+                    mexc_close_order_id=close_order_id,
+                )
+                await self.mexc.ticker_stream.remove(position.symbol)
+                LOGGER.warning(
+                    "Exchange had no remaining contracts after runner split id=%s symbol=%s",
+                    position.id,
+                    position.symbol,
+                )
+                await self._notify(
+                    "💰 POSITION CLOSED",
+                    f"**{position.symbol}** • tp5_exchange_closed_during_runner_split",
+                    [
+                        {"name": "Gross return", "value": f"{closed.current_return_pct:+.2f}%", "inline": True},
+                        {"name": "Exit price", "value": f"{fill_price:.10g}", "inline": True},
+                    ],
+                    color=GREEN,
+                )
+                return None
+
+            actual_remaining_contracts = float(live_position.get("holdVol") or remaining_contracts)
+            remaining_quantity = actual_remaining_contracts * spec.contract_size
+            closed_quantity = position.quantity_base - remaining_quantity
+            if closed_quantity <= 0 or remaining_quantity <= 0:
+                raise RuntimeError(
+                    f"invalid live runner split for {position.symbol}: closed={closed_quantity} remaining={remaining_quantity}"
+                )
+            metadata_patch = {
+                "contracts": actual_remaining_contracts,
+                "recovery_runner_partial_done": True,
+                "recovery_runner_partial_at": datetime.now(UTC).isoformat(),
+                "recovery_runner_partial_exit_price": fill_price,
+                "recovery_runner_partial_exit_return_pct": short_return_pct(position.entry_price, fill_price),
+                "recovery_runner_closed_fraction_actual": closed_quantity / (
+                    float(position.metadata.get("original_quantity_base") or position.quantity_base)
+                ),
+                "recovery_runner_partial_close_order_id": close_order_id,
+            }
+        else:
+            remaining_quantity = position.quantity_base * runner_fraction
+            closed_quantity = position.quantity_base - remaining_quantity
+            exit_fee = closed_quantity * fill_price * self.settings.paper_taker_fee_rate
+            metadata_patch = {
+                "recovery_runner_partial_done": True,
+                "recovery_runner_partial_at": datetime.now(UTC).isoformat(),
+                "recovery_runner_partial_exit_price": fill_price,
+                "recovery_runner_partial_exit_return_pct": short_return_pct(position.entry_price, fill_price),
+                "recovery_runner_closed_fraction_actual": closed_quantity / (
+                    float(position.metadata.get("original_quantity_base") or position.quantity_base)
+                ),
+            }
+
+        updated = await self.repo.record_partial_close(
+            position,
+            exit_price=fill_price,
+            closed_quantity_base=closed_quantity,
+            remaining_quantity_base=remaining_quantity,
+            exit_fee_usdt=exit_fee,
+            metadata_patch=metadata_patch,
+        )
+        if position.mode == "paper":
+            partial_pnl = closed_quantity * (position.entry_price - fill_price)
+            await self.repo.adjust_paper_equity(partial_pnl - exit_fee)
+
+        LOGGER.info(
+            "Recovery runner partial id=%s symbol=%s return_pct=%.4f closed_qty=%.10g remaining_qty=%.10g",
+            position.id,
+            position.symbol,
+            current_return,
+            closed_quantity,
+            remaining_quantity,
+        )
+        return updated
+
     async def _place_live_protection(self, position: TraderPosition, floor_pct: float) -> int:
         if position.mexc_position_id is None:
             raise RuntimeError("cannot place live protection without MEXC position id")
@@ -1110,7 +1401,7 @@ class PortfolioShortTrader:
             exit_notional = position.quantity_base * price
             exit_fee = exit_notional * self.settings.paper_taker_fee_rate
 
-        await self.repo.close_position(
+        closed_position = await self.repo.close_position(
             position,
             exit_price=price,
             status="closed",
@@ -1123,20 +1414,22 @@ class PortfolioShortTrader:
             await self.repo.adjust_paper_equity(pnl - exit_fee)
         await self.mexc.ticker_stream.remove(position.symbol)
         realized = short_return_pct(position.entry_price, price)
-        gross_pnl = position.quantity_base * (position.entry_price - price)
-        net_pnl = gross_pnl - position.entry_fee_usdt - exit_fee
+        leg_pnl = position.quantity_base * (position.entry_price - price)
+        gross_pnl = float(position.realized_pnl_usdt or 0.0) + leg_pnl
+        total_fees = position.entry_fee_usdt + position.exit_fee_usdt + exit_fee
+        net_pnl = gross_pnl - total_fees
         LOGGER.info(
-            "Position closed id=%s symbol=%s reason=%s return_pct=%.4f net_pnl=%.4f exit_price=%.10g",
-            position.id, position.symbol, reason, realized, net_pnl, price,
+            "Position closed id=%s symbol=%s reason=%s leg_return_pct=%.4f total_return_pct=%.4f net_pnl=%.4f exit_price=%.10g",
+            position.id, position.symbol, reason, realized, closed_position.current_return_pct, net_pnl, price,
         )
         await self._notify(
             "💰 POSITION CLOSED",
             f"**{position.symbol}** • {reason}",
             [
-                {"name": "Gross return", "value": f"{realized:+.2f}%", "inline": True},
+                {"name": "Gross return", "value": f"{closed_position.current_return_pct:+.2f}%", "inline": True},
                 {"name": "Peak", "value": f"{max(position.peak_profit_pct, realized):+.2f}%", "inline": True},
                 {"name": "Price P/L after fees", "value": f"${net_pnl:+,.4f}", "inline": True},
-                {"name": "Fees", "value": f"${position.entry_fee_usdt + exit_fee:,.4f}", "inline": True},
+                {"name": "Fees", "value": f"${total_fees:,.4f}", "inline": True},
                 {"name": "Exit price", "value": f"{price:.10g}", "inline": True},
             ],
             color=GREEN if realized > 0 else RED,
@@ -1378,12 +1671,20 @@ class PortfolioShortTrader:
                 "max_total_exposure_pct": self.settings.max_total_exposure_pct,
                 "strategy": self.settings.execution_strategy,
                 "run_id": self._active_run_id,
-                "version": "1.3.73",
+                "version": "1.3.75",
             },
         )
 
     def _strategy_label(self) -> str:
         if self.settings.uses_generic_slots:
+            if self.settings.uses_recovery_runner:
+                return (
+                    f"{self.settings.execution_strategy.upper()} • {self.settings.max_open_positions} generic slots × "
+                    f"{self.settings.slot_allocation_pct:.2f}% • Daily-Core + Persistence V2 HARD SKIP • "
+                    f"TP +{self.settings.tp5_target_pct:g}% core • adverse >= {self.settings.recovery_runner_adverse_pct:g}% "
+                    f"→ 50% TP5 + 50% runner / {self.settings.recovery_runner_trail_gap_pct:g}pp trail • "
+                    f"no SL • max {self.settings.max_total_exposure_pct:.1f}% exposure • one position/symbol"
+                )
             stop = (
                 f" • catastrophic SL -{self.settings.catastrophic_stop_pct:g}%"
                 if self.settings.uses_catastrophic_stop else ""

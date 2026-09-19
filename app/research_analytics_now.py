@@ -73,7 +73,10 @@ async def main() -> None:
         # Keep the raw signal dataset for future analysis, but stop generating and
         # uploading legacy strategy-sweep/feature/regime bundles on every Discord run.
         dataset_csv = research_signal_dataset_csv(rows, generated_at=now)
-        strategy_csv = research_current_strategy_csv(report) if hasattr(report, "strategy") else None
+        # Subscriber performance is now reported by app.report_now using the exact
+        # production recovery-runner replay.  Keep this job focused on dataset
+        # diagnostics and the raw research signal export.
+        strategy_csv = None
 
         sent = await notifier.send_research_analytics(
             report,

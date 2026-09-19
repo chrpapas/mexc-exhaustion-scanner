@@ -458,6 +458,7 @@ class PerformanceSummary:
     tp5_sl90_daily_core_persistence_skip_account_run_rate: AccountRunRateSummary | None = None
     tp5_sl125_daily_core_persistence_skip_account_run_rate: AccountRunRateSummary | None = None
     tp5_nostop_daily_core_persistence_skip_account_run_rate: AccountRunRateSummary | None = None
+    current_strategy_account_run_rate: AccountRunRateSummary | None = None
     hold_7d_account_run_rate: AccountRunRateSummary | None = None
     tp20_account_run_rate: AccountRunRateSummary | None = None
     standard_7d_account_run_rate: AccountRunRateSummary | None = None
@@ -594,6 +595,7 @@ class PerformanceSummary:
             "tp5_sl90_daily_core_persistence_skip_account_run_rate": self.tp5_sl90_daily_core_persistence_skip_account_run_rate.as_dict() if self.tp5_sl90_daily_core_persistence_skip_account_run_rate else None,
             "tp5_sl125_daily_core_persistence_skip_account_run_rate": self.tp5_sl125_daily_core_persistence_skip_account_run_rate.as_dict() if self.tp5_sl125_daily_core_persistence_skip_account_run_rate else None,
             "tp5_nostop_daily_core_persistence_skip_account_run_rate": self.tp5_nostop_daily_core_persistence_skip_account_run_rate.as_dict() if self.tp5_nostop_daily_core_persistence_skip_account_run_rate else None,
+            "current_strategy_account_run_rate": self.current_strategy_account_run_rate.as_dict() if self.current_strategy_account_run_rate else None,
             "hold_7d_account_run_rate": self.hold_7d_account_run_rate.as_dict() if self.hold_7d_account_run_rate else None,
             "tp20_account_run_rate": self.tp20_account_run_rate.as_dict() if self.tp20_account_run_rate else None,
             "standard_7d_account_run_rate": self.standard_7d_account_run_rate.as_dict() if self.standard_7d_account_run_rate else None,
@@ -1385,6 +1387,19 @@ def build_performance_summary(
                     exit_at, exit_return, _priority = min(candidates, key=lambda item: (item[0], item[2]))
                     return exit_at, exit_return
                 return None, None
+            if strategy == "recovery_runner":
+                target = earliest_event(row, "target_5_at")
+                if target is None or target > now_utc:
+                    return None, None
+                if bool(row.get("recovery_runner_triggered")):
+                    runner_exit = row.get("recovery_runner_exit_at")
+                    runner_return = row.get("recovery_runner_exit_return")
+                    if runner_exit is not None and runner_exit <= now_utc and runner_return is not None:
+                        return runner_exit, float(runner_return)
+                    # Triggered runners keep the same slot open after the 50% TP5
+                    # realization, so no full-position exit exists yet.
+                    return None, None
+                return target, 0.05
             if strategy == "hold_7d":
                 cutoff = confirmed + timedelta(hours=168)
                 if cutoff <= now_utc:
@@ -1472,8 +1487,25 @@ def build_performance_summary(
                 "position_fraction": candidate_fraction,
                 "exit_at": exit_at,
                 "exit_return": exit_return,
-                "mark_return": row.get("current_return_pct"),
-                "path_points": path_points,
+                "mark_return": (
+                    (
+                        row.get("recovery_runner_mark_return")
+                        if row.get("recovery_runner_mark_return") is not None
+                        else (0.025 + 0.5 * float(row.get("current_return_pct")))
+                        if row.get("current_return_pct") is not None and row.get("target_5_at") is not None
+                        else None
+                    )
+                    if strategy == "recovery_runner" and bool(row.get("recovery_runner_triggered"))
+                    else row.get("current_return_pct")
+                ),
+                "path_points": (
+                    [
+                        (ts, (0.025 + 0.5 * ret) if bool(row.get("recovery_runner_triggered")) and row.get("target_5_at") is not None and ts >= row.get("target_5_at") else ret)
+                        for ts, ret in path_points
+                    ]
+                    if strategy == "recovery_runner"
+                    else path_points
+                ),
             }
             positions.append(position)
             all_positions.append(position)
@@ -1610,7 +1642,17 @@ def build_performance_summary(
                 else:
                     all_signal_losses += 1
             else:
-                mark = eligible_row.get("current_return_pct")
+                mark = (
+                    (
+                        eligible_row.get("recovery_runner_mark_return")
+                        if eligible_row.get("recovery_runner_mark_return") is not None
+                        else (0.025 + 0.5 * float(eligible_row.get("current_return_pct")))
+                        if eligible_row.get("current_return_pct") is not None and eligible_row.get("target_5_at") is not None
+                        else None
+                    )
+                    if strategy == "recovery_runner" and bool(eligible_row.get("recovery_runner_triggered"))
+                    else eligible_row.get("current_return_pct")
+                )
                 all_signal_open += 1
                 if mark is not None:
                     all_signal_marks.append(float(mark))
@@ -1733,7 +1775,8 @@ def build_performance_summary(
     trader_strategy_hold_7d = trader_strategy_summary("hold_7d")
 
     tp5_exposure = ExposureRecommendation(0.05, 6, 0.30, "legacy/research frozen TP5 configuration")
-    current_live_exposure = ExposureRecommendation(1.0 / 12.0, 6, 0.50, "promoted 6×8.33% / 50% configuration")
+    current_live_exposure = ExposureRecommendation(1.0 / 12.0, 6, 0.50, "legacy promoted 6×8.33% / 50% configuration")
+    recovery_runner_exposure = ExposureRecommendation(0.10, 10, 1.00, "production recovery runner 10×10% / 100%")
     tp20_exposure = ExposureRecommendation(0.02, 5, 0.10, "risk-based suggestion from observed HIGH_RISK adverse paths")
     standard_7d_exposure = ExposureRecommendation(0.03, 5, 0.15, "risk-based suggestion for fixed 7-day STANDARD holds")
     tp5_account_run_rate = account_run_rate(
@@ -1985,6 +2028,14 @@ def build_performance_summary(
         daily_bull_persistence_v2_skip=True,
         catastrophic_stop_pct=None,
     )
+    current_strategy_account_run_rate = account_run_rate(
+        strategy="recovery_runner",
+        risk_tiers={"standard", "high_risk"},
+        exposure=recovery_runner_exposure,
+        daily_core_skip=True,
+        daily_bull_persistence_v2_skip=True,
+        catastrophic_stop_pct=None,
+    )
     hold_7d_account_run_rate = account_run_rate(
         strategy="hold_7d", risk_tiers={"standard", "high_risk"}, exposure=tp5_exposure
     )
@@ -2074,6 +2125,7 @@ def build_performance_summary(
         tp5_sl90_daily_core_persistence_skip_account_run_rate=tp5_sl90_daily_core_persistence_skip_account_run_rate,
         tp5_sl125_daily_core_persistence_skip_account_run_rate=tp5_sl125_daily_core_persistence_skip_account_run_rate,
         tp5_nostop_daily_core_persistence_skip_account_run_rate=tp5_nostop_daily_core_persistence_skip_account_run_rate,
+        current_strategy_account_run_rate=current_strategy_account_run_rate,
         hold_7d_account_run_rate=hold_7d_account_run_rate,
         tp20_account_run_rate=tp20_account_run_rate,
         standard_7d_account_run_rate=standard_7d_account_run_rate,

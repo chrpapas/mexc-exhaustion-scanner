@@ -147,9 +147,9 @@ services:
       - key: TRADING_MODE
         value: paper
       - key: TRADER_EXECUTION_STRATEGY
-        value: tp5_sl75_daily_core_persistence_skip_v2
+        value: tp5_nostop_adv30_runner50_trail1_daily_core_persistence_skip_v2
       - key: TRADER_PAPER_RUN_ID
-        value: tp5_sl75_persist_v2_armed48_50pct_v1
+        value: tp5_adv30_runner50_trail1_candidate_v1
       - key: TRADER_MARGIN_MODE
         value: cross
       - key: TRADER_LEVERAGE
@@ -157,19 +157,19 @@ services:
       - key: TRADER_ALLOWED_RISK_TIERS
         value: STANDARD,HIGH_RISK
       - key: TRADER_MAX_OPEN_POSITIONS
-        value: "6"
+        value: "10"
       - key: TRADER_SLOT_ALLOCATION_PCT
-        value: "8.333333333333"
+        value: "10"
       - key: TRADER_MAX_TOTAL_EXPOSURE_PCT
-        value: "50"
+        value: "100"
       - key: TRADER_TP5_TARGET_PCT
         value: "5"
       - key: TRADER_CATASTROPHIC_STOP_PCT
         value: "75"
       - key: TRADER_MAX_STANDARD_POSITIONS
-        value: "5"
+        value: "10"
       - key: TRADER_MAX_HIGH_RISK_POSITIONS
-        value: "1"
+        value: "10"
       - key: TRADER_STANDARD_HOLD_DAYS
         value: "7"
       - key: TRADER_HIGH_RISK_TIMEOUT_DAYS

@@ -8,6 +8,7 @@ from app.config import Settings
 from app.db import Database
 from app.mexc import MexcClient
 from app.notifier import DiscordNotifier
+from app.trader_db import TraderRepository
 from app.performance import build_performance_summary, short_return
 
 LOGGER = logging.getLogger(__name__)
@@ -58,6 +59,9 @@ async def main() -> None:
             )
 
         now = datetime.now(UTC)
+        trader_repo = TraderRepository(db)
+        live_trader = await trader_repo.active_run_performance()
+
         report = build_performance_summary(
             rows,
             now_utc=now,
@@ -68,6 +72,7 @@ async def main() -> None:
             label="ON-DEMAND SHADOW PERFORMANCE",
             as_of=now,
             timezone_name=settings.performance_report_timezone,
+            live_trader=live_trader,
         )
         if not sent:
             raise RuntimeError(

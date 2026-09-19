@@ -128,11 +128,9 @@ class TraderRepository:
         value = await self.db.pool.fetchval(
             """
             SELECT tr.starting_equity_usdt
-                 + COALESCE(SUM(CASE WHEN tp.status IN ('closed','liquidated')
-                                     THEN tp.realized_pnl_usdt ELSE 0 END),0)
+                 + COALESCE(SUM(COALESCE(tp.realized_pnl_usdt,0)),0)
                  - COALESCE(SUM(tp.entry_fee_usdt),0)
-                 - COALESCE(SUM(CASE WHEN tp.status IN ('closed','liquidated')
-                                     THEN tp.exit_fee_usdt ELSE 0 END),0)
+                 - COALESCE(SUM(tp.exit_fee_usdt),0)
             FROM trader_runs tr
             LEFT JOIN trader_positions tp ON tp.run_id=tr.run_id
             WHERE tr.run_id=$1 AND tr.mode='paper'
@@ -308,6 +306,98 @@ class TraderRepository:
         row = await self.db.pool.fetchrow("SELECT * FROM trader_positions WHERE id=$1", position_id)
         return self._position(row) if row else None
 
+    async def active_run_performance(self) -> dict[str, Any] | None:
+        """Return subscriber-facing performance for the currently active trader run."""
+        runtime = await self.runtime()
+        run_id = str(runtime.get("active_run_id") or "")
+        if not run_id:
+            return None
+        run = await self.db.pool.fetchrow(
+            "SELECT run_id, mode, strategy_name, starting_equity_usdt, started_at, status "
+            "FROM trader_runs WHERE run_id=$1",
+            run_id,
+        )
+        if not run:
+            return None
+        positions = await self.db.pool.fetch(
+            """
+            SELECT status, opened_at, closed_at, notional_usdt, current_return_pct,
+                   realized_pnl_usdt, realized_return_pct, entry_fee_usdt, exit_fee_usdt,
+                   max_adverse_pct, metadata
+            FROM trader_positions
+            WHERE run_id=$1
+            ORDER BY opened_at,id
+            """,
+            run_id,
+        )
+        starting = float(run["starting_equity_usdt"] or 0.0)
+        realized_pnl = sum(float(r["realized_pnl_usdt"] or 0.0) for r in positions)
+        paid_fees = sum(float(r["entry_fee_usdt"] or 0.0) + float(r["exit_fee_usdt"] or 0.0) for r in positions)
+        unrealized = sum(
+            float(r["notional_usdt"] or 0.0) * float(r["current_return_pct"] or 0.0) / 100.0
+            for r in positions if r["status"] == "open"
+        )
+        mtm_equity = starting + realized_pnl - paid_fees + unrealized
+        observed_return = ((mtm_equity / starting) - 1.0) if starting > 0 else None
+        started_at = run["started_at"]
+        now = datetime.now(UTC)
+        span_days = max(0.0, (now - started_at).total_seconds() / 86400.0) if started_at else 0.0
+        monthly = observed_return * 30.0 / span_days if observed_return is not None and span_days > 0 else None
+        closed = [r for r in positions if r["status"] in {"closed", "liquidated"}]
+        wins = sum(1 for r in closed if float(r["realized_return_pct"] or 0.0) > 0)
+        losses = len(closed) - wins
+        adverse = [float(r["max_adverse_pct"] or 0.0) for r in positions]
+        adverse_sorted = sorted(adverse)
+        median_adverse = None
+        if adverse_sorted:
+            n = len(adverse_sorted)
+            median_adverse = adverse_sorted[n//2] if n % 2 else (adverse_sorted[n//2-1] + adverse_sorted[n//2]) / 2.0
+        runner_count = 0
+        for r in positions:
+            metadata = json_object(r["metadata"])
+            if metadata.get("recovery_runner_partial_done"):
+                runner_count += 1
+        decisions = await self.db.pool.fetchrow(
+            """
+            SELECT
+              COUNT(*) FILTER (WHERE d.decision='accepted') AS accepted,
+              COUNT(*) FILTER (WHERE d.decision='ignored_capacity') AS ignored_capacity,
+              COUNT(*) FILTER (WHERE d.decision='ignored_duplicate_symbol') AS ignored_duplicate_symbol,
+              COUNT(*) FILTER (WHERE d.decision='ignored_exposure') AS ignored_exposure
+            FROM trader_signal_decisions d
+            JOIN run_signals s ON s.id=d.signal_id
+            WHERE d.decided_at >= $1
+            """,
+            started_at,
+        ) if started_at else None
+        return {
+            "run_id": run_id,
+            "mode": str(run["mode"]),
+            "strategy_name": str(run["strategy_name"]),
+            "started_at": started_at,
+            "span_days": span_days,
+            "starting_equity_usdt": starting,
+            "mtm_equity_usdt": mtm_equity,
+            "observed_return": observed_return,
+            "thirty_day_equivalent_return": monthly,
+            "realized_pnl_usdt": realized_pnl,
+            "unrealized_pnl_usdt": unrealized,
+            "fees_usdt": paid_fees,
+            "positions": len(positions),
+            "closed": len(closed),
+            "wins": wins,
+            "losses": losses,
+            "win_rate": (wins / len(closed)) if closed else None,
+            "open_positions": sum(1 for r in positions if r["status"] == "open"),
+            "median_adverse_pct": median_adverse,
+            "worst_adverse_pct": max(adverse) if adverse else None,
+            "runner_partial_count": runner_count,
+            "accepted": int(decisions["accepted"] or 0) if decisions else 0,
+            "ignored_capacity": int(decisions["ignored_capacity"] or 0) if decisions else 0,
+            "ignored_duplicate_symbol": int(decisions["ignored_duplicate_symbol"] or 0) if decisions else 0,
+            "ignored_exposure": int(decisions["ignored_exposure"] or 0) if decisions else 0,
+        }
+
     async def portfolio_stats(self, run_id: str | None = None) -> dict[str, Any]:
         row = await self.db.pool.fetchrow(
             """
@@ -315,7 +405,7 @@ class TraderRepository:
               COUNT(*) FILTER (WHERE status IN ('closed','liquidated')) AS closed_count,
               COUNT(*) FILTER (WHERE status='liquidated') AS liquidation_count,
               COUNT(*) FILTER (WHERE status='closed' AND COALESCE(realized_return_pct,0) > 0) AS win_count,
-              COALESCE(SUM(realized_pnl_usdt) FILTER (WHERE status IN ('closed','liquidated')),0) AS realized_pnl,
+              COALESCE(SUM(COALESCE(realized_pnl_usdt,0)),0) AS realized_pnl,
               COALESCE(SUM(entry_fee_usdt + exit_fee_usdt),0) AS fees,
               COUNT(*) FILTER (WHERE status='open') AS open_count
             FROM trader_positions
@@ -477,6 +567,61 @@ class TraderRepository:
             json.dumps(patch, separators=(",", ":"), default=str),
         )
 
+    async def record_partial_close(
+        self,
+        position: TraderPosition,
+        *,
+        exit_price: float,
+        closed_quantity_base: float,
+        remaining_quantity_base: float,
+        exit_fee_usdt: float,
+        metadata_patch: dict[str, Any] | None = None,
+    ) -> TraderPosition:
+        if closed_quantity_base <= 0 or remaining_quantity_base <= 0:
+            raise ValueError("partial close requires positive closed and remaining quantities")
+        partial_pnl = closed_quantity_base * (position.entry_price - exit_price)
+        remaining_notional = remaining_quantity_base * position.entry_price
+        return_pct = (position.entry_price - exit_price) / position.entry_price * 100.0
+        row = await self.db.pool.fetchrow(
+            """
+            UPDATE trader_positions
+            SET quantity_base=$2,
+                notional_usdt=$3,
+                current_price=$4,
+                current_return_pct=$5,
+                realized_pnl_usdt=COALESCE(realized_pnl_usdt,0)+$6,
+                exit_fee_usdt=exit_fee_usdt+$7,
+                metadata=metadata || $8::jsonb,
+                last_observed_at=now(), updated_at=now()
+            WHERE id=$1 AND status='open'
+            RETURNING *
+            """,
+            position.id,
+            remaining_quantity_base,
+            remaining_notional,
+            exit_price,
+            return_pct,
+            partial_pnl,
+            exit_fee_usdt,
+            json.dumps(metadata_patch or {}, separators=(",", ":"), default=str),
+        )
+        if not row:
+            raise RuntimeError(f"position {position.id} is no longer open")
+        await self.add_event(
+            position.id,
+            "partial_close",
+            exit_price,
+            return_pct,
+            {
+                "closed_quantity_base": closed_quantity_base,
+                "remaining_quantity_base": remaining_quantity_base,
+                "realized_pnl_usdt": partial_pnl,
+                "exit_fee_usdt": exit_fee_usdt,
+                **(metadata_patch or {}),
+            },
+        )
+        return self._position(row)
+
     async def close_position(
         self,
         position: TraderPosition,
@@ -487,8 +632,13 @@ class TraderRepository:
         exit_fee_usdt: float = 0.0,
         mexc_close_order_id: int | None = None,
     ) -> TraderPosition:
-        realized_return_pct = (position.entry_price - exit_price) / position.entry_price * 100.0
-        realized_pnl = position.quantity_base * (position.entry_price - exit_price)
+        leg_return_pct = (position.entry_price - exit_price) / position.entry_price * 100.0
+        leg_pnl = position.quantity_base * (position.entry_price - exit_price)
+        prior_realized = float(position.realized_pnl_usdt or 0.0)
+        realized_pnl = prior_realized + leg_pnl
+        original_notional = float(position.metadata.get("original_notional_usdt") or position.notional_usdt)
+        realized_return_pct = realized_pnl / original_notional * 100.0 if original_notional > 0 else leg_return_pct
+        cumulative_exit_fee = float(position.exit_fee_usdt or 0.0) + exit_fee_usdt
         row = await self.db.pool.fetchrow(
             """
             UPDATE trader_positions
@@ -506,13 +656,19 @@ class TraderRepository:
             realized_pnl,
             reason,
             mexc_close_order_id,
-            exit_fee_usdt,
+            cumulative_exit_fee,
         )
         if not row:
             raise RuntimeError(f"position {position.id} is no longer open")
         await self.add_event(
             position.id, status, exit_price, realized_return_pct,
-            {"reason": reason, "realized_pnl_usdt": realized_pnl, "exit_fee_usdt": exit_fee_usdt},
+            {
+                "reason": reason,
+                "leg_return_pct": leg_return_pct,
+                "leg_realized_pnl_usdt": leg_pnl,
+                "realized_pnl_usdt": realized_pnl,
+                "exit_fee_usdt": cumulative_exit_fee,
+            },
         )
         return self._position(row)
 
@@ -570,4 +726,5 @@ class TraderRepository:
             mexc_position_id=int(row["mexc_position_id"]) if row["mexc_position_id"] is not None else None,
             mexc_open_order_id=int(row["mexc_open_order_id"]) if row["mexc_open_order_id"] is not None else None,
             metadata=metadata,
+            realized_pnl_usdt=float(row.get("realized_pnl_usdt") or 0.0),
         )

@@ -4,6 +4,7 @@ import asyncio
 import os
 
 from app.db import Database
+from app.trader_config import RECOVERY_RUNNER_STRATEGY
 from app.trader_db import TraderRepository
 
 
@@ -14,7 +15,7 @@ async def main() -> None:
     if url.startswith("postgres://"):
         url = "postgresql://" + url.removeprefix("postgres://")
     mode = os.getenv("TRADING_MODE", "paper").strip().lower()
-    strategy = os.getenv("TRADER_EXECUTION_STRATEGY", "tp5_sl75_daily_core_persistence_skip_v2").strip().lower()
+    strategy = os.getenv("TRADER_EXECUTION_STRATEGY", RECOVERY_RUNNER_STRATEGY).strip().lower()
 
     db = Database(url)
     await db.connect()

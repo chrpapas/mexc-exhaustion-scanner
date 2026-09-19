@@ -195,6 +195,10 @@ def _aggregate_performance_path_metrics(
         "path_return_240h": None,
         "path_times": None,
         "path_returns": None,
+        "recovery_runner_triggered": False,
+        "recovery_runner_exit_at": None,
+        "recovery_runner_exit_return": None,
+        "recovery_runner_mark_return": None,
     }
     if confirmed_at is None:
         return empty
@@ -253,6 +257,46 @@ def _aggregate_performance_path_metrics(
             if at <= confirmed_at + timedelta(hours=hours):
                 returns[hours] = row.get("close_return_pct")
 
+    # Production recovery-runner replay: if the signal suffered at least -30%
+    # adverse excursion before first reaching TP5, half is realized at +5% and
+    # the remaining half trails one return-percentage-point behind the best
+    # post-TP5 favorable return.  We intentionally use intrabar favorable/adverse
+    # path fields here rather than close-only returns so the replay mirrors the
+    # production protection rule as closely as the research store permits.
+    runner_triggered = bool(
+        target_5_at is not None
+        and mae_before_5 is not None
+        and float(mae_before_5) <= -0.30
+    )
+    runner_exit_at = None
+    runner_exit_return = None
+    runner_mark_return = None
+    if runner_triggered and target_5_at is not None:
+        high_water = 0.05
+        for row in valid:
+            if row["candle_close_at"] < target_5_at:
+                continue
+            favorable = row.get("favorable_return_pct")
+            close_ret = row.get("close_return_pct")
+            candidates = [high_water]
+            if favorable is not None:
+                candidates.append(float(favorable))
+            if close_ret is not None:
+                candidates.append(float(close_ret))
+            high_water = max(candidates)
+            floor = max(0.04, high_water - 0.01)
+            # Use the 15m close to test the trailing floor. Intrabar adverse
+            # extremes do not reveal whether the low occurred before or after
+            # the TP/high-water event inside the same candle.
+            if close_ret is not None and float(close_ret) <= floor:
+                runner_exit_at = row["candle_close_at"]
+                runner_exit_return = 0.5 * 0.05 + 0.5 * floor
+                break
+        if runner_exit_at is None:
+            latest = valid[-1].get("close_return_pct")
+            if latest is not None:
+                runner_mark_return = 0.5 * 0.05 + 0.5 * float(latest)
+
     return {
         "target_5_at": target_5_at,
         "path_mae_before_target_5": mae_before_5,
@@ -277,4 +321,8 @@ def _aggregate_performance_path_metrics(
         "path_return_240h": returns[240],
         "path_times": [row["candle_close_at"] for row in valid],
         "path_returns": [row.get("close_return_pct") for row in valid],
+        "recovery_runner_triggered": runner_triggered,
+        "recovery_runner_exit_at": runner_exit_at,
+        "recovery_runner_exit_return": runner_exit_return,
+        "recovery_runner_mark_return": runner_mark_return,
     }

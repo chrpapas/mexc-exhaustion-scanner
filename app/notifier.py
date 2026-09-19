@@ -5,6 +5,7 @@ import logging
 import statistics
 from datetime import datetime
 from zoneinfo import ZoneInfo
+from typing import Any
 
 import httpx
 
@@ -188,14 +189,9 @@ class DiscordNotifier:
         label: str = "DAILY SHADOW PERFORMANCE",
         as_of: datetime | None = None,
         timezone_name: str | None = None,
+        live_trader: dict[str, Any] | None = None,
     ) -> bool:
-        """Send a lean subscriber board for the one current live strategy.
-
-        v1.3.56 retains the lean current-strategy-only subscriber surface from the
-        subscriber surface.  Research/rollback history remains in storage, but
-        the public board answers one operational question only: how is the
-        currently promoted Daily-Core + Persistence V2 TP5/SL75 account doing?
-        """
+        """Send the subscriber-facing three-layer current-strategy performance board."""
         if not self._performance_webhook_url:
             return False
 
@@ -208,229 +204,99 @@ class DiscordNotifier:
             else report.report_date.strftime("%d %b %Y")
         )
 
-        account = (
-            report.tp5_sl100_lae10_24_q1_daily_core_persistence_skip_account_run_rate
-            or report.tp5_sl75_daily_core_persistence_skip_account_run_rate
-        )
+        account = report.current_strategy_account_run_rate
 
-        def account_economics() -> str:
+        def live_trader_economics() -> str:
+            if not live_trader:
+                return "Live trader run metrics unavailable."
+            started = live_trader.get("started_at")
+            started_text = started.astimezone(ZoneInfo(timezone_name)).strftime("%d %b %Y • %H:%M %Z") if started is not None and timezone_name else str(started or "n/a")
+            return (
+                f"Since restart **{started_text}** • mode **{str(live_trader.get('mode') or '').upper()}**\n"
+                f"Account MTM **{self._signed_percent(live_trader.get('observed_return'))}** • "
+                f"30D equivalent **{self._signed_percent(live_trader.get('thirty_day_equivalent_return'))}*** • "
+                f"equity **${float(live_trader.get('mtm_equity_usdt') or 0):,.2f}**\n"
+                f"Closed **{live_trader.get('wins',0)}W / {live_trader.get('losses',0)}L** • resolved win rate **{self._percent(live_trader.get('win_rate'))}** • "
+                f"open **{live_trader.get('open_positions',0)}** • runner activations **{live_trader.get('runner_partial_count',0)}**\n"
+                f"realized P&L **${float(live_trader.get('realized_pnl_usdt') or 0):,.2f}** • unrealized **${float(live_trader.get('unrealized_pnl_usdt') or 0):,.2f}** • fees **${float(live_trader.get('fees_usdt') or 0):,.2f}**\n"
+                f"median/worst adverse **-{float(live_trader.get('median_adverse_pct') or 0):.2f}% / -{float(live_trader.get('worst_adverse_pct') or 0):.2f}%** • "
+                f"capacity/duplicate/exposure skips **{live_trader.get('ignored_capacity',0)}/{live_trader.get('ignored_duplicate_symbol',0)}/{live_trader.get('ignored_exposure',0)}**"
+            )
+
+        def strategy_since_august() -> str:
             if account is None:
-                return "Current-strategy replay unavailable"
-            dd = (
-                f"-{self._percent(account.max_mtm_drawdown)}"
-                if account.max_mtm_drawdown is not None else "n/a"
-            )
+                return "Current-strategy replay unavailable."
+            dd = f"-{self._percent(account.max_mtm_drawdown)}" if account.max_mtm_drawdown is not None else "n/a"
             capture = (account.entered / account.eligible_signals) if account.eligible_signals else None
-            monthly_dollars = (
-                f"${account.thirty_day_pnl_per_10k:,.0f} per $10k"
-                if account.thirty_day_pnl_per_10k is not None else "n/a"
-            )
             return (
-                f"Historical account MTM **{self._signed_percent(account.observed_account_return)}** over **{account.span_days:.1f}d** • "
-                f"30D run-rate **{self._signed_percent(account.thirty_day_equivalent_return)}*** ≈ **{monthly_dollars}** • "
-                f"max DD **{dd}**\n"
-                f"closed **{account.closed_wins}W / {account.closed_losses}L** • resolved win rate **{self._percent(account.closed_win_rate)}** • "
-                f"open **{account.open_positions}** • entered **{account.entered}/{account.eligible_signals} ({self._percent(capture)})** • "
-                f"capacity/symbol misses **{account.missed_capacity}/{account.missed_same_symbol}**\n"
-                f"avg/peak exposure **{self._percent(account.avg_exposure_pct)} / {self._percent(account.peak_exposure_pct)}**"
-            )
-
-        def tail_challenger_economics() -> str:
-            variants = [
-                ("SL75 legacy baseline", report.tp5_sl75_daily_core_persistence_skip_account_run_rate),
-                ("SL80", report.tp5_sl80_daily_core_persistence_skip_account_run_rate),
-                ("SL85", report.tp5_sl85_daily_core_persistence_skip_account_run_rate),
-                ("SL90", report.tp5_sl90_daily_core_persistence_skip_account_run_rate),
-                ("SL100", report.tp5_sl100_daily_core_persistence_skip_account_run_rate),
-                ("SL125", report.tp5_sl125_daily_core_persistence_skip_account_run_rate),
-                ("No catastrophic stop", report.tp5_nostop_daily_core_persistence_skip_account_run_rate),
-                ("SL100 + LAE-Q1", report.tp5_sl100_lae10_24_q1_daily_core_persistence_skip_account_run_rate),
-            ]
-            if any(result is None for _label, result in variants):
-                return "Tail-challenger replay unavailable"
-
-            def compact(label: str, result) -> str:
-                dd = f"-{self._percent(result.max_mtm_drawdown)}" if result.max_mtm_drawdown is not None else "n/a"
-                return (
-                    f"**{label}:** {self._signed_percent(result.observed_account_return)} • "
-                    f"30D {self._signed_percent(result.thirty_day_equivalent_return)} • "
-                    f"DD {dd} • {result.closed_wins}W/{result.closed_losses}L • "
-                    f"{result.open_positions} open • {result.entered} entered"
-                )
-
-            return "\n".join(compact(label, result) for label, result in variants) + (
-                "\nResearch comparison — **live/default is now TP5/SL100 + LAE10/24-Q1**."
-            )
-
-        def tp20_matrix_economics() -> str:
-            lines = []
-            for slots in (6, 8, 10, 12):
-                row = []
-                exposures = (50, 60, 70, 75, 80, 90, 100) if slots == 6 else (50, 75, 100)
-                for exposure in exposures:
-                    result = getattr(
-                        report,
-                        f"tp20_indefinite_{slots}slots_{exposure}pct_account_run_rate",
-                        None,
-                    )
-                    if result is None:
-                        row.append(f"{exposure}% n/a")
-                        continue
-                    dd = (
-                        f"-{self._percent(result.max_mtm_drawdown)}"
-                        if result.max_mtm_drawdown is not None
-                        else "n/a"
-                    )
-                    row.append(
-                        f"{exposure}%: {self._signed_percent(result.observed_account_return)} "
-                        f"(30D {self._signed_percent(result.thirty_day_equivalent_return)}, "
-                        f"DD {dd}, {result.entered} entered)"
-                    )
-                lines.append(f"**{slots} slots:** " + " • ".join(row))
-            return (
-                "\n".join(lines)
-                + "\nTP20 indefinite research only; open positions are marked to endpoint MTM."
-            )
-
-        def tp5_exposure_curve_economics() -> str:
-            lines = []
-            for exposure in (50, 60, 70, 75, 80, 90, 100):
-                if exposure == 50:
-                    result = report.tp5_sl100_lae10_24_q1_daily_core_persistence_skip_account_run_rate
-                else:
-                    result = getattr(
-                        report,
-                        f"tp5_sl100_lae10_24_q1_6slots_{exposure}pct_account_run_rate",
-                        None,
-                    )
-                if result is None:
-                    lines.append(f"**{exposure}%:** n/a")
-                    continue
-                dd = (
-                    f"-{self._percent(result.max_mtm_drawdown)}"
-                    if result.max_mtm_drawdown is not None
-                    else "n/a"
-                )
-                lines.append(
-                    f"**{exposure}%:** {self._signed_percent(result.observed_account_return)} "
-                    f"• 30D {self._signed_percent(result.thirty_day_equivalent_return)} "
-                    f"• DD {dd} • {result.closed_wins}W/{result.closed_losses}L "
-                    f"• {result.entered} entered"
-                )
-            return (
-                "\n".join(lines)
-                + "\nStrict promoted-strategy replay • 6 slots • TP5/SL100 + LAE10/24-Q1. "
-                  "Research only above the deployed 50% exposure."
+                f"Exact **10-slot / 10% MTM / 100% cap** replay from **{account.start_at.strftime('%d %b %Y') if account.start_at else 'start'}**\n"
+                f"Account MTM **{self._signed_percent(account.observed_account_return)}** over **{account.span_days:.1f}d** • "
+                f"30D equivalent **{self._signed_percent(account.thirty_day_equivalent_return)}*** • max DD **{dd}**\n"
+                f"Closed **{account.closed_wins}W / {account.closed_losses}L** • resolved win rate **{self._percent(account.closed_win_rate)}** • "
+                f"open **{account.open_positions}**\n"
+                f"entered **{account.entered}/{account.eligible_signals} ({self._percent(capture)})** • capacity/symbol misses **{account.missed_capacity}/{account.missed_same_symbol}** • "
+                f"avg/peak exposure **{self._percent(account.avg_exposure_pct)} / {self._percent(account.peak_exposure_pct)}**\n"
+                f"adverse before TP5: -10% **{account.breach_10}**, -20% **{account.breach_20}**, -30% **{account.breach_30}** (recovered **{account.recovered_after_breach_30}**), "
+                f"-50% **{account.breach_50}**, -75% **{account.breach_75}**"
             )
 
         def all_signal_economics() -> str:
             if account is None:
-                return "Signal-quality view unavailable"
+                return "All-signal view unavailable."
             return (
-                f"If every admitted signal were tracked independently (ignoring slot capacity): **{account.all_signal_wins} TP5 / {account.all_signal_losses} SL75 / {account.all_signal_open} open** • "
+                f"Every signal passing the **current Daily-Core + Persistence V2** admission filters, with no slot/capacity constraint: **{account.all_signal_sample} signals**\n"
+                f"Completed positive exits **{account.all_signal_wins}** • completed losses **{account.all_signal_losses}** • still open **{account.all_signal_open}** • "
                 f"resolved win rate **{self._percent(account.all_signal_win_rate)}**\n"
-                f"Gross marked signal sum **{self._signed_percent(account.all_signal_sum_return)}** • "
-                f"average marked signal **{self._signed_percent(account.all_signal_avg_return)}**. "
-                "This is a signal-quality sum, **not** an achievable account return."
+                f"Arithmetic sum of current-strategy signal returns/marks **{self._signed_percent(account.all_signal_sum_return)}** • "
+                f"average per signal **{self._signed_percent(account.all_signal_avg_return)}**. "
+                "This deliberately ignores portfolio capacity and compounding; it is **not account return**."
             )
-
-        def full_universe_economics() -> str:
-            if account is None:
-                return "Full-universe view unavailable"
-            resolved = account.full_universe_wins + account.full_universe_losses
-            return (
-                f"Before active filters/capacity: **{account.full_universe_sample} signals** • "
-                f"**{account.full_universe_wins} TP5 / {account.full_universe_losses} SL75 / {account.full_universe_open} open** • "
-                f"resolved win rate **{self._percent(account.full_universe_win_rate)}**\n"
-                f"Current admission filters removed **{account.filtered_sl75}/{account.full_universe_losses} historical SL75**; "
-                f"**{account.all_signal_losses} SL75** remains in the unlimited admitted universe. "
-                "Research context only — **not account performance**."
-            )
-
-        def adverse_profile() -> str:
-            if account is None:
-                return "Adverse-path view unavailable"
-            return (
-                f"Before TP5: **-10% {account.breach_10}** (recovered {account.recovered_after_breach_10}) • "
-                f"**-20% {account.breach_20}** (recovered {account.recovered_after_breach_20}) • "
-                f"**-30% {account.breach_30}** (recovered {account.recovered_after_breach_30})\n"
-                f"**-50% {account.breach_50}** (recovered {account.recovered_after_breach_50}) • "
-                f"**-75% {account.breach_75}** • median/worst MAE **{self._signed_percent(account.median_mae)} / {self._signed_percent(account.worst_mae)}**"
-            )
-
 
         board = {
-            "title": "📊 Exhaustion Scanner • Performance & Playbook • Current Strategy",
+            "title": "📊 Exhaustion Scanner • Performance & Playbook • Subscriber",
             "description": (
                 f"**{self._pretty_label(label)}** • Updated **{as_of_text}**\n"
-                "Only the currently promoted live/default strategy is shown. Legacy PCR, HTF, Daily-Core-only, TP20 and 7D competitors are intentionally omitted."
+                "One production strategy, shown three different ways so account performance and raw signal quality are never mixed."
             ),
             "color": 0x5865F2,
             "fields": [
                 {
-                    "name": "▶️ Live/default • Daily-Core + Persistence V2",
-                    "value": (
-                        "**TP5 + SL100 + LAE10/24-Q1** • STANDARD + HIGH_RISK confirmed shorts • **1× cross** • "
-                        "**8.33% of current equity per admitted entry** • max **6** open positions / **50%** aggregate exposure • "
-                        "one position per symbol • TP **+5%** • catastrophic SL **-100%** • Q1 stale-tail exit **-10% at ≥24h for entry quality ≤1** • no timeout.\n"
-                        "Admission is fail-closed: skip Daily-Confirmed Core V1 flagged/non-computable signals, then skip "
-                        "Trend Persistence V2 flagged/non-computable signals on its reachable branch. "
-                        "V2 keeps the frozen early V1 branch and adds Mature-Run Weak-Breakdown V1: Daily Bull + Core-false + run→breakdown ≥24h + previous 1h momentum >0 + no lower-high/lower-close + no 15m structural break."
-                    ),
+                    "name": "🟢 1 • Live Trader • Since Restart",
+                    "value": live_trader_economics(),
                     "inline": False,
                 },
                 {
-                    "name": "💰 Historical trader replay • achievable",
-                    "value": account_economics(),
+                    "name": "📈 2 • Current Strategy • Since August",
+                    "value": strategy_since_august(),
                     "inline": False,
                 },
                 {
-                    "name": "🧪 Catastrophic-stop plateau • strict shadow replay",
-                    "value": tail_challenger_economics(),
-                    "inline": False,
-                },
-                {
-                    "name": "📐 TP5 promoted strategy • 6-slot exposure curve",
-                    "value": tp5_exposure_curve_economics(),
-                    "inline": False,
-                },
-                {
-                    "name": "🧭 TP20 indefinite • slots × exposure strict matrix",
-                    "value": tp20_matrix_economics(),
-                    "inline": False,
-                },
-                {
-                    "name": "🎯 Current strategy • unlimited signal quality",
+                    "name": "Σ 3 • All Eligible Signals • Since August",
                     "value": all_signal_economics(),
                     "inline": False,
                 },
                 {
-                    "name": "🔬 Full scanner universe • before active filters",
-                    "value": full_universe_economics(),
-                    "inline": False,
-                },
-                {
-                    "name": "⚠️ Historical trader replay • adverse risk",
-                    "value": adverse_profile(),
-                    "inline": False,
-                },
-                {
-                    "name": "Today",
-                    "value": f"Published confirmed shorts today **{report.confirmed_today}**",
+                    "name": "⚙️ Running Strategy",
+                    "value": (
+                        "**10 slots × 10% MTM equity / 100% max nominal exposure** • STANDARD + HIGH_RISK • 1× cross • one position/symbol • "
+                        "Daily-Core + Persistence V2 fail-closed • **no pre-TP stop**. Normal trades close at **+5%**. "
+                        "After **≥30% adverse before TP5**, realize **50% at +5%** and trail the remaining **50%** by **1 return percentage point** in the same slot."
+                    ),
                     "inline": False,
                 },
                 {
                     "name": "How to read it",
                     "value": (
-                        "Historical trader replay applies today's promoted **TP5/SL100 + LAE10/24-Q1** strategy to the recorded signal history and uses **6×8.33% / 50%** sizing, 6-slot capacity, one-position-per-symbol, compounding and "
-                        "**0.08% fee per fill** plus current MTM. **30D run-rate*** linearly scales the observed period and is not a forecast. "
-                        "Funding and real execution slippage are not modeled."
+                        "**Live Trader** is what the running trader actually did since its current run/restart. "
+                        "**Since August** is a chronological portfolio replay of today's exact strategy including capacity and duplicate-symbol blocking. "
+                        "**All Eligible Signals** ignores capacity so its arithmetic sum measures signal quality, not achievable portfolio return. "
+                        "*30D equivalent is a linear normalization of the observed period, not a forecast.*"
                     ),
                     "inline": False,
                 },
             ],
             "footer": {
-                "text": "Current strategy only • Daily-Core + Persistence V2 + LAE10/24-Q1 • 6×8.33% / 50% • TP5 / SL100"
+                "text": "Current production strategy • Daily-Core + Persistence V2 • 10×10% / 100% • TP5 + adverse-recovery runner"
             },
         }
 
@@ -706,49 +572,46 @@ class DiscordNotifier:
             "title": "🧠 Exhaustion Scanner • Research Intelligence • Current Strategy",
             "description": (
                 f"Updated **{display_time.strftime('%d %b %Y • %H:%M %Z')}** • raw signals **{total_signals}**.\n"
-                "Only the promoted **Daily-Core + Persistence V2 • TP5/SL75 • 6×5% / 30%** strategy is shown. Legacy challenger sections are no longer rendered."
+                "Dataset and forward-validation diagnostics only; portfolio performance is reported separately on the subscriber Performance & Playbook board."
             ),
             "color": 0x5865F2,
             "fields": [
                 {
                     "name": "🧭 Trend Persistence • V2 • current live rule",
                     "value": (
-                        "STANDARD + HIGH_RISK confirmed shorts • Daily-Confirmed Core hard skip (fail closed) • "
-                        "Trend Persistence V2 hard skip (fail closed on its reachable branch) • "
-                        "6 slots × 5% • 30% max exposure • TP +5% • SL -75% • no timeout.\n"
-                        "V2 = early V1 branch (≤6h + extreme daily extension/acceleration) OR mature-run weak-breakdown branch (≥24h + previous 1h momentum >0 + no lower-high/lower-close + no 15m structural break)."
+                        "STANDARD + HIGH_RISK confirmed shorts • **Daily-Confirmed Core hard skip** (fail closed) • "
+                        "**Trend Persistence V2** hard skip (fail closed) • 10 slots × 10% MTM / 100% cap • "
+                        "**TP +5%**, no pre-TP stop; ≥30% adverse recovery activates the 50/50 one-point trailing runner."
                     ),
                     "inline": False,
                 },
                 {
-                    "name": "2 • Retrospective current-strategy replay",
+                    "name": "2 • Retrospective current-strategy replay • data coverage",
                     "value": (
-                        f"Admission: raw **{total_signals}** • Daily-Core flagged/missing **{core_flagged}/{core_missing}** • "
+                        f"Admission dataset: raw **{total_signals}** • Daily-Core flagged/missing **{core_flagged}/{core_missing}** • "
                         f"Persistence flagged/missing **{persistence_flagged}/{persistence_missing}** • admitted **{admitted}**.\n"
-                        f"TP5 **{validation.target_exits}** • SL75 **{validation.stop_exits}** • open **{validation.waiting}**.\n"
-                        f"{book_line(portfolio)}"
+                        "The exact recovery-runner portfolio replay and all-signal arithmetic sum now live in **Performance & Playbook**; legacy SL matrices are intentionally omitted here."
                     ),
                     "inline": False,
                 },
                 {
-                    "name": "3 • Current tail profile",
-                    "value": " • ".join(tail_bits) if tail_bits else "No current-strategy tail observations yet.",
+                    "name": "3 • Adverse-path diagnostics",
+                    "value": " • ".join(tail_bits) if tail_bits else "No tail observations yet.",
                     "inline": False,
                 },
                 {
                     "name": "4 • True-forward evidence",
                     "value": (
-                        f"Frozen **{freeze_at.astimezone(tz).strftime('%d %b %Y • %H:%M %Z')}**. "
-                        f"Raw post-freeze **{forward_total}** • Daily-Core flagged/missing **{forward_core_flagged}/{forward_core_missing}** • "
-                        f"Persistence flagged/missing **{forward_persistence_flagged}/{forward_persistence_missing}** • admitted **{forward_admitted}**.\n"
-                        f"TP5 **{forward_validation.target_exits}** • SL75 **{forward_validation.stop_exits}** • open **{forward_validation.waiting}**.\n"
-                        f"{book_line(forward_portfolio)}"
+                        f"Frozen **{freeze_at.astimezone(tz).strftime('%d %b %Y • %H:%M %Z')}** • post-freeze raw **{forward_total}** • "
+                        f"Daily-Core flagged/missing **{forward_core_flagged}/{forward_core_missing}** • "
+                        f"Persistence V2 flagged/missing **{forward_persistence_flagged}/{forward_persistence_missing}** • admitted **{forward_admitted}**.\n"
+                        "This block is for forward data coverage and filter behavior, not a second subscriber return calculation."
                     ),
                     "inline": False,
                 },
             ],
             "footer": {
-                "text": "Current strategy only • 30D is an observed linear run-rate, not a forecast • funding/slippage excluded"
+                "text": "Research diagnostics only • current production performance is reported separately"
             },
         }
 
