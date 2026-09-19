@@ -3,6 +3,13 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 
+from app.strategy_ids import (
+    CURRENT_STRATEGY_ID,
+    LEGACY_DAILY_CORE_ID,
+    LEGACY_SUBSCRIBER_V1_ID,
+    LEGACY_SUBSCRIBER_V2_ID,
+)
+
 
 def _env_bool(name: str, default: bool) -> bool:
     raw = os.getenv(name)
@@ -100,7 +107,13 @@ class Settings:
         settings = cls(
             database_url=database_url,
             discord_webhook_url=os.getenv("DISCORD_WEBHOOK_URL") or None,
-            discord_performance_webhook_url=os.getenv("DISCORD_PERFORMANCE_WEBHOOK_URL") or None,
+            discord_performance_webhook_url=(
+                os.getenv("DISCORD_PERFORMANCE_WEBHOOK_URL")
+                or os.getenv("DISCORD_WEBHOOK_URL")
+                or os.getenv("DISCORD_TRADER_EVENTS_WEBHOOK_URL")
+                or os.getenv("DISCORD_TRADER_WEBHOOK_URL")
+                or None
+            ),
             discord_trader_events_webhook_url=(
                 os.getenv("DISCORD_TRADER_EVENTS_WEBHOOK_URL")
                 or os.getenv("DISCORD_TRADER_WEBHOOK_URL")
@@ -112,7 +125,7 @@ class Settings:
                 "confirmed_short",
             ),
             subscriber_signal_strategy=os.getenv(
-                "SUBSCRIBER_SIGNAL_STRATEGY", "tp5_sl75_daily_core_persistence_skip_v2"
+                "SUBSCRIBER_SIGNAL_STRATEGY", CURRENT_STRATEGY_ID
             ).strip().lower(),
             mexc_base_url=os.getenv("MEXC_BASE_URL", "https://contract.mexc.com"),
             mexc_spot_base_url=os.getenv("MEXC_SPOT_BASE_URL", "https://api.mexc.com"),
@@ -188,9 +201,15 @@ class Settings:
             "breakdown_watch",
             "confirmed_short",
         }
-        if self.subscriber_signal_strategy not in {"tp5_sl75_daily_core_persistence_skip_v2", "tp5_sl75_daily_core_persistence_skip_v1", "tp5_sl75_daily_core_skip_v1", "all_confirmed"}:
+        if self.subscriber_signal_strategy not in {
+            CURRENT_STRATEGY_ID,
+            LEGACY_SUBSCRIBER_V2_ID,
+            LEGACY_SUBSCRIBER_V1_ID,
+            LEGACY_DAILY_CORE_ID,
+            "all_confirmed",
+        }:
             raise ValueError(
-                "SUBSCRIBER_SIGNAL_STRATEGY must be tp5_sl75_daily_core_persistence_skip_v2, tp5_sl75_daily_core_persistence_skip_v1, tp5_sl75_daily_core_skip_v1 or all_confirmed"
+                "SUBSCRIBER_SIGNAL_STRATEGY must be the current production strategy, a supported legacy admission alias, or all_confirmed"
             )
         unknown_signal_levels = self.discord_signal_levels - allowed_signal_levels
         if unknown_signal_levels:

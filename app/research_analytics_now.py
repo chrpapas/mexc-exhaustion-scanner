@@ -87,8 +87,7 @@ async def main() -> None:
         )
         if not sent:
             raise RuntimeError(
-                "Research analytics were not sent. Check DISCORD_PERFORMANCE_WEBHOOK_URL "
-                "(or DISCORD_WEBHOOK_URL fallback) in Render."
+                "Research analytics were not sent. No Discord webhook is configured. Checked DISCORD_PERFORMANCE_WEBHOOK_URL, DISCORD_WEBHOOK_URL, DISCORD_TRADER_EVENTS_WEBHOOK_URL, and DISCORD_TRADER_WEBHOOK_URL."
             )
 
         if hasattr(report, "total_signals"):

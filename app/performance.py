@@ -14,6 +14,46 @@ PUBLIC_PERFORMANCE_RISK_TIERS = frozenset({"standard", "high_risk"})
 SHADOW_FEE_PER_FILL = 0.0008
 MONTHLY_RUN_RATE_DAYS = 30.0
 
+# Frozen acceptance window from the validated Aug-8 -> Sep-18 production replay.
+# The report can grow past this date, but it must continue to reproduce this
+# historical admission universe or the August benchmark is not comparable.
+CURRENT_STRATEGY_REPLAY_START_AT = datetime(2026, 8, 8, 0, 0, tzinfo=ZoneInfo("UTC"))
+CURRENT_STRATEGY_REFERENCE_CUTOFF = datetime(2026, 9, 18, 9, 15, tzinfo=ZoneInfo("UTC"))
+CURRENT_STRATEGY_REFERENCE_TOTAL_SIGNALS = 473
+CURRENT_STRATEGY_REFERENCE_ELIGIBLE_SIGNALS = 366
+
+
+def _strategy_feature_snapshot(row: dict[str, Any]) -> dict[str, Any]:
+    snapshot = row.get("feature_snapshot")
+    if isinstance(snapshot, str):
+        try:
+            snapshot = json.loads(snapshot)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            snapshot = {}
+    snapshot = dict(snapshot) if isinstance(snapshot, dict) else {}
+    for key in (
+        "run_score", "hours_run_to_breakdown", "previous_momentum_1h",
+        "lower_high_and_close", "structural_break_15m",
+        "daily_distance_above_ema20_atr", "daily_ema20_slope",
+        "daily_close_above_ema20", "daily_momentum_3d",
+        "distance_above_ema20_atr_4h", "cross_section_percentile",
+    ):
+        if snapshot.get(key) is None and row.get(key) is not None:
+            snapshot[key] = row.get(key)
+    return snapshot
+
+
+def current_strategy_signal_is_eligible(row: dict[str, Any]) -> bool:
+    """Exact fail-closed scanner/trader admission for the promoted strategy."""
+    if str(row.get("risk_tier") or "standard") not in PUBLIC_PERFORMANCE_RISK_TIERS:
+        return False
+    features = _strategy_feature_snapshot(row)
+    if daily_confirmed_core_v1_state(features) is not False:
+        return False
+    if daily_bull_persistence_v2_state(features) is not False:
+        return False
+    return True
+
 def short_return(entry_price: float, exit_price: float) -> float:
     if entry_price <= 0 or exit_price <= 0:
         raise ValueError("prices must be positive")
@@ -339,6 +379,9 @@ class AccountRunRateSummary:
     recovered_after_breach_50: int = 0
     median_mae: float | None = None
     worst_mae: float | None = None
+    reference_gate_passed: bool | None = None
+    reference_total_signals: int | None = None
+    reference_eligible_signals: int | None = None
 
     def as_dict(self) -> dict[str, Any]:
         data = {name: getattr(self, name) for name in self.__dataclass_fields__}
@@ -1245,10 +1288,33 @@ def build_performance_summary(
     # this follows each strategy's actual exit rule through the common report
     # timestamp and respects its suggested slot sizing/capacity. This is the
     # basis for the 30-day equivalent run-rate shown publicly.
-    account_start_at = min(
+    all_account_start_at = min(
         (row["confirmed_at"] for row in rows if row.get("confirmed_at") is not None and row["confirmed_at"] <= now_utc),
         default=None,
     )
+    current_strategy_start_at = min(
+        (
+            row["confirmed_at"]
+            for row in rows
+            if row.get("confirmed_at") is not None
+            and CURRENT_STRATEGY_REPLAY_START_AT <= row["confirmed_at"] <= now_utc
+        ),
+        default=None,
+    )
+
+    reference_rows = [
+        row for row in rows
+        if row.get("confirmed_at") is not None
+        and CURRENT_STRATEGY_REPLAY_START_AT <= row["confirmed_at"] <= CURRENT_STRATEGY_REFERENCE_CUTOFF
+    ]
+    reference_total_signals = len(reference_rows)
+    reference_eligible_signals = sum(current_strategy_signal_is_eligible(row) for row in reference_rows)
+    reference_gate_passed = None
+    if now_utc >= CURRENT_STRATEGY_REFERENCE_CUTOFF:
+        reference_gate_passed = (
+            reference_total_signals == CURRENT_STRATEGY_REFERENCE_TOTAL_SIGNALS
+            and reference_eligible_signals == CURRENT_STRATEGY_REFERENCE_ELIGIBLE_SIGNALS
+        )
 
     def account_run_rate(
         *,
@@ -1262,13 +1328,19 @@ def build_performance_summary(
         catastrophic_stop_pct: float | None = 0.75,
         lae10_24_q1: bool = False,
     ) -> AccountRunRateSummary:
+        replay_start_at = current_strategy_start_at if strategy == "recovery_runner" else all_account_start_at
         ordered = sorted(
-            [row for row in rows if row.get("confirmed_at") is not None and row["confirmed_at"] <= now_utc],
+            [
+                row for row in rows
+                if row.get("confirmed_at") is not None
+                and row["confirmed_at"] <= now_utc
+                and (replay_start_at is None or row["confirmed_at"] >= replay_start_at)
+            ],
             key=lambda row: row["confirmed_at"],
         )
         span_days = (
-            max(0.0, (now_utc - account_start_at).total_seconds() / 86400.0)
-            if account_start_at is not None else 0.0
+            max(0.0, (now_utc - replay_start_at).total_seconds() / 86400.0)
+            if replay_start_at is not None else 0.0
         )
         equity = 1.0
         positions: list[dict[str, Any]] = []
@@ -1283,26 +1355,10 @@ def build_performance_summary(
         max_exposure_fraction = 0.0
 
         def feature_snapshot(row: dict[str, Any]) -> dict[str, Any]:
-            snapshot = row.get("feature_snapshot")
-            if isinstance(snapshot, str):
-                try:
-                    snapshot = json.loads(snapshot)
-                except (TypeError, ValueError, json.JSONDecodeError):
-                    snapshot = {}
-            return snapshot if isinstance(snapshot, dict) else {}
+            return _strategy_feature_snapshot(row)
 
         def admission_features(row: dict[str, Any]) -> dict[str, Any]:
-            snapshot = dict(feature_snapshot(row))
-            if snapshot.get("run_score") is None and row.get("run_score") is not None:
-                snapshot["run_score"] = row.get("run_score")
-            for key in (
-                "hours_run_to_breakdown", "previous_momentum_1h",
-                "lower_high_and_close", "structural_break_15m",
-                "daily_distance_above_ema20_atr", "daily_ema20_slope",
-            ):
-                if snapshot.get(key) is None and row.get(key) is not None:
-                    snapshot[key] = row.get(key)
-            return snapshot
+            return _strategy_feature_snapshot(row)
 
         def signal_position_fraction(row: dict[str, Any]) -> float:
             if not pcr_sizing:
@@ -1425,7 +1481,7 @@ def build_performance_summary(
             nonlocal equity, closed, closed_wins, closed_losses
             due = sorted(
                 [pos for pos in positions if pos["exit_at"] is not None and pos["exit_at"] <= cutoff],
-                key=lambda pos: pos["exit_at"],
+                key=lambda pos: (pos["exit_at"], pos["position_id"]),
             )
             for pos in due:
                 equity += pos["notional"] * (float(pos["exit_return"]) - SHADOW_FEE_PER_FILL)
@@ -1438,6 +1494,23 @@ def build_performance_summary(
                     closed_wins += 1
                 else:
                     closed_losses += 1
+
+        def historical_mark(pos: dict[str, Any], cutoff: datetime) -> float:
+            latest = None
+            for ts, ret in pos.get("path_points") or ():
+                if ts is None or ret is None or ts > cutoff:
+                    continue
+                latest = float(ret)
+            return latest if latest is not None else 0.0
+
+        def mtm_equity_at(cutoff: datetime) -> float:
+            # Production sizing is based on current MTM equity, not realized-only
+            # equity. This is the exact sizing convention used by the validated
+            # 10x10% August replay.
+            return equity + sum(
+                float(pos["notional"]) * historical_mark(pos, cutoff)
+                for pos in positions
+            )
 
         for row in ordered:
             entry_at = row["confirmed_at"]
@@ -1461,16 +1534,18 @@ def build_performance_summary(
             eligible_signals += 1
             eligible_rows.append(row)
             symbol = str(row.get("symbol") or "")
-            if any(pos["symbol"] == symbol for pos in positions):
-                missed_same_symbol += 1
-                continue
+            # Match the frozen production replay accounting: a full book is a
+            # capacity miss even if the incoming symbol is already present.
             if len(positions) >= exposure.max_slots:
                 missed_capacity += 1
+                continue
+            if any(pos["symbol"] == symbol for pos in positions):
+                missed_same_symbol += 1
                 continue
 
             exit_at, exit_return = known_exit(row)
             candidate_fraction = signal_position_fraction(row)
-            notional = max(0.0, equity) * candidate_fraction
+            notional = max(0.0, mtm_equity_at(entry_at)) * candidate_fraction
             equity -= notional * SHADOW_FEE_PER_FILL
             path_times = list(row.get("path_times") or ())
             path_returns = list(row.get("path_returns") or ())
@@ -1491,12 +1566,21 @@ def build_performance_summary(
                     (
                         row.get("recovery_runner_mark_return")
                         if row.get("recovery_runner_mark_return") is not None
-                        else (0.025 + 0.5 * float(row.get("current_return_pct")))
-                        if row.get("current_return_pct") is not None and row.get("target_5_at") is not None
+                        else (0.025 + 0.5 * float(
+                            row.get("current_return_pct")
+                            if row.get("current_return_pct") is not None
+                            else row.get("path_latest_return")
+                        ))
+                        if (row.get("current_return_pct") is not None or row.get("path_latest_return") is not None)
+                        and row.get("target_5_at") is not None
                         else None
                     )
                     if strategy == "recovery_runner" and bool(row.get("recovery_runner_triggered"))
-                    else row.get("current_return_pct")
+                    else (
+                        row.get("current_return_pct")
+                        if row.get("current_return_pct") is not None
+                        else row.get("path_latest_return")
+                    )
                 ),
                 "path_points": (
                     [
@@ -1540,8 +1624,8 @@ def build_performance_summary(
         # equity (paid fees + unrealized P&L); the report-time return separately
         # includes a hypothetical closing fee for still-open positions.
         event_times: set[datetime] = set()
-        if account_start_at is not None:
-            event_times.add(account_start_at)
+        if replay_start_at is not None:
+            event_times.add(replay_start_at)
         event_times.add(now_utc)
         for pos in all_positions:
             event_times.add(pos["entry_at"])
@@ -1646,12 +1730,21 @@ def build_performance_summary(
                     (
                         eligible_row.get("recovery_runner_mark_return")
                         if eligible_row.get("recovery_runner_mark_return") is not None
-                        else (0.025 + 0.5 * float(eligible_row.get("current_return_pct")))
-                        if eligible_row.get("current_return_pct") is not None and eligible_row.get("target_5_at") is not None
+                        else (0.025 + 0.5 * float(
+                            eligible_row.get("current_return_pct")
+                            if eligible_row.get("current_return_pct") is not None
+                            else eligible_row.get("path_latest_return")
+                        ))
+                        if (eligible_row.get("current_return_pct") is not None or eligible_row.get("path_latest_return") is not None)
+                        and eligible_row.get("target_5_at") is not None
                         else None
                     )
                     if strategy == "recovery_runner" and bool(eligible_row.get("recovery_runner_triggered"))
-                    else eligible_row.get("current_return_pct")
+                    else (
+                        eligible_row.get("current_return_pct")
+                        if eligible_row.get("current_return_pct") is not None
+                        else eligible_row.get("path_latest_return")
+                    )
                 )
                 all_signal_open += 1
                 if mark is not None:
@@ -1722,7 +1815,7 @@ def build_performance_summary(
 
         return AccountRunRateSummary(
             strategy=strategy,
-            start_at=account_start_at,
+            start_at=replay_start_at,
             end_at=now_utc,
             span_days=span_days,
             eligible_signals=eligible_signals,
@@ -1768,6 +1861,9 @@ def build_performance_summary(
             recovered_after_breach_50=breach_recoveries[50],
             median_mae=median_mae,
             worst_mae=min(admitted_mae) if admitted_mae else None,
+            reference_gate_passed=(reference_gate_passed if strategy == "recovery_runner" else None),
+            reference_total_signals=(reference_total_signals if strategy == "recovery_runner" else None),
+            reference_eligible_signals=(reference_eligible_signals if strategy == "recovery_runner" else None),
         )
 
     trader_strategy_tp5 = trader_strategy_summary("tp5")

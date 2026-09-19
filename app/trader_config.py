@@ -3,8 +3,10 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 
+from app.strategy_ids import CURRENT_STRATEGY_ID
 
-RECOVERY_RUNNER_STRATEGY = "tp5_nostop_adv30_runner50_trail1_daily_core_persistence_skip_v2"
+
+RECOVERY_RUNNER_STRATEGY = CURRENT_STRATEGY_ID
 
 
 def _bool(name: str, default: bool = False) -> bool:

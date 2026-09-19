@@ -1,4 +1,17 @@
-# MEXC Exhaustion Scanner + Multi-Slot Futures Trader v1.3.77
+# MEXC Exhaustion Scanner + Multi-Slot Futures Trader v1.3.79
+
+
+## v1.3.79 — canonical strategy identity + validated August replay
+
+- Scanner, trader, and subscriber report now share the canonical strategy id `tp5_nostop_adv30_runner50_trail1_daily_core_persistence_skip_v2`. The legacy scanner `tp5_sl75_daily_core_persistence_skip_v2` value remains accepted as an admission-only compatibility alias.
+- Subscriber performance is sourced from the complete `research_signal_features_enriched` universe; `shadow_trades` is outcome enrichment only and can no longer silently remove historical signals from the August replay.
+- Current-strategy replay sizes every new position from contemporaneous **MTM equity**, matching the frozen 10-slot / 10% / 100% validation replay. Capacity is evaluated before duplicate-symbol attribution, matching the validated diagnostics.
+- A fail-closed comparability gate pins the frozen Aug-08 → Sep-18 09:15 UTC reference at **473 public signals / 366 current-strategy eligible**. If those counts do not reproduce, Discord suppresses both the August account benchmark and all-signal benchmark instead of publishing incomparable numbers.
+- Frozen-artifact regression reproduces **366 eligible / 178 entered / 168 closed / 10 open / 176 capacity / 12 duplicate**, with fee-aware MTM return ~**+75.16%**, consistent with the prior 8 bps/side validation (~+75.17%). Gross research reference remains ~+80.12%.
+
+## v1.3.78 — Discord webhook compatibility
+
+Performance, research-analytics, and signal-ledger reports now reuse an existing Discord webhook automatically. Fallback order: `DISCORD_PERFORMANCE_WEBHOOK_URL` → `DISCORD_WEBHOOK_URL` → `DISCORD_TRADER_EVENTS_WEBHOOK_URL` → `DISCORD_TRADER_WEBHOOK_URL`. No duplicate webhook secret is required.
 
 
 
@@ -9,7 +22,7 @@
 
 
 
-## v1.3.77 — subscriber reporting cleanup + exact current-strategy replay
+## v1.3.78 — subscriber reporting cleanup + exact current-strategy replay
 
 Subscriber reporting is now intentionally split into three non-overlapping views: **Live Trader since the active run/restart**, **the exact current 10-slot recovery-runner strategy replayed from the start of the retained August dataset**, and **all eligible current-strategy signals ignoring portfolio capacity**. The third view reports the arithmetic sum/average of per-signal returns and is explicitly not presented as an achievable account return.
 

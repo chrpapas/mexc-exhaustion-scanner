@@ -1611,25 +1611,27 @@ class Database:
     async def performance_rows(self) -> list[dict[str, Any]]:
         """Return performance/ledger rows without database-side path sorting.
 
-        The previous implementation used several ordered ``array_agg`` expressions
-        over the growing research path table.  That query eventually becomes the
+        The signal universe comes from research_signal_features_enriched rather than
+        shadow_trades. shadow_trades can lag/backfill incompletely and must never
+        define which confirmed signals existed. The previous implementation used
+        several ordered ``array_agg`` expressions over the growing research path table.  That query eventually becomes the
         bottleneck for both ``signal_ledger_now`` and ``report_now``.  Keep the DB
         work to two simple reads and aggregate the small per-episode paths in Python.
         """
         base_rows = await self.pool.fetch(
             """
             SELECT
-                st.episode_id, st.symbol, st.confirmed_at, st.entry_price, st.risk_tier,
+                f.episode_id, f.symbol, f.confirmed_at, f.entry_price, f.risk_tier,
                 st.current_return_pct, st.mfe_pct, st.mae_pct,
                 st.return_1h_pct, st.return_4h_pct, st.return_12h_pct, st.return_24h_pct,
                 st.return_48h_pct, st.return_72h_pct, st.return_168h_pct,
                 st.matured_at, st.matured_48h_at, st.matured_72h_at, st.matured_168h_at,
                 st.first_profit_at, st.target_20_at, st.isolated_100_breach_at,
                 st.adverse_200_breach_at, st.adverse_300_breach_at, st.cross_400_breach_at,
-                rsf.feature_snapshot
-            FROM shadow_trades st
-            LEFT JOIN research_signal_features rsf ON rsf.episode_id = st.episode_id
-            ORDER BY st.confirmed_at ASC
+                f.feature_snapshot, f.run_score, f.hours_run_to_breakdown
+            FROM research_signal_features_enriched f
+            LEFT JOIN shadow_trades st ON st.episode_id = f.episode_id
+            ORDER BY f.confirmed_at ASC, f.episode_id ASC
             """
         )
         # Do not request every persisted 15m path row in one asyncpg fetch.

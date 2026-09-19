@@ -26,7 +26,7 @@ services:
       - key: DISCORD_SIGNAL_LEVELS
         value: confirmed_short
       - key: SUBSCRIBER_SIGNAL_STRATEGY
-        value: tp5_sl75_daily_core_persistence_skip_v2
+        value: tp5_nostop_adv30_runner50_trail1_daily_core_persistence_skip_v2
       - key: DISCORD_PERFORMANCE_WEBHOOK_URL
         sync: false
       - key: DISCORD_TRADER_EVENTS_WEBHOOK_URL

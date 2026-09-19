@@ -1,6 +1,5 @@
 .gitignore
 .python-version
-MANIFEST.txt
 README.md
 README_v0.8.8.md
 TRADER-DEPLOY.md
@@ -37,6 +36,7 @@ app/signal_ledger.py
 app/signal_ledger_now.py
 app/signal_ledger_table.py
 app/signals.py
+app/strategy_ids.py
 app/token_regime.py
 app/trader.py
 app/trader_config.py
@@ -87,6 +87,7 @@ tests/test_daily_confirmed_core_v144.py
 tests/test_daily_core_live_v148.py
 tests/test_daily_regime_v143.py
 tests/test_db_research_aggregation_v1329.py
+tests/test_discord_webhook_fallback_v1378.py
 tests/test_exposure_shadow_v149.py
 tests/test_historical_backtest_v1373.py
 tests/test_historical_live_store_v1376.py
@@ -134,6 +135,7 @@ tests/test_research_v154.py
 tests/test_signal_ledger.py
 tests/test_signals.py
 tests/test_standard_scaling_v1330.py
+tests/test_strategy_alignment_v1379.py
 tests/test_strategy_validation_v1327.py
 tests/test_subscriber_pcr_report_v1337.py
 tests/test_tp20_daily_core_v146.py

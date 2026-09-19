@@ -10,6 +10,7 @@ from typing import Any
 import httpx
 
 from app.models import RunSignal
+from app.strategy_ids import CURRENT_STRATEGY_ID
 from app.daily_core_strategy import (
     DAILY_CORE_SKIP_STRATEGY,
     daily_confirmed_core_v1_missing_features,
@@ -71,7 +72,7 @@ class DiscordNotifier:
             return
 
         features = signal.features
-        if self._subscriber_signal_strategy in {DAILY_CORE_SKIP_STRATEGY, DAILY_CORE_PERSISTENCE_SKIP_STRATEGY, DAILY_CORE_PERSISTENCE_SKIP_STRATEGY_V2}:
+        if self._subscriber_signal_strategy in {CURRENT_STRATEGY_ID, DAILY_CORE_SKIP_STRATEGY, DAILY_CORE_PERSISTENCE_SKIP_STRATEGY, DAILY_CORE_PERSISTENCE_SKIP_STRATEGY_V2}:
             daily_core_state = daily_confirmed_core_v1_state(features)
             if daily_core_state is None:
                 missing = daily_confirmed_core_v1_missing_features(features)
@@ -87,8 +88,8 @@ class DiscordNotifier:
                     signal.symbol,
                 )
                 return
-        if self._subscriber_signal_strategy in {DAILY_CORE_PERSISTENCE_SKIP_STRATEGY, DAILY_CORE_PERSISTENCE_SKIP_STRATEGY_V2}:
-            if self._subscriber_signal_strategy == DAILY_CORE_PERSISTENCE_SKIP_STRATEGY_V2:
+        if self._subscriber_signal_strategy in {CURRENT_STRATEGY_ID, DAILY_CORE_PERSISTENCE_SKIP_STRATEGY, DAILY_CORE_PERSISTENCE_SKIP_STRATEGY_V2}:
+            if self._subscriber_signal_strategy in {CURRENT_STRATEGY_ID, DAILY_CORE_PERSISTENCE_SKIP_STRATEGY_V2}:
                 persistence_state = daily_bull_persistence_v2_state(features)
                 missing = daily_bull_persistence_v2_missing_features(features)
                 version = "V2"
@@ -226,6 +227,13 @@ class DiscordNotifier:
         def strategy_since_august() -> str:
             if account is None:
                 return "Current-strategy replay unavailable."
+            if account.reference_gate_passed is False:
+                return (
+                    "⛔ **Historical comparability gate failed — benchmark suppressed.**\n"
+                    f"Frozen Aug-08→Sep-18 reference expected **473 total / 366 eligible**; "
+                    f"current report source produced **{account.reference_total_signals} / {account.reference_eligible_signals}**. "
+                    "The report will not publish an account-return number until the signal universe matches the validated reference."
+                )
             dd = f"-{self._percent(account.max_mtm_drawdown)}" if account.max_mtm_drawdown is not None else "n/a"
             capture = (account.entered / account.eligible_signals) if account.eligible_signals else None
             return (
@@ -243,6 +251,11 @@ class DiscordNotifier:
         def all_signal_economics() -> str:
             if account is None:
                 return "All-signal view unavailable."
+            if account.reference_gate_passed is False:
+                return (
+                    "⛔ **Suppressed by the same historical comparability gate.** "
+                    "All-signal statistics would use an incomplete/different universe, so they are not published."
+                )
             return (
                 f"Every signal passing the **current Daily-Core + Persistence V2** admission filters, with no slot/capacity constraint: **{account.all_signal_sample} signals**\n"
                 f"Completed positive exits **{account.all_signal_wins}** • completed losses **{account.all_signal_losses}** • still open **{account.all_signal_open}** • "
