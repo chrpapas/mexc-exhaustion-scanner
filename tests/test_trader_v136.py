@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 from app.mexc_trade import MexcTradeClient, MexcTradeError
-from app.trader_config import TraderSettings
+from app.trader_config import RECOVERY_RUNNER_STRATEGY, TraderSettings
 from app.trader_models import TradeSignal
 from tests.test_trader_v123 import FakeRepo, _position
 
@@ -37,14 +37,15 @@ def test_tp5_sl75_pcr_v1_defaults_are_frozen(monkeypatch):
     ):
         monkeypatch.delenv(key, raising=False)
     settings = TraderSettings.from_env()
-    assert settings.execution_strategy == "tp5_sl100_lae10_24_q1_daily_core_persistence_skip_v2"
-    assert settings.paper_run_id == "tp5_sl75_persist_v2_armed48_50pct_v1"
-    assert settings.max_open_positions == 6
-    assert settings.slot_allocation_pct == pytest.approx(50.0 / 6.0)
-    assert settings.max_total_exposure_pct == pytest.approx(50.0)
+    assert settings.execution_strategy == RECOVERY_RUNNER_STRATEGY
+    assert settings.paper_run_id == "tp5_adv30_runner50_trail1_candidate_v1"
+    assert settings.max_open_positions == 10
+    assert settings.slot_allocation_pct == pytest.approx(10.0)
+    assert settings.max_total_exposure_pct == pytest.approx(100.0)
     assert settings.tp5_target_pct == pytest.approx(5.0)
-    assert settings.catastrophic_stop_pct == pytest.approx(100.0)
-    assert settings.uses_catastrophic_stop is True
+    assert settings.catastrophic_stop_pct == pytest.approx(75.0)
+    assert settings.uses_catastrophic_stop is False
+    assert settings.uses_recovery_runner is True
     assert settings.paper_starting_equity_usdt == pytest.approx(2000.0)
     assert settings.uses_generic_slots is True
 

@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.trader_config import TraderSettings
+from app.trader_config import RECOVERY_RUNNER_STRATEGY, TraderSettings
 from app.trader_logic import (
     HTF_BASE_POSITION_FRACTION,
     HTF_CROSS_SECTION_PERCENTILE_THRESHOLD,
@@ -71,8 +71,9 @@ def test_htf_strategy_supported_but_daily_core_skip_remains_default(monkeypatch)
     monkeypatch.setenv("DATABASE_URL", "postgresql://example")
     monkeypatch.delenv("TRADER_EXECUTION_STRATEGY", raising=False)
     default = TraderSettings.from_env()
-    assert default.execution_strategy == "tp5_sl100_lae10_24_q1_daily_core_persistence_skip_v2"
+    assert default.execution_strategy == RECOVERY_RUNNER_STRATEGY
     assert default.uses_daily_core_skip
+    assert default.uses_recovery_runner
     assert not default.uses_pcr_derisk
     assert not default.uses_htf_derisk
 

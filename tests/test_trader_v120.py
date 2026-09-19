@@ -1,7 +1,7 @@
 import pytest
 
 from app.mexc_trade import MexcTradeClient
-from app.trader_config import TraderSettings
+from app.trader_config import RECOVERY_RUNNER_STRATEGY, TraderSettings
 from app.trader_logic import newly_breached_thresholds, protected_profit_floor_pct, short_price_for_return
 
 
@@ -25,13 +25,13 @@ def test_strategy_one_is_new_default(monkeypatch):
     assert s.trading_mode == "paper"
     assert s.margin_mode == "cross"
     assert s.allowed_risk_tiers == ("STANDARD", "HIGH_RISK")
-    assert s.max_open_positions == 6
-    assert s.execution_strategy == "tp5_sl100_lae10_24_q1_daily_core_persistence_skip_v2"
-    assert s.slot_allocation_pct == pytest.approx(50.0 / 6.0)
-    assert s.max_total_exposure_pct == 50
+    assert s.max_open_positions == 10
+    assert s.execution_strategy == RECOVERY_RUNNER_STRATEGY
+    assert s.slot_allocation_pct == pytest.approx(10.0)
+    assert s.max_total_exposure_pct == 100
     assert s.tp5_target_pct == 5
     # Legacy tier caps remain configured for rollback but are ignored by TP5 generic slots.
-    assert s.max_standard_positions == 5
+    assert s.max_standard_positions == 9
     assert s.max_high_risk_positions == 1
     assert s.standard_hold_days == 7
     assert s.high_risk_timeout_days == 4

@@ -13,7 +13,7 @@ from app.daily_bull_persistence_strategy import (
     daily_bull_persistence_v1_state,
 )
 from app.models import RunSignal
-from app.trader_config import TraderSettings
+from app.trader_config import RECOVERY_RUNNER_STRATEGY, TraderSettings
 from app.trader_models import TradeSignal
 
 
@@ -51,13 +51,13 @@ def test_persistence_strategy_is_default_without_resetting_existing_paper_run(mo
     monkeypatch.delenv("TRADER_EXECUTION_STRATEGY", raising=False)
     monkeypatch.delenv("TRADER_PAPER_RUN_ID", raising=False)
     settings = TraderSettings.from_env()
-    assert settings.execution_strategy == "tp5_sl100_lae10_24_q1_daily_core_persistence_skip_v2"
+    assert settings.execution_strategy == RECOVERY_RUNNER_STRATEGY
     assert settings.uses_daily_core_skip
     assert settings.uses_daily_bull_persistence_skip
-    # Intentionally retained so promotion applies to future entries without closing the current paper book.
-    assert settings.paper_run_id == "tp5_sl75_persist_v2_armed48_50pct_v1"
-    assert settings.slot_allocation_pct == pytest.approx(50.0 / 6.0)
-    assert settings.max_total_exposure_pct == pytest.approx(50.0)
+    assert settings.uses_recovery_runner
+    assert settings.paper_run_id == "tp5_adv30_runner50_trail1_candidate_v1"
+    assert settings.slot_allocation_pct == pytest.approx(10.0)
+    assert settings.max_total_exposure_pct == pytest.approx(100.0)
 
 
 @pytest.mark.asyncio

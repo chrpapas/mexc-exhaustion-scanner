@@ -1,63 +1,67 @@
-MEXC Exhaustion Scanner + Multi-Slot Futures Trader v1.3.58
+MEXC Exhaustion Scanner + Multi-Slot Futures Trader v1.3.75
 
-Deploy the entire project/ZIP together.
+Deploy the entire project/ZIP together and apply all pending migrations through:
+  migrations/021_recovery_runner_exit_strategy.sql
 
-v1.3.58 IMPROVES OPPORTUNITY RECALL WITHOUT LOOSENING ENTRY CONFIRMATION
-- Armed Runner V1 remembers a legitimate unconfirmed pump for 48h after the latest tracked peak/detection.
-- Current run_score / 72h return may fade during that memory window; the short still requires exhaustion structure, structural break, failed retest, then Daily-Core + Persistence V2 admission.
-- Confirmed episodes keep the existing +5% new-high re-arm and add a 48h time-based re-arm when the symbol independently qualifies again.
-- Fixes the contradictory worker gate that previously rejected the classifier's intended late-prior-runner exception below STATE_MIN_RUN_SCORE.
-- Adds lifecycle telemetry: new-high/time re-arms, confirmed locks, armed keeps/exhaustion/expiry, late-prior admissions.
-
-CURRENT TRADER ALLOCATION
-- STANDARD + HIGH_RISK
-- 6 generic slots
-- 8.333333333333% current equity per slot
-- 50% max aggregate exposure
-- 5 STANDARD slots + 1 HIGH_RISK slot
-- TP +5%
-- catastrophic SL -75%
+v1.3.75 PROMOTED TRADER POLICY
+- Strategy: tp5_nostop_adv30_runner50_trail1_daily_core_persistence_skip_v2
+- Admission: Daily-Core + Persistence V2, fail closed
+- Risk tiers: STANDARD + HIGH_RISK
+- 10 generic slots
+- 10% of current MTM equity per new position
+- 100% max nominal exposure
 - 1x cross
 - one open position per symbol
+- no stop-loss before TP5
+- ordinary trade: close 100% at +5%
+- recovery runner: only if the trade first suffered >=30% adverse return before first TP5; realize 50% at TP5, keep 50% in the SAME slot, and trail the remainder 1 return-percentage-point behind the best post-TP5 short return
+- runner exchange stop is raised in 0.25 percentage-point steps
+- if a MEXC contract cannot be split safely because of min-volume/step rules, fall back to a full TP5 close
 
-Existing open positions are NOT resized. Keep the existing TRADER_PAPER_RUN_ID if you do not want deployment to archive/reset the current paper book.
+Existing open positions are NOT converted to the new exit policy. Each keeps its persisted exit_strategy and frozen metadata.
 
-Required/expected Render values:
-Scanner:
-  SUBSCRIBER_SIGNAL_STRATEGY=tp5_sl75_daily_core_persistence_skip_v2
-  ARMED_RUNNER_MEMORY_HOURS=48
-  CONFIRMED_REARM_HOURS=48
-  REARM_NEW_HIGH_PCT=0.05
-  EPISODE_MAX_AGE_HOURS=240
-
-Trader:
-  TRADER_EXECUTION_STRATEGY=tp5_sl75_daily_core_persistence_skip_v2
-  TRADER_MAX_OPEN_POSITIONS=6
-  TRADER_SLOT_ALLOCATION_PCT=8.333333333333
-  TRADER_MAX_TOTAL_EXPOSURE_PCT=50
-  TRADER_TP5_TARGET_PCT=5
-  TRADER_CATASTROPHIC_STOP_PCT=75
+EXPECTED RENDER TRADER VALUES
+  TRADER_EXECUTION_STRATEGY=tp5_nostop_adv30_runner50_trail1_daily_core_persistence_skip_v2
+  TRADER_PAPER_RUN_ID=tp5_adv30_runner50_trail1_candidate_v1
   TRADER_ALLOWED_RISK_TIERS=STANDARD,HIGH_RISK
+  TRADER_MAX_OPEN_POSITIONS=10
+  TRADER_SLOT_ALLOCATION_PCT=10
+  TRADER_MAX_TOTAL_EXPOSURE_PCT=100
+  TRADER_TP5_TARGET_PCT=5
+  TRADER_ALLOW_SAME_SYMBOL_PARALLEL=false
+  TRADER_MARGIN_MODE=cross
+  TRADER_LEVERAGE=1
+  TRADER_PROCESS_EXISTING_SIGNALS=false
+  TRADER_MAX_SIGNAL_AGE_SECONDS=900
 
-No new database migration is required.
+LIVE EXECUTION IS DELIBERATELY FAIL-CLOSED IN render.yaml
+The package ships with:
+  TRADING_MODE=paper
+  MEXC_LIVE_ORDER_API_ENABLED=false
 
-Verification completed for this package:
-  pytest -q  -> 278 passed
-  python scripts/verify_project.py -> PROJECT VERIFICATION PASSED
+After deploying/migrating and running preflight successfully, actual live execution requires all of:
+  TRADING_MODE=live
+  MEXC_LIVE_ORDER_API_ENABLED=true
+  MEXC_API_KEY=<Futures-enabled key>
+  MEXC_API_SECRET=<secret>
+  LIVE_TRADING_CONFIRM=I_UNDERSTAND_LIVE_TRADING
 
-Post-deploy checks:
+Do not arm live mode until `python -m app.trader_preflight` succeeds and the exchange account has no unmanaged futures positions.
+
+SCANNER
+`SUBSCRIBER_SIGNAL_STRATEGY` remains `tp5_sl75_daily_core_persistence_skip_v2` because it controls the scanner-side admission/subscriber filter naming, not the trader exit policy. The live trader independently applies the promoted Daily-Core + Persistence V2 admission and recovery-runner exit strategy.
+
+DISCORD PERFORMANCE NOTE
+The existing historical account replay in the performance board is retained as legacy research context until partial-runner replay is implemented inside the analytics engine. The board now says this explicitly and no longer labels the legacy 6-slot SL100 replay as the current production policy.
+
+POST-DEPLOY CHECKS
+  python -m app.trader_preflight        # required before arming live
   python -m app.trader_status
   python -m app.report_now
   python -m app.research_analytics_now
 
-Expected scanner evaluation summary now includes fields such as:
-  rearm_new_high=...
-  rearm_timeout=...
-  confirmed_locked=...
-  armed_kept=...
-  armed_exhaustion=...
-  armed_expired=...
-  late_prior_admissions=...
+PACKAGE VERIFICATION
+  pytest -q
+  python scripts/verify_project.py
 
-
-Current v1.3.58 paper run ID: tp5_sl75_persist_v2_armed48_50pct_v1
+`ruff` is not declared as a project dependency in this archive, so `python -m ruff check app tests` is optional and requires installing Ruff separately.

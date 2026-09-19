@@ -1,4 +1,43 @@
-# Trader deployment — v1.3.61
+# Trader deployment — v1.3.77
+
+## v1.3.75 promoted production candidate
+
+Promoted trader strategy:
+`tp5_nostop_adv30_runner50_trail1_daily_core_persistence_skip_v2`
+
+Frozen portfolio parameters for new positions:
+- Daily-Core + Persistence V2 admission, fail closed
+- STANDARD + HIGH_RISK
+- 10 generic slots
+- 10% of current MTM equity per slot
+- 100% max nominal exposure
+- one open position per symbol
+- 1x cross
+- no stop-loss before TP5
+- ordinary trades: full close at +5%
+- recovery-runner trades: if max adverse return reached at least -30% before first TP5, realize 50% at TP5 and keep 50% in the same slot with a 1 return-percentage-point trailing profit floor
+- runner stop updates in 0.25 percentage-point steps; a too-small MEXC contract that cannot be split safely falls back to a full TP5 close
+
+Existing open positions retain their persisted exit strategy and are not mutated by deployment.
+Migration `021_recovery_runner_exit_strategy.sql` only extends the persisted exit-strategy constraint. Partial TP5 P/L and fees are booked on the same position row so paper cash reconstruction remains idempotent.
+
+Render strategy values:
+```text
+TRADER_EXECUTION_STRATEGY=tp5_nostop_adv30_runner50_trail1_daily_core_persistence_skip_v2
+TRADER_PAPER_RUN_ID=tp5_adv30_runner50_trail1_candidate_v1
+TRADER_ALLOWED_RISK_TIERS=STANDARD,HIGH_RISK
+TRADER_MAX_OPEN_POSITIONS=10
+TRADER_SLOT_ALLOCATION_PCT=10
+TRADER_MAX_TOTAL_EXPOSURE_PCT=100
+TRADER_TP5_TARGET_PCT=5
+TRADER_ALLOW_SAME_SYMBOL_PARALLEL=false
+TRADER_MARGIN_MODE=cross
+TRADER_LEVERAGE=1
+TRADER_PROCESS_EXISTING_SIGNALS=false
+TRADER_MAX_SIGNAL_AGE_SECONDS=900
+```
+
+The repository deliberately keeps `TRADING_MODE=paper` and `MEXC_LIVE_ORDER_API_ENABLED=false` in `render.yaml`. Live execution remains fail-closed and must still be explicitly armed with valid Futures credentials, `TRADING_MODE=live`, `MEXC_LIVE_ORDER_API_ENABLED=true`, and `LIVE_TRADING_CONFIRM=I_UNDERSTAND_LIVE_TRADING`.
 
 ## v1.3.60 rolling-deploy concurrency fix
 
@@ -141,3 +180,11 @@ python -m app.historical_pipeline run --cache-dir ./research-history-v2 --months
 The controller freezes the time window, checkpoints every 15 minutes, automatically
 continues until current candles are complete, reconstructs delisted/historical symbols,
 then downloads their missing candles and exits. If interrupted, re-run the same command.
+## Historical live-schema refetch (v1.3.76)
+
+The new historical fetcher is offline research only and does not place orders or require MEXC credentials. Run it in a separate local process/service from the production worker. See `README.md` for `app.historical_live_store` and `app.historical_live_validate` commands. Do not promote six-month replay results unless the production-overlap validation gate passes.
+
+
+## v1.3.77 reporting
+
+`python -m app.report_now` now sends the subscriber three-layer board: actual active trader run, current production strategy replay since the retained August data begins, and the capacity-independent arithmetic sum of all eligible current-strategy signals. `python -m app.research_analytics_now` is research-diagnostics only and no longer uploads legacy strategy-comparison CSVs.

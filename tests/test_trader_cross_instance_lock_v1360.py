@@ -72,5 +72,6 @@ def test_strategy_label_uses_configured_833_percent(monkeypatch):
     settings = TraderSettings.from_env()
     trader = PortfolioShortTrader(settings)
     label = trader._strategy_label()
-    assert "6 generic slots × 8.33%" in label
-    assert "max 50.0% exposure" in label
+    assert "10 generic slots × 10.00%" in label
+    assert "max 100.0% exposure" in label
+    assert "50% TP5 + 50% runner" in label

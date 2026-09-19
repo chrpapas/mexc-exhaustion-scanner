@@ -238,24 +238,16 @@ def test_performance_report_uses_dedicated_stats_webhook_and_embeds():
         field["name"] + " " + field["value"] for field in embed.get("fields", [])
     )
     assert "Performance & Playbook" in all_text
-    assert "Current Strategy" in all_text
-    assert "Live/default • Daily-Core + Persistence V2" in all_text
-    assert "Historical trader replay" in all_text
-    assert "30D run-rate" in all_text
-    assert "max DD" in all_text
-    assert "avg/peak exposure" in all_text
-    assert "Current strategy" in all_text
-    assert "adverse risk" in all_text
-    assert "resolved win rate" in all_text
-    assert "per $10k" in all_text
-    assert "max **6** open positions" in all_text
-    assert "50%" in all_text
-    assert "0.08% fee per fill" in all_text
-    assert "Previous active" not in all_text
-    assert "PCR" in all_text  # only mentioned as intentionally omitted
-    assert "TP5 indefinite" not in all_text
-    assert "7D hold" not in all_text
-    assert "TP20" in all_text  # only mentioned as intentionally omitted
+    assert "Live Trader • Since Restart" in all_text
+    assert "Current Strategy • Since August" in all_text
+    assert "All Eligible Signals • Since August" in all_text
+    assert "10 slots × 10% MTM equity / 100% max nominal exposure" in all_text
+    assert "no pre-TP stop" in all_text
+    assert "50% at +5%" in all_text
+    assert "arithmetic sum" in all_text.lower()
+    assert "Legacy historical account replay" not in all_text
+    assert "SL75" not in all_text
+    assert "TP20" not in all_text
     assert "EntryGate" not in all_text
 
 

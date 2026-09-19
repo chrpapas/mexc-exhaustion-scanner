@@ -10,7 +10,7 @@ from app.daily_core_strategy import (
     daily_confirmed_core_v1_snapshot_metadata,
 )
 from app.models import Candle, RunSignal
-from app.trader_config import TraderSettings
+from app.trader_config import RECOVERY_RUNNER_STRATEGY, TraderSettings
 from app.trader_models import TradeSignal
 
 
@@ -44,12 +44,13 @@ def test_daily_core_skip_is_default_and_pcr_is_rollback(monkeypatch):
     monkeypatch.delenv("TRADER_EXECUTION_STRATEGY", raising=False)
     monkeypatch.delenv("TRADER_PAPER_RUN_ID", raising=False)
     default = TraderSettings.from_env()
-    assert default.execution_strategy == "tp5_sl100_lae10_24_q1_daily_core_persistence_skip_v2"
-    assert default.paper_run_id == "tp5_sl75_persist_v2_armed48_50pct_v1"
+    assert default.execution_strategy == RECOVERY_RUNNER_STRATEGY
+    assert default.paper_run_id == "tp5_adv30_runner50_trail1_candidate_v1"
     assert default.uses_daily_core_skip
-    assert default.uses_catastrophic_stop
-    assert default.slot_allocation_pct == pytest.approx(50.0 / 6.0)
-    assert default.max_total_exposure_pct == pytest.approx(50.0)
+    assert default.uses_recovery_runner
+    assert not default.uses_catastrophic_stop
+    assert default.slot_allocation_pct == pytest.approx(10.0)
+    assert default.max_total_exposure_pct == pytest.approx(100.0)
 
     monkeypatch.setenv("TRADER_EXECUTION_STRATEGY", "tp5_sl75_pcr_v1")
     rollback = TraderSettings.from_env()

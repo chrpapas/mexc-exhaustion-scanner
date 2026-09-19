@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.trader_config import TraderSettings
+from app.trader_config import RECOVERY_RUNNER_STRATEGY, TraderSettings
 from app.trader_logic import (
     PCR_BASE_POSITION_FRACTION,
     PCR_EMA_DISTANCE_ATR_THRESHOLD,
@@ -47,14 +47,15 @@ def test_daily_core_skip_is_new_default_but_pcr_and_fixed_sl75_remain_supported(
     monkeypatch.delenv("TRADER_EXECUTION_STRATEGY", raising=False)
     monkeypatch.delenv("TRADER_PAPER_RUN_ID", raising=False)
     settings = TraderSettings.from_env()
-    assert settings.execution_strategy == "tp5_sl100_lae10_24_q1_daily_core_persistence_skip_v2"
-    assert settings.paper_run_id == "tp5_sl75_persist_v2_armed48_50pct_v1"
+    assert settings.execution_strategy == RECOVERY_RUNNER_STRATEGY
+    assert settings.paper_run_id == "tp5_adv30_runner50_trail1_candidate_v1"
     assert settings.uses_daily_core_skip
     assert not settings.uses_pcr_derisk
-    assert settings.uses_catastrophic_stop
+    assert settings.uses_recovery_runner
+    assert not settings.uses_catastrophic_stop
     assert settings.uses_generic_slots
-    assert settings.max_open_positions == 6
-    assert settings.max_total_exposure_pct == pytest.approx(50.0)
+    assert settings.max_open_positions == 10
+    assert settings.max_total_exposure_pct == pytest.approx(100.0)
 
     monkeypatch.setenv("TRADER_EXECUTION_STRATEGY", "tp5_sl75_v1")
     fixed = TraderSettings.from_env()
