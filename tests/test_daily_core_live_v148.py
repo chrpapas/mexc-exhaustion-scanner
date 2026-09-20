@@ -45,7 +45,7 @@ def test_daily_core_skip_is_default_and_pcr_is_rollback(monkeypatch):
     monkeypatch.delenv("TRADER_PAPER_RUN_ID", raising=False)
     default = TraderSettings.from_env()
     assert default.execution_strategy == RECOVERY_RUNNER_STRATEGY
-    assert default.paper_run_id == "tp5_adv30_runner50_trail1_candidate_v1"
+    assert default.paper_run_id == "tp5_adv30_runner50_trail1_atr_hard_v1"
     assert default.uses_daily_core_skip
     assert default.uses_recovery_runner
     assert not default.uses_catastrophic_stop

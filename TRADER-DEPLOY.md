@@ -1,4 +1,29 @@
-# Trader deployment — v1.3.79
+# Trader deployment — v1.3.81
+
+## v1.3.81 current paper-production strategy — ATR Hard Filter V1
+
+`tp5_nostop_adv30_runner50_trail1_daily_core_persistence_atr_hard_v1`
+
+Final admission after Daily-Core + Persistence V2: `atr_15m_pct >= 0.02461` on every signal. Missing ATR data fails closed. The trader repeats the same check before entry. Paper execution remains 10×10% MTM / 100% cap with the adverse-30 recovery runner.
+
+Rollback model strategy: `tp5_nostop_adv30_runner50_trail1_daily_core_persistence_atr_gate_v1`.
+
+
+
+## v1.3.80 rollback candidate — ATR Capacity Gate V1
+
+`tp5_nostop_adv30_runner50_trail1_daily_core_persistence_atr_gate_v1`
+
+The scanner remains Daily-Core + Persistence V2 fail-closed. The trader keeps the existing 10×10% MTM / 100% exposure / no-stop adverse-30 runner execution and adds a scarcity-only capacity gate:
+
+- occupancy 0–6: admit normally;
+- occupancy 7–9: require frozen confirmation-time `atr_15m_pct = atr_15m / retest_close >= 0.02461`;
+- signals in the same 5-minute confirmation bucket are ranked by descending `atr_15m_pct`;
+- missing ATR or entry price is fail-closed when the gate is active;
+- the legacy no-gate runner remains selectable as `tp5_nostop_adv30_runner50_trail1_daily_core_persistence_skip_v2`.
+
+Render defaults use a new paper run id so the gated candidate is measured separately from the prior runner.
+
 
 ## v1.3.75 promoted production candidate
 
@@ -200,3 +225,20 @@ The old scanner `tp5_sl75_daily_core_persistence_skip_v2` value is still accepte
 ## v1.3.78 reporting
 
 `python -m app.report_now` now sends the subscriber three-layer board: actual active trader run, current production strategy replay since the retained August data begins, and the capacity-independent arithmetic sum of all eligible current-strategy signals. `python -m app.research_analytics_now` is research-diagnostics only and no longer uploads legacy strategy-comparison CSVs.
+
+
+## ATR Capacity Gate V1 (v1.3.80)
+
+Production candidate settings:
+
+```text
+TRADER_EXECUTION_STRATEGY=tp5_nostop_adv30_runner50_trail1_daily_core_persistence_atr_gate_v1
+TRADER_MAX_OPEN_POSITIONS=10
+TRADER_SLOT_ALLOCATION_PCT=10
+TRADER_MAX_TOTAL_EXPOSURE_PCT=100
+ATR_CAPACITY_GATE_ENABLED=true
+ATR_CAPACITY_GATE_MIN_OCCUPANCY=7
+ATR_CAPACITY_GATE_MIN_ATR_15M_PCT=0.02461
+```
+
+`atr_15m_pct` is derived causally from the frozen confirmation-time `atr_15m / retest_close`. The gate is trader-side because occupancy is portfolio state. Scanner Daily-Core + Persistence V2 admission is unchanged.

@@ -55,7 +55,7 @@ def test_persistence_strategy_is_default_without_resetting_existing_paper_run(mo
     assert settings.uses_daily_core_skip
     assert settings.uses_daily_bull_persistence_skip
     assert settings.uses_recovery_runner
-    assert settings.paper_run_id == "tp5_adv30_runner50_trail1_candidate_v1"
+    assert settings.paper_run_id == "tp5_adv30_runner50_trail1_atr_hard_v1"
     assert settings.slot_allocation_pct == pytest.approx(10.0)
     assert settings.max_total_exposure_pct == pytest.approx(100.0)
 

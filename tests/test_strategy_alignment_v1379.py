@@ -16,6 +16,8 @@ def _safe_features():
         "daily_momentum_3d": -0.02,
         "daily_distance_above_ema20_atr": 1.0,
         "hours_run_to_breakdown": 12.0,
+        "atr_15m": 0.003,
+        "retest_close": 0.1,
         "lower_high_and_close": True,
         "structural_break_15m": True,
     }
@@ -39,6 +41,7 @@ def test_current_strategy_admission_is_fail_closed_and_shared():
     row = {
         "confirmed_at": datetime(2026, 9, 1, tzinfo=UTC),
         "risk_tier": "standard",
+        "entry_price": 0.1,
         "feature_snapshot": _safe_features(),
     }
     assert current_strategy_signal_is_eligible(row) is True

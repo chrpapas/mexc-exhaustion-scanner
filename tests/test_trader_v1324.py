@@ -18,7 +18,7 @@ def test_pcr_sl75_default_configuration(monkeypatch):
         monkeypatch.delenv(key, raising=False)
     settings = TraderSettings.from_env()
     assert settings.execution_strategy == RECOVERY_RUNNER_STRATEGY
-    assert settings.paper_run_id == "tp5_adv30_runner50_trail1_candidate_v1"
+    assert settings.paper_run_id == "tp5_adv30_runner50_trail1_atr_hard_v1"
     assert settings.uses_generic_slots is True
     assert settings.uses_catastrophic_stop is False
     assert settings.uses_recovery_runner is True
