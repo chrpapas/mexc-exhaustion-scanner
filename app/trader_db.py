@@ -266,7 +266,12 @@ class TraderRepository:
                    pe.started_at AS episode_started_at, pe.breakdown_at AS episode_breakdown_at
             FROM run_signals rs
             LEFT JOIN pump_episodes pe ON pe.id = rs.episode_id
-            WHERE rs.id > $1 AND rs.level='confirmed_short'
+            LEFT JOIN trader_signal_decisions td ON td.signal_id = rs.id
+            LEFT JOIN trader_positions tp ON tp.signal_id = rs.id
+            WHERE rs.id > $1
+              AND rs.level='confirmed_short'
+              AND td.signal_id IS NULL
+              AND tp.signal_id IS NULL
             ORDER BY rs.id ASC
             LIMIT $2
             """,

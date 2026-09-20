@@ -62,6 +62,7 @@ class ScannerWorker:
             settings.discord_signal_levels,
             performance_webhook_url=settings.discord_performance_webhook_url,
             subscriber_signal_strategy=settings.subscriber_signal_strategy,
+            subscriber_atr_hard_min_15m_pct=settings.subscriber_atr_hard_min_15m_pct,
         )
         self.trader_watchdog_notifier = TraderNotifier(settings.discord_trader_events_webhook_url)
         self.trader_repo = TraderRepository(self.db)

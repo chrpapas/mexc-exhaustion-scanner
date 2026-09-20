@@ -9,18 +9,19 @@ from zoneinfo import ZoneInfo
 from app.trader_logic import pcr_position_fraction
 from app.daily_core_strategy import daily_confirmed_core_v1_state
 from app.daily_bull_persistence_strategy import daily_bull_persistence_v1_state, daily_bull_persistence_v2_state
+from app.strategy_ids import CURRENT_ATR_HARD_MIN_15M_PCT
 
 PUBLIC_PERFORMANCE_RISK_TIERS = frozenset({"standard", "high_risk"})
 SHADOW_FEE_PER_FILL = 0.0008
 MONTHLY_RUN_RATE_DAYS = 30.0
 
-# Frozen acceptance window from the validated Aug-8 -> Sep-18 production replay.
-# The report can grow past this date, but it must continue to reproduce this
-# historical admission universe or the August benchmark is not comparable.
+# Frozen acceptance window from the validated Aug-8 -> Sep-18 signal dataset.
+# ATR Hard V1 is applied deterministically at 0.02461 to that same historical
+# universe; the report must reproduce the frozen 473 total / 199 eligible anchor.
 CURRENT_STRATEGY_REPLAY_START_AT = datetime(2026, 8, 8, 0, 0, tzinfo=ZoneInfo("UTC"))
 CURRENT_STRATEGY_REFERENCE_CUTOFF = datetime(2026, 9, 18, 9, 15, tzinfo=ZoneInfo("UTC"))
 CURRENT_STRATEGY_REFERENCE_TOTAL_SIGNALS = 473
-CURRENT_STRATEGY_REFERENCE_ELIGIBLE_SIGNALS = 366
+CURRENT_STRATEGY_REFERENCE_ELIGIBLE_SIGNALS = 199
 
 
 def _strategy_feature_snapshot(row: dict[str, Any]) -> dict[str, Any]:
@@ -37,6 +38,7 @@ def _strategy_feature_snapshot(row: dict[str, Any]) -> dict[str, Any]:
         "daily_distance_above_ema20_atr", "daily_ema20_slope",
         "daily_close_above_ema20", "daily_momentum_3d",
         "distance_above_ema20_atr_4h", "cross_section_percentile",
+        "atr_15m", "retest_close",
     ):
         if snapshot.get(key) is None and row.get(key) is not None:
             snapshot[key] = row.get(key)
@@ -52,7 +54,14 @@ def current_strategy_signal_is_eligible(row: dict[str, Any]) -> bool:
         return False
     if daily_bull_persistence_v2_state(features) is not False:
         return False
-    return True
+    try:
+        atr_15m = float(features.get("atr_15m"))
+        entry = float(row.get("entry_price") or features.get("retest_close"))
+    except (TypeError, ValueError):
+        return False
+    if atr_15m <= 0 or entry <= 0:
+        return False
+    return (atr_15m / entry) >= CURRENT_ATR_HARD_MIN_15M_PCT
 
 def short_return(entry_price: float, exit_price: float) -> float:
     if entry_price <= 0 or exit_price <= 0:

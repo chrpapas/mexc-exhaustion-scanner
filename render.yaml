@@ -26,7 +26,9 @@ services:
       - key: DISCORD_SIGNAL_LEVELS
         value: confirmed_short
       - key: SUBSCRIBER_SIGNAL_STRATEGY
-        value: tp5_nostop_adv30_runner50_trail1_daily_core_persistence_skip_v2
+        value: tp5_nostop_adv30_runner50_trail1_daily_core_persistence_atr_hard_v1
+      - key: ATR_HARD_FILTER_MIN_ATR_15M_PCT
+        value: "0.02461"
       - key: DISCORD_PERFORMANCE_WEBHOOK_URL
         sync: false
       - key: DISCORD_TRADER_EVENTS_WEBHOOK_URL
@@ -147,9 +149,9 @@ services:
       - key: TRADING_MODE
         value: paper
       - key: TRADER_EXECUTION_STRATEGY
-        value: tp5_nostop_adv30_runner50_trail1_daily_core_persistence_skip_v2
+        value: tp5_nostop_adv30_runner50_trail1_daily_core_persistence_atr_hard_v1
       - key: TRADER_PAPER_RUN_ID
-        value: tp5_adv30_runner50_trail1_candidate_v1
+        value: tp5_adv30_runner50_trail1_atr_hard_v1
       - key: TRADER_MARGIN_MODE
         value: cross
       - key: TRADER_LEVERAGE
@@ -162,6 +164,10 @@ services:
         value: "10"
       - key: TRADER_MAX_TOTAL_EXPOSURE_PCT
         value: "100"
+      - key: ATR_HARD_FILTER_ENABLED
+        value: "true"
+      - key: ATR_HARD_FILTER_MIN_ATR_15M_PCT
+        value: "0.02461"
       - key: TRADER_TP5_TARGET_PCT
         value: "5"
       - key: TRADER_CATASTROPHIC_STOP_PCT

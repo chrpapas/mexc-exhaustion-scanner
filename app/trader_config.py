@@ -3,10 +3,16 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 
-from app.strategy_ids import CURRENT_STRATEGY_ID
+from app.strategy_ids import (
+    ATR_CAPACITY_GATE_STRATEGY_ID,
+    CURRENT_ATR_HARD_MIN_15M_PCT,
+    CURRENT_STRATEGY_ID,
+    LEGACY_RECOVERY_RUNNER_ID,
+)
 
 
 RECOVERY_RUNNER_STRATEGY = CURRENT_STRATEGY_ID
+RECOVERY_RUNNER_STRATEGIES = frozenset({CURRENT_STRATEGY_ID, ATR_CAPACITY_GATE_STRATEGY_ID, LEGACY_RECOVERY_RUNNER_ID})
 
 
 def _bool(name: str, default: bool = False) -> bool:
@@ -37,6 +43,11 @@ class TraderSettings:
     max_open_positions: int
     slot_allocation_pct: float
     max_total_exposure_pct: float
+    atr_hard_filter_enabled: bool
+    atr_hard_filter_min_atr_15m_pct: float
+    atr_capacity_gate_enabled: bool
+    atr_capacity_gate_min_occupancy: int
+    atr_capacity_gate_min_atr_15m_pct: float
     max_standard_positions: int
     max_high_risk_positions: int
     standard_hold_days: int
@@ -83,7 +94,7 @@ class TraderSettings:
         execution_strategy = os.getenv("TRADER_EXECUTION_STRATEGY", RECOVERY_RUNNER_STRATEGY).strip().lower()
         allowed_risk_tiers = _csv_upper("TRADER_ALLOWED_RISK_TIERS", "STANDARD,HIGH_RISK")
         max_open_positions = int(
-            os.getenv("TRADER_MAX_OPEN_POSITIONS", "10" if execution_strategy == RECOVERY_RUNNER_STRATEGY else "6")
+            os.getenv("TRADER_MAX_OPEN_POSITIONS", "10" if execution_strategy in RECOVERY_RUNNER_STRATEGIES else "6")
         )
         if max_open_positions < 1:
             raise ValueError("TRADER_MAX_OPEN_POSITIONS must be >= 1")
@@ -98,7 +109,7 @@ class TraderSettings:
         }
         default_exposure = (
             "100"
-            if execution_strategy == RECOVERY_RUNNER_STRATEGY
+            if execution_strategy in RECOVERY_RUNNER_STRATEGIES
             else ("50" if current_strategy else ("30" if legacy_tp5_strategy else "20"))
         )
         max_total_exposure_pct = float(os.getenv("TRADER_MAX_TOTAL_EXPOSURE_PCT", default_exposure))
@@ -130,9 +141,19 @@ class TraderSettings:
             execution_strategy=execution_strategy,
             paper_run_id=os.getenv(
                 "TRADER_PAPER_RUN_ID",
-                "tp5_adv30_runner50_trail1_candidate_v1"
-                if execution_strategy == RECOVERY_RUNNER_STRATEGY
-                else "tp5_sl75_persist_v2_armed48_50pct_v1",
+                (
+                    "tp5_adv30_runner50_trail1_atr_hard_v1"
+                    if execution_strategy == CURRENT_STRATEGY_ID
+                    else (
+                        "tp5_adv30_runner50_trail1_atr_gate_v1"
+                        if execution_strategy == ATR_CAPACITY_GATE_STRATEGY_ID
+                        else (
+                            "tp5_adv30_runner50_trail1_candidate_v1"
+                            if execution_strategy == LEGACY_RECOVERY_RUNNER_ID
+                            else "tp5_sl75_persist_v2_armed48_50pct_v1"
+                        )
+                    )
+                ),
             ).strip(),
             margin_mode=os.getenv("TRADER_MARGIN_MODE", "cross").strip().lower(),
             legacy_position_maturity=os.getenv("TRADER_POSITION_MATURITY", "profit_20").strip().lower(),
@@ -141,6 +162,19 @@ class TraderSettings:
             max_open_positions=max_open_positions,
             slot_allocation_pct=slot_allocation_pct,
             max_total_exposure_pct=max_total_exposure_pct,
+            atr_hard_filter_enabled=_bool(
+                "ATR_HARD_FILTER_ENABLED", execution_strategy == CURRENT_STRATEGY_ID
+            ),
+            atr_hard_filter_min_atr_15m_pct=float(
+                os.getenv("ATR_HARD_FILTER_MIN_ATR_15M_PCT", str(CURRENT_ATR_HARD_MIN_15M_PCT))
+            ),
+            atr_capacity_gate_enabled=_bool(
+                "ATR_CAPACITY_GATE_ENABLED", execution_strategy == ATR_CAPACITY_GATE_STRATEGY_ID
+            ),
+            atr_capacity_gate_min_occupancy=int(os.getenv("ATR_CAPACITY_GATE_MIN_OCCUPANCY", "7")),
+            atr_capacity_gate_min_atr_15m_pct=float(
+                os.getenv("ATR_CAPACITY_GATE_MIN_ATR_15M_PCT", "0.02461")
+            ),
             max_standard_positions=max_standard_positions,
             max_high_risk_positions=max_high_risk_positions,
             standard_hold_days=int(os.getenv("TRADER_STANDARD_HOLD_DAYS", "7")),
@@ -173,9 +207,9 @@ class TraderSettings:
     def validate(self) -> None:
         if self.trading_mode not in {"paper", "live"}:
             raise ValueError("TRADING_MODE must be paper or live")
-        if self.execution_strategy not in {RECOVERY_RUNNER_STRATEGY, "tp5_sl100_lae10_24_q1_daily_core_persistence_skip_v2", "tp5_sl75_daily_core_persistence_skip_v2", "tp5_sl75_daily_core_persistence_skip_v1", "tp5_sl75_daily_core_skip_v1", "tp5_sl75_pcr_v1", "tp5_sl75_htf_v1", "tp5_sl75_v1", "tp5_v1", "tier_v1"}:
+        if self.execution_strategy not in {*RECOVERY_RUNNER_STRATEGIES, "tp5_sl100_lae10_24_q1_daily_core_persistence_skip_v2", "tp5_sl75_daily_core_persistence_skip_v2", "tp5_sl75_daily_core_persistence_skip_v1", "tp5_sl75_daily_core_skip_v1", "tp5_sl75_pcr_v1", "tp5_sl75_htf_v1", "tp5_sl75_v1", "tp5_v1", "tier_v1"}:
             raise ValueError(
-                f"TRADER_EXECUTION_STRATEGY must be {RECOVERY_RUNNER_STRATEGY}, tp5_sl100_lae10_24_q1_daily_core_persistence_skip_v2, tp5_sl75_daily_core_persistence_skip_v2, tp5_sl75_daily_core_persistence_skip_v1, tp5_sl75_daily_core_skip_v1, tp5_sl75_pcr_v1, tp5_sl75_htf_v1, tp5_sl75_v1, tp5_v1 or tier_v1"
+                f"TRADER_EXECUTION_STRATEGY must be one of {sorted(RECOVERY_RUNNER_STRATEGIES)}, tp5_sl100_lae10_24_q1_daily_core_persistence_skip_v2, tp5_sl75_daily_core_persistence_skip_v2, tp5_sl75_daily_core_persistence_skip_v1, tp5_sl75_daily_core_skip_v1, tp5_sl75_pcr_v1, tp5_sl75_htf_v1, tp5_sl75_v1, tp5_v1 or tier_v1"
             )
         if not self.paper_run_id or len(self.paper_run_id) > 80:
             raise ValueError("TRADER_PAPER_RUN_ID must be a non-empty identifier up to 80 characters")
@@ -190,7 +224,7 @@ class TraderSettings:
         unknown = set(self.allowed_risk_tiers) - {"STANDARD", "HIGH_RISK", "EXTREME_RISK"}
         if unknown:
             raise ValueError(f"unsupported risk tiers: {sorted(unknown)}")
-        if self.execution_strategy in {RECOVERY_RUNNER_STRATEGY, "tp5_v1", "tp5_sl75_v1", "tp5_sl75_pcr_v1", "tp5_sl75_htf_v1", "tp5_sl75_daily_core_skip_v1", "tp5_sl75_daily_core_persistence_skip_v1", "tp5_sl75_daily_core_persistence_skip_v2", "tp5_sl100_lae10_24_q1_daily_core_persistence_skip_v2"} and "EXTREME_RISK" in self.allowed_risk_tiers:
+        if self.execution_strategy in {*RECOVERY_RUNNER_STRATEGIES, "tp5_v1", "tp5_sl75_v1", "tp5_sl75_pcr_v1", "tp5_sl75_htf_v1", "tp5_sl75_daily_core_skip_v1", "tp5_sl75_daily_core_persistence_skip_v1", "tp5_sl75_daily_core_persistence_skip_v2", "tp5_sl100_lae10_24_q1_daily_core_persistence_skip_v2"} and "EXTREME_RISK" in self.allowed_risk_tiers:
             raise ValueError("TP5 strategies intentionally exclude EXTREME_RISK")
         if self.max_open_positions < 1:
             raise ValueError("TRADER_MAX_OPEN_POSITIONS must be >= 1")
@@ -200,6 +234,13 @@ class TraderSettings:
             raise ValueError("TRADER_MAX_TOTAL_EXPOSURE_PCT must be in (0,100]")
         if self.slot_allocation_pct * self.max_open_positions > self.max_total_exposure_pct + 1e-9:
             raise ValueError("slot allocation × max slots cannot exceed aggregate exposure cap")
+        if self.uses_atr_hard_filter and self.atr_hard_filter_min_atr_15m_pct <= 0:
+            raise ValueError("ATR_HARD_FILTER_MIN_ATR_15M_PCT must be positive")
+        if self.uses_atr_capacity_gate:
+            if self.atr_capacity_gate_min_occupancy < 1:
+                raise ValueError("ATR_CAPACITY_GATE_MIN_OCCUPANCY must be >= 1")
+            if self.atr_capacity_gate_min_atr_15m_pct <= 0:
+                raise ValueError("ATR_CAPACITY_GATE_MIN_ATR_15M_PCT must be positive")
         if self.max_standard_positions < 0 or self.max_standard_positions > self.max_open_positions:
             raise ValueError("TRADER_MAX_STANDARD_POSITIONS must be between 0 and max slots")
         if self.max_high_risk_positions < 0 or self.max_high_risk_positions > self.max_open_positions:
@@ -251,7 +292,7 @@ class TraderSettings:
 
     @property
     def uses_generic_slots(self) -> bool:
-        return self.execution_strategy in {RECOVERY_RUNNER_STRATEGY, "tp5_v1", "tp5_sl75_v1", "tp5_sl75_pcr_v1", "tp5_sl75_htf_v1", "tp5_sl75_daily_core_skip_v1", "tp5_sl75_daily_core_persistence_skip_v1", "tp5_sl75_daily_core_persistence_skip_v2", "tp5_sl100_lae10_24_q1_daily_core_persistence_skip_v2"}
+        return self.execution_strategy in {*RECOVERY_RUNNER_STRATEGIES, "tp5_v1", "tp5_sl75_v1", "tp5_sl75_pcr_v1", "tp5_sl75_htf_v1", "tp5_sl75_daily_core_skip_v1", "tp5_sl75_daily_core_persistence_skip_v1", "tp5_sl75_daily_core_persistence_skip_v2", "tp5_sl100_lae10_24_q1_daily_core_persistence_skip_v2"}
 
 
     @property
@@ -269,7 +310,7 @@ class TraderSettings:
     @property
     def uses_daily_core_skip(self) -> bool:
         return self.execution_strategy in {
-            RECOVERY_RUNNER_STRATEGY,
+            *RECOVERY_RUNNER_STRATEGIES,
             "tp5_sl75_daily_core_skip_v1",
             "tp5_sl75_daily_core_persistence_skip_v1",
             "tp5_sl75_daily_core_persistence_skip_v2",
@@ -278,11 +319,11 @@ class TraderSettings:
 
     @property
     def uses_daily_bull_persistence_skip(self) -> bool:
-        return self.execution_strategy in {RECOVERY_RUNNER_STRATEGY, "tp5_sl75_daily_core_persistence_skip_v1", "tp5_sl75_daily_core_persistence_skip_v2", "tp5_sl100_lae10_24_q1_daily_core_persistence_skip_v2"}
+        return self.execution_strategy in {*RECOVERY_RUNNER_STRATEGIES, "tp5_sl75_daily_core_persistence_skip_v1", "tp5_sl75_daily_core_persistence_skip_v2", "tp5_sl100_lae10_24_q1_daily_core_persistence_skip_v2"}
 
     @property
     def uses_daily_bull_persistence_v2_skip(self) -> bool:
-        return self.execution_strategy in {RECOVERY_RUNNER_STRATEGY, "tp5_sl75_daily_core_persistence_skip_v2", "tp5_sl100_lae10_24_q1_daily_core_persistence_skip_v2"}
+        return self.execution_strategy in {*RECOVERY_RUNNER_STRATEGIES, "tp5_sl75_daily_core_persistence_skip_v2", "tp5_sl100_lae10_24_q1_daily_core_persistence_skip_v2"}
 
     @property
     def uses_lae10_24_q1(self) -> bool:
@@ -290,7 +331,15 @@ class TraderSettings:
 
     @property
     def uses_recovery_runner(self) -> bool:
-        return self.execution_strategy == RECOVERY_RUNNER_STRATEGY
+        return self.execution_strategy in RECOVERY_RUNNER_STRATEGIES
+
+    @property
+    def uses_atr_hard_filter(self) -> bool:
+        return self.execution_strategy == CURRENT_STRATEGY_ID and self.atr_hard_filter_enabled
+
+    @property
+    def uses_atr_capacity_gate(self) -> bool:
+        return self.execution_strategy == ATR_CAPACITY_GATE_STRATEGY_ID and self.atr_capacity_gate_enabled
 
     @property
     def recovery_runner_adverse_pct(self) -> float:

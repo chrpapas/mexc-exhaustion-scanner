@@ -4,6 +4,8 @@ import os
 from dataclasses import dataclass
 
 from app.strategy_ids import (
+    ATR_CAPACITY_GATE_STRATEGY_ID,
+    CURRENT_ATR_HARD_MIN_15M_PCT,
     CURRENT_STRATEGY_ID,
     LEGACY_DAILY_CORE_ID,
     LEGACY_SUBSCRIBER_V1_ID,
@@ -37,6 +39,7 @@ class Settings:
     trader_watchdog_stale_seconds: int
     discord_signal_levels: frozenset[str]
     subscriber_signal_strategy: str
+    subscriber_atr_hard_min_15m_pct: float
     mexc_base_url: str
     mexc_spot_base_url: str
     require_mexc_spot_pair: bool
@@ -127,6 +130,9 @@ class Settings:
             subscriber_signal_strategy=os.getenv(
                 "SUBSCRIBER_SIGNAL_STRATEGY", CURRENT_STRATEGY_ID
             ).strip().lower(),
+            subscriber_atr_hard_min_15m_pct=float(
+                os.getenv("ATR_HARD_FILTER_MIN_ATR_15M_PCT", str(CURRENT_ATR_HARD_MIN_15M_PCT))
+            ),
             mexc_base_url=os.getenv("MEXC_BASE_URL", "https://contract.mexc.com"),
             mexc_spot_base_url=os.getenv("MEXC_SPOT_BASE_URL", "https://api.mexc.com"),
             require_mexc_spot_pair=_env_bool("REQUIRE_MEXC_SPOT_PAIR", True),
@@ -203,6 +209,7 @@ class Settings:
         }
         if self.subscriber_signal_strategy not in {
             CURRENT_STRATEGY_ID,
+            ATR_CAPACITY_GATE_STRATEGY_ID,
             LEGACY_SUBSCRIBER_V2_ID,
             LEGACY_SUBSCRIBER_V1_ID,
             LEGACY_DAILY_CORE_ID,
@@ -211,6 +218,8 @@ class Settings:
             raise ValueError(
                 "SUBSCRIBER_SIGNAL_STRATEGY must be the current production strategy, a supported legacy admission alias, or all_confirmed"
             )
+        if self.subscriber_signal_strategy == CURRENT_STRATEGY_ID and self.subscriber_atr_hard_min_15m_pct <= 0:
+            raise ValueError("ATR_HARD_FILTER_MIN_ATR_15M_PCT must be positive")
         unknown_signal_levels = self.discord_signal_levels - allowed_signal_levels
         if unknown_signal_levels:
             raise ValueError(

@@ -1,5 +1,19 @@
-# MEXC Exhaustion Scanner + Multi-Slot Futures Trader v1.3.79
+# MEXC Exhaustion Scanner + Multi-Slot Futures Trader v1.3.81
 
+## v1.3.81 — ATR Hard Filter V1
+
+Current paper-production strategy: `tp5_nostop_adv30_runner50_trail1_daily_core_persistence_atr_hard_v1`.
+
+- Daily-Core + Persistence V2 remains fail-closed.
+- Final universal admission filter: `atr_15m_pct = atr_15m / retest_close >= 0.02461` on every candidate.
+- Missing/invalid ATR inputs fail closed in both subscriber delivery and trader admission.
+- Execution remains 10 slots × 10% current MTM equity, 100% nominal cap, no pre-TP stop, adverse-30% recovery runner (50% TP5 + 50% 1pp trail).
+- Render remains `TRADING_MODE=paper`; live order API remains disabled.
+- Frozen Aug-08→Sep-18 regression anchor: 473 total signals / 199 ATR-hard eligible.
+
+## v1.3.80 — ATR Capacity Gate V1 (rollback model)
+
+Rollback strategy: `tp5_nostop_adv30_runner50_trail1_daily_core_persistence_atr_gate_v1`. It applies the same 0.02461 threshold only at 7+ occupied slots. The no-model runner remains available as `tp5_nostop_adv30_runner50_trail1_daily_core_persistence_skip_v2`.
 
 ## v1.3.79 — canonical strategy identity + validated August replay
 

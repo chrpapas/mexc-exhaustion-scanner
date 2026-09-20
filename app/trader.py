@@ -4,6 +4,7 @@ import asyncio
 import logging
 import time
 from datetime import UTC, datetime
+from itertools import groupby
 from typing import Any
 
 from app.db import Database
@@ -76,6 +77,60 @@ def _lae_q1_entry_quality(features: dict[str, Any]) -> int:
     q += 1 if r72 is not None and r72 > 0.5629 else 0
     q += 1 if momentum is not None and momentum <= -0.04472 else 0
     return min(10, q)
+
+
+def _atr_15m_pct(signal: TradeSignal) -> float | None:
+    """Frozen confirmation-time ATR14 normalized by the signal entry price."""
+    try:
+        atr_15m = float(signal.features.get("atr_15m"))
+        entry = float(signal.entry_hint) if signal.entry_hint is not None else float(signal.features.get("retest_close"))
+    except (TypeError, ValueError):
+        return None
+    if atr_15m <= 0 or entry <= 0:
+        return None
+    return atr_15m / entry
+
+
+def _capacity_priority_key(signal: TradeSignal) -> tuple[datetime, int, float, int]:
+    """Within one confirmation bucket, higher normalized ATR gets first claim on scarce slots."""
+    atr_pct = _atr_15m_pct(signal)
+    return (
+        signal.signaled_at,
+        1 if atr_pct is None else 0,
+        -(atr_pct or 0.0),
+        signal.id,
+    )
+
+
+def _atr_hard_filter_decision(
+    signal: TradeSignal,
+    settings: TraderSettings,
+) -> tuple[bool, str, float | None]:
+    """Frozen ATR Hard Filter v1. Fail closed for every candidate signal."""
+    if not settings.uses_atr_hard_filter:
+        return True, "not_active", _atr_15m_pct(signal)
+    atr_pct = _atr_15m_pct(signal)
+    if atr_pct is None:
+        return False, "missing_atr_15m_pct", None
+    if atr_pct < settings.atr_hard_filter_min_atr_15m_pct:
+        return False, "below_threshold", atr_pct
+    return True, "passed", atr_pct
+
+
+def _atr_capacity_gate_decision(
+    signal: TradeSignal,
+    settings: TraderSettings,
+    occupancy: int,
+) -> tuple[bool, str, float | None]:
+    """Frozen ATR Capacity Gate v1. Fail closed only once occupancy is scarce."""
+    if not settings.uses_atr_capacity_gate or occupancy < settings.atr_capacity_gate_min_occupancy:
+        return True, "not_active", _atr_15m_pct(signal)
+    atr_pct = _atr_15m_pct(signal)
+    if atr_pct is None:
+        return False, "missing_atr_15m_pct", None
+    if atr_pct < settings.atr_capacity_gate_min_atr_15m_pct:
+        return False, "below_threshold", atr_pct
+    return True, "passed", atr_pct
 
 
 class PortfolioShortTrader:
@@ -322,28 +377,35 @@ class PortfolioShortTrader:
                     ",".join(str(item.id) for item in recovered),
                     ",".join(item.symbol for item in recovered),
                 )
-                for signal in recovered:
-                    try:
-                        await self._handle_signal(signal)
-                    except Exception as exc:
-                        LOGGER.exception("Could not recover signal id=%s symbol=%s", signal.id, signal.symbol)
-                        await self.repo.decision(signal.id, "error", str(exc))
-                        await self._alert_error(f"signal:{signal.symbol}", exc)
-                    finally:
-                        await self.repo.set_cursor(signal.id)
+                await self._process_signal_batch(recovered, recovery=True)
 
             runtime = await self.repo.runtime()
             cursor = int(runtime["last_signal_id"])
             signals = await self.repo.next_confirmed_signals(cursor)
-            for signal in signals:
+            if signals:
+                await self._process_signal_batch(signals, recovery=False)
+
+    async def _process_signal_batch(self, signals: list[TradeSignal], *, recovery: bool) -> None:
+        """Process one or more chronological 5m confirmation cohorts.
+
+        Model-based strategies rank signals sharing the same frozen signaled_at by
+        normalized ATR. Cursor advancement happens after the entire cohort so
+        priority ordering cannot skip a lower-id signal within the same timestamp.
+        """
+        chronological = sorted(signals, key=lambda item: (item.signaled_at, item.id))
+        for _, cohort_iter in groupby(chronological, key=lambda item: item.signaled_at):
+            cohort = list(cohort_iter)
+            for signal in sorted(cohort, key=_capacity_priority_key):
                 try:
                     await self._handle_signal(signal)
                 except Exception as exc:
-                    LOGGER.exception("Could not process signal id=%s symbol=%s", signal.id, signal.symbol)
+                    label = "recover" if recovery else "process"
+                    LOGGER.exception(
+                        "Could not %s signal id=%s symbol=%s", label, signal.id, signal.symbol
+                    )
                     await self.repo.decision(signal.id, "error", str(exc))
                     await self._alert_error(f"signal:{signal.symbol}", exc)
-                finally:
-                    await self.repo.set_cursor(signal.id)
+            await self.repo.set_cursor(max(signal.id for signal in cohort))
 
     async def _handle_signal(self, signal: TradeSignal) -> None:
         age = max(0.0, (datetime.now(UTC) - signal.signaled_at).total_seconds())
@@ -452,6 +514,26 @@ class PortfolioShortTrader:
                     )
                 return
 
+        atr_hard_ok, atr_hard_reason, atr_15m_pct = _atr_hard_filter_decision(signal, self.settings)
+        if not atr_hard_ok:
+            if atr_hard_reason == "missing_atr_15m_pct":
+                await self._ignore_signal(
+                    signal,
+                    "ignored_missing_atr_hard_filter_data",
+                    "ATR Hard Filter V1 is fail-closed because confirmation-time atr_15m or entry price is missing",
+                )
+            else:
+                await self._ignore_signal(
+                    signal,
+                    "ignored_atr_hard_filter",
+                    (
+                        f"ATR Hard Filter V1 requires atr_15m_pct >= "
+                        f"{self.settings.atr_hard_filter_min_atr_15m_pct:.5f}; "
+                        f"signal={atr_15m_pct:.5f}"
+                    ),
+                )
+            return
+
         active = await self._active_positions()
         if len(active) >= self.settings.max_open_positions:
             await self._ignore_signal(
@@ -471,6 +553,30 @@ class PortfolioShortTrader:
                 f"{signal.symbol} already open",
                 active=active,
             )
+            return
+        atr_gate_ok, atr_gate_reason, atr_15m_pct = _atr_capacity_gate_decision(
+            signal, self.settings, len(active)
+        )
+        if not atr_gate_ok:
+            if atr_gate_reason == "missing_atr_15m_pct":
+                await self._ignore_signal(
+                    signal,
+                    "ignored_missing_atr_capacity_data",
+                    "ATR Capacity Gate V1 is fail-closed under scarce capacity because atr_15m or entry price is missing",
+                    active=active,
+                )
+            else:
+                await self._ignore_signal(
+                    signal,
+                    "ignored_atr_capacity_gate",
+                    (
+                        f"ATR Capacity Gate V1 requires atr_15m_pct >= "
+                        f"{self.settings.atr_capacity_gate_min_atr_15m_pct:.5f} "
+                        f"at occupancy >= {self.settings.atr_capacity_gate_min_occupancy}; "
+                        f"signal={atr_15m_pct:.5f}"
+                    ),
+                    active=active,
+                )
             return
         if self.settings.execution_strategy == "tier_v1" and signal.risk_tier == "STANDARD":
             standard_count = sum(p.risk_tier == "STANDARD" for p in active)
@@ -701,6 +807,12 @@ class PortfolioShortTrader:
                 "risk_tier": signal.risk_tier,
                 "paper_taker_fee_rate": self.settings.paper_taker_fee_rate,
                 "execution_strategy": self.settings.execution_strategy,
+                "atr_hard_filter_enabled": self.settings.uses_atr_hard_filter,
+                "atr_hard_filter_min_atr_15m_pct": self.settings.atr_hard_filter_min_atr_15m_pct if self.settings.uses_atr_hard_filter else None,
+                "atr_capacity_gate_enabled": self.settings.uses_atr_capacity_gate,
+                "atr_capacity_gate_min_occupancy": self.settings.atr_capacity_gate_min_occupancy if self.settings.uses_atr_capacity_gate else None,
+                "atr_capacity_gate_min_atr_15m_pct": self.settings.atr_capacity_gate_min_atr_15m_pct if self.settings.uses_atr_capacity_gate else None,
+                "atr_15m_pct": _atr_15m_pct(signal) if (self.settings.uses_atr_hard_filter or self.settings.uses_atr_capacity_gate) else None,
                 "original_notional_usdt": notional,
                 "original_quantity_base": quantity,
                 "recovery_runner_enabled": self.settings.uses_recovery_runner,
@@ -806,6 +918,12 @@ class PortfolioShortTrader:
                 "risk_tier": signal.risk_tier,
                 "mexc_liquidate_price": live_position.get("liquidatePrice"),
                 "execution_strategy": self.settings.execution_strategy,
+                "atr_hard_filter_enabled": self.settings.uses_atr_hard_filter,
+                "atr_hard_filter_min_atr_15m_pct": self.settings.atr_hard_filter_min_atr_15m_pct if self.settings.uses_atr_hard_filter else None,
+                "atr_capacity_gate_enabled": self.settings.uses_atr_capacity_gate,
+                "atr_capacity_gate_min_occupancy": self.settings.atr_capacity_gate_min_occupancy if self.settings.uses_atr_capacity_gate else None,
+                "atr_capacity_gate_min_atr_15m_pct": self.settings.atr_capacity_gate_min_atr_15m_pct if self.settings.uses_atr_capacity_gate else None,
+                "atr_15m_pct": _atr_15m_pct(signal) if (self.settings.uses_atr_hard_filter or self.settings.uses_atr_capacity_gate) else None,
                 "recovery_runner_enabled": self.settings.uses_recovery_runner,
                 "recovery_runner_adverse_pct": self.settings.recovery_runner_adverse_pct if self.settings.uses_recovery_runner else None,
                 "recovery_runner_fraction": self.settings.recovery_runner_fraction if self.settings.uses_recovery_runner else None,
@@ -1671,7 +1789,7 @@ class PortfolioShortTrader:
                 "max_total_exposure_pct": self.settings.max_total_exposure_pct,
                 "strategy": self.settings.execution_strategy,
                 "run_id": self._active_run_id,
-                "version": "1.3.75",
+                "version": "1.3.81",
             },
         )
 
@@ -1683,7 +1801,15 @@ class PortfolioShortTrader:
                     f"{self.settings.slot_allocation_pct:.2f}% • Daily-Core + Persistence V2 HARD SKIP • "
                     f"TP +{self.settings.tp5_target_pct:g}% core • adverse >= {self.settings.recovery_runner_adverse_pct:g}% "
                     f"→ 50% TP5 + 50% runner / {self.settings.recovery_runner_trail_gap_pct:g}pp trail • "
-                    f"no SL • max {self.settings.max_total_exposure_pct:.1f}% exposure • one position/symbol"
+                    + (
+                        f"ATR hard >= {self.settings.atr_hard_filter_min_atr_15m_pct:.5f} on every signal • "
+                        if self.settings.uses_atr_hard_filter else (
+                            f"ATR gate >= {self.settings.atr_capacity_gate_min_atr_15m_pct:.5f} at "
+                            f"{self.settings.atr_capacity_gate_min_occupancy}+ occupied • "
+                            if self.settings.uses_atr_capacity_gate else ""
+                        )
+                    )
+                    + f"no SL • max {self.settings.max_total_exposure_pct:.1f}% exposure • one position/symbol"
                 )
             stop = (
                 f" • catastrophic SL -{self.settings.catastrophic_stop_pct:g}%"

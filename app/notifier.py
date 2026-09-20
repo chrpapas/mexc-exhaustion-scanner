@@ -10,7 +10,7 @@ from typing import Any
 import httpx
 
 from app.models import RunSignal
-from app.strategy_ids import CURRENT_STRATEGY_ID
+from app.strategy_ids import ATR_CAPACITY_GATE_STRATEGY_ID, CURRENT_ATR_HARD_MIN_15M_PCT, CURRENT_STRATEGY_ID
 from app.daily_core_strategy import (
     DAILY_CORE_SKIP_STRATEGY,
     daily_confirmed_core_v1_missing_features,
@@ -49,6 +49,7 @@ class DiscordNotifier:
         *,
         performance_webhook_url: str | None = None,
         subscriber_signal_strategy: str = "all_confirmed",
+        subscriber_atr_hard_min_15m_pct: float = CURRENT_ATR_HARD_MIN_15M_PCT,
     ) -> None:
         self._webhook_url = webhook_url
         # Backward-compatible fallback: if the dedicated stats webhook is not
@@ -56,6 +57,7 @@ class DiscordNotifier:
         self._performance_webhook_url = performance_webhook_url or webhook_url
         self._signal_levels = frozenset(signal_levels or {"confirmed_short"})
         self._subscriber_signal_strategy = subscriber_signal_strategy
+        self._subscriber_atr_hard_min_15m_pct = subscriber_atr_hard_min_15m_pct
         self._client = httpx.AsyncClient(timeout=15.0)
 
     def should_send_signal(self, level: str) -> bool:
@@ -72,7 +74,7 @@ class DiscordNotifier:
             return
 
         features = signal.features
-        if self._subscriber_signal_strategy in {CURRENT_STRATEGY_ID, DAILY_CORE_SKIP_STRATEGY, DAILY_CORE_PERSISTENCE_SKIP_STRATEGY, DAILY_CORE_PERSISTENCE_SKIP_STRATEGY_V2}:
+        if self._subscriber_signal_strategy in {CURRENT_STRATEGY_ID, ATR_CAPACITY_GATE_STRATEGY_ID, DAILY_CORE_SKIP_STRATEGY, DAILY_CORE_PERSISTENCE_SKIP_STRATEGY, DAILY_CORE_PERSISTENCE_SKIP_STRATEGY_V2}:
             daily_core_state = daily_confirmed_core_v1_state(features)
             if daily_core_state is None:
                 missing = daily_confirmed_core_v1_missing_features(features)
@@ -88,8 +90,8 @@ class DiscordNotifier:
                     signal.symbol,
                 )
                 return
-        if self._subscriber_signal_strategy in {CURRENT_STRATEGY_ID, DAILY_CORE_PERSISTENCE_SKIP_STRATEGY, DAILY_CORE_PERSISTENCE_SKIP_STRATEGY_V2}:
-            if self._subscriber_signal_strategy in {CURRENT_STRATEGY_ID, DAILY_CORE_PERSISTENCE_SKIP_STRATEGY_V2}:
+        if self._subscriber_signal_strategy in {CURRENT_STRATEGY_ID, ATR_CAPACITY_GATE_STRATEGY_ID, DAILY_CORE_PERSISTENCE_SKIP_STRATEGY, DAILY_CORE_PERSISTENCE_SKIP_STRATEGY_V2}:
+            if self._subscriber_signal_strategy in {CURRENT_STRATEGY_ID, ATR_CAPACITY_GATE_STRATEGY_ID, DAILY_CORE_PERSISTENCE_SKIP_STRATEGY_V2}:
                 persistence_state = daily_bull_persistence_v2_state(features)
                 missing = daily_bull_persistence_v2_missing_features(features)
                 version = "V2"
@@ -109,6 +111,26 @@ class DiscordNotifier:
                     version, signal.symbol,
                 )
                 return
+        if self._subscriber_signal_strategy == CURRENT_STRATEGY_ID:
+            try:
+                atr_15m = float(features.get("atr_15m"))
+                entry = float(features.get("retest_close"))
+                atr_15m_pct = atr_15m / entry if atr_15m > 0 and entry > 0 else None
+            except (TypeError, ValueError):
+                atr_15m_pct = None
+            if atr_15m_pct is None:
+                LOGGER.warning(
+                    "Subscriber signal suppressed fail-closed for %s: missing ATR Hard Filter inputs",
+                    signal.symbol,
+                )
+                return
+            if atr_15m_pct < self._subscriber_atr_hard_min_15m_pct:
+                LOGGER.info(
+                    "Subscriber signal hard-filtered by ATR Hard V1: %s atr_15m_pct=%.5f threshold=%.5f",
+                    signal.symbol, atr_15m_pct, self._subscriber_atr_hard_min_15m_pct,
+                )
+                return
+
         run_score = features.get("run_score", signal.score)
         exhaustion_score = features.get("exhaustion_score")
         risk_tier = str(features.get("risk_tier") or "standard")
@@ -230,14 +252,14 @@ class DiscordNotifier:
             if account.reference_gate_passed is False:
                 return (
                     "⛔ **Historical comparability gate failed — benchmark suppressed.**\n"
-                    f"Frozen Aug-08→Sep-18 reference expected **473 total / 366 eligible**; "
+                    f"Frozen Aug-08→Sep-18 reference expected **473 total / 199 ATR-hard eligible**; "
                     f"current report source produced **{account.reference_total_signals} / {account.reference_eligible_signals}**. "
                     "The report will not publish an account-return number until the signal universe matches the validated reference."
                 )
             dd = f"-{self._percent(account.max_mtm_drawdown)}" if account.max_mtm_drawdown is not None else "n/a"
             capture = (account.entered / account.eligible_signals) if account.eligible_signals else None
             return (
-                f"Exact **10-slot / 10% MTM / 100% cap** replay from **{account.start_at.strftime('%d %b %Y') if account.start_at else 'start'}**\n"
+                f"Exact **ATR Hard V1 + 10-slot / 10% MTM / 100% cap** replay from **{account.start_at.strftime('%d %b %Y') if account.start_at else 'start'}**\n"
                 f"Account MTM **{self._signed_percent(account.observed_account_return)}** over **{account.span_days:.1f}d** • "
                 f"30D equivalent **{self._signed_percent(account.thirty_day_equivalent_return)}*** • max DD **{dd}**\n"
                 f"Closed **{account.closed_wins}W / {account.closed_losses}L** • resolved win rate **{self._percent(account.closed_win_rate)}** • "
