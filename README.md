@@ -1,4 +1,4 @@
-# MEXC Exhaustion Scanner + Multi-Slot Futures Trader v1.3.81
+# MEXC Exhaustion Scanner + Multi-Slot Futures Trader v1.3.82
 
 ## v1.3.81 — ATR Hard Filter V1
 

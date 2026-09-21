@@ -1,4 +1,4 @@
-# Trader deployment — v1.3.81
+# Trader deployment — v1.3.82
 
 ## v1.3.81 current paper-production strategy — ATR Hard Filter V1
 
