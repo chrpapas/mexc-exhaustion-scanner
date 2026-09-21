@@ -1334,6 +1334,7 @@ def build_performance_summary(
         daily_core_skip: bool = False,
         daily_bull_persistence_skip: bool = False,
         daily_bull_persistence_v2_skip: bool = False,
+        atr_hard_filter: bool = False,
         catastrophic_stop_pct: float | None = 0.75,
         lae10_24_q1: bool = False,
     ) -> AccountRunRateSummary:
@@ -1539,6 +1540,15 @@ def build_performance_summary(
                     continue
             elif daily_bull_persistence_skip:
                 if daily_bull_persistence_v1_state(admission_features(row)) is not False:
+                    continue
+            if atr_hard_filter:
+                features = admission_features(row)
+                try:
+                    atr_15m = float(features.get("atr_15m"))
+                    entry = float(row.get("entry_price") or features.get("retest_close"))
+                except (TypeError, ValueError):
+                    continue
+                if atr_15m <= 0 or entry <= 0 or (atr_15m / entry) < CURRENT_ATR_HARD_MIN_15M_PCT:
                     continue
             eligible_signals += 1
             eligible_rows.append(row)
@@ -2139,6 +2149,7 @@ def build_performance_summary(
         exposure=recovery_runner_exposure,
         daily_core_skip=True,
         daily_bull_persistence_v2_skip=True,
+        atr_hard_filter=True,
         catastrophic_stop_pct=None,
     )
     hold_7d_account_run_rate = account_run_rate(

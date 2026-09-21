@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import io
+import json
 import math
 import statistics
 from dataclasses import dataclass, replace
@@ -36,6 +37,7 @@ from app.trader_logic import (
     PCR_RETURN_24H_THRESHOLD,
     parabolic_continuation_risk,
 )
+from app.strategy_ids import CURRENT_ATR_HARD_MIN_15M_PCT
 from app.token_regime import (
     EPISODIC_CLASS,
     INSUFFICIENT_CLASS,
@@ -2111,7 +2113,7 @@ def _volatility_bucket_summary(
     generated_at: datetime,
 ) -> VolatilityBucketSummary:
     values = [value for row in rows for value in [_entry_atr_pct(row)] if value is not None]
-    validation = _strategy_validation_summary(rows, strategy="tp5_sl75_challenger", generated_at=generated_at)
+    validation = _strategy_validation_summary(rows, strategy="tp5_challenger", generated_at=generated_at)
     tp5_validation = _strategy_validation_summary(rows, strategy="tp5_challenger", generated_at=generated_at)
     tails = {item.threshold_pct: item for item in tp5_validation.tail_ladder}
     hit_times = [
@@ -2333,7 +2335,7 @@ def _build_volatility_research(
 
     fractions = _volatility_position_fractions(rows, calibration_median=p50)
     fixed = _portfolio_replay(
-        rows, strategy="tp5_sl75_challenger", generated_at=generated_at, path_rows=path_rows,
+        rows, strategy="tp5_challenger", generated_at=generated_at, path_rows=path_rows,
         cohort="volatility_comparison_all_observed", strategy_name_override="tp5_sl75_fixed_6x5_30pct",
     )
     normalized = _portfolio_replay(
@@ -3426,15 +3428,32 @@ def _cohort_score_buckets(rows: list[dict[str, Any]], cohort: str) -> tuple[Coho
     )
 
 
+def _atr_hard_v1_passes(row: dict[str, Any]) -> bool:
+    snapshot = row.get("feature_snapshot")
+    if isinstance(snapshot, str):
+        try:
+            snapshot = json.loads(snapshot)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            snapshot = {}
+    snapshot = dict(snapshot) if isinstance(snapshot, dict) else {}
+    atr = _float(snapshot.get("atr_15m") if snapshot.get("atr_15m") is not None else row.get("atr_15m"))
+    entry = _float(row.get("entry_price") or snapshot.get("retest_close") or row.get("retest_close"))
+    return bool(atr is not None and entry is not None and atr > 0 and entry > 0 and (atr / entry) >= CURRENT_ATR_HARD_MIN_15M_PCT)
+
+
 def build_current_strategy_research(
     raw_rows: Iterable[dict[str, Any]],
     *,
     generated_at: datetime,
     portfolio_path_rows: Iterable[dict[str, Any]] = (),
 ) -> CurrentStrategyResearchSummary:
-    """Build only the currently promoted Daily-Core + Persistence V2 research book.
+    """Build the promoted Daily-Core + Persistence V2 + ATR Hard V1 research universe.
 
-    This is the lightweight v1.3.56 path used by the Discord research command.
+    ATR Hard V1 is fail-closed at the frozen 0.02461 threshold. The routine
+    research portfolio uses the promoted 10x10 / 100% no-pre-TP-stop core;
+    exact adverse-30 runner accounting remains owned by the performance replay.
+
+    This is the lightweight Discord research command path.
     Legacy research builders remain available for offline/backward analysis, but
     they are no longer computed for the routine on-demand Discord report.
     """
@@ -3465,6 +3484,8 @@ def build_current_strategy_research(
             if persistence:
                 persistence_flagged += 1
                 continue
+            if not _atr_hard_v1_passes(row):
+                continue
             admitted.append(row)
         return (
             admitted,
@@ -3478,14 +3499,14 @@ def build_current_strategy_research(
     admitted_ids = {int(row["episode_id"]) for row in admitted if row.get("episode_id") is not None}
     portfolio = _portfolio_replay(
         rows,
-        strategy="tp5_sl75_challenger",
+        strategy="tp5_challenger",
         generated_at=generated_at,
         path_rows=path_rows,
-        cohort="current_daily_core_persistence_v2",
-        strategy_name_override="tp5_sl75_daily_core_persistence_skip_v2",
-        position_fraction_override=0.05,
-        max_total_override=6,
-        max_exposure_fraction_override=0.30,
+        cohort="current_daily_core_persistence_v2_atr_hard_v1",
+        strategy_name_override="tp5_nostop_daily_core_persistence_atr_hard_v1_10x10",
+        position_fraction_override=0.10,
+        max_total_override=10,
+        max_exposure_fraction_override=1.00,
         eligible_episode_ids=admitted_ids,
     )
     validation = _strategy_validation_summary(
@@ -3505,14 +3526,14 @@ def build_current_strategy_research(
     }
     forward_portfolio = _portfolio_replay(
         forward_rows,
-        strategy="tp5_sl75_challenger",
+        strategy="tp5_challenger",
         generated_at=generated_at,
         path_rows=path_rows,
-        cohort="current_daily_core_persistence_v2_true_forward",
-        strategy_name_override="tp5_sl75_daily_core_persistence_skip_v2_true_forward",
-        position_fraction_override=0.05,
-        max_total_override=6,
-        max_exposure_fraction_override=0.30,
+        cohort="current_daily_core_persistence_v2_atr_hard_v1_true_forward",
+        strategy_name_override="tp5_nostop_daily_core_persistence_atr_hard_v1_10x10_true_forward",
+        position_fraction_override=0.10,
+        max_total_override=10,
+        max_exposure_fraction_override=1.00,
         eligible_episode_ids=forward_ids,
     )
     forward_validation = _strategy_validation_summary(
@@ -3521,7 +3542,7 @@ def build_current_strategy_research(
 
     return CurrentStrategyResearchSummary(
         generated_at=generated_at,
-        strategy="tp5_sl75_daily_core_persistence_skip_v2",
+        strategy="tp5_nostop_adv30_runner50_trail1_daily_core_persistence_atr_hard_v1",
         total_signals=len(rows),
         daily_core_flagged=core_flagged,
         daily_core_missing=core_missing,
