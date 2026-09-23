@@ -1,0 +1,10 @@
+v1.2
+- Added causal Min1 snapshot reconstruction with no current-minute look-ahead.
+- Added disk-backed incremental Min1 SQLite index.
+- Added empirical collector timing model loader with symbol-median queue positions.
+- audit_timing_calibrator.py now exports timing_model.json.
+- Added resumable public MEXC Min1 history fetcher.
+- Added phase-sensitivity validation runner.
+- Exact audit snapshots override modeled snapshots when both are present.
+- Added Min1 reconstruction coverage gate and diagnostics.
+- Added four Min1 causality/timing tests; total offline tests 7.

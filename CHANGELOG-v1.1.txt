@@ -1,0 +1,6 @@
+v1.1
+- Added standalone audit_timing_calibrator.py.
+- Fits fetch-start delay vs collector queue index per audited candle cycle.
+- Reports cycle phase within each 15-minute candle, sweep duration, fetch latency, write latency, fit error, and correlation.
+- Pairs audited signal reads to collector snapshots only when they refer to the same completed Min15 candle open_time.
+- No changes to production_faithful_backtester.py replay semantics or seeded validation core.

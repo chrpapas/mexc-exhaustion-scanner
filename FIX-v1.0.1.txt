@@ -1,0 +1,7 @@
+production-faithful-backtester v1.0.1
+
+Fix:
+- dynamic_validate() now passes len(adm_match) and len(raw_match) to metrics().
+- v1.0 passed match lists directly, causing TypeError: unsupported operand type(s) for /: 'list' and 'int'.
+
+No replay, strategy, candle, audit-overlay, scanner, or trader behavior changed.
