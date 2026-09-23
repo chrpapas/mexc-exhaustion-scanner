@@ -23,6 +23,12 @@ services:
         value: "true"
       - key: LOG_LEVEL
         value: INFO
+      - key: SNAPSHOT_AUDIT_ENABLED
+        value: "true"
+      - key: SNAPSHOT_AUDIT_STATES
+        value: breakdown_watch
+      - key: SNAPSHOT_AUDIT_SYMBOLS
+        value: ""
       - key: DISCORD_SIGNAL_LEVELS
         value: confirmed_short
       - key: SUBSCRIBER_SIGNAL_STRATEGY
