@@ -1,5 +1,8 @@
 .gitignore
 .python-version
+AUDIT-CHANGESET.txt
+AUDIT-ONLY.md
+ORIGINAL-SOURCE-ZIP.sha256
 README.md
 README_v0.8.8.md
 TRADER-DEPLOY.md
@@ -68,13 +71,16 @@ migrations/017_daily_core_trader_decisions.sql
 migrations/018_daily_bull_persistence_trader_decisions.sql
 migrations/019_research_path_progress_indexes.sql
 migrations/020_persistence_v2_trader_decisions.sql
+migrations/021_atr_hard_filter_trader_decisions.sql
 migrations/021_recovery_runner_exit_strategy.sql
 pyproject.toml
 render.yaml
+scripts/extract_snapshot_audit.py
 scripts/verify_project.py
 tests/test_armed_runner_v157.py
 tests/test_atr_capacity_gate_v1380.py
 tests/test_atr_hard_filter_v1381.py
+tests/test_atr_hard_migration_v1382.py
 tests/test_atr_hard_notifier_v1381.py
 tests/test_cleanup_v1313.py
 tests/test_cleanup_v1314.py
@@ -137,6 +143,7 @@ tests/test_research_v153.py
 tests/test_research_v154.py
 tests/test_signal_ledger.py
 tests/test_signals.py
+tests/test_snapshot_audit_config_v1382.py
 tests/test_standard_scaling_v1330.py
 tests/test_strategy_alignment_v1379.py
 tests/test_strategy_validation_v1327.py

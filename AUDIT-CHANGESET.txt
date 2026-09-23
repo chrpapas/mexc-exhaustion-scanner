@@ -1,0 +1,26 @@
+Base artifact:
+  mexc-exhaustion-scanner-v1.3.82-atr-hard-fix(1).zip
+  SHA-256 9364f78bfdc2b036443900693168907c61077d8db4980d0f4149915db16cd8ca
+
+Original project files modified:
+  app/config.py
+  app/worker.py
+
+Original project files removed:
+  none
+
+New files added:
+  AUDIT-ONLY.md
+  AUDIT-CHANGESET.txt
+  ORIGINAL-SOURCE-ZIP.sha256
+  scripts/extract_snapshot_audit.py
+  tests/test_snapshot_audit_config_v1382.py
+
+Behavioral scope:
+  - no trader source changed
+  - no signal/scoring strategy source changed
+  - no database schema/migration changed
+  - no notifier source changed
+  - no execution source changed
+  - SNAPSHOT_AUDIT_ENABLED defaults false
+  - audit data is emitted only to logs; no audit DB writes

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import signal
 from dataclasses import replace
@@ -45,6 +46,7 @@ from app.signals import (
 )
 
 LOGGER = logging.getLogger(__name__)
+AUDIT_LOGGER = logging.getLogger("snapshot_audit")
 
 
 class ScannerWorker:
@@ -86,6 +88,77 @@ class ScannerWorker:
             exhaustion_watch_max_24h=settings.exhaustion_watch_max_24h,
             active_exhaustion_min_score=settings.active_exhaustion_min_score,
         )
+
+    def _snapshot_audit_symbol_selected(
+        self, symbol: str, *, episode_state: str | None = None
+    ) -> bool:
+        if not self.settings.snapshot_audit_enabled:
+            return False
+        configured = self.settings.snapshot_audit_symbols
+        if "*" in configured or symbol in configured:
+            return True
+        return (
+            episode_state is not None
+            and episode_state.lower() in self.settings.snapshot_audit_states
+        )
+
+    @staticmethod
+    def _snapshot_audit_candle(candle: object | None) -> dict[str, object] | None:
+        if candle is None:
+            return None
+        return {
+            "open_time": getattr(candle, "open_time", None),
+            "open": getattr(candle, "open", None),
+            "high": getattr(candle, "high", None),
+            "low": getattr(candle, "low", None),
+            "close": getattr(candle, "close", None),
+            "volume": getattr(candle, "volume", None),
+            "amount": getattr(candle, "amount", None),
+        }
+
+    def _emit_snapshot_audit_chunks(
+        self,
+        event: str,
+        *,
+        cycle_started_at: datetime,
+        rows: list[dict[str, object]],
+        meta: dict[str, object] | None = None,
+        chunk_size: int = 25,
+    ) -> None:
+        if not self.settings.snapshot_audit_enabled:
+            return
+        total = len(rows)
+        if total == 0:
+            AUDIT_LOGGER.info(
+                "SNAPSHOT_AUDIT %s",
+                json.dumps(
+                    {
+                        "event": event,
+                        "cycle_started_at": cycle_started_at,
+                        "row_count": 0,
+                        **(meta or {}),
+                    },
+                    separators=(",", ":"),
+                    default=str,
+                ),
+            )
+            return
+        chunks = (total + chunk_size - 1) // chunk_size
+        for chunk_index in range(chunks):
+            start = chunk_index * chunk_size
+            payload = {
+                "event": event,
+                "cycle_started_at": cycle_started_at,
+                "row_count": total,
+                "chunk_index": chunk_index + 1,
+                "chunk_count": chunks,
+                "rows": rows[start : start + chunk_size],
+                **(meta or {}),
+            }
+            AUDIT_LOGGER.info(
+                "SNAPSHOT_AUDIT %s",
+                json.dumps(payload, separators=(",", ":"), default=str),
+            )
 
     async def run(self) -> None:
         await self.db.connect()
@@ -479,17 +552,57 @@ class ScannerWorker:
             return
         semaphore = asyncio.Semaphore(self.settings.request_concurrency)
 
-        async def sync_symbol(symbol: str) -> None:
+        # Keep the audit-disabled production path byte-for-byte equivalent in
+        # behavior to v1.3.82: same coroutine shape, same gather ordering, and
+        # no audit timing/serialization work inside the candle sweep.
+        if not self.settings.snapshot_audit_enabled:
+            async def sync_symbol(symbol: str) -> None:
+                async with semaphore:
+                    await self._sync_interval(
+                        symbol, "Min15", bootstrap_days=14, overlap_hours=2
+                    )
+                    await self._sync_interval(
+                        symbol, "Hour4", bootstrap_days=120, overlap_hours=12
+                    )
+
+            results = await asyncio.gather(
+                *(sync_symbol(symbol) for symbol in symbols), return_exceptions=True
+            )
+            failures = sum(isinstance(result, Exception) for result in results)
+            for symbol, result in zip(symbols, results, strict=True):
+                if isinstance(result, Exception):
+                    LOGGER.warning("Candle sync failed for %s: %s", symbol, result)
+            LOGGER.info(
+                "Candle sync complete: symbols=%d failures=%d", len(symbols), failures
+            )
+            return
+
+        cycle_started_at = datetime.now(UTC)
+        audit_rows: list[dict[str, object]] = []
+
+        async def sync_symbol_audited(queue_index: int, symbol: str) -> None:
             async with semaphore:
                 await self._sync_interval(
-                    symbol, "Min15", bootstrap_days=14, overlap_hours=2
+                    symbol,
+                    "Min15",
+                    bootstrap_days=14,
+                    overlap_hours=2,
+                    audit_sink=audit_rows,
+                    audit_context={
+                        "queue_index": queue_index,
+                        "queue_size": len(symbols),
+                    },
                 )
                 await self._sync_interval(
                     symbol, "Hour4", bootstrap_days=120, overlap_hours=12
                 )
 
         results = await asyncio.gather(
-            *(sync_symbol(symbol) for symbol in symbols), return_exceptions=True
+            *(
+                sync_symbol_audited(queue_index, symbol)
+                for queue_index, symbol in enumerate(symbols, start=1)
+            ),
+            return_exceptions=True,
         )
         failures = sum(isinstance(result, Exception) for result in results)
         for symbol, result in zip(symbols, results, strict=True):
@@ -497,6 +610,16 @@ class ScannerWorker:
                 LOGGER.warning("Candle sync failed for %s: %s", symbol, result)
         LOGGER.info(
             "Candle sync complete: symbols=%d failures=%d", len(symbols), failures
+        )
+        self._emit_snapshot_audit_chunks(
+            "candle_cycle",
+            cycle_started_at=cycle_started_at,
+            rows=audit_rows,
+            meta={
+                "symbol_count": len(symbols),
+                "request_concurrency": self.settings.request_concurrency,
+                "failures": failures,
+            },
         )
 
     async def _daily_regime_for_confirmed_signal(
@@ -545,11 +668,28 @@ class ScannerWorker:
         return result
 
     async def _sync_interval(
-        self, symbol: str, interval: str, bootstrap_days: int, overlap_hours: int
+        self,
+        symbol: str,
+        interval: str,
+        bootstrap_days: int,
+        overlap_hours: int,
+        *,
+        audit_sink: list[dict[str, object]] | None = None,
+        audit_context: dict[str, object] | None = None,
     ) -> None:
         desired_start = datetime.now(UTC) - timedelta(days=bootstrap_days)
+        if audit_sink is None:
+            await self._sync_interval_from(
+                symbol, interval, desired_start=desired_start, overlap_hours=overlap_hours
+            )
+            return
         await self._sync_interval_from(
-            symbol, interval, desired_start=desired_start, overlap_hours=overlap_hours
+            symbol,
+            interval,
+            desired_start=desired_start,
+            overlap_hours=overlap_hours,
+            audit_sink=audit_sink,
+            audit_context=audit_context,
         )
 
     async def _sync_interval_from(
@@ -559,26 +699,101 @@ class ScannerWorker:
         *,
         desired_start: datetime,
         overlap_hours: int,
+        audit_sink: list[dict[str, object]] | None = None,
+        audit_context: dict[str, object] | None = None,
     ) -> None:
         """Backfill missing left-edge history, then refresh the recent overlap."""
         earliest = await self.db.earliest_candle_time(symbol, interval)
         latest = await self.db.latest_candle_time(symbol, interval)
+
+        # Original v1.3.82 path. Keeping this as an explicit fast path ensures
+        # SNAPSHOT_AUDIT_ENABLED=false does not add timestamping or audit work.
+        if audit_sink is None or interval != "Min15":
+            if latest is None:
+                candles = await self.mexc.get_klines(
+                    symbol, interval, int(desired_start.timestamp())
+                )
+                await self.db.upsert_candles(candles)
+                return
+
+            if earliest is None or earliest > desired_start:
+                history_end = (earliest or latest) - timedelta(seconds=1)
+                if history_end > desired_start:
+                    historical = await self.mexc.get_klines(
+                        symbol,
+                        interval,
+                        int(desired_start.timestamp()),
+                        int(history_end.timestamp()),
+                    )
+                    await self.db.upsert_candles(historical)
+
+            recent_start = latest - timedelta(hours=overlap_hours)
+            recent = await self.mexc.get_klines(
+                symbol, interval, int(recent_start.timestamp())
+            )
+            await self.db.upsert_candles(recent)
+            return
+
+        # Audit-enabled Min15 path: decision/data semantics are identical; only
+        # fetch/write timestamps and the exact latest payload are captured.
         if latest is None:
-            candles = await self.mexc.get_klines(symbol, interval, int(desired_start.timestamp()))
+            fetch_started_at = datetime.now(UTC)
+            candles = await self.mexc.get_klines(
+                symbol, interval, int(desired_start.timestamp())
+            )
+            fetch_finished_at = datetime.now(UTC)
             await self.db.upsert_candles(candles)
+            write_finished_at = datetime.now(UTC)
+            latest_fetched = max(candles, key=lambda item: item.open_time, default=None)
+            audit_sink.append(
+                {
+                    **(audit_context or {}),
+                    "symbol": symbol,
+                    "mode": "bootstrap",
+                    "latest_before": None,
+                    "fetch_started_at": fetch_started_at,
+                    "fetch_finished_at": fetch_finished_at,
+                    "write_finished_at": write_finished_at,
+                    "fetched_count": len(candles),
+                    "latest_fetched": self._snapshot_audit_candle(latest_fetched),
+                }
+            )
             return
 
         if earliest is None or earliest > desired_start:
             history_end = (earliest or latest) - timedelta(seconds=1)
             if history_end > desired_start:
                 historical = await self.mexc.get_klines(
-                    symbol, interval, int(desired_start.timestamp()), int(history_end.timestamp())
+                    symbol,
+                    interval,
+                    int(desired_start.timestamp()),
+                    int(history_end.timestamp()),
                 )
                 await self.db.upsert_candles(historical)
 
         recent_start = latest - timedelta(hours=overlap_hours)
-        recent = await self.mexc.get_klines(symbol, interval, int(recent_start.timestamp()))
+        fetch_started_at = datetime.now(UTC)
+        recent = await self.mexc.get_klines(
+            symbol, interval, int(recent_start.timestamp())
+        )
+        fetch_finished_at = datetime.now(UTC)
         await self.db.upsert_candles(recent)
+        write_finished_at = datetime.now(UTC)
+        latest_fetched = max(recent, key=lambda item: item.open_time, default=None)
+        audit_sink.append(
+            {
+                **(audit_context or {}),
+                "symbol": symbol,
+                "mode": "overlap_refresh",
+                "latest_before": latest,
+                "recent_start": recent_start,
+                "fetch_started_at": fetch_started_at,
+                "fetch_finished_at": fetch_finished_at,
+                "write_finished_at": write_finished_at,
+                "fetched_count": len(recent),
+                "latest_fetched": self._snapshot_audit_candle(latest_fetched),
+            }
+        )
 
     async def collect_research_regime_history(self) -> None:
         """Ensure pre-signal history exists for regime and HTF backfills.
@@ -691,6 +906,20 @@ class ScannerWorker:
 
         loop = asyncio.get_running_loop()
         evaluation_started = loop.time()
+        evaluation_started_at = (
+            datetime.now(UTC) if self.settings.snapshot_audit_enabled else None
+        )
+        audit_rows: list[dict[str, object]] | None = (
+            [] if self.settings.snapshot_audit_enabled else None
+        )
+        evaluation_queue_index = (
+            {
+                symbol: queue_index
+                for queue_index, symbol in enumerate(symbols, start=1)
+            }
+            if audit_rows is not None
+            else {}
+        )
         LOGGER.info(
             "Signal evaluation started: symbols=%d concurrency=%d",
             len(symbols),
@@ -879,6 +1108,37 @@ class ScannerWorker:
                 base_features.update(htf_snapshot_metadata(base_features))
 
                 episode = await self.db.get_active_episode(symbol)
+                audit_this_symbol = (
+                    audit_rows is not None
+                    and self._snapshot_audit_symbol_selected(
+                        symbol,
+                        episode_state=(episode.state if episode is not None else None),
+                    )
+                )
+                if audit_this_symbol:
+                    audit_rows.append(
+                        {
+                            "kind": "signal_read",
+                            "queue_index": evaluation_queue_index.get(symbol),
+                            "queue_size": len(symbols),
+                            "symbol": symbol,
+                            "read_at": now,
+                            "episode_id": episode.id if episode is not None else None,
+                            "episode_state": episode.state if episode is not None else None,
+                            "db_latest_min15": self._snapshot_audit_candle(
+                                candles_15m[-1] if candles_15m else None
+                            ),
+                            "completed_latest_min15": self._snapshot_audit_candle(
+                                completed_15m[-1] if completed_15m else None
+                            ),
+                            "ticker_last_price": ticker.last_price,
+                            "risk_tier": risk.tier,
+                            "run_score": run_score,
+                            "exhaustion_score": exhaustion_score,
+                            "market_state": state,
+                            "scorable": scorable,
+                        }
+                    )
                 peak_candle = max(completed_15m[-289:], key=lambda item: item.high)
                 normal_state_valid = scorable and state is not None
 
@@ -985,6 +1245,28 @@ class ScannerWorker:
                             tolerance_atr=self.settings.retest_tolerance_atr,
                             window_candles=self.settings.retest_window_candles,
                         )
+                        if audit_this_symbol and audit_rows is not None:
+                            audit_rows.append(
+                                {
+                                    "kind": "retest_result",
+                                    "queue_index": evaluation_queue_index.get(symbol),
+                                    "queue_size": len(symbols),
+                                    "symbol": symbol,
+                                    "evaluated_at": now,
+                                    "episode_id": episode.id,
+                                    "episode_state": episode.state,
+                                    "breakdown_at": episode.breakdown_at,
+                                    "broken_level": episode.broken_level,
+                                    "breakdown_atr_15m": episode.breakdown_atr_15m,
+                                    "retest_confirmed": retest.confirmed,
+                                    "retest_invalidated": retest.invalidated,
+                                    "retest_expired": retest.expired,
+                                    "retest_at": retest.retest_at,
+                                    "retest_high": retest.retest_high,
+                                    "retest_close": retest.retest_close,
+                                    "retest_reason": retest.reason,
+                                }
+                            )
                         if retest.confirmed:
                             confirm_features = dict(base_features)
                             daily_features = await self._daily_regime_for_confirmed_signal(
@@ -1380,6 +1662,18 @@ class ScannerWorker:
             failures,
             loop.time() - evaluation_started,
         )
+        if audit_rows is not None and evaluation_started_at is not None:
+            self._emit_snapshot_audit_chunks(
+                "signal_cycle",
+                cycle_started_at=evaluation_started_at,
+                rows=audit_rows,
+                meta={
+                    "symbol_count": len(symbols),
+                    "signal_eval_concurrency": self.settings.signal_eval_concurrency,
+                    "failures": failures,
+                    "duration_seconds": loop.time() - evaluation_started,
+                },
+            )
 
     async def _emit_watch_transition(
         self,

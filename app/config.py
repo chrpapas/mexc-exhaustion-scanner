@@ -46,6 +46,10 @@ class Settings:
     log_level: str
     execution_enabled: bool
 
+    snapshot_audit_enabled: bool
+    snapshot_audit_symbols: frozenset[str]
+    snapshot_audit_states: frozenset[str]
+
     ticker_poll_seconds: int
     ticker_store_seconds: int
     candle_poll_seconds: int
@@ -138,6 +142,9 @@ class Settings:
             require_mexc_spot_pair=_env_bool("REQUIRE_MEXC_SPOT_PAIR", True),
             log_level=os.getenv("LOG_LEVEL", "INFO").upper(),
             execution_enabled=_env_bool("EXECUTION_ENABLED", False),
+            snapshot_audit_enabled=_env_bool("SNAPSHOT_AUDIT_ENABLED", False),
+            snapshot_audit_symbols=_env_csv("SNAPSHOT_AUDIT_SYMBOLS", ""),
+            snapshot_audit_states=_env_csv_lower("SNAPSHOT_AUDIT_STATES", "breakdown_watch"),
             ticker_poll_seconds=int(os.getenv("TICKER_POLL_SECONDS", "60")),
             ticker_store_seconds=int(os.getenv("TICKER_STORE_SECONDS", "300")),
             candle_poll_seconds=int(os.getenv("CANDLE_POLL_SECONDS", "900")),
