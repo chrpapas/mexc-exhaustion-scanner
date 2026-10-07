@@ -5,7 +5,7 @@ services:
     plan: starter
     region: frankfurt
     buildCommand: pip install .
-    startCommand: python -m app.worker
+    startCommand: python -m app.t100_scanner_shadow
     autoDeployTrigger: commit
     maxShutdownDelaySeconds: 60
     envVars:
@@ -138,7 +138,7 @@ services:
     plan: starter
     region: frankfurt
     buildCommand: pip install .
-    startCommand: python -m app.trader
+    startCommand: python -m app.t100_200_worker
     autoDeployTrigger: commit
     maxShutdownDelaySeconds: 60
     envVars:
@@ -149,78 +149,24 @@ services:
       - key: PYTHON_VERSION
         value: "3.12.11"
       - key: MEXC_BASE_URL
+        value: https://contract.mexc.com
+      - key: MEXC_SPOT_BASE_URL
         value: https://api.mexc.com
-      - key: MEXC_WS_URL
-        value: wss://contract.mexc.com/edge
+      - key: REQUIRE_MEXC_SPOT_PAIR
+        value: "true"
+      - key: LOG_LEVEL
+        value: INFO
       - key: TRADING_MODE
         value: paper
-      - key: TRADER_EXECUTION_STRATEGY
-        value: tp5_nostop_adv30_runner50_trail1_daily_core_persistence_atr_hard_v1
-      - key: TRADER_PAPER_RUN_ID
-        value: tp5_adv30_runner50_trail1_atr_hard_v1
-      - key: TRADER_MARGIN_MODE
-        value: cross
-      - key: TRADER_LEVERAGE
-        value: "1"
-      - key: TRADER_ALLOWED_RISK_TIERS
-        value: STANDARD,HIGH_RISK
-      - key: TRADER_MAX_OPEN_POSITIONS
-        value: "10"
-      - key: TRADER_SLOT_ALLOCATION_PCT
-        value: "10"
-      - key: TRADER_MAX_TOTAL_EXPOSURE_PCT
-        value: "100"
-      - key: ATR_HARD_FILTER_ENABLED
-        value: "true"
-      - key: ATR_HARD_FILTER_MIN_ATR_15M_PCT
-        value: "0.02461"
-      - key: TRADER_TP5_TARGET_PCT
-        value: "5"
-      - key: TRADER_CATASTROPHIC_STOP_PCT
-        value: "75"
-      - key: TRADER_MAX_STANDARD_POSITIONS
-        value: "10"
-      - key: TRADER_MAX_HIGH_RISK_POSITIONS
-        value: "10"
-      - key: TRADER_STANDARD_HOLD_DAYS
-        value: "7"
-      - key: TRADER_HIGH_RISK_TIMEOUT_DAYS
-        value: "4"
-      - key: TRADER_ALLOW_SAME_SYMBOL_PARALLEL
-        value: "false"
       - key: PAPER_STARTING_EQUITY_USDT
         value: "2000"
-      - key: TRADER_PAPER_TAKER_FEE_RATE
-        value: "0.0008"
-      - key: TRADER_POLL_SECONDS
-        value: "5"
-      - key: TRADER_PROCESS_EXISTING_SIGNALS
-        value: "false"
-      - key: TRADER_MAX_SIGNAL_AGE_SECONDS
-        value: "900"
-      - key: TRADER_PROFIT_TARGET_PCT
-        value: "20"
-      - key: TRADER_PROTECTION_ARM_PCT
-        value: "25"
-      - key: TRADER_TRAIL_CALLBACK_PCT
-        value: "15"
-      - key: TRADER_PROTECTION_UPDATE_STEP_PCT
-        value: "1"
-      - key: TRADER_PROTECTION_NOTIFY_STEP_PCT
-        value: "10"
-      - key: TRADER_DISCORD_HEARTBEAT_SECONDS
-        value: "900"
-      - key: TRADER_ERROR_ALERT_COOLDOWN_SECONDS
-        value: "300"
+      - key: T100_POLL_SECONDS
+        value: "60"
+      - key: REQUEST_RATE_PER_SECOND
+        value: "8"
+      - key: REQUEST_CONCURRENCY
+        value: "4"
       - key: DISCORD_TRADER_EVENTS_WEBHOOK_URL
-        sync: false
-      - key: MEXC_LIVE_ORDER_API_ENABLED
-        value: "false"
-      - key: MEXC_API_KEY
-        sync: false
-      - key: MEXC_API_SECRET
-        sync: false
-      - key: LIVE_TRADING_CONFIRM
         sync: false
 
 databases:
