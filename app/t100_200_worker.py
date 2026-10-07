@@ -1089,6 +1089,35 @@ class T100Worker:
         )
         positions = await self._open_positions()
         equity = await self._equity(positions)
+        runtime = await self._runtime()
+        realized_equity = float(runtime["realized_equity_usdt"])
+        unrealized_pnl = equity - realized_equity
+        gross_notional = sum(float(p["notional_usdt"]) for p in positions)
+        gross_exposure_pct = (
+            gross_notional / equity * 100.0 if equity > 0 else None
+        )
+        await self.db.pool.execute(
+            """
+            INSERT INTO t100_equity_snapshots(
+                snapshot_at,equity_usdt,realized_equity_usdt,unrealized_pnl_usdt,
+                gross_notional_usdt,gross_exposure_pct,open_positions
+            ) VALUES($1,$2,$3,$4,$5,$6,$7)
+            ON CONFLICT(snapshot_at) DO UPDATE SET
+                equity_usdt=EXCLUDED.equity_usdt,
+                realized_equity_usdt=EXCLUDED.realized_equity_usdt,
+                unrealized_pnl_usdt=EXCLUDED.unrealized_pnl_usdt,
+                gross_notional_usdt=EXCLUDED.gross_notional_usdt,
+                gross_exposure_pct=EXCLUDED.gross_exposure_pct,
+                open_positions=EXCLUDED.open_positions
+            """,
+            eval_at,
+            equity,
+            realized_equity,
+            unrealized_pnl,
+            gross_notional,
+            gross_exposure_pct,
+            len(positions),
+        )
         await self.db.heartbeat(
             "mexc-t100-200-paper",
             {
