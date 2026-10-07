@@ -6,7 +6,6 @@ import logging
 import math
 import os
 import signal
-from dataclasses import asdict
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -62,7 +61,6 @@ from app.trader_notifier import TraderNotifier
 LOGGER = logging.getLogger(__name__)
 M30 = timedelta(minutes=30)
 H4 = timedelta(hours=4)
-DAY = timedelta(days=1)
 
 
 def configure_logging(level: str) -> None:
@@ -276,11 +274,14 @@ class T100Worker:
         h4c = [c for c in h4 if c.open_time + H4 <= eval_at]
         if len(h4c) < 25:
             return None
-        h4cl = [c.close for c in h4c]
+        # Frozen historical proxy computed production-style Hour4 metrics
+        # over a rolling window capped at the most recent 80 completed H4 bars.
+        h4w = h4c[-80:]
+        h4cl = [c.close for c in h4w]
         h4ema = ema(h4cl, 20)
         h4atr = atr(
-            [c.high for c in h4c],
-            [c.low for c in h4c],
+            [c.high for c in h4w],
+            [c.low for c in h4w],
             h4cl,
             14,
         )
@@ -431,13 +432,17 @@ class T100Worker:
         earliest = await self.db.earliest_candle_time(symbol, "Min30")
         needed = feature_at - timedelta(days=365)
         if earliest is None or earliest > needed:
+            # This is an intentional deep backfill, not the normal overlap sync.
+            # get_klines paginates the native Min30 endpoint in <=1900-bar windows.
             try:
-                await self._sync_interval(
+                start = feature_at - timedelta(days=370)
+                candles = await self.mexc.get_klines(
                     symbol,
                     "Min30",
-                    bootstrap=timedelta(days=370),
-                    overlap=timedelta(hours=3),
+                    max(0, int(start.timestamp())),
+                    int(feature_at.timestamp()),
                 )
+                await self.db.upsert_candles(candles)
             except Exception:
                 LOGGER.warning("T100 strict365 backfill failed for %s", symbol, exc_info=True)
             earliest = await self.db.earliest_candle_time(symbol, "Min30")
