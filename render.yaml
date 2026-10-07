@@ -5,7 +5,7 @@ services:
     plan: starter
     region: frankfurt
     buildCommand: pip install .
-    startCommand: python -m app.t100_scanner_shadow
+    startCommand: python -m app.t100_200_scanner
     autoDeployTrigger: commit
     maxShutdownDelaySeconds: 60
     envVars:
@@ -138,7 +138,7 @@ services:
     plan: starter
     region: frankfurt
     buildCommand: pip install .
-    startCommand: python -m app.t100_200_worker
+    startCommand: python -m app.t100_200_trader
     autoDeployTrigger: commit
     maxShutdownDelaySeconds: 60
     envVars:
