@@ -1101,11 +1101,30 @@ class T100Worker:
         )
 
     async def cycle(self) -> None:
-        await self.refresh_contracts()
-        await self.sync_market_history()
         latest_eval = _floor_30m(datetime.now(UTC))
         runtime = await self._runtime()
         last_eval = runtime.get("last_eval_at")
+
+        # No new native Min30 close: do not hammer the full universe. Keep only
+        # idempotent pending-admission recovery and heartbeat alive.
+        if last_eval is not None and last_eval >= latest_eval:
+            await self._admit_pending_stage2(latest_eval)
+            positions = await self._open_positions()
+            await self.db.heartbeat(
+                "mexc-t100-200-paper",
+                {
+                    "strategy_id": STRATEGY_ID,
+                    "run_id": PAPER_RUN_ID,
+                    "mode": "paper",
+                    "last_eval_at": last_eval.isoformat(),
+                    "open_positions": len(positions),
+                    "equity_usdt": round(await self._equity(positions), 4),
+                },
+            )
+            return
+
+        await self.refresh_contracts()
+        await self.sync_market_history()
         if last_eval is None:
             evals = [latest_eval]
         else:
@@ -1120,20 +1139,6 @@ class T100Worker:
                 raise RuntimeError("T100 catch-up exceeds 10 days; manual reconstruction required")
         for eval_at in evals:
             await self.process_eval(eval_at)
-        if not evals:
-            await self._admit_pending_stage2(latest_eval)
-            positions = await self._open_positions()
-            await self.db.heartbeat(
-                "mexc-t100-200-paper",
-                {
-                    "strategy_id": STRATEGY_ID,
-                    "run_id": PAPER_RUN_ID,
-                    "mode": "paper",
-                    "last_eval_at": last_eval.isoformat() if last_eval else None,
-                    "open_positions": len(positions),
-                    "equity_usdt": round(await self._equity(positions), 4),
-                },
-            )
 
     async def run(self) -> None:
         await self.initialize()
