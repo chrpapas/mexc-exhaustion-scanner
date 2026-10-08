@@ -1,5 +1,6 @@
 from app.t100_200_strategy import (
     HIGH_TIER,
+    LEGACY_HIGH_TIER,
     LOW_TIER,
     Stage1Gate,
     evaluate_completed_bar,
@@ -18,9 +19,13 @@ def test_stage1_gate_and_tier_boundaries():
     assert Stage1Gate(True, 0.15, 5.7).tier == HIGH_TIER
 
 
-def test_t100_200_notional_fractions_are_per_current_equity():
+def test_t100_225_notional_fractions_are_per_current_equity():
     assert notional_fraction(LOW_TIER) == 0.25
-    assert notional_fraction(HIGH_TIER) == 0.50
+    assert notional_fraction(HIGH_TIER) == 0.5625
+
+
+def test_legacy_high_200_pending_signal_keeps_old_fraction():
+    assert notional_fraction(LEGACY_HIGH_TIER) == 0.50
 
 
 def test_pretrail_sl75_is_adverse_first():
