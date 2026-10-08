@@ -169,7 +169,7 @@ class T100Scanner(T100Worker):
             "**Stage2 P15_A4_D0** • native Min30 P2 • 4 slots • one position/symbol\n"
             "Stage1 strict365 + r24 ≥15% + ATR7 ≥4% • LOW_100 <5.7% ATR → "
             "25% equity notional • HIGH_200 ≥5.7% → 50%\n"
-            "SL75 before trail • trail arms +10% • 1pp gap • ADVERSE_FIRST • "
+            "SL75 before trail • trail arms +14% • 0.5pp gap • ADVERSE_FIRST • "
             "0.08%/fill • 25bp each-side execution debit • funding included"
         )
 

@@ -49,6 +49,8 @@ from app.t100_200_strategy import (
     SHORT_EXHAUSTION_SCORE,
     SLIPPAGE_RATE,
     STRATEGY_ID,
+    TRAIL_ACTIVATION_PCT,
+    TRAIL_GAP_PCT,
     WIDE_SCAN_MIN_RETURN_72H,
     Stage1Gate,
     evaluate_completed_bar,
@@ -873,6 +875,8 @@ class T100Worker:
                 low=float(candle["low"]),
                 trail_active=bool(p["trail_active"]),
                 best_profit_pct=float(p["best_profit_pct"]),
+                trail_activation_pct=float(p["trail_activation_pct"]),
+                trail_gap_pct=float(p["trail_gap_pct"]),
             )
             mae = max(
                 float(p["mae_pct"]),
@@ -1006,16 +1010,20 @@ class T100Worker:
                                 INSERT INTO t100_positions(
                                     signal_id,symbol,slot_no,tier,opened_at,entry_price,
                                     notional_usdt,quantity,entry_fee_usdt,entry_slippage_usdt,
+                                    trail_activation_pct,trail_gap_pct,
                                     current_price,current_return_pct,metadata
-                                ) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$6,0,$11::jsonb)
+                                ) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$6,0,$13::jsonb)
                                 RETURNING id
                                 """,
                                 signal_row["id"], signal_row["symbol"], slot,
                                 signal_row["t100_tier"], signal_row["p2_at"], entry,
                                 notional, quantity, entry_fee, entry_slip,
+                                TRAIL_ACTIVATION_PCT, TRAIL_GAP_PCT,
                                 json.dumps(
                                     {
                                         "strategy_id": STRATEGY_ID,
+                                        "trail_activation_pct": TRAIL_ACTIVATION_PCT,
+                                        "trail_gap_pct": TRAIL_GAP_PCT,
                                         "stage1_return_24h": signal_row["stage1_return_24h"],
                                         "stage1_atr7_pct": signal_row["stage1_atr7_pct"],
                                     },
@@ -1042,6 +1050,8 @@ class T100Worker:
                                         "slot": slot,
                                         "notional": notional,
                                         "entry": entry,
+                                        "trail_activation_pct": TRAIL_ACTIVATION_PCT,
+                                        "trail_gap_pct": TRAIL_GAP_PCT,
                                     }
                                 ),
                             )
@@ -1154,7 +1164,7 @@ class T100Worker:
                 {"name": "Strategy", "value": STRATEGY_ID, "inline": False},
                 {"name": "Slots", "value": "4", "inline": True},
                 {"name": "Sizing", "value": "LOW 25% / HIGH 50% equity", "inline": True},
-                {"name": "Exit", "value": "SL75 → trail +10%, gap 1pp", "inline": False},
+                {"name": "Exit", "value": "SL75 → trail +14%, gap 0.5pp", "inline": False},
             ],
         )
         try:
