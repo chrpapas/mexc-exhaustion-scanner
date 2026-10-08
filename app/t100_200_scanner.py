@@ -207,20 +207,9 @@ class T100Scanner(T100Worker):
         )
 
     async def process_eval(self, eval_at: datetime) -> None:
-        candidates = await self._select_eval_candidates(eval_at)
-        processed = 0
-        for candidate in candidates:
-            row = await self._feature_for_symbol(
-                str(candidate["symbol"]),
-                eval_at,
-                include_recent_m30=True,
-            )
-            if row is None:
-                continue
-            row["cross_rank"] = candidate.get("cross_rank")
-            row["btc_r24"] = candidate.get("btc_r24")
+        rows = await self._build_eval_rows(eval_at)
+        for row in rows:
             await self._process_symbol_row(row)
-            processed += 1
 
         await self.db.pool.execute(
             """
@@ -242,14 +231,14 @@ class T100Scanner(T100Worker):
             {
                 "strategy_id": STRATEGY_ID,
                 "last_eval_at": eval_at.isoformat(),
-                "evaluated_symbols": processed,
+                "evaluated_symbols": len(rows),
                 "eligible_stage2_created": int(eligible or 0),
             },
         )
         LOGGER.info(
             "T100 scanner eval complete %s symbols=%d eligible_stage2=%d",
             eval_at.isoformat(),
-            processed,
+            len(rows),
             int(eligible or 0),
         )
 
