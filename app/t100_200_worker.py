@@ -951,7 +951,7 @@ class T100Worker:
                         ),
                     )
             await self.notifier.send(
-                "T100_200 PAPER EXIT",
+                "T100_225 PAPER EXIT",
                 f"{p['symbol']} • {decision.reason}",
                 [
                     {"name": "Exit", "value": f"{exit_px:.10g}", "inline": True},
@@ -976,8 +976,8 @@ class T100Worker:
             if signal_row["symbol"] in symbols:
                 decision, reason = "ignored_duplicate_symbol", "one position per symbol"
             elif len(positions) >= MAX_OPEN_POSITIONS:
-                decision, reason = "ignored_capacity", "all four T100_200 slots occupied"
-            elif signal_row["t100_tier"] not in {"LOW_100", "HIGH_200"}:
+                decision, reason = "ignored_capacity", "all four T100_225 slots occupied"
+            elif signal_row["t100_tier"] not in {"LOW_100", HIGH_TIER, LEGACY_HIGH_TIER}:
                 decision, reason = "ignored_invalid", "eligible Stage2 missing frozen ATR tier"
             else:
                 equity = await self._equity(positions)
@@ -997,7 +997,7 @@ class T100Worker:
                                 """
                                 UPDATE t100_p2_signals
                                 SET trade_decision='accepted',
-                                    trade_decision_reason='T100_200 Stage2 admitted'
+                                    trade_decision_reason='T100_225 Stage2 admitted'
                                 WHERE id=$1 AND trade_decision IS NULL
                                 RETURNING id
                                 """,
@@ -1056,7 +1056,7 @@ class T100Worker:
                                 ),
                             )
                     await self.notifier.send(
-                        "T100_200 PAPER ENTRY",
+                        "T100_225 PAPER ENTRY",
                         f"{signal_row['symbol']} • {signal_row['t100_tier']} • slot {slot}/4",
                         [
                             {"name": "Entry", "value": f"{entry:.10g}", "inline": True},
@@ -1158,12 +1158,12 @@ class T100Worker:
     async def run(self) -> None:
         await self.initialize()
         await self.notifier.send(
-            "T100_200 PAPER STARTED",
-            "Frozen Stage2 P15_A4 strategy is active in paper/shadow mode.",
+            "T100_225 PAPER STARTED",
+            "Frozen A14/G0.5 Stage2 P15_A4 strategy with T100_225 sizing is active in paper/shadow mode.",
             [
                 {"name": "Strategy", "value": STRATEGY_ID, "inline": False},
                 {"name": "Slots", "value": "4", "inline": True},
-                {"name": "Sizing", "value": "LOW 25% / HIGH 50% equity", "inline": True},
+                {"name": "Sizing", "value": "LOW 25% / HIGH 56.25% equity", "inline": True},
                 {"name": "Exit", "value": "SL75 → trail +14%, gap 0.5pp", "inline": False},
             ],
         )
@@ -1177,7 +1177,7 @@ class T100Worker:
                 except Exception:
                     LOGGER.exception("T100 cycle failed")
                     await self.notifier.send(
-                        "T100_200 PAPER ERROR",
+                        "T100_225 PAPER ERROR",
                         "Cycle failed; strategy remains fail-closed until the next successful cycle.",
                     )
                 elapsed = asyncio.get_running_loop().time() - started
