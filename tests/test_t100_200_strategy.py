@@ -35,26 +35,40 @@ def test_pretrail_sl75_is_adverse_first():
     assert d.exit_price == stop_price(100.0) == 175.0
 
 
-def test_new_trail_activation_cannot_exit_same_bar():
+def test_a14_new_trail_activation_cannot_exit_same_bar():
     d = evaluate_completed_bar(
         entry=100.0,
         high=100.0,
-        low=89.0,
+        low=85.0,
         trail_active=False,
         best_profit_pct=0.0,
     )
     assert d.exit_price is None
     assert d.trail_active
-    assert d.best_profit_pct == 11.0
+    assert d.best_profit_pct == 15.0
 
 
-def test_existing_trail_uses_best_minus_one_percentage_point():
+def test_a14_existing_trail_uses_half_percentage_point_gap():
+    d = evaluate_completed_bar(
+        entry=100.0,
+        high=87.0,
+        low=80.0,
+        trail_active=True,
+        best_profit_pct=14.0,
+    )
+    assert d.reason == "trail_gap0p5"
+    assert d.exit_price == 86.5
+
+
+def test_legacy_a10_g1_position_can_keep_original_exit_geometry():
     d = evaluate_completed_bar(
         entry=100.0,
         high=92.5,
         low=80.0,
         trail_active=True,
         best_profit_pct=10.0,
+        trail_activation_pct=10.0,
+        trail_gap_pct=1.0,
     )
     assert d.reason == "trail_gap1"
     assert d.exit_price == 91.0
