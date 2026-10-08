@@ -1164,7 +1164,7 @@ class T100Worker:
                 {"name": "Strategy", "value": STRATEGY_ID, "inline": False},
                 {"name": "Slots", "value": "4", "inline": True},
                 {"name": "Sizing", "value": "LOW 25% / HIGH 50% equity", "inline": True},
-                {"name": "Exit", "value": "SL75 → trail +10%, gap 1pp", "inline": False},
+                {"name": "Exit", "value": "SL75 → trail +14%, gap 0.5pp", "inline": False},
             ],
         )
         try:
