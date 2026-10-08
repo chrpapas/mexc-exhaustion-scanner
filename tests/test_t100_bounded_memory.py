@@ -16,24 +16,22 @@ def test_bounded_candidate_selection_preserves_frozen_ranking_inputs(monkeypatch
         "B_USDT": {"r24": 0.01, "r72": 0.01, "amount24": 60.0},
         "C_USDT": {"r24": 0.15, "r72": 0.05, "amount24": 40.0},
     }
-    calls = []
+    discovery_calls = []
+    full_feature_calls = []
 
-    async def feature(symbol, eval_at, *, include_recent_m30=True):
-        calls.append((symbol, include_recent_m30))
-        row = {
-            "symbol": symbol,
-            "eval_at": eval_at,
-            "feature_at": eval_at,
-            **rows[symbol],
-        }
-        if include_recent_m30:
-            row["recent_m30"] = [object()] * 220
-        return row
+    async def discovery_feature(symbol, eval_at):
+        discovery_calls.append(symbol)
+        return {"symbol": symbol, **rows[symbol]}
+
+    async def full_feature(*args, **kwargs):
+        full_feature_calls.append((args, kwargs))
+        raise AssertionError("full feature builder must not run during universe ranking")
 
     async def active_symbols():
         return {"B_USDT"}
 
-    worker._feature_for_symbol = feature
+    worker._discovery_feature_for_symbol = discovery_feature
+    worker._feature_for_symbol = full_feature
     worker._active_scanner_symbols = active_symbols
 
     monkeypatch.setattr(worker_module, "EXCLUDED_SYMBOLS", set())
@@ -53,5 +51,6 @@ def test_bounded_candidate_selection_preserves_frozen_ranking_inputs(monkeypatch
     # HIGH_RISK_MIN_AMOUNT_24H post-ranking filter.
     assert [row["symbol"] for row in candidates] == ["B_USDT", "A_USDT"]
     assert all("recent_m30" not in row for row in candidates)
-    assert len(calls) == len(worker.contracts)
-    assert all(include_recent is False for _, include_recent in calls)
+    assert len(discovery_calls) == len(worker.contracts)
+    assert set(discovery_calls) == worker.contracts
+    assert full_feature_calls == []
