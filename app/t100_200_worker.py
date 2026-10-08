@@ -336,25 +336,61 @@ class T100Worker:
         rows = await self.db.pool.fetch("SELECT symbol FROM t100_scanner_state")
         return {str(r["symbol"]) for r in rows}
 
+    async def _discovery_feature_for_symbol(
+        self, symbol: str, eval_at: datetime
+    ) -> dict[str, Any] | None:
+        """Return only the scalar fields required for frozen universe ranking.
+
+        This deliberately avoids the full T100 feature builder: discovery ranking
+        needs only Min30 r24/r72/amount24. Keeping Hour4, ATR, exhaustion and
+        lifecycle candle objects out of the all-symbol pass prevents catch-up
+        memory spikes while preserving the exact ranking inputs.
+        """
+        feature_at = eval_at - M30
+        rows = await self.db.pool.fetch(
+            """
+            SELECT open_time, close, amount
+            FROM candles
+            WHERE symbol=$1
+              AND interval='Min30'
+              AND open_time <= $2
+            ORDER BY open_time DESC
+            LIMIT 145
+            """,
+            symbol,
+            feature_at,
+        )
+        if len(rows) < 145:
+            return None
+        rows = list(reversed(rows))
+        if rows[-1]["open_time"] != feature_at:
+            return None
+
+        current_close = float(rows[-1]["close"])
+        r24 = pct_return(float(rows[-49]["close"]), current_close)
+        r72 = pct_return(float(rows[-145]["close"]), current_close)
+        amount24 = sum(float(row["amount"]) for row in rows[-48:])
+        return {
+            "symbol": symbol,
+            "r24": r24,
+            "r72": r72,
+            "amount24": amount24,
+        }
+
     async def _select_eval_candidates(
         self, eval_at: datetime
     ) -> list[dict[str, Any]]:
         """Select the frozen proxy universe without retaining candle histories.
 
-        Cross-sectional ranking requires scalar features for the whole universe, but
-        lifecycle processing only needs full candle histories for selected symbols.
-        Keep the first pass lightweight and bounded, then let the scanner hydrate
-        selected symbols one at a time.
+        Cross-sectional ranking requires only r24/r72/amount24 for the whole
+        universe. Lifecycle processing needs the full feature/candle payload only
+        for selected symbols, which the scanner hydrates one at a time.
         """
         semaphore = asyncio.Semaphore(self.request_concurrency)
 
         async def one(symbol: str):
             async with semaphore:
-                return await self._feature_for_symbol(
-                    symbol,
-                    eval_at,
-                    include_recent_m30=False,
-                )
+                return await self._discovery_feature_for_symbol(symbol, eval_at)
 
         symbols = sorted(self.contracts)
         rows: list[dict[str, Any]] = []
