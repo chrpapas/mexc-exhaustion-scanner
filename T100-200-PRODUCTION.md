@@ -1,10 +1,10 @@
-# T100_200 production promotion
+# T100_225 production promotion
 
 Strategy ID: `t100_225_stage2_p15_a4_sl75_trail14_gap0p5_v3`
 
-This release promotes the certified T100_200 A14/G0.5 exit geometry to the production **paper/shadow**
-service. It does not enable live MEXC orders. Signal generation, Stage1 gate, ATR tier sizing,
-slot count, SL75, fees, slippage, and funding treatment remain unchanged.
+This release runs the certified A14/G0.5 exit geometry with T100_225 sizing in the production **paper/shadow**
+service. It does not enable live MEXC orders. Signal generation, Stage1 gate, slot count,
+SL75, fees, slippage, and funding treatment remain unchanged.
 
 ## Frozen signal contract
 
@@ -22,9 +22,9 @@ slot count, SL75, fees, slippage, and funding treatment remain unchanged.
 Four slots, one position per symbol.
 
 - Stage1 ATR7 4.0% to <5.7%: LOW_100, entry notional = 25% of current equity.
-- Stage1 ATR7 >=5.7%: HIGH_200, entry notional = 50% of current equity.
+- Stage1 ATR7 >=5.7%: HIGH_225, entry notional = 56.25% of current equity.
 
-This reproduces 100% / 200% gross tier exposure across four slots. Capacity is
+This reproduces 100% / 225% gross tier exposure across four slots. Capacity is
 still four simultaneous names; the HIGH tier is larger notional, not extra slots.
 
 ## Frozen exits and paper costs
