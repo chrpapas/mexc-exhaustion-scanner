@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-STRATEGY_ID = "t100_200_stage2_p15_a4_sl75_trail10_gap1_v1"
-PAPER_RUN_ID = "t100_200_stage2_p15_a4_sl75_trail10_gap1_shadow_v1"
+STRATEGY_ID = "t100_200_stage2_p15_a4_sl75_trail14_gap0p5_v2"
+PAPER_RUN_ID = "t100_200_stage2_p15_a4_sl75_trail14_gap0p5_shadow_v2"
 
 # Frozen signal contract.
 MIN_AMOUNT_24H = 3_000_000.0
@@ -36,8 +36,8 @@ MAX_OPEN_POSITIONS = 4
 
 # Frozen exits.
 STOP_PCT = 75.0
-TRAIL_ACTIVATION_PCT = 10.0
-TRAIL_GAP_PCT = 1.0
+TRAIL_ACTIVATION_PCT = 14.0
+TRAIL_GAP_PCT = 0.5
 
 # Frozen realistic-cost paper accounting.
 FEE_RATE = 0.0008
@@ -102,13 +102,25 @@ def stop_price(entry: float) -> float:
     return entry * (1.0 + STOP_PCT / 100.0)
 
 
-def trail_floor_pct(best_profit_pct: float) -> float:
-    return best_profit_pct - TRAIL_GAP_PCT
+def trail_floor_pct(
+    best_profit_pct: float,
+    trail_gap_pct: float = TRAIL_GAP_PCT,
+) -> float:
+    return best_profit_pct - trail_gap_pct
 
 
-def trail_trigger_price(entry: float, best_profit_pct: float) -> float:
-    floor = trail_floor_pct(best_profit_pct)
+def trail_trigger_price(
+    entry: float,
+    best_profit_pct: float,
+    trail_gap_pct: float = TRAIL_GAP_PCT,
+) -> float:
+    floor = trail_floor_pct(best_profit_pct, trail_gap_pct)
     return entry * (1.0 - floor / 100.0)
+
+
+def trail_reason(trail_gap_pct: float) -> str:
+    label = f"{trail_gap_pct:g}".replace(".", "p")
+    return f"trail_gap{label}"
 
 
 @dataclass(frozen=True, slots=True)
@@ -126,6 +138,8 @@ def evaluate_completed_bar(
     low: float,
     trail_active: bool,
     best_profit_pct: float,
+    trail_activation_pct: float = TRAIL_ACTIVATION_PCT,
+    trail_gap_pct: float = TRAIL_GAP_PCT,
 ) -> BarExitDecision:
     """Apply the frozen ADVERSE_FIRST Min30 exit chronology.
 
@@ -139,9 +153,14 @@ def evaluate_completed_bar(
         raise ValueError("prices must be positive")
 
     if trail_active:
-        trigger = trail_trigger_price(entry, best_profit_pct)
+        trigger = trail_trigger_price(entry, best_profit_pct, trail_gap_pct)
         if high >= trigger:
-            return BarExitDecision(trigger, "trail_gap1", True, best_profit_pct)
+            return BarExitDecision(
+                trigger,
+                trail_reason(trail_gap_pct),
+                True,
+                best_profit_pct,
+            )
     else:
         catastrophic = stop_price(entry)
         if high >= catastrophic:
@@ -149,5 +168,5 @@ def evaluate_completed_bar(
 
     favorable = short_return_pct(entry, low)
     updated_best = max(best_profit_pct, favorable)
-    updated_active = trail_active or updated_best >= TRAIL_ACTIVATION_PCT
+    updated_active = trail_active or updated_best >= trail_activation_pct
     return BarExitDecision(None, None, updated_active, updated_best)
