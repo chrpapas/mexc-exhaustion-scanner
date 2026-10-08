@@ -377,7 +377,15 @@ class T100Worker:
         row = await self.db.pool.fetchrow(
             "SELECT * FROM t100_scanner_state WHERE symbol=$1", symbol
         )
-        return dict(row) if row else None
+        if row is None:
+            return None
+        state = dict(row)
+        # Scanner-state metadata is intentionally unused by lifecycle logic.
+        # asyncpg returns json/jsonb as text unless a codec is registered; carrying
+        # that text forward and json.dumps()-ing it again causes exponential
+        # double-encoding on each save. Normalize it to the canonical empty object.
+        state["metadata"] = {}
+        return state
 
     async def _save_scanner_state(self, state: dict[str, Any]) -> None:
         await self.db.pool.execute(
@@ -398,7 +406,7 @@ class T100Worker:
             state["symbol"], state["started_at"], state["state"], state["peak_price"],
             state["peak_at"], state["last_run_score"], state["last_exhaustion_score"],
             state.get("broken_level"), state.get("breakdown_at"), state.get("breakdown_atr7"),
-            state.get("confirmed_at"), json.dumps(state.get("metadata", {}), default=str),
+            state.get("confirmed_at"), "{}",
         )
 
     async def _delete_scanner_state(self, symbol: str) -> None:
