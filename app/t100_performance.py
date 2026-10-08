@@ -11,19 +11,19 @@ from app.t100_200_strategy import STRATEGY_ID
 
 # Frozen production-freeze anchors. These are benchmark/reference statistics only.
 # Full-history funding before the MEXC public retention floor is incomplete.
-FROZEN_FULL_RETURN_PCT = 1436.2
-FROZEN_FULL_CAGR_PCT = 111.7
-FROZEN_FULL_4Y_X = 20.1
-FROZEN_FULL_TRIGGER_AWARE_DD_PCT = -59.8
-FROZEN_FULL_CLOSE_DD_PCT = -60.1
+FROZEN_FULL_RETURN_PCT = 6202.1
+FROZEN_FULL_CAGR_PCT = 212.0
+FROZEN_FULL_4Y_X = 94.8
+FROZEN_FULL_TRIGGER_AWARE_DD_PCT = -58.0
+FROZEN_FULL_CLOSE_DD_PCT = -58.2
 
 FROZEN_COVERED_START = "10 Apr 2025"
 FROZEN_COVERED_END = "25 Sep 2026"
-FROZEN_COVERED_RETURN_PCT = 434.0
-FROZEN_COVERED_CAGR_PCT = 215.4
-FROZEN_COVERED_4Y_X = 98.9
-FROZEN_COVERED_TRIGGER_AWARE_DD_PCT = -59.8
-FROZEN_COVERED_WORST_SUBWINDOW_RETURN_PCT = 29.4
+FROZEN_COVERED_RETURN_PCT = 1411.0
+FROZEN_COVERED_CAGR_PCT = 543.6
+FROZEN_COVERED_4Y_X = 1715.8
+FROZEN_COVERED_TRIGGER_AWARE_DD_PCT = -58.0
+FROZEN_COVERED_WORST_SUBWINDOW_RETURN_PCT = 42.7
 
 
 @dataclass(frozen=True, slots=True)
@@ -232,7 +232,10 @@ def build_t100_performance_summary(
         median_adverse_pct=median_adverse,
         worst_adverse_pct=worst_adverse,
         sl75_exits=sum(p.get("exit_reason") == "sl75" for p in closed_rows),
-        trail_exits=sum(p.get("exit_reason") == "trail_gap1" for p in closed_rows),
+        trail_exits=sum(
+            str(p.get("exit_reason") or "").startswith("trail_gap")
+            for p in closed_rows
+        ),
         raw_p2=len(signals),
         stage1_count=sum(int(s.get("stage_no") or 0) == 1 for s in signals),
         eligible_stage2=len(eligible),
