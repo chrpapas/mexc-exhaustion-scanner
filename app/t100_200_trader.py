@@ -187,7 +187,7 @@ class T100Trader(T100Worker):
             STRATEGY_ID,
         )
         await self.notifier.send(
-            "T100_200 PAPER TRADER STARTED",
+            "T100_225 PAPER TRADER STARTED",
             "Listening only to scanner-produced eligible Stage2 signals.",
             [
                 {"name": "Strategy", "value": STRATEGY_ID, "inline": False},

@@ -1,10 +1,10 @@
-# T100_200 production promotion
+# T100_225 production promotion
 
-Strategy ID: `t100_200_stage2_p15_a4_sl75_trail14_gap0p5_v2`
+Strategy ID: `t100_225_stage2_p15_a4_sl75_trail14_gap0p5_v3`
 
-This release promotes the certified T100_200 A14/G0.5 exit geometry to the production **paper/shadow**
-service. It does not enable live MEXC orders. Signal generation, Stage1 gate, ATR tier sizing,
-slot count, SL75, fees, slippage, and funding treatment remain unchanged.
+This release runs the certified A14/G0.5 exit geometry with T100_225 sizing in the production **paper/shadow**
+service. It does not enable live MEXC orders. Signal generation, Stage1 gate, slot count,
+SL75, fees, slippage, and funding treatment remain unchanged.
 
 ## Frozen signal contract
 
@@ -22,9 +22,9 @@ slot count, SL75, fees, slippage, and funding treatment remain unchanged.
 Four slots, one position per symbol.
 
 - Stage1 ATR7 4.0% to <5.7%: LOW_100, entry notional = 25% of current equity.
-- Stage1 ATR7 >=5.7%: HIGH_200, entry notional = 50% of current equity.
+- Stage1 ATR7 >=5.7%: HIGH_225, entry notional = 56.25% of current equity.
 
-This reproduces 100% / 200% gross tier exposure across four slots. Capacity is
+This reproduces 100% / 225% gross tier exposure across four slots. Capacity is
 still four simultaneous names; the HIGH tier is larger notional, not extra slots.
 
 ## Frozen exits and paper costs
@@ -68,3 +68,21 @@ including 50 bp slippage each side plus 1.5x negative funding.
 Cutover semantics are intentionally non-retroactive: any position opened before the
 promotion keeps the trail activation/gap stored on that position (10% / 1pp for the
 prior strategy). New positions opened after promotion are stamped 14% / 0.5pp.
+
+
+## v1.6.0 T100_225 sizing promotion
+
+The certified A14/G0.5 exit geometry remains frozen. This promotion changes only
+the HIGH-tier paper notional from 50% to 56.25% of current equity, equivalent to
+LOW100/HIGH225 gross tier sizing across four slots.
+
+Certified BASE25 anchors:
+- Full history: $10,000 -> $932,552; CAGR 247.4%; trigger-aware DD -61.0%; CAGR/DD 4.06.
+- Fully covered MEXC funding window: $10,000 -> $198,787; CAGR 676.7%;
+  trigger-aware DD -61.0%; CAGR/DD 11.10.
+- Zero liquidation-breach bars across all full-history stress cases.
+- Candidate beat T100_200 on return and CAGR/DD in every covered stress case.
+
+Cutover is non-retroactive. Existing open positions keep their fixed original
+notional. Legacy pending HIGH_200 signals remain supported at 50%; newly generated
+HIGH_225 signals use 56.25%. Production remains paper-only.

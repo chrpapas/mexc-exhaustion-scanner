@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-STRATEGY_ID = "t100_200_stage2_p15_a4_sl75_trail14_gap0p5_v2"
-PAPER_RUN_ID = "t100_200_stage2_p15_a4_sl75_trail14_gap0p5_shadow_v2"
+STRATEGY_ID = "t100_225_stage2_p15_a4_sl75_trail14_gap0p5_v3"
+PAPER_RUN_ID = "t100_225_stage2_p15_a4_sl75_trail14_gap0p5_shadow_v3"
 
 # Frozen signal contract.
 MIN_AMOUNT_24H = 3_000_000.0
@@ -24,14 +24,16 @@ EPISODE_MAX_AGE_HOURS = 240
 EMA_EQ_30_ALPHA = 0.36
 ATR30_PERIOD = 7
 
-# Frozen T100_200 Stage-1 gate / tiering.
+# Frozen T100_225 Stage-1 gate / tiering.
 STAGE1_MIN_RETURN_24H = 0.15
 STAGE1_MIN_ATR7_PCT = 4.0
 HIGH_TIER_MIN_ATR7_PCT = 5.7
 LOW_TIER = "LOW_100"
-HIGH_TIER = "HIGH_200"
+HIGH_TIER = "HIGH_225"
+LEGACY_HIGH_TIER = "HIGH_200"
 LOW_NOTIONAL_FRACTION = 0.25
-HIGH_NOTIONAL_FRACTION = 0.50
+HIGH_NOTIONAL_FRACTION = 0.5625
+LEGACY_HIGH_NOTIONAL_FRACTION = 0.50
 MAX_OPEN_POSITIONS = 4
 
 # Frozen exits.
@@ -89,7 +91,9 @@ def notional_fraction(tier: str) -> float:
         return LOW_NOTIONAL_FRACTION
     if tier == HIGH_TIER:
         return HIGH_NOTIONAL_FRACTION
-    raise ValueError(f"unsupported T100_200 tier: {tier}")
+    if tier == LEGACY_HIGH_TIER:
+        return LEGACY_HIGH_NOTIONAL_FRACTION
+    raise ValueError(f"unsupported T100_225 tier: {tier}")
 
 
 def short_return_pct(entry: float, price: float) -> float:

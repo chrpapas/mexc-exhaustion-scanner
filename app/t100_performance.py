@@ -11,19 +11,18 @@ from app.t100_200_strategy import STRATEGY_ID
 
 # Frozen production-freeze anchors. These are benchmark/reference statistics only.
 # Full-history funding before the MEXC public retention floor is incomplete.
-FROZEN_FULL_RETURN_PCT = 6202.1
-FROZEN_FULL_CAGR_PCT = 212.0
-FROZEN_FULL_4Y_X = 94.8
-FROZEN_FULL_TRIGGER_AWARE_DD_PCT = -58.0
-FROZEN_FULL_CLOSE_DD_PCT = -58.2
+FROZEN_FULL_RETURN_PCT = 9225.5
+FROZEN_FULL_CAGR_PCT = 247.4
+FROZEN_FULL_4Y_X = 145.6
+FROZEN_FULL_TRIGGER_AWARE_DD_PCT = -61.0
 
 FROZEN_COVERED_START = "10 Apr 2025"
 FROZEN_COVERED_END = "25 Sep 2026"
-FROZEN_COVERED_RETURN_PCT = 1411.0
-FROZEN_COVERED_CAGR_PCT = 543.6
-FROZEN_COVERED_4Y_X = 1715.8
-FROZEN_COVERED_TRIGGER_AWARE_DD_PCT = -58.0
-FROZEN_COVERED_WORST_SUBWINDOW_RETURN_PCT = 42.7
+FROZEN_COVERED_RETURN_PCT = 1887.9
+FROZEN_COVERED_CAGR_PCT = 676.7
+FROZEN_COVERED_4Y_X = 3639.8
+FROZEN_COVERED_TRIGGER_AWARE_DD_PCT = -61.0
+FROZEN_COVERED_WORST_SUBWINDOW_RETURN_PCT = 47.9
 
 
 @dataclass(frozen=True, slots=True)
@@ -224,8 +223,8 @@ def build_t100_performance_summary(
         closed_wins=wins,
         closed_losses=losses,
         closed_win_rate=win_rate,
-        low_entries=sum(p.get("tier") == "LOW_100" for p in positions),
-        high_entries=sum(p.get("tier") == "HIGH_200" for p in positions),
+        low_entries=sum(str(p.get("tier") or "").startswith("LOW_") for p in positions),
+        high_entries=sum(str(p.get("tier") or "").startswith("HIGH_") for p in positions),
         funding_net_usdt=funding,
         fees_usdt=fees,
         slippage_usdt=slippage,
