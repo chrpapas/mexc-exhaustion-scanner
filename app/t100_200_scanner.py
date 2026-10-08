@@ -20,7 +20,6 @@ from app.t100_performance import (
     FROZEN_COVERED_WORST_SUBWINDOW_RETURN_PCT,
     FROZEN_FULL_4Y_X,
     FROZEN_FULL_CAGR_PCT,
-    FROZEN_FULL_CLOSE_DD_PCT,
     FROZEN_FULL_RETURN_PCT,
     FROZEN_FULL_TRIGGER_AWARE_DD_PCT,
     build_t100_performance_summary,
@@ -124,7 +123,7 @@ class T100Scanner(T100Worker):
         )
 
         economics = (
-            f"Entries LOW_100 **{summary.low_entries}** • HIGH_200 **{summary.high_entries}**\n"
+            f"Entries LOW tier **{summary.low_entries}** • HIGH tier **{summary.high_entries}**\n"
             f"Funding **{self._money(summary.funding_net_usdt)}** • fees "
             f"**{self._money(summary.fees_usdt)}** • execution debit "
             f"**{self._money(summary.slippage_usdt)}**\n"
@@ -147,14 +146,13 @@ class T100Scanner(T100Worker):
         open_positions = (
             "\n".join(summary.open_lines)
             if summary.open_lines
-            else "No open T100_200 paper positions."
+            else "No open T100_225 paper positions."
         )
 
         benchmark = (
             f"Full known-funding history: return **+{FROZEN_FULL_RETURN_PCT:.1f}%** • "
             f"CAGR **{FROZEN_FULL_CAGR_PCT:.1f}%** • 4Y **{FROZEN_FULL_4Y_X:.1f}×** • "
-            f"trigger-aware DD **{FROZEN_FULL_TRIGGER_AWARE_DD_PCT:.1f}%** • "
-            f"close DD **{FROZEN_FULL_CLOSE_DD_PCT:.1f}%**\n"
+            f"trigger-aware DD **{FROZEN_FULL_TRIGGER_AWARE_DD_PCT:.1f}%**\n"
             f"Fully covered MEXC window **{FROZEN_COVERED_START} → {FROZEN_COVERED_END}**: "
             f"return **+{FROZEN_COVERED_RETURN_PCT:.1f}%** • CAGR "
             f"**{FROZEN_COVERED_CAGR_PCT:.1f}%** • 4Y extrapolation "
@@ -168,13 +166,13 @@ class T100Scanner(T100Worker):
         running = (
             "**Stage2 P15_A4_D0** • native Min30 P2 • 4 slots • one position/symbol\n"
             "Stage1 strict365 + r24 ≥15% + ATR7 ≥4% • LOW_100 <5.7% ATR → "
-            "25% equity notional • HIGH_200 ≥5.7% → 50%\n"
+            "25% equity notional • HIGH_225 ≥5.7% → 56.25%\n"
             "SL75 before trail • trail arms +14% • 0.5pp gap • ADVERSE_FIRST • "
             "0.08%/fill • 25bp each-side execution debit • funding included"
         )
 
         sent = await self.performance_notifier.send(
-            "📊 T100_200 • Daily Performance Dashboard",
+            "📊 T100_225 • Daily Performance Dashboard",
             (
                 f"Updated **{local_now.strftime('%d %b %Y • %H:%M %Z')}**\n"
                 "Live paper performance is separated from the frozen historical benchmark."
