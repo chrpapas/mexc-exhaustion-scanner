@@ -1,9 +1,10 @@
 # T100_200 production promotion
 
-Strategy ID: `t100_200_stage2_p15_a4_sl75_trail10_gap1_v1`
+Strategy ID: `t100_200_stage2_p15_a4_sl75_trail14_gap0p5_v2`
 
-This release promotes the frozen T100_200 strategy to the production **paper/shadow**
-service. It does not enable live MEXC orders.
+This release promotes the certified T100_200 A14/G0.5 exit geometry to the production **paper/shadow**
+service. It does not enable live MEXC orders. Signal generation, Stage1 gate, ATR tier sizing,
+slot count, SL75, fees, slippage, and funding treatment remain unchanged.
 
 ## Frozen signal contract
 
@@ -30,8 +31,8 @@ still four simultaneous names; the HIGH tier is larger notional, not extra slots
 
 - SL75 before trailing is active.
 - No fixed take-profit.
-- Trail arms at +10% short profit.
-- Trail floor follows best profit minus 1 percentage point.
+- Trail arms at +14% short profit.
+- Trail floor follows best profit minus 0.5 percentage points.
 - ADVERSE_FIRST completed-bar ordering.
 - Fee: 0.08% per fill.
 - Slippage: 25 bps each side as a pure P&L debit; trigger prices are unchanged.
@@ -54,3 +55,16 @@ old research/trader tables remain intact for auditability.
 
 Restore the prior Render start commands from the previous commit. The new tables
 are additive and do not modify legacy scanner/trader rows.
+
+
+## v1.5.0 A14/G0.5 promotion
+
+A14/G0.5 was selected after the locked trail-confirmation and robustness certification
+passes. Under the normal certified cost model it produced 212.0% CAGR with -58.0%
+trigger-aware drawdown over the full historical replay. It also beat the previous
+A10/G1 production control under every covered-window stress scenario tested,
+including 50 bp slippage each side plus 1.5x negative funding.
+
+Cutover semantics are intentionally non-retroactive: any position opened before the
+promotion keeps the trail activation/gap stored on that position (10% / 1pp for the
+prior strategy). New positions opened after promotion are stamped 14% / 0.5pp.
