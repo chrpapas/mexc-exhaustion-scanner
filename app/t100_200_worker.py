@@ -248,11 +248,7 @@ class T100Worker:
             LOGGER.warning("T100 candle sync examples: %s", failures[:5])
 
     async def _feature_for_symbol(
-        self,
-        symbol: str,
-        eval_at: datetime,
-        *,
-        include_recent_m30: bool = True,
+        self, symbol: str, eval_at: datetime
     ) -> dict[str, Any] | None:
         feature_at = eval_at - M30
         m30 = await self.db.fetch_candles(symbol, "Min30", 420)
@@ -302,7 +298,7 @@ class T100Worker:
         structural = current.close < support
         lower_hc = current.high < completed[-2].high and current.close < completed[-2].close
 
-        row = {
+        return {
             "symbol": symbol,
             "eval_at": eval_at,
             "feature_at": feature_at,
@@ -326,124 +322,13 @@ class T100Worker:
             "below_ema_eq": ema_eq is not None and current.close < ema_eq,
             "lower_high_and_close": lower_hc,
             "structural_break": structural,
+            "current_candle": current,
+            "recent_m30": completed[-220:],
         }
-        if include_recent_m30:
-            row["current_candle"] = current
-            row["recent_m30"] = completed[-220:]
-        return row
 
     async def _active_scanner_symbols(self) -> set[str]:
         rows = await self.db.pool.fetch("SELECT symbol FROM t100_scanner_state")
         return {str(r["symbol"]) for r in rows}
-
-    async def _discovery_feature_for_symbol(
-        self, symbol: str, eval_at: datetime
-    ) -> dict[str, Any] | None:
-        """Return only the scalar fields required for frozen universe ranking.
-
-        This deliberately avoids the full T100 feature builder: discovery ranking
-        needs only Min30 r24/r72/amount24. Keeping Hour4, ATR, exhaustion and
-        lifecycle candle objects out of the all-symbol pass prevents catch-up
-        memory spikes while preserving the exact ranking inputs.
-        """
-        feature_at = eval_at - M30
-        rows = await self.db.pool.fetch(
-            """
-            SELECT open_time, close, amount
-            FROM candles
-            WHERE symbol=$1
-              AND interval='Min30'
-              AND open_time <= $2
-            ORDER BY open_time DESC
-            LIMIT 145
-            """,
-            symbol,
-            feature_at,
-        )
-        if len(rows) < 145:
-            return None
-        rows = list(reversed(rows))
-        if rows[-1]["open_time"] != feature_at:
-            return None
-
-        current_close = float(rows[-1]["close"])
-        r24 = pct_return(float(rows[-49]["close"]), current_close)
-        r72 = pct_return(float(rows[-145]["close"]), current_close)
-        amount24 = sum(float(row["amount"]) for row in rows[-48:])
-        return {
-            "symbol": symbol,
-            "r24": r24,
-            "r72": r72,
-            "amount24": amount24,
-        }
-
-    async def _select_eval_candidates(
-        self, eval_at: datetime
-    ) -> list[dict[str, Any]]:
-        """Select the frozen proxy universe without retaining candle histories.
-
-        Cross-sectional ranking requires only r24/r72/amount24 for the whole
-        universe. Lifecycle processing needs the full feature/candle payload only
-        for selected symbols, which the scanner hydrates one at a time.
-        """
-        semaphore = asyncio.Semaphore(self.request_concurrency)
-
-        async def one(symbol: str):
-            async with semaphore:
-                return await self._discovery_feature_for_symbol(symbol, eval_at)
-
-        symbols = sorted(self.contracts)
-        rows: list[dict[str, Any]] = []
-        batch_size = max(8, self.request_concurrency * 4)
-        for start in range(0, len(symbols), batch_size):
-            batch = symbols[start : start + batch_size]
-            results = await asyncio.gather(
-                *(one(symbol) for symbol in batch),
-                return_exceptions=True,
-            )
-            rows.extend(r for r in results if isinstance(r, dict))
-
-        returns = [float(r["r24"]) for r in rows]
-        btc = next((r for r in rows if r["symbol"] == "BTC_USDT"), None)
-        btc_r24 = None if btc is None else float(btc["r24"])
-        active = await self._active_scanner_symbols()
-
-        ranked: list[tuple[int, float, float, str, dict[str, Any]]] = []
-        for row in rows:
-            symbol = str(row["symbol"])
-            if symbol in EXCLUDED_SYMBOLS:
-                continue
-            rank = percentile_rank(float(row["r24"]), returns)
-            row["cross_rank"] = rank
-            row["btc_r24"] = btc_r24
-            is_active = symbol in active
-            standard = float(row["amount24"]) >= MIN_AMOUNT_24H
-            mover = float(row["r24"]) >= DISCOVERY_MIN_RETURN_24H
-            relative = rank is not None and rank >= DISCOVERY_MIN_CROSS_SECTION_PERCENTILE
-            mover72 = float(row["r72"]) >= WIDE_SCAN_MIN_RETURN_72H
-            if not (is_active or standard or mover or relative or mover72):
-                continue
-            ranked.append(
-                (
-                    2 if is_active else (1 if mover72 else 0),
-                    max(float(row["r24"]), float(row["r72"])),
-                    float(row["amount24"]),
-                    symbol,
-                    row,
-                )
-            )
-
-        ranked.sort(key=lambda x: (x[0], x[1], x[2], x[3]), reverse=True)
-        selected = [x[4] for x in ranked[:MAX_SYMBOLS]]
-        return [
-            {
-                "symbol": str(row["symbol"]),
-                "cross_rank": row.get("cross_rank"),
-                "btc_r24": row.get("btc_r24"),
-            }
-            for row in selected
-            if float(row["amount24"]) >= HIGH_RISK_MIN_AMOUNT_24H
-        ]
 
     async def _build_eval_rows(self, eval_at: datetime) -> list[dict[str, Any]]:
         semaphore = asyncio.Semaphore(self.request_concurrency)
