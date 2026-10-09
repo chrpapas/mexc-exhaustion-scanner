@@ -18,7 +18,7 @@ BEGIN
 
     -- pg_get_constraintdef yields CHECK (<expression>); retain the entire old
     -- predicate and extend it with the new frozen tier.
-    existing_expression := substring(existing_definition FROM '^CHECK \\((.*)\\)$');
+    existing_expression := CASE WHEN left(existing_definition, 7) = 'CHECK (' AND right(existing_definition, 1) = ')' THEN substring(existing_definition FROM 8 FOR length(existing_definition) - 8) ELSE NULL END;
     IF existing_expression IS NULL THEN
         RAISE EXCEPTION 'Unexpected tier check definition: %', existing_definition;
     END IF;
