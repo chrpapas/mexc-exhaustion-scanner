@@ -465,7 +465,7 @@ class T100Worker:
     ) -> bool:
         if current_feature <= previous_feature + M30:
             return False
-        start = previous_feature - timedelta(hours=72)
+        start = previous_feature - timedelta(hours=144)
         rows = await self.db.pool.fetch(
             """
             SELECT open_time,close FROM candles
