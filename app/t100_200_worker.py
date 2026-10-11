@@ -465,7 +465,7 @@ class T100Worker:
     ) -> bool:
         if current_feature <= previous_feature + M30:
             return False
-        start = previous_feature - timedelta(hours=72)
+        start = previous_feature - timedelta(hours=144)
         rows = await self.db.pool.fetch(
             """
             SELECT open_time,close FROM candles
@@ -476,12 +476,21 @@ class T100Worker:
             symbol, start, current_feature,
         )
         by_time = {r["open_time"]: float(r["close"]) for r in rows}
+        # Frozen EXACT_V2 episode semantics: reset only on a positive-to-
+        # nonpositive r72 crossing, not on every nonpositive r72 observation.
+        # Include the current signal's feature candle, but exclude the prior
+        # signal's candle. Missing 72h comparisons do not change the prior
+        # valid r72 state.
+        previous_valid_r72 = None
         for t, close in sorted(by_time.items()):
-            if not (previous_feature < t < current_feature):
-                continue
             old = by_time.get(t - timedelta(hours=72))
-            if old is not None and old > 0 and close / old - 1.0 <= 0:
-                return True
+            if old is None or old <= 0:
+                continue
+            r72 = close / old - 1.0
+            if previous_feature < t <= current_feature:
+                if previous_valid_r72 is not None and previous_valid_r72 > 0 and r72 <= 0:
+                    return True
+            previous_valid_r72 = r72
         return False
 
     async def _record_p2(
