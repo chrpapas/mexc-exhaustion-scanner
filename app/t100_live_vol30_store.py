@@ -72,13 +72,16 @@ class PostgresVol30Reservations:
                 pending = sum((Decimal(str(r['reserved_notional_usdt'])) -
                                Decimal(str(r['filled_notional_usdt']))
                                for r in records if r['state'] in inflight), Decimal(0))
+                other_active_parents = int(await conn.fetchval(
+                    '''SELECT COUNT(*) FROM t100_live_vol30_parents
+                       WHERE signal_id<>$1 AND status IN ('ACTIVE','HALTED')''', signal_id))
                 original = Vol30Parent(
                     signal_id=int(base['signal_id']),symbol=symbol,tier=str(base['tier']),
                     admitted_at=base['admitted_at'],
                     admitted_equity_usdt=Decimal(str(base['admitted_equity_usdt'])),
                     target_notional_usdt=Decimal(str(base['target_notional_usdt'])),
                     filled_notional_usdt=filled,pending_notional_usdt=pending,
-                    other_open_positions=0)
+                    other_open_positions=other_active_parents)
                 if any(r['state'] in inflight for r in records):
                     return (ChildDecision('DEFER','PREVIOUS_CHILD_REQUIRES_EXCHANGE_RECONCILIATION'), None)
                 # Portfolio cap and open slots are passed in an independently
