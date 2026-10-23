@@ -6,12 +6,13 @@ from app.t100_live_recovery import RestartRecoveryGate, RecoveryHalted
 class Ledger:
     def __init__(self):
         self.rows = []
+        self.stop_rows = []
         self.fail = False
     async def fetch(self, query):
-        assert "t100_live_order_intents" in query
+        assert "t100_live_order_intents" in query or "t100_live_stop_amendments" in query
         if self.fail:
             raise ConnectionError("db down")
-        return self.rows
+        return self.stop_rows if 't100_live_stop_amendments' in query else self.rows
 
 
 class Exchange:
@@ -80,4 +81,9 @@ class RestartTests(unittest.IsolatedAsyncioTestCase):
     async def test_ambiguous_exchange_response_blocks(self):
         self.ex.positions = None
         with self.assertRaisesRegex(RecoveryHalted, "EXCHANGE_RESPONSE_AMBIGUOUS"):
+            await self.gate.inspect()
+
+    async def test_unresolved_stop_amendment_blocks(self):
+        self.db.stop_rows = [dict(external_id="s1", state="UNKNOWN")]
+        with self.assertRaisesRegex(RecoveryHalted, "UNRESOLVED_STOP_AMENDMENTS"):
             await self.gate.inspect()
