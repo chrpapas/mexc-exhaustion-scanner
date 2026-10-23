@@ -45,6 +45,22 @@
    tiny limited-risk live pilot. Do not interpret 'go' or 'continue'
    as permission to place funded orders.
 
+## Read-only schema discovery (operator-local; not yet performed)
+Run locally with a MEXC API key restricted to **read-only** permissions,
+using process environment variables `MEXC_API_KEY` and `MEXC_API_SECRET`:
+
+```bash
+T100_EXECUTION_MODE=paper python -m app.t100_live_preflight --schema-only
+```
+
+The output deliberately omits account balances, position IDs, symbols,
+quantities, unknown field names and secret values; it reports only an
+allowlisted field/type summary. Do **not** share keys, full API payloads,
+private request headers, or unredacted logs. An empty account yields no
+field schema evidence. This is a discovery probe, not proof of pagination,
+atomicity, API permissions, or safety for real orders. It has not been run
+against the operator account in this PR.
+
 ## Current architecture boundaries
 - `app/t100_live_guards.py` blocks the production paper portfolio
   from switching to live mode.
@@ -60,6 +76,8 @@
   inventory reads for canonical content equality and timestamp proximity.
   Identical consecutive reads reduce torn-snapshot risk but **cannot**
   prove venue atomicity or exclude intervening changes.
+- `app/t100_live_contract_evidence.py` creates shareable, allowlisted
+  shape-only summaries, never account values or unknown field names.
 - `app/t100_live_preflight.py` now uses strict raw GET inventory reads
   instead of legacy silently filtered helpers; orphan native stops block
   readiness and even apparently empty reads remain uncertified pending
