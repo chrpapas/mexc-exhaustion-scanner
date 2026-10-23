@@ -30,6 +30,17 @@ class ReadOnlyMexcProbe:
             raise VenueReadHalted("POSITIONS_RESPONSE_UNVERIFIED")
         return raw
 
+    async def raw_open_stops(self) -> list[dict[str, Any]]:
+        try:
+            raw = await self._client._private_get(
+                "/api/v1/private/stoporder/open_orders"
+            )
+        except Exception as exc:
+            raise VenueReadHalted("OPEN_STOPS_GET_FAILED") from exc
+        if not isinstance(raw, list) or any(not isinstance(s, dict) for s in raw):
+            raise VenueReadHalted("OPEN_STOPS_RESPONSE_UNVERIFIED")
+        return raw
+
     async def raw_stop_page(self, page: int, size: int) -> Any:
         if type(page) is not int or type(size) is not int or page < 1 or not 1 <= size <= 100:
             raise VenueReadHalted("INVALID_STOP_PAGE_ARGUMENTS")
