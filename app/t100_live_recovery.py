@@ -7,6 +7,7 @@ A database read error or any non-flat state requires manual reconciliation.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from collections.abc import Mapping
 from typing import Any, Protocol
 
 
@@ -52,7 +53,7 @@ class RestartRecoveryGate:
             raise RecoveryHalted("LEDGER_RESPONSE_AMBIGUOUS")
         if intents:
             if not all(
-                isinstance(row, dict)
+                isinstance(row, Mapping)
                 and row.get("external_oid")
                 and row.get("state")
                 for row in intents
