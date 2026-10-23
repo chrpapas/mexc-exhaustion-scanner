@@ -44,6 +44,20 @@ class ProbeTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaisesRegex(VenueReadHalted, "POSITIONS_GET_FAILED"):
             await self.probe.raw_open_positions()
 
+    async def test_open_stops_empty_preserved(self):
+        self.client.responses = [[]]
+        self.assertEqual(await self.probe.raw_open_stops(), [])
+
+    async def test_open_stops_malformed_row_blocks(self):
+        self.client.responses = [[dict(id="99"), None]]
+        with self.assertRaisesRegex(VenueReadHalted, "OPEN_STOPS_RESPONSE"):
+            await self.probe.raw_open_stops()
+
+    async def test_open_stops_transport_error_blocks(self):
+        self.client.fail = True
+        with self.assertRaisesRegex(VenueReadHalted, "OPEN_STOPS_GET_FAILED"):
+            await self.probe.raw_open_stops()
+
     async def test_stop_page_passes_raw_contract(self):
         payload = dict(page_num=2, page_size=100, total=101,
                        resultList=[dict(id="100")])
