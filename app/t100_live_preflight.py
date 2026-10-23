@@ -11,9 +11,10 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-from typing import Any
+from typing import Any, TYPE_CHECKING
 
-from app.mexc_trade import MexcTradeClient
+if TYPE_CHECKING:
+    from app.mexc_trade import MexcTradeClient
 from app.t100_live_guards import LIVE_ADAPTER_STATUS, T100ExecutionControls
 from app.t100_live_readonly_probe import ReadOnlyMexcProbe
 
@@ -43,6 +44,8 @@ async def read_only_preflight(
 
     owned = client is None
     if owned:
+        # Avoid importing network dependencies during pure offline safety tests.
+        from app.mexc_trade import MexcTradeClient
         client = MexcTradeClient("https://api.mexc.com", api_key=key, api_secret=secret)
     assert client is not None
     try:
