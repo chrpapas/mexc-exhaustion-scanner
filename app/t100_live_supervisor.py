@@ -74,6 +74,17 @@ class LivePositionSupervisor:
         keys = {(p.symbol, p.position_id) for p in expected}
         if len(keys) != len(expected):
             raise SupervisionHalted("DUPLICATE_EXPECTED_INVENTORY")
+        if len({p.symbol for p in expected}) != len(expected):
+            raise SupervisionHalted("ONE_POSITION_PER_SYMBOL")
+        for wanted in expected:
+            if (not wanted.symbol or not wanted.position_id or not wanted.stop_order_id
+                    or not isinstance(wanted.contracts, Decimal)
+                    or not isinstance(wanted.entry_price, Decimal)
+                    or not isinstance(wanted.stop_price, Decimal)):
+                raise SupervisionHalted("INVALID_EXPECTED_POSITION")
+            _decimal(wanted.contracts)
+            _decimal(wanted.entry_price)
+            _decimal(wanted.stop_price)
         live_keys = set()
         for p in positions:
             if not isinstance(p, dict):
@@ -94,6 +105,22 @@ class LivePositionSupervisor:
                 raise SupervisionHalted("POSITION_SIDE_DRIFT")
         if live_keys != keys:
             raise SupervisionHalted("MISSING_EXCHANGE_POSITION")
+        expected_stop_ids = {(p.position_id, p.stop_order_id) for p in expected}
+        if len(expected_stop_ids) != len(expected):
+            raise SupervisionHalted("DUPLICATE_EXPECTED_STOP")
+        actual_stop_ids = set()
+        for s in stops:
+            if not isinstance(s, dict):
+                raise SupervisionHalted("MALFORMED_STOP")
+            sid = (str(s.get("positionId") or ""),
+                   str(s.get("id") or s.get("stopPlanOrderId") or ""))
+            if sid in actual_stop_ids:
+                raise SupervisionHalted("DUPLICATE_EXCHANGE_STOP")
+            actual_stop_ids.add(sid)
+            if sid not in expected_stop_ids:
+                raise SupervisionHalted("UNRECOGNIZED_EXCHANGE_STOP")
+        if actual_stop_ids != expected_stop_ids:
+            raise SupervisionHalted("NATIVE_STOP_MISSING_OR_DUPLICATE")
         for wanted in expected:
             matched = [
                 s for s in stops
