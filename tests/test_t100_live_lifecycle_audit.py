@@ -99,3 +99,19 @@ class AuditTests(unittest.IsolatedAsyncioTestCase):
         self.exchange.positions[0]["positionType"] = 1
         with self.assertRaisesRegex(LifecycleHalted, "SIDE_DRIFT"):
             await self.audit.inspect(self.tracked)
+
+    async def test_unrecognized_account_position_fails(self):
+        self.exchange.positions.append(dict(symbol="OTHER_USDT", positionId="999", holdVol="1", positionType=2))
+        with self.assertRaisesRegex(LifecycleHalted, "UNRECOGNIZED_ACCOUNT_POSITION"):
+            await self.audit.inspect(self.tracked)
+
+    async def test_unrecognized_account_stop_fails(self):
+        self.exchange.stops.append(dict(positionId="999", id="888", state=1, stopLossPrice="4", vol="1"))
+        with self.assertRaisesRegex(LifecycleHalted, "UNRECOGNIZED_ACCOUNT_STOP"):
+            await self.audit.inspect(self.tracked)
+
+    async def test_unfilled_with_unexpected_position_fails(self):
+        self.exchange.order.update(dealVol="0", dealAvgPrice=None, positionId=None, state=2)
+        self.tracked = TrackedOrder("SIREN_USDT", "t100v1eabc", "101", D("20"))
+        with self.assertRaisesRegex(LifecycleHalted, "UNRECOGNIZED_ACCOUNT_POSITION"):
+            await self.audit.inspect(self.tracked)
