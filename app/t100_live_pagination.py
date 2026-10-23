@@ -7,7 +7,7 @@ invents completeness from a short or empty page, or sends POST requests.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Protocol
+from typing import Any, Protocol, Callable
 
 
 class PaginationHalted(RuntimeError):
@@ -34,7 +34,7 @@ def _int(raw: Any, field: str, *, min_value: int = 0) -> int:
 
 async def collect_verified_pages(
     reader: PageReader, *, page_size: int = 100, max_pages: int = 20,
-    max_rows: int = 2000,
+    max_rows: int = 2000, identity: Callable[[dict[str, Any]], str] | None = None,
 ) -> CompletePages:
     """Require {page_num,page_size,total,resultList} on every response.
 
@@ -47,6 +47,9 @@ async def collect_verified_pages(
     _int(max_rows, "MAX_ROWS", min_value=1)
     if page_size > 100 or max_pages > 100 or max_rows > 10000:
         raise PaginationHalted("UNSAFE_PAGINATION_BOUNDS")
+    if identity is None:
+        raise PaginationHalted("ROW_IDENTITY_REQUIRED")
+    seen: set[str] = set()
     all_rows: list[dict[str, Any]] = []
     expected_total: int | None = None
     pages = 0
@@ -73,14 +76,21 @@ async def collect_verified_pages(
                 raise PaginationHalted("PAGINATION_LIMIT_EXCEEDED")
         elif total != expected_total:
             raise PaginationHalted("TOTAL_CHANGED_DURING_PAGINATION")
+        for row in rows:
+            try:
+                key = identity(row)
+            except Exception as exc:
+                raise PaginationHalted("ROW_IDENTITY_INVALID") from exc
+            if not isinstance(key, str) or not key or key in seen:
+                raise PaginationHalted("MISSING_OR_DUPLICATE_ROW_IDENTITY")
+            seen.add(key)
         all_rows.extend(rows)
         pages += 1
         if len(all_rows) > total:
             raise PaginationHalted("PAGE_COUNT_EXCEEDS_TOTAL")
         if len(all_rows) == total:
-            # A stable reported count does not prove a stable snapshot:
-            # IDs must also be checked across pages and a second snapshot
-            # or exchange snapshot token is needed for atomicity.
+            # Stable count and distinct IDs still do NOT prove atomicity.
+            # Caller must independently establish a consistent venue snapshot.
             return CompletePages(tuple(all_rows), total, pages)
         if not rows or len(rows) != page_size:
             raise PaginationHalted("INCOMPLETE_PAGE_BEFORE_TOTAL")
