@@ -52,6 +52,10 @@
   `app/t100_live_recovery.py` perform read-only safety checks.
 - `app/t100_live_stop_journal.py` persists stop intent and verifies
   observed native stop state; it **does not** issue amendments.
+- `app/t100_live_consistency.py` checks two independently complete
+  inventory reads for canonical content equality and timestamp proximity.
+  Identical consecutive reads reduce torn-snapshot risk but **cannot**
+  prove venue atomicity or exclude intervening changes.
 - `app/t100_live_readonly_probe.py` provides a GET-only strict
   MEXC probe for raw position responses and raw stop-list pages; it
   does not assume or certify exchange pagination response semantics,
