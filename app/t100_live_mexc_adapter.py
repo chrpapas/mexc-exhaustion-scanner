@@ -67,7 +67,12 @@ class LiveMexcAdapter:
             raise RuntimeError("NATIVE_STOP_MODIFICATION_UNVERIFIED")
 
     async def open_positions(self, symbol: str | None = None) -> list[dict[str, Any]]:
-        return await self.client.open_positions(symbol)
+        # Do not interpret an unexpected/NULL account response as an empty account.
+        data = await self.client._private_get(
+            "/api/v1/private/position/open_positions", {"symbol": symbol})
+        if not isinstance(data, list) or not all(isinstance(item, dict) for item in data):
+            raise RuntimeError("MEXC_OPEN_POSITION_RESPONSE_UNVERIFIED")
+        return data
 
     async def open_stop_orders(self, symbol: str | None = None) -> list[dict[str, Any]]:
         return await self.client.stop_orders(symbol=symbol, finished=False)
