@@ -17,3 +17,6 @@ CREATE TABLE IF NOT EXISTS t100_live_stop_amendments (
 CREATE INDEX IF NOT EXISTS idx_t100_stop_amendments_unresolved
     ON t100_live_stop_amendments (state, created_at)
     WHERE state <> 'VERIFIED';
+CREATE UNIQUE INDEX IF NOT EXISTS uq_t100_stop_amendments_one_pending
+    ON t100_live_stop_amendments (symbol, position_id, stop_order_id)
+    WHERE state <> 'VERIFIED';
