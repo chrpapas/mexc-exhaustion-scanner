@@ -47,9 +47,13 @@ class RestartRecoveryGate:
                 "SELECT external_oid, state, exchange_order_id "
                 "FROM t100_live_order_intents ORDER BY id"
             )
+            stop_amendments = await self.ledger.fetch(
+                "SELECT external_id, state FROM t100_live_stop_amendments "
+                "WHERE state <> 'VERIFIED' ORDER BY id"
+            )
         except Exception as exc:
             raise RecoveryHalted("LEDGER_UNAVAILABLE") from exc
-        if not isinstance(intents, list):
+        if not isinstance(intents, list) or not isinstance(stop_amendments, list):
             raise RecoveryHalted("LEDGER_RESPONSE_AMBIGUOUS")
         if intents:
             if not all(
@@ -60,6 +64,8 @@ class RestartRecoveryGate:
             ):
                 raise RecoveryHalted("LEDGER_ROWS_INVALID")
             raise RecoveryHalted("PERSISTED_INTENTS_REQUIRE_MANUAL_RECONCILIATION")
+        if stop_amendments:
+            raise RecoveryHalted("UNRESOLVED_STOP_AMENDMENTS_REQUIRE_MANUAL_RECONCILIATION")
         try:
             positions = await self.exchange.open_positions()
             stops = await self.exchange.open_stop_orders()
