@@ -58,6 +58,19 @@ class PreflightTests(unittest.IsolatedAsyncioTestCase):
                       result["preflight_failures"])
         self.assertFalse(result["live_order_submission_possible"])
         self.assertEqual(len(c.calls), 2)
+        self.assertTrue(result["redacted_inventory_schema"]["positions"]["empty_rows_cannot_establish_schema"])
+
+    async def test_schema_evidence_redacts_account_values(self):
+        c = FakeClient(positions=[{"positionId": "PRIVATE-123",
+                                   "symbol": "SIREN_USDT",
+                                   "unknownSecretField": "SECRET-XYZ"}],
+                       stops=[{"id": "PRIVATE-STOP-999"}])
+        result = await read_only_preflight(client=c)
+        schema = str(result["redacted_inventory_schema"])
+        for secret in ("PRIVATE-123", "SIREN_USDT", "SECRET-XYZ",
+                       "unknownSecretField", "PRIVATE-STOP-999"):
+            self.assertNotIn(secret, schema)
+        self.assertEqual(result["redacted_inventory_schema"]["positions"]["unlisted_field_occurrences"], 1)
 
     async def test_nonempty_positions_block(self):
         result = await read_only_preflight(
