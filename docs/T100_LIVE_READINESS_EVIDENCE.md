@@ -52,6 +52,10 @@
   `app/t100_live_recovery.py` perform read-only safety checks.
 - `app/t100_live_stop_journal.py` persists stop intent and verifies
   observed native stop state; it **does not** issue amendments.
+- `app/t100_live_shadow_replay.py` replays bounded, explicitly
+  complete synthetic/redacted observation fixtures into the fail-closed
+  shadow session and emits digest-only, non-authorizing evidence. It does
+  **not** collect real MEXC data or certify a shadow soak.
 - `app/t100_live_consistency.py` checks two independently complete
   inventory reads for canonical content equality and timestamp proximity.
   Identical consecutive reads reduce torn-snapshot risk but **cannot**
