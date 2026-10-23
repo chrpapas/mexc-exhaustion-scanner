@@ -8,7 +8,9 @@
   These checks do not certify HYBRID/KNOWN_ONLY lot snapshots or a full
   independent equity/exit/funding replay.
 - Dedicated offline CI covers admission, short trailing, read-only order
-  lifecycle, stop journal, restart recovery, and FIFO short accounting.
+  lifecycle, stop journal, restart recovery, FIFO short accounting,
+  strict timestamp/pagination inventory snapshot validation, and
+  rejection of unexpected native stop orders.
 - CI is an offline correctness check; it is not a MEXC API certification.
 
 ## Release blockers (all mandatory)
@@ -50,6 +52,9 @@
   `app/t100_live_recovery.py` perform read-only safety checks.
 - `app/t100_live_stop_journal.py` persists stop intent and verifies
   observed native stop state; it **does not** issue amendments.
+- `app/t100_live_snapshot.py` validates independently supplied read-only
+  inventory snapshots and rejects stale, incomplete or malformed reads;
+  it does **not** itself establish pagination completeness or fetch venue data.
 - `app/t100_live_accounting.py` computes deterministic FIFO realized
   short PnL for explicitly complete, ordered, linear USDT fills and
   funding events; it **does not** fetch or certify exchange history.
