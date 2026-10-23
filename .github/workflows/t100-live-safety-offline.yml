@@ -1,0 +1,35 @@
+name: T100 live safety offline checks
+
+on:
+  pull_request:
+    paths:
+      - 'app/t100_live_*.py'
+      - 'app/t100_v40_admission.py'
+      - 'tests/test_t100_live_*.py'
+      - 'tests/test_t100_v40_admission.py'
+      - '.github/workflows/t100-live-safety-offline.yml'
+  push:
+    branches:
+      - feature/t100-live-readiness-gates-20261023
+
+permissions:
+  contents: read
+
+jobs:
+  pure-python-offline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    env:
+      PYTHONPATH: .
+      T100_EXECUTION_MODE: paper
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Compile pure policy and lifecycle modules
+        run: |
+          python -m py_compile app/t100_live_lifecycle_audit.py app/t100_live_supervisor.py app/t100_live_trailing.py app/t100_v40_admission.py
+      - name: Run offline lifecycle and V40 tests without credentials
+        run: |
+          python -m unittest -v tests.test_t100_live_lifecycle_audit tests.test_t100_live_supervisor tests.test_t100_v40_admission
