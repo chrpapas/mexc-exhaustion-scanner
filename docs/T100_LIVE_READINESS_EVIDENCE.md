@@ -52,6 +52,10 @@
   `app/t100_live_recovery.py` perform read-only safety checks.
 - `app/t100_live_stop_journal.py` persists stop intent and verifies
   observed native stop state; it **does not** issue amendments.
+- `app/t100_live_shadow.py` reconciles one atomic, independently supplied
+  inventory snapshot against managed short positions and native stops;
+  returns SHADOW_ONLY and data-only trailing proposals, never orders.
+  It is not a running service or an authenticated venue read.
 - `app/t100_live_snapshot.py` validates independently supplied read-only
   inventory snapshots and rejects stale, incomplete or malformed reads;
   it does **not** itself establish pagination completeness or fetch venue data.
