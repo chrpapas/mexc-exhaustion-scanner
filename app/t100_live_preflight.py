@@ -8,6 +8,7 @@ in the process environment, never from command-line flags.
 """
 from __future__ import annotations
 
+import argparse
 import asyncio
 import json
 import os
@@ -89,9 +90,28 @@ async def read_only_preflight(
     return result
 
 
+def shareable_contract_report(result: dict[str, Any]) -> dict[str, Any]:
+    """Allowlist-only output for sharing schema evidence without account values."""
+    return {
+        "exchange": "MEXC",
+        "read_only": True,
+        "live_order_submission_possible": False,
+        "credential_status": result.get("credential_status", "UNKNOWN"),
+        "read_failure_type": result.get("read_failure_type"),
+        "redacted_inventory_schema": result.get("redacted_inventory_schema"),
+        "venue_contract_certified": False,
+        "pagination_certified": False,
+    }
+
+
 def main() -> None:
+    parser = argparse.ArgumentParser(description="Read-only T100 MEXC preflight")
+    parser.add_argument("--schema-only", action="store_true",
+                        help="Print only shareable redacted API shape evidence")
+    args = parser.parse_args()
     result = asyncio.run(read_only_preflight())
-    print(json.dumps(result, indent=2, sort_keys=True))
+    print(json.dumps(shareable_contract_report(result) if args.schema_only else result,
+                     indent=2, sort_keys=True))
     print("NO ORDERS SENT. THIS CHECK DOES NOT ENABLE LIVE TRADING.")
 
 
