@@ -52,6 +52,10 @@
   `app/t100_live_recovery.py` perform read-only safety checks.
 - `app/t100_live_stop_journal.py` persists stop intent and verifies
   observed native stop state; it **does not** issue amendments.
+- `app/t100_live_readonly_probe.py` provides a GET-only strict
+  MEXC probe for raw position responses and raw stop-list pages; it
+  does not assume or certify exchange pagination response semantics,
+  and has not been run against authenticated account data.
 - `app/t100_live_pagination.py` validates explicit page metadata,
   consistent totals and unique row IDs across all pages; it intentionally
   requires an adapter to map a **verified** venue response shape. Even a
