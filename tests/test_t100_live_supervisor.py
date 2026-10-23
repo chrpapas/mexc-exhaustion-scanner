@@ -51,3 +51,23 @@ class SupervisorTests(unittest.IsolatedAsyncioTestCase):
         proposed=self.s.propose(position(),observed_low=D("86"),price_tick=D("0.01"))
         self.assertEqual(proposed.proposed_stop,D("86.50"))
         self.assertEqual(proposed.old_stop,D("175"))
+
+    async def test_extra_native_stop_rejected(self):
+        self.exchange.stops.append(dict(positionId="10", id="100", state=1, stopLossPrice="175", vol="20"))
+        with self.assertRaisesRegex(SupervisionHalted, "UNRECOGNIZED_EXCHANGE_STOP"):
+            await self.s.verify([position()])
+
+    async def test_duplicate_native_stop_rejected(self):
+        self.exchange.stops.append(dict(self.exchange.stops[0]))
+        with self.assertRaisesRegex(SupervisionHalted, "DUPLICATE_EXCHANGE_STOP"):
+            await self.s.verify([position()])
+
+    async def test_duplicate_symbol_expected_rejected(self):
+        second = ManagedShort("SIREN_USDT", "11", D("1"), D("100"), "101", D("175"), D("0"), False)
+        with self.assertRaisesRegex(SupervisionHalted, "ONE_POSITION_PER_SYMBOL"):
+            await self.s.verify([position(), second])
+
+    async def test_invalid_expected_contracts_rejected(self):
+        bad = ManagedShort("SIREN_USDT", "10", D("NaN"), D("100"), "99", D("175"), D("0"), False)
+        with self.assertRaisesRegex(SupervisionHalted, "INVALID_EXCHANGE_NUMERIC_FIELD"):
+            await self.s.verify([bad])
