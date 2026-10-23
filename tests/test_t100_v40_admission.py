@@ -59,7 +59,7 @@ class FrozenV40PolicyTests(unittest.TestCase):
                     stage1_atr7_pct=6.,active_positions=4,already_open_symbol=False)
         self.assertEqual(r.reason,"four_slot_limit")
     def test_marked_exposure_shock_budget(self):
-        b=shock_budget(equity_usdt=10000.,marked_existing_usdt=10000.,cost_bps=100.)
+        b=shock_budget(equity_usdt=10000.,marked_existing_usdt=19000.,cost_bps=100.)
         self.assertGreaterEqual(b,0.)
         self.assertLess(b,6250.)
     def test_lot_count_v39_same_price(self):
