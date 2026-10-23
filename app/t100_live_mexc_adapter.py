@@ -37,6 +37,35 @@ class LiveMexcAdapter:
             raise RuntimeError("MEXC did not return orderId")
         return str(result["orderId"])
 
+    async def tighten_native_short_stop(self, *, symbol: str, stop_order_id: int,
+                                        position_id: int, new_stop_price: str,
+                                        previous_stop_price: str) -> None:
+        """In-place TP/SL modification; never loosen a short protective stop.
+
+        Ambiguous mutation or missing post-update verification MUST halt the
+        caller, not trigger a blind retry.
+        """
+        from decimal import Decimal
+        current, requested = Decimal(previous_stop_price), Decimal(new_stop_price)
+        if not (current.is_finite() and requested.is_finite()
+                and current > 0 and requested > 0 and requested < current):
+            raise ValueError("non-tightening or invalid short stop modification")
+        await self.client._private_post(
+            "/api/v1/private/stoporder/change_plan_price",
+            {"stopPlanOrderId": stop_order_id, "lossTrend": 2,
+             "stopLossPrice": str(requested)},
+        )
+        orders = await self.open_stop_orders(symbol)
+        ok = any(
+            str(item.get("id")) == str(stop_order_id)
+            and str(item.get("positionId")) == str(position_id)
+            and int(item.get("state", 0)) == 1
+            and Decimal(str(item.get("stopLossPrice") or 0)) <= requested
+            for item in orders
+        )
+        if not ok:
+            raise RuntimeError("NATIVE_STOP_MODIFICATION_UNVERIFIED")
+
     async def open_positions(self, symbol: str | None = None) -> list[dict[str, Any]]:
         return await self.client.open_positions(symbol)
 
