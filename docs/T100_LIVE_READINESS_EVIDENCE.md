@@ -52,6 +52,10 @@
   `app/t100_live_recovery.py` perform read-only safety checks.
 - `app/t100_live_stop_journal.py` persists stop intent and verifies
   observed native stop state; it **does not** issue amendments.
+- `app/t100_live_shadow_session.py` requires strictly increasing
+  observation timestamps and bounded gaps; any failed check permanently
+  halts that in-memory session until manual intervention. It is not a
+  persistent service and cannot independently prove feed completeness.
 - `app/t100_live_shadow.py` reconciles one atomic, independently supplied
   inventory snapshot against managed short positions and native stops;
   returns SHADOW_ONLY and data-only trailing proposals, never orders.
