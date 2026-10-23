@@ -17,6 +17,7 @@ if TYPE_CHECKING:
     from app.mexc_trade import MexcTradeClient
 from app.t100_live_guards import LIVE_ADAPTER_STATUS, T100ExecutionControls
 from app.t100_live_readonly_probe import ReadOnlyMexcProbe
+from app.t100_live_contract_evidence import summarize_inventory_schema
 
 
 async def read_only_preflight(
@@ -60,6 +61,9 @@ async def read_only_preflight(
         probe = ReadOnlyMexcProbe(client)
         positions = await probe.raw_open_positions()
         stops = await probe.raw_open_stops()
+        # Shape evidence contains only allowlisted field names and types;
+        # never IDs, symbols, quantities, balances or unknown key names.
+        result["redacted_inventory_schema"] = summarize_inventory_schema(positions, stops)
         result["open_futures_positions"] = len(positions)
         result["open_futures_stop_orders"] = len(stops)
         await client.refresh_contract_specs()
