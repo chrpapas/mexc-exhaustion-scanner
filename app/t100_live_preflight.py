@@ -15,6 +15,7 @@ from typing import Any
 
 from app.mexc_trade import MexcTradeClient
 from app.t100_live_guards import LIVE_ADAPTER_STATUS, T100ExecutionControls
+from app.t100_live_readonly_probe import ReadOnlyMexcProbe
 
 
 async def read_only_preflight(
@@ -51,8 +52,13 @@ async def read_only_preflight(
         result["usdt_equity"] = float(asset.get("equity") or 0)
         result["usdt_available"] = await client.usdt_available_balance()
         result["position_mode"] = await client.position_mode()
-        positions = await client.open_positions()
+        # The legacy open_positions()/open_stop_orders() helpers silently
+        # discard malformed rows. Never infer an empty account from them.
+        probe = ReadOnlyMexcProbe(client)
+        positions = await probe.raw_open_positions()
+        stops = await probe.raw_open_stops()
         result["open_futures_positions"] = len(positions)
+        result["open_futures_stop_orders"] = len(stops)
         await client.refresh_contract_specs()
         result["public_contract_specs_loaded"] = len(client._spec_cache)
 
@@ -60,9 +66,12 @@ async def read_only_preflight(
             failures.append("hedge_position_mode_not_verified")
         if result["open_futures_positions"] != 0:
             failures.append("account_has_existing_positions")
+        if result["open_futures_stop_orders"] != 0:
+            failures.append("account_has_existing_stop_orders")
         if result["usdt_available"] <= 0:
             failures.append("no_available_futures_usdt")
-        result["credential_status"] = "SIGNED_PRIVATE_READS_SUCCEEDED"
+        result["credential_status"] = "SIGNED_PRIVATE_READS_SUCCEEDED_UNCERTIFIED_SCHEMA"
+        failures.append("venue_read_contract_and_pagination_not_certified")
     except Exception as exc:
         # Do not emit secrets, raw URLs, request bodies, or credentials.
         failures.append("private_or_public_read_failed")
