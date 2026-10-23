@@ -3,7 +3,7 @@ import os
 import unittest
 from unittest.mock import patch
 
-from app.t100_live_preflight import read_only_preflight
+from app.t100_live_preflight import read_only_preflight, shareable_contract_report
 
 
 class FakeClient:
@@ -105,6 +105,16 @@ class PreflightTests(unittest.IsolatedAsyncioTestCase):
         c.stops = None
         result = await read_only_preflight(client=c)
         self.assertIn("private_or_public_read_failed", result["preflight_failures"])
+
+    async def test_shareable_report_never_includes_account_values(self):
+        result = await read_only_preflight(client=FakeClient())
+        result["usdt_equity"] = 987654321.12
+        result["api_key"] = "DO_NOT_SHARE"
+        shared = shareable_contract_report(result)
+        self.assertNotIn("987654321", str(shared))
+        self.assertNotIn("DO_NOT_SHARE", str(shared))
+        self.assertFalse(shared["venue_contract_certified"])
+        self.assertFalse(shared["pagination_certified"])
 
     async def test_missing_credentials_makes_no_calls(self):
         with patch.dict(os.environ, {"MEXC_API_KEY": "", "MEXC_API_SECRET": ""}):
