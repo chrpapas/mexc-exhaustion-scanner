@@ -60,6 +60,10 @@
   inventory reads for canonical content equality and timestamp proximity.
   Identical consecutive reads reduce torn-snapshot risk but **cannot**
   prove venue atomicity or exclude intervening changes.
+- `app/t100_live_preflight.py` now uses strict raw GET inventory reads
+  instead of legacy silently filtered helpers; orphan native stops block
+  readiness and even apparently empty reads remain uncertified pending
+  verified venue response contracts and pagination.
 - `app/t100_live_readonly_probe.py` provides a GET-only strict
   MEXC probe for raw position responses and raw stop-list pages; it
   does not assume or certify exchange pagination response semantics,
