@@ -29,7 +29,7 @@ jobs:
           python-version: '3.12'
       - name: Compile pure policy and lifecycle modules
         run: |
-          python -m py_compile app/t100_live_pagination.py app/t100_live_shadow_session.py app/t100_live_shadow.py app/t100_live_snapshot.py app/t100_live_accounting.py app/t100_live_lifecycle_audit.py app/t100_live_stop_journal.py app/t100_live_recovery.py app/t100_live_supervisor.py app/t100_live_trailing.py app/t100_v40_admission.py
+          python -m py_compile app/t100_live_readonly_probe.py app/t100_live_pagination.py app/t100_live_shadow_session.py app/t100_live_shadow.py app/t100_live_snapshot.py app/t100_live_accounting.py app/t100_live_lifecycle_audit.py app/t100_live_stop_journal.py app/t100_live_recovery.py app/t100_live_supervisor.py app/t100_live_trailing.py app/t100_v40_admission.py
       - name: Run offline lifecycle and V40 tests without credentials
         run: |
-          python -m unittest -v tests.test_t100_live_pagination tests.test_t100_live_shadow_session tests.test_t100_live_shadow tests.test_t100_live_snapshot tests.test_t100_live_accounting tests.test_t100_live_lifecycle_audit tests.test_t100_live_stop_journal tests.test_t100_live_recovery tests.test_t100_live_supervisor tests.test_t100_v40_admission
+          python -m unittest -v tests.test_t100_live_readonly_probe tests.test_t100_live_pagination tests.test_t100_live_shadow_session tests.test_t100_live_shadow tests.test_t100_live_snapshot tests.test_t100_live_accounting tests.test_t100_live_lifecycle_audit tests.test_t100_live_stop_journal tests.test_t100_live_recovery tests.test_t100_live_supervisor tests.test_t100_v40_admission
