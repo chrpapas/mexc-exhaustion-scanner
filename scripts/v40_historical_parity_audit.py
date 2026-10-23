@@ -20,6 +20,7 @@ from pathlib import Path
 from zipfile import ZipFile
 
 from app.t100_v40_admission import PriorBar, causal_49_bar_features
+from app import t100_v40_admission as live_policy
 
 CAPITALS = (2000, 10000, 100000)
 COSTS = (100, 200)
@@ -81,6 +82,7 @@ def run(path: Path) -> dict:
         checked = 0
         feature_comparisons = 0
         ref_notionals = 0
+        direct_policy_notionals = 0
         cost_mode_entry_counts = Counter()
         results = {}
         for capital in CAPITALS:
@@ -144,6 +146,22 @@ def run(path: Path) -> dict:
                             if not approx(actual, capacity_ceiling, NOTIONAL_TOLERANCE):
                                 raise AssertionError(f'REFERENCE_NOTIONAL_MISMATCH_{capital}_{cost}_{k}: {actual} vs {capacity_ceiling}')
                             ref_notionals += 1
+                            # Independently exercise the actual pure live admission
+                            # function in the exported no-shock-clip cases.
+                            # An occupied/margin-constrained portfolio remains untested.
+                            if approx(requested, desired_target):
+                                call = getattr(live_policy, 'admission', None) or live_policy.v40_admission
+                                decision = call(
+                                    prior_bars=bars[k], admission_open_ts=k[1],
+                                    equity_usdt=eq, marked_existing_usdt=0.,
+                                    stage1_atr7_pct=atr, active_positions=0,
+                                    already_open_symbol=False,
+                                    used_same_bar_usdt=max(0., .05*f[3]-remaining_quota),
+                                    cost_bps=float(cost))
+                                if decision.action != 'ADMIT' or not approx(
+                                        decision.modeled_notional_usdt, actual, NOTIONAL_TOLERANCE):
+                                    raise AssertionError(f'DIRECT_POLICY_NOTIONAL_MISMATCH_{capital}_{cost}_{k}')
+                                direct_policy_notionals += 1
                         elif actual > capacity_ceiling + max(NOTIONAL_TOLERANCE, 2.e-10 * capacity_ceiling):
                             raise AssertionError(f'LOT_MODE_OVERSIZE_{capital}_{scenario}_{k}')
                     if len(es) != int(m['entered']):
@@ -167,10 +185,12 @@ def run(path: Path) -> dict:
             'gate_decisions_checked': checked,
             'entry_diagnostic_comparisons_checked': feature_comparisons,
             'reference_entry_notionals_exact': ref_notionals,
+            'direct_policy_reference_notionals_exact': direct_policy_notionals,
             'discrepancies': 0,
             'tested_capitals': results,
             'limitations': [
                 'HYBRID/KNOWN_ONLY lot rounding cannot be exactly reproduced without the contract specification snapshot',
+                'The direct-policy comparison is restricted to exported entries where the shock budget was not binding',
                 'Existing marked portfolio exposure, fees, funding and exits were not independently replayed',
                 'V40 liquidity capacity is a historical candle turnover proxy, not live executable MEXC depth',
                 'No live order, exchange stop or live fill is certified',
