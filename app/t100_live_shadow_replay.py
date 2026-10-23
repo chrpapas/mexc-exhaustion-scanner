@@ -33,7 +33,7 @@ class ReplayEvidence:
 
 
 def _decimal(raw: Any) -> Decimal:
-    if isinstance(raw, bool) or not isinstance(raw, (str, int)):
+    if type(raw) is not str:
         raise ReplayHalted("INVALID_DECIMAL_FIELD")
     try:
         value = Decimal(str(raw))
