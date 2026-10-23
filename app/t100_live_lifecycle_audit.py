@@ -104,6 +104,18 @@ class LifecycleAuditor:
         avg = None if filled == 0 else dec(avg_raw)
         if filled == 0 and avg_raw not in (None, "", 0, "0"):
             raise LifecycleHalted("PRICE_WITHOUT_FILL")
+        # A single-order audit must never overlook unrelated account inventory.
+        # Any additional position is an unresolved account-wide exposure.
+        for p in positions:
+            if not isinstance(p, dict):
+                raise LifecycleHalted("MALFORMED_ACCOUNT_POSITION")
+            if filled == 0 or str(p.get("positionId") or p.get("id")) != position_id or str(p.get("symbol")) != tracked.symbol:
+                raise LifecycleHalted("UNRECOGNIZED_ACCOUNT_POSITION")
+        for s in stops:
+            if not isinstance(s, dict):
+                raise LifecycleHalted("MALFORMED_ACCOUNT_STOP")
+            if filled == 0 or str(s.get("positionId")) != position_id:
+                raise LifecycleHalted("UNRECOGNIZED_ACCOUNT_STOP")
         covered = False
         if filled:
             if not position_id:
