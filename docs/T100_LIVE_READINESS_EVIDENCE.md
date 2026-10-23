@@ -52,6 +52,13 @@
   `app/t100_live_recovery.py` perform read-only safety checks.
 - `app/t100_live_stop_journal.py` persists stop intent and verifies
   observed native stop state; it **does not** issue amendments.
+- `app/t100_live_pagination.py` validates explicit page metadata,
+  consistent totals and unique row IDs across all pages; it intentionally
+  requires an adapter to map a **verified** venue response shape. Even a
+  complete count cannot prove an atomic account snapshot. The legacy
+  `MexcTradeClient` inventory helpers silently filter malformed rows and
+  `stop_orders` currently reads only page 1; **do not feed their output
+  directly into live safety decisions**.
 - `app/t100_live_shadow_session.py` requires strictly increasing
   observation timestamps and bounded gaps; any failed check permanently
   halts that in-memory session until manual intervention. It is not a
