@@ -7,7 +7,7 @@ from app.t100_live_supervisor import ManagedShort
 
 
 def position():
-    return dict(symbol="SIREN_USDT", positionId="10", positionType=2, holdVol="20")
+    return dict(symbol="SIREN_USDT", positionId="10", positionType=2, holdVol="20", state=1)
 
 
 def stop():
