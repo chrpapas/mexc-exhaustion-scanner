@@ -6,7 +6,7 @@ from app.t100_live_schema_assessment import assess_shadow_schema
 
 def pos(**extra):
     return dict(symbol="SIREN_USDT", positionId="10", positionType=2,
-                holdVol="20", **extra)
+                holdVol="20", state=1, **extra)
 
 
 def stop(**extra):
@@ -32,6 +32,18 @@ class SchemaAssessmentTests(unittest.TestCase):
         r = assess_shadow_schema(summarize_inventory_schema([p], [stop()]))
         self.assertIn("positionType", r["families"]["positions"]["missing_fields"])
         self.assertEqual(r["overall"], "PARSER_SHAPE_MISMATCH")
+
+    def test_missing_position_state_flagged(self):
+        p = pos()
+        del p["state"]
+        r = assess_shadow_schema(summarize_inventory_schema([p], [stop()]))
+        self.assertIn("state", r["families"]["positions"]["missing_fields"])
+
+    def test_nullable_position_state_flagged(self):
+        p = pos()
+        p["state"] = None
+        r = assess_shadow_schema(summarize_inventory_schema([p], [stop()]))
+        self.assertIn("state", r["families"]["positions"]["incompatible_fields"])
 
     def test_missing_stop_volume_flagged(self):
         s = stop()
@@ -133,7 +145,7 @@ class ObservedMexcRuntimeShapeTests(unittest.TestCase):
     def test_runtime_stop_position_id_string_is_supported(self):
         evidence = summarize_inventory_schema(
             [{"symbol": "X_USDT", "positionId": 1,
-              "positionType": 2, "holdVol": 1}],
+              "positionType": 2, "holdVol": 1, "state": 1}],
             [{"id": 1, "positionId": "1", "state": 3,
               "stopLossPrice": 1.0, "vol": 1}],
         )
