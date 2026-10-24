@@ -450,6 +450,52 @@ class PersistenceTests(unittest.IsolatedAsyncioTestCase):
                 previous, current, reason=REVIEW_LATCHED)
         self.assertEqual(len(pool.conn.calls), 1)
 
+    async def test_close_checkpoint_intent_and_revision_are_atomic(self):
+        previous = cp(
+            lifecycle_state="CLOSING",
+            checkpoint_version=2,
+        )
+        current = replace(
+            previous,
+            lifecycle_state="CLOSED",
+            checkpoint_version=3,
+        )
+        pool = Pool(["10", 77, 3])
+        journal = PostgresCheckpointJournal(pool)
+        await journal.advance(
+            previous, current, reason=CLOSE_VERIFIED)
+        self.assertEqual(len(pool.conn.calls), 3)
+        self.assertIn(
+            "t100_live_position_checkpoints",
+            pool.conn.calls[0][0])
+        self.assertIn(
+            "t100_live_order_intents",
+            pool.conn.calls[1][0])
+        self.assertIn(
+            "t100_live_position_checkpoint_revisions",
+            pool.conn.calls[2][0])
+        self.assertEqual(pool.conn.tx_exception_types, [None])
+
+    async def test_close_intent_cas_failure_rolls_back_before_revision(self):
+        previous = cp(
+            lifecycle_state="CLOSING",
+            checkpoint_version=2,
+        )
+        current = replace(
+            previous,
+            lifecycle_state="CLOSED",
+            checkpoint_version=3,
+        )
+        pool = Pool(["10", None])
+        journal = PostgresCheckpointJournal(pool)
+        with self.assertRaisesRegex(
+            CheckpointJournalHalted, "CLOSE_INTENT_CAS_FAILURE"):
+            await journal.advance(
+                previous, current, reason=CLOSE_VERIFIED)
+        self.assertEqual(len(pool.conn.calls), 2)
+        self.assertIs(
+            pool.conn.tx_exception_types[0], CheckpointJournalHalted)
+
     async def test_database_error_wrapped_fail_closed(self):
         pool = Pool([RuntimeError("db down")])
         journal = PostgresCheckpointJournal(pool)
