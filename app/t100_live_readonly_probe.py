@@ -108,3 +108,39 @@ class ReadOnlyMexcProbe:
             raise VenueReadHalted("FUNDING_PAGE_ROWS_UNVERIFIED")
         return raw
 
+    async def raw_order_by_id(self, order_id: str) -> dict[str, Any]:
+        """Read one MEXC futures order by immutable exchange order ID."""
+        if (
+            not isinstance(order_id, str) or not order_id.isdigit()
+            or int(order_id) <= 0
+        ):
+            raise VenueReadHalted("INVALID_ORDER_ID")
+        try:
+            raw = await self._client._private_get(
+                f"/api/v1/private/order/get/{order_id}"
+            )
+        except Exception as exc:
+            raise VenueReadHalted("ORDER_GET_FAILED") from exc
+        if not isinstance(raw, dict):
+            raise VenueReadHalted("ORDER_RESPONSE_UNVERIFIED")
+        return raw
+
+    async def raw_order_deal_details(
+        self, order_id: str,
+    ) -> list[dict[str, Any]]:
+        """Read all trade records for one MEXC futures order ID."""
+        if (
+            not isinstance(order_id, str) or not order_id.isdigit()
+            or int(order_id) <= 0
+        ):
+            raise VenueReadHalted("INVALID_ORDER_ID")
+        try:
+            raw = await self._client._private_get(
+                f"/api/v1/private/order/deal_details/{order_id}"
+            )
+        except Exception as exc:
+            raise VenueReadHalted("ORDER_DEALS_GET_FAILED") from exc
+        if not isinstance(raw, list) or any(not isinstance(row, dict) for row in raw):
+            raise VenueReadHalted("ORDER_DEALS_RESPONSE_UNVERIFIED")
+        return raw
+
