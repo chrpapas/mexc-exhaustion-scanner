@@ -102,11 +102,21 @@ async def read_only_preflight(
         result["open_futures_stop_orders"] = len(stops)
 
         if include_raw_consistency:
+            last_observed_ms = -1
+
             async def _raw_inventory_read() -> InventoryRead:
+                nonlocal last_observed_ms
                 p = await probe.raw_open_positions()
                 s = await probe.raw_open_stops()
+                observed_ms = time.monotonic_ns() // 1_000_000
+                # Two very fast fake/local reads can share one millisecond.
+                # Preserve strict observation order without hiding a real
+                # multi-millisecond delay: only bump an equal timestamp by 1.
+                if observed_ms <= last_observed_ms:
+                    observed_ms = last_observed_ms + 1
+                last_observed_ms = observed_ms
                 return InventoryRead(
-                    p, s, time.monotonic_ns() // 1_000_000,
+                    p, s, observed_ms,
                     positions_complete=False, stops_complete=False,
                 )
             try:
