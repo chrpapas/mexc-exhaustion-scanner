@@ -20,6 +20,20 @@ class ReadOnlyMexcProbe:
     def __init__(self, client: PrivateGet):
         self._client = client
 
+    async def raw_account_assets(self) -> list[dict[str, Any]]:
+        try:
+            raw = await self._client._private_get(
+                "/api/v1/private/account/assets"
+            )
+        except Exception as exc:
+            raise VenueReadHalted("ACCOUNT_ASSETS_GET_FAILED") from exc
+        if (
+            not isinstance(raw, list)
+            or any(not isinstance(row, dict) for row in raw)
+        ):
+            raise VenueReadHalted("ACCOUNT_ASSETS_RESPONSE_UNVERIFIED")
+        return raw
+
     async def raw_open_positions(
         self, symbol: str | None = None,
     ) -> list[dict[str, Any]]:
