@@ -517,3 +517,35 @@ atomicity evidence.
 
 The revised diagnostic is version
 2026-10-24-projected-discovery-soak-v2.
+
+
+### 2026-10-24 projected discovery soak v2: 12/12 critical pairs stable
+
+The revised bounded real-account discovery soak completed all 12 requested
+samples over approximately 69 seconds.
+
+Observed result:
+- completed_samples=12
+- consistent_samples=12
+- cross_sample_inventory_count_changes=0
+- position_presence_samples=12
+- current_tpsl_presence_samples=0
+- position_without_current_tpsl_samples=12
+- kill_tripped=false
+- full_raw_drift_samples=4
+- changed_position_field_names={unRealizedPnl}
+- changed_stop_field_names={}
+- raw_inventory_completeness_verified=false
+- exchange_atomicity_verified=false
+- entry_allowed=false
+- live_authorization=false
+- status=COMPLETED_READ_ONLY_DISCOVERY
+
+This confirms that the first soak halt was caused by naturally changing
+unrealized PnL rather than safety-critical inventory drift. Across all 12
+pairs the critical projection remained stable.
+
+This is sustained read-only discovery evidence only. The observed account
+still had one position and zero current TP/SL rows following the operator's
+manual TP/SL cancellation, so this cannot be counted as a protected-position
+operational soak.
