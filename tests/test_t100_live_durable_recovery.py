@@ -4,6 +4,7 @@ from decimal import Decimal as D
 
 from app.t100_live_durable_recovery import (
     DurableRecoveryHalted,
+    DurableRestartRecoveryGate,
     checkpoint_from_row,
     recover_nonflat,
 )
@@ -316,3 +317,93 @@ class DurableRecoveryTests(unittest.TestCase):
         with self.assertRaisesRegex(
             DurableRecoveryHalted, "RECOVERY_INPUT_RESPONSE_AMBIGUOUS"):
             run(stops=[None])
+
+
+class Ledger:
+    def __init__(self):
+        self.queries = []
+        self.fail = False
+
+    async def fetch(self, query):
+        self.queries.append(query)
+        if self.fail:
+            raise ConnectionError("db down")
+        if "t100_live_position_checkpoints" in query:
+            return [checkpoint()]
+        if "t100_live_order_intents" in query:
+            return [intent()]
+        if "t100_live_stop_amendments" in query:
+            return []
+        raise AssertionError("unexpected query")
+
+
+class Exchange:
+    def __init__(self):
+        self.positions = [position()]
+        self.stops = [stop()]
+        self.fail = False
+        self.calls = []
+
+    async def open_positions(self, symbol=None):
+        self.calls.append(("positions", symbol))
+        if self.fail:
+            raise TimeoutError()
+        return self.positions
+
+    async def open_stop_orders(self, symbol=None):
+        self.calls.append(("stops", symbol))
+        if self.fail:
+            raise TimeoutError()
+        return self.stops
+
+
+class DurableRecoveryGateTests(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        self.ledger = Ledger()
+        self.exchange = Exchange()
+        self.gate = DurableRestartRecoveryGate(self.ledger, self.exchange)
+
+    async def test_select_get_only_recovery_path(self):
+        r = await self.gate.inspect_nonflat(
+            positions_complete=True, stops_complete=True)
+        self.assertEqual(r.mode, "SHADOW_ONLY_RECOVERED_NONFLAT")
+        self.assertFalse(r.live_authorization)
+        self.assertEqual(len(self.ledger.queries), 3)
+        self.assertTrue(all(q.lstrip().startswith("SELECT") for q in self.ledger.queries))
+        self.assertEqual(
+            self.exchange.calls,
+            [("positions", None), ("stops", None)],
+        )
+
+    async def test_completeness_defaults_false(self):
+        with self.assertRaisesRegex(
+            DurableRecoveryHalted, "COMPLETENESS_UNVERIFIED"):
+            await self.gate.inspect_nonflat()
+
+    async def test_ledger_outage_blocks_before_exchange_reads(self):
+        self.ledger.fail = True
+        with self.assertRaisesRegex(
+            DurableRecoveryHalted, "RECOVERY_LEDGER_UNAVAILABLE"):
+            await self.gate.inspect_nonflat(
+                positions_complete=True, stops_complete=True)
+        self.assertEqual(self.exchange.calls, [])
+
+    async def test_exchange_outage_blocks(self):
+        self.exchange.fail = True
+        with self.assertRaisesRegex(
+            DurableRecoveryHalted, "RECOVERY_EXCHANGE_READ_UNAVAILABLE"):
+            await self.gate.inspect_nonflat(
+                positions_complete=True, stops_complete=True)
+
+    async def test_missing_durable_table_fails_closed(self):
+        class MissingTableLedger(Ledger):
+            async def fetch(self, query):
+                if "t100_live_position_checkpoints" in query:
+                    raise RuntimeError("relation does not exist")
+                return await super().fetch(query)
+
+        gate = DurableRestartRecoveryGate(MissingTableLedger(), self.exchange)
+        with self.assertRaisesRegex(
+            DurableRecoveryHalted, "RECOVERY_LEDGER_UNAVAILABLE"):
+            await gate.inspect_nonflat(
+                positions_complete=True, stops_complete=True)
