@@ -92,3 +92,56 @@ async def double_read_inventory(
         "SHADOW_ONLY", first.observed_at_ms, second.observed_at_ms,
         len(second.positions), len(second.stops), second_hash,
     )
+
+
+
+@dataclass(frozen=True)
+class RawConsistencyEvidence:
+    """Consistency only; explicitly does not establish collection completeness."""
+    mode: str
+    first_observed_at_ms: int
+    second_observed_at_ms: int
+    positions: int
+    stops: int
+
+
+async def double_read_raw_inventory(
+    reader: Callable[[], Awaitable[InventoryRead]],
+    *, max_separation_ms: int = 2000,
+) -> RawConsistencyEvidence:
+    """Compare two strict raw inventory reads without asserting completeness.
+
+    This is appropriate during venue contract discovery: identical snapshots
+    reduce torn-read risk but do not prove that an endpoint returned every
+    position/stop, nor that MEXC provides an atomic account snapshot.
+    """
+    if type(max_separation_ms) is not int or not 0 < max_separation_ms <= 3000:
+        raise ValueError("INVALID_MAX_SEPARATION")
+    try:
+        first = await reader()
+        if not isinstance(first, InventoryRead):
+            raise ConsistencyHalted("INVENTORY_READ_TYPE")
+        if not isinstance(first.positions, list) or not isinstance(first.stops, list):
+            raise ConsistencyHalted("INVENTORY_READ_MALFORMED")
+        first_hash = _fingerprint(first)
+
+        second = await reader()
+        if not isinstance(second, InventoryRead):
+            raise ConsistencyHalted("INVENTORY_READ_TYPE")
+        if not isinstance(second.positions, list) or not isinstance(second.stops, list):
+            raise ConsistencyHalted("INVENTORY_READ_MALFORMED")
+        second_hash = _fingerprint(second)
+    except Exception as exc:
+        raise ConsistencyHalted("RAW_INVENTORY_DOUBLE_READ_UNVERIFIED") from exc
+
+    if type(first.observed_at_ms) is not int or type(second.observed_at_ms) is not int:
+        raise ConsistencyHalted("INVALID_OBSERVATION_TIMESTAMPS")
+    delta = second.observed_at_ms - first.observed_at_ms
+    if delta <= 0 or delta > max_separation_ms:
+        raise ConsistencyHalted("RAW_INVENTORY_READS_NOT_CONSECUTIVE")
+    if first_hash != second_hash:
+        raise ConsistencyHalted("RAW_INVENTORY_CHANGED_BETWEEN_READS")
+    return RawConsistencyEvidence(
+        "READ_ONLY_DISCOVERY", first.observed_at_ms, second.observed_at_ms,
+        len(second.positions), len(second.stops),
+    )
