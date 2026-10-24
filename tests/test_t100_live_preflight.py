@@ -115,6 +115,34 @@ class PreflightTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(result["shadow_schema_assessment"]["active_stop_schema_observed"])
         self.assertFalse(result["shadow_schema_assessment"]["historical_stop_schema_observed"])
 
+    async def test_active_tpsl_semantics_are_shareable_without_values(self):
+        c = FakeClient(
+            positions=[{
+                "positionId": 10, "symbol": "SIREN_USDT",
+                "positionType": 2, "holdVol": 5, "state": 1,
+            }],
+            stops=[{
+                "id": 99, "positionId": "10", "symbol": "SIREN_USDT",
+                "positionType": 2, "state": 1, "isFinished": 0,
+                "stopLossPrice": 175.0, "vol": 5,
+                "profitLossVolType": "SAME",
+            }],
+        )
+        result = await read_only_preflight(client=c)
+        self.assertTrue(
+            result["active_tpsl_semantics"][
+                "active_tpsl_row_semantics_verified"
+            ]
+        )
+        shared = shareable_contract_report(result)
+        self.assertTrue(
+            shared["active_tpsl_semantics"][
+                "all_rows_link_to_observed_position"
+            ]
+        )
+        for value in ("SIREN_USDT", "175.0", "99"):
+            self.assertNotIn(value, str(shared["active_tpsl_semantics"]))
+
     async def test_schema_evidence_redacts_account_values(self):
         c = FakeClient(positions=[{"positionId": "PRIVATE-123",
                                    "symbol": "SIREN_USDT",
