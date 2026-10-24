@@ -29,6 +29,49 @@ def checkpoint(**extra):
     return row
 
 
+
+def revisions_for(row):
+    n = int(row["checkpoint_version"])
+    final_stop = D(str(row["stop_price"]))
+    final_best = D(str(row["best_profit_pct"]))
+    final_armed = bool(row["armed"])
+    rows = []
+    for version in range(1, n + 1):
+        if version == 1:
+            stop_price = final_stop + D(n - 1)
+            best = D("0")
+            armed = False
+            reason = "ENTRY_PROTECTED"
+        else:
+            stop_price = final_stop + D(n - version)
+            if final_armed:
+                best = D("14") if final_best == D("14") else max(
+                    D("14"),
+                    final_best - D(n - version) * D("0.1"),
+                )
+                armed = True
+            else:
+                best = final_best
+                armed = False
+            reason = "STOP_VERIFIED"
+        rows.append({
+            "position_id": row["position_id"],
+            "checkpoint_version": version,
+            "write_reason": reason,
+            "symbol": row["symbol"],
+            "external_oid": row["external_oid"],
+            "exchange_order_id": row["exchange_order_id"],
+            "contracts": row["contracts"],
+            "entry_price": row["entry_price"],
+            "stop_order_id": row["stop_order_id"],
+            "stop_price": stop_price,
+            "best_profit_pct": best,
+            "armed": armed,
+            "lifecycle_state": "OPEN",
+        })
+    return rows
+
+
 def intent(**extra):
     row = {
         "symbol": "SIREN_USDT",
@@ -84,8 +127,14 @@ def stop(**extra):
 
 
 def run(**kw):
+    checkpoints = kw.get("checkpoints", [checkpoint()])
+    revisions = kw.get(
+        "revisions",
+        [rev for row in checkpoints for rev in revisions_for(row)],
+    )
     return recover_nonflat(
-        checkpoint_rows=kw.get("checkpoints", [checkpoint()]),
+        checkpoint_rows=checkpoints,
+        revision_rows=revisions,
         intent_rows=kw.get("intents", [intent()]),
         stop_amendment_rows=kw.get("amendments", []),
         orders=kw.get("orders", [order()]),
@@ -219,6 +268,85 @@ class DurableRecoveryTests(unittest.TestCase):
             with self.assertRaisesRegex(
                 DurableRecoveryHalted, "CHECKPOINT_VERSION"):
                 checkpoint_from_row(checkpoint(checkpoint_version=value))
+
+    def test_missing_revision_history_blocks(self):
+        with self.assertRaisesRegex(
+            DurableRecoveryHalted, "REVISION_POSITION_SET_MISMATCH"):
+            run(revisions=[])
+
+    def test_revision_count_mismatch_blocks(self):
+        with self.assertRaisesRegex(
+            DurableRecoveryHalted, "REVISION_COUNT_MISMATCH"):
+            run(
+                checkpoints=[checkpoint(
+                    stop_price=D("90"), best_profit_pct=D("14"),
+                    armed=True, checkpoint_version=2)],
+                revisions=[revisions_for(checkpoint())[0]],
+                stops=[stop(stopLossPrice=D("90"))],
+            )
+
+    def test_duplicate_revision_version_blocks(self):
+        base = checkpoint(
+            stop_price=D("90"), best_profit_pct=D("14"),
+            armed=True, checkpoint_version=2)
+        rows = revisions_for(base)
+        rows[1]["checkpoint_version"] = 1
+        with self.assertRaisesRegex(
+            DurableRecoveryHalted, "DUPLICATE_CHECKPOINT_REVISION_VERSION"):
+            run(
+                checkpoints=[base],
+                revisions=rows,
+                stops=[stop(stopLossPrice=D("90"))],
+            )
+
+    def test_revision_sequence_gap_blocks(self):
+        base = checkpoint(
+            stop_price=D("89"), best_profit_pct=D("14"),
+            armed=True, checkpoint_version=3)
+        rows = revisions_for(base)
+        rows[1]["checkpoint_version"] = 4
+        with self.assertRaisesRegex(
+            DurableRecoveryHalted, "REVISION_SEQUENCE_GAP"):
+            run(
+                checkpoints=[base],
+                revisions=rows,
+                stops=[stop(stopLossPrice=D("89"))],
+            )
+
+    def test_revision_stop_must_tighten_strictly(self):
+        base = checkpoint(
+            stop_price=D("90"), best_profit_pct=D("14"),
+            armed=True, checkpoint_version=2)
+        rows = revisions_for(base)
+        rows[1]["stop_price"] = rows[0]["stop_price"]
+        with self.assertRaisesRegex(
+            DurableRecoveryHalted, "STOP_NOT_STRICTLY_TIGHTER"):
+            run(
+                checkpoints=[base],
+                revisions=rows,
+                stops=[stop(stopLossPrice=D("90"))],
+            )
+
+    def test_revision_immutable_provenance_drift_blocks(self):
+        rows = revisions_for(checkpoint())
+        rows[0]["exchange_order_id"] = "999"
+        with self.assertRaisesRegex(
+            DurableRecoveryHalted, "REVISION_IMMUTABLE_DRIFT"):
+            run(revisions=rows)
+
+    def test_final_revision_must_equal_current_checkpoint(self):
+        base = checkpoint(
+            stop_price=D("90"), best_profit_pct=D("14"),
+            armed=True, checkpoint_version=2)
+        rows = revisions_for(base)
+        rows[-1]["best_profit_pct"] = D("14.1")
+        with self.assertRaisesRegex(
+            DurableRecoveryHalted, "FINAL_REVISION_MISMATCH"):
+            run(
+                checkpoints=[base],
+                revisions=rows,
+                stops=[stop(stopLossPrice=D("90"))],
+            )
 
     def test_unresolved_order_intent_blocks(self):
         for state in ("PREPARED", "SUBMITTING", "UNKNOWN", "REVIEW"):
@@ -442,6 +570,8 @@ class Ledger:
         self.queries.append(query)
         if self.fail:
             raise ConnectionError("db down")
+        if "t100_live_position_checkpoint_revisions" in query:
+            return revisions_for(checkpoint())
         if "t100_live_position_checkpoints" in query:
             return [checkpoint()]
         if "t100_live_order_intents" in query:
@@ -490,7 +620,7 @@ class DurableRecoveryGateTests(unittest.IsolatedAsyncioTestCase):
             positions_complete=True, stops_complete=True)
         self.assertEqual(r.mode, "SHADOW_ONLY_RECOVERED_NONFLAT")
         self.assertFalse(r.live_authorization)
-        self.assertEqual(len(self.ledger.queries), 3)
+        self.assertEqual(len(self.ledger.queries), 4)
         self.assertTrue(all(q.lstrip().startswith("SELECT") for q in self.ledger.queries))
         self.assertEqual(
             self.exchange.calls,
