@@ -3,7 +3,9 @@ import os
 import unittest
 from unittest.mock import patch
 
-from app.t100_live_preflight import read_only_preflight, shareable_contract_report
+from app.t100_live_preflight import (
+    read_only_preflight, shareable_contract_report, _run_cli_preflight,
+)
 
 
 class FakeClient:
@@ -166,6 +168,20 @@ class PreflightTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(shared["venue_contract_certified"])
         self.assertFalse(shared["pagination_certified"])
         self.assertEqual(shared["shadow_schema_assessment"]["overall"], "INCOMPLETE_SCHEMA_EVIDENCE")
+
+    async def test_cli_timeout_fails_closed(self):
+        async def never_returns(**kwargs):
+            import asyncio
+            await asyncio.sleep(60)
+        with patch("app.t100_live_preflight.read_only_preflight", never_returns), \
+             patch("app.t100_live_preflight.asyncio.wait_for",
+                   side_effect=TimeoutError):
+            result = await _run_cli_preflight(schema_only=True)
+        self.assertEqual(result["credential_status"],
+                         "READ_ONLY_PREFLIGHT_TIMED_OUT")
+        self.assertFalse(result["live_order_submission_possible"])
+        self.assertIn("overall_read_only_preflight_timeout",
+                      result["preflight_failures"])
 
     async def test_missing_credentials_makes_no_calls(self):
         with patch.dict(os.environ, {"MEXC_API_KEY": "", "MEXC_API_SECRET": ""}):
