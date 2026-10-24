@@ -26,7 +26,7 @@ from app.t100_live_active_tpsl import assess_active_tpsl_semantics
 from app.t100_live_stop_transition import assess_recent_finished_tpsl_transition
 from app.t100_live_funding_probe import collect_observed_position_funding
 
-PREFLIGHT_DIAGNOSTIC_VERSION = "2026-10-24-funding-pagination-v1"
+PREFLIGHT_DIAGNOSTIC_VERSION = "2026-10-24-funding-economics-v1"
 
 
 async def read_only_preflight(
@@ -142,9 +142,22 @@ async def read_only_preflight(
                             probe, position_id=str(pid_raw or "")
                         )
                     )
-                    result["funding_observed_position_probe"]["status"] = (
-                        "PAGINATION_VERIFIED_SIGN_SEMANTICS_UNCERTIFIED"
-                    )
+                    funding = result["funding_observed_position_probe"]
+                    if (
+                        funding.get("funding_sign_semantics_verified")
+                        and funding.get("funding_formula_semantics_verified")
+                    ):
+                        funding["status"] = (
+                            "PAGINATION_AND_FUNDING_ECONOMICS_OBSERVED"
+                        )
+                    elif funding.get("funding_sign_semantics_verified"):
+                        funding["status"] = (
+                            "PAGINATION_AND_FUNDING_SIGN_OBSERVED_FORMULA_UNCERTAIN"
+                        )
+                    else:
+                        funding["status"] = (
+                            "PAGINATION_VERIFIED_SIGN_SEMANTICS_UNCERTIFIED"
+                        )
                 except Exception as exc:
                     result["funding_observed_position_probe"] = {
                         "status": "FUNDING_READ_CONTRACT_UNVERIFIED",
