@@ -19,6 +19,7 @@ if TYPE_CHECKING:
 from app.t100_live_guards import LIVE_ADAPTER_STATUS, T100ExecutionControls
 from app.t100_live_readonly_probe import ReadOnlyMexcProbe
 from app.t100_live_contract_evidence import summarize_inventory_schema
+from app.t100_live_schema_assessment import assess_shadow_schema
 
 
 async def read_only_preflight(
@@ -65,6 +66,7 @@ async def read_only_preflight(
         # Shape evidence contains only allowlisted field names and types;
         # never IDs, symbols, quantities, balances or unknown key names.
         result["redacted_inventory_schema"] = summarize_inventory_schema(positions, stops)
+        result["shadow_schema_assessment"] = assess_shadow_schema(result["redacted_inventory_schema"])
         result["open_futures_positions"] = len(positions)
         result["open_futures_stop_orders"] = len(stops)
         await client.refresh_contract_specs()
@@ -99,6 +101,7 @@ def shareable_contract_report(result: dict[str, Any]) -> dict[str, Any]:
         "credential_status": result.get("credential_status", "UNKNOWN"),
         "read_failure_type": result.get("read_failure_type"),
         "redacted_inventory_schema": result.get("redacted_inventory_schema"),
+        "shadow_schema_assessment": result.get("shadow_schema_assessment"),
         "venue_contract_certified": False,
         "pagination_certified": False,
     }
