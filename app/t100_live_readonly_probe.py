@@ -41,18 +41,35 @@ class ReadOnlyMexcProbe:
             raise VenueReadHalted("OPEN_STOPS_RESPONSE_UNVERIFIED")
         return raw
 
-    async def raw_stop_page(self, page: int, size: int) -> Any:
-        if type(page) is not int or type(size) is not int or page < 1 or not 1 <= size <= 100:
+    async def raw_stop_page(
+        self, page: int, size: int, *, is_finished: int = 1,
+    ) -> list[dict[str, Any]]:
+        """Read one TP/SL page without claiming pagination completeness.
+
+        Current MEXC documentation describes data as a list even though
+        page_num/page_size are request parameters. Because the response
+        does not report a total/page count, a short page is schema evidence
+        only and must never be treated as proof that history is complete.
+        """
+        if (
+            type(page) is not int or type(size) is not int
+            or page < 1 or not 1 <= size <= 100
+            or type(is_finished) is not int or is_finished not in {0, 1}
+        ):
             raise VenueReadHalted("INVALID_STOP_PAGE_ARGUMENTS")
         try:
             raw = await self._client._private_get(
                 "/api/v1/private/stoporder/list/orders",
-                {"page_num": page, "page_size": size, "is_finished": 0},
+                {
+                    "page_num": page,
+                    "page_size": size,
+                    "is_finished": is_finished,
+                },
             )
         except Exception as exc:
             raise VenueReadHalted("STOP_PAGE_GET_FAILED") from exc
-        if not isinstance(raw, dict):
+        if not isinstance(raw, list) or any(not isinstance(s, dict) for s in raw):
             raise VenueReadHalted("STOP_PAGE_RESPONSE_UNVERIFIED")
-        # Deliberately do not rename/guess response fields. Contract
-        # mapping requires verified, redacted MEXC response evidence.
+        if len(raw) > size:
+            raise VenueReadHalted("STOP_PAGE_OVERFLOW")
         return raw
