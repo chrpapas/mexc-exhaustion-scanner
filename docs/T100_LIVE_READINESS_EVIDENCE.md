@@ -359,3 +359,54 @@ currency. No broad account history is used to infer ownership of an order.
 Real fill evidence will require a known order ID that T100 owns or that the
 operator deliberately designates for audit; no order will be created for
 testing.
+
+
+### 2026-10-24 durable non-flat restart recovery design
+
+The previous restart gate intentionally blocked every non-flat account because
+the existing live order-intent ledger does not persist enough runtime state to
+reconstruct a managed T100 position after a crash. In particular it does not
+durably record position_id, native stop_order_id/current stop_price, or the
+trailing state best_profit_pct/armed.
+
+A separate draft-only checkpoint schema was therefore added at
+sql/t100_live_position_checkpoints_draft.sql. It is NOT deployed.
+
+The new pure recovery policy in app/t100_live_durable_recovery.py reconstructs
+ManagedShort state only when every condition below is true:
+
+- 1..4 OPEN durable checkpoints exist, one symbol per checkpoint
+- checkpoint trailing state is internally coherent
+- each checkpoint has exactly one ACK order intent with matching immutable
+  external/exchange order identity, initial quantity and initial stop bound
+- no PREPARED/SUBMITTING/UNKNOWN/REVIEW order intent exists
+- no unresolved stop amendment exists
+- the original MEXC order is re-read and matches externalOid, orderId, symbol,
+  OPEN_SHORT side, final-filled state, positionId, dealt quantity and average
+  fill price
+- current position inventory is independently certified complete
+- current TP/SL inventory is independently certified complete
+- every exchange position exactly matches checkpoint identity, short side,
+  holding state, quantity and entry price
+- every native stop exactly matches checkpoint identity, active state,
+  stop price and protective quantity
+- no additional exchange position, stop or ACK intent exists outside the
+  durable checkpoint set
+
+Recovery output remains SHADOW_ONLY_RECOVERED_NONFLAT with
+live_authorization=false. Any mismatch fails closed.
+
+A SELECT/GET-only orchestration layer loads checkpoints, intents and stop
+amendments and re-reads the immutable origin order plus current positions and
+native stops. It defaults both endpoint-completeness flags to false; callers
+must supply independently established completeness evidence.
+
+Current MEXC documentation describes open positions and current TP/SL as
+non-paginated list responses, but does not provide an explicit maximum,
+truncation contract, total count, or atomic-snapshot guarantee. Therefore the
+current real probe still cannot set positions_complete/stops_complete=true
+solely because expected rows were observed. Durable recovery remains
+non-authorizing until that evidence gap is resolved.
+
+The draft checkpoint table is intentionally not migrated and no live database
+writes were performed.
