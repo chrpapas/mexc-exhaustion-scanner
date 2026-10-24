@@ -680,3 +680,37 @@ raw payload was identical.
 The account still had one observed position and zero current TP/SL rows after
 the operator's manual cancellation, so active protection semantics remain
 insufficient for an operational-protection pass.
+
+
+### 2026-10-24 first real private WebSocket observation: authenticated quiet pass
+
+A 30-second operator-local private Futures WebSocket observation completed
+successfully with diagnostic version
+2026-10-24-private-ws-observer-v1.
+
+Observed result:
+- credential_status=PRIVATE_WS_LOGIN_SUCCEEDED_READ_ONLY_OBSERVATION
+- login_verified=true
+- filter_sent=true
+- pongs_seen=1
+- private_events_seen=0
+- position_events_seen=0
+- stop_plan_events_seen=0
+- fill_events_seen=0
+- unexpected_private_channels={}
+- elapsed_ms=30628
+- status=COMPLETED_PRIVATE_WS_OBSERVATION
+- read_only=true
+- live_order_submission_possible=false
+- entry_allowed=false
+- live_authorization=false
+- rest_snapshot_completeness_verified=false
+- exchange_atomicity_verified=false
+
+This validates the real-account private WS authentication/filter/heartbeat
+path and a clean bounded observation interval. Zero private events during the
+window is not treated as evidence that no position exists and does not
+validate position/stop/fill event payload semantics. Those remain unobserved
+until a real account lifecycle event naturally occurs.
+
+No account mutation was performed for the purpose of generating a WS event.
