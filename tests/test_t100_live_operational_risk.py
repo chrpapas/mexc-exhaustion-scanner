@@ -132,7 +132,8 @@ class OperationalRiskTests(unittest.TestCase):
                 daily_loss_usdt=0,
                 manual_kill_switch=False,
             )
-        self.assertFalse(m.kill.tripped)
+        self.assertTrue(m.kill.tripped)
+        self.assertEqual(m.kill.first_reason, "RECOVERY_UNVERIFIED")
 
     def test_invalid_numeric_inputs_fail_without_silent_coercion(self):
         for bad in ("NaN", "Infinity", -1):
@@ -144,6 +145,9 @@ class OperationalRiskTests(unittest.TestCase):
                     daily_loss_usdt=0,
                     manual_kill_switch=False,
                 )
+            self.assertTrue(m.kill.tripped)
+            self.assertEqual(
+                m.kill.first_reason, "RECOVERY_UNVERIFIED")
 
     def test_invalid_manual_kill_type_rejected(self):
         m = OperationalRiskMonitor(limits())
@@ -155,6 +159,8 @@ class OperationalRiskTests(unittest.TestCase):
                 daily_loss_usdt=0,
                 manual_kill_switch=1,
             )
+        self.assertTrue(m.kill.tripped)
+        self.assertEqual(m.kill.first_reason, "RECOVERY_UNVERIFIED")
 
     def test_invalid_limits_rejected(self):
         for bad in (D("0"), D("-1"), D("NaN")):
