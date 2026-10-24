@@ -17,7 +17,7 @@ def read(t=1000, positions=None, stops=None, **kw):
 
 
 def pos(vol="2"):
-    return dict(symbol="SIREN_USDT", positionId="1", positionType=2, holdVol=vol)
+    return dict(symbol="SIREN_USDT", positionId="1", positionType=2, holdVol=vol, state=1)
 
 
 def stop(price="175"):
@@ -51,7 +51,7 @@ class ConsistencyTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(r.fingerprint_sha256),64)
 
     async def test_row_order_does_not_change_fingerprint(self):
-        a=[pos(),dict(symbol="OTHER_USDT",positionId="2",positionType=1,holdVol="1")]
+        a=[pos(),dict(symbol="OTHER_USDT",positionId="2",positionType=1,holdVol="1",state=1)]
         r=await verify(read(1000,a,[stop()]),read(1500,list(reversed(a)),[stop()]))
         self.assertEqual(r.positions,2)
 
@@ -136,7 +136,7 @@ class RawConsistencyTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_raw_row_order_does_not_matter(self):
         rows = [pos(), dict(symbol="OTHER_USDT", positionId="2",
-                            positionType=1, holdVol="1")]
+                            positionType=1, holdVol="1", state=1)]
         reader = Reader(read(1000, rows, []),
                         read(1500, list(reversed(rows)), []))
         r = await double_read_raw_inventory(reader)
