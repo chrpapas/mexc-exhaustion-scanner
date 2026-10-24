@@ -15,9 +15,14 @@ SAFE_POSITION_FIELDS = frozenset({
     "avgPrice", "holdAvgPrice", "liquidatePrice",
 })
 SAFE_STOP_FIELDS = frozenset({
-    "id", "stopPlanOrderId", "positionId", "symbol", "state",
-    "stopLossPrice", "vol", "createTime", "updateTime",
-    "profitLossVolType", "volType", "stopLossType",
+    "id", "stopPlanOrderId", "orderId", "positionId", "symbol", "state",
+    "positionType", "lossTrend", "profitTrend", "triggerSide",
+    "stopLossPrice", "takeProfitPrice", "vol", "realityVol",
+    "placeOrderId", "errorCode", "isFinished", "version", "priceProtect",
+    "profitLossVolType", "takeProfitVol", "stopLossVol",
+    "createTime", "updateTime", "volType", "takeProfitReverse",
+    "stopLossReverse", "takeProfitType", "takeProfitOrderPrice",
+    "stopLossType", "stopLossOrderPrice",
 })
 
 
