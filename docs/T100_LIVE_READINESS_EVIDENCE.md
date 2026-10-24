@@ -739,3 +739,37 @@ Possible outcomes distinguish:
 The report is redacted and non-authorizing. It exposes only counts, booleans,
 field names/types and status. It does not prove account-wide completeness or
 exchange atomicity.
+
+
+### 2026-10-24 first real REST-WS-REST continuity sandwich: stable
+
+A 30-second real-account continuity probe completed with:
+
+- before_positions=1
+- after_positions=1
+- before_current_tpsl=0
+- after_current_tpsl=0
+- critical_positions_equal=true
+- critical_current_tpsl_equal=true
+- critical_rest_inventory_equal=true
+- full_raw_positions_equal=false
+- changed_position_field_names={unRealizedPnl}
+- changed_stop_field_names={}
+- ws login_verified=true
+- ws filter_sent=true
+- ws pongs_seen=1
+- ws private_events_seen=0
+- ws unexpected_private_channels={}
+- status=REST_WS_REST_CONTINUITY_STABLE
+- account_wide_completeness_verified=false
+- exchange_atomicity_verified=false
+- live_authorization=false
+
+This is independent continuity evidence spanning both REST and the authenticated
+private WS channel. It confirms that the safety-critical current inventory did
+not change across the WS observation window while the expected mark-to-market
+field moved.
+
+No current TP/SL existed before or after the window following the operator's
+manual cancellation, so this is not protected-position operational soak
+evidence.
