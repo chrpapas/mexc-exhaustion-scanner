@@ -26,8 +26,9 @@ from app.t100_live_active_tpsl import assess_active_tpsl_semantics
 from app.t100_live_stop_transition import assess_recent_finished_tpsl_transition
 from app.t100_live_funding_probe import collect_observed_position_funding
 from app.t100_live_symbol_crosscheck import crosscheck_symbol_scoped_inventory
+from app.t100_live_position_margin_witness import assess_position_margin_witness
 
-PREFLIGHT_DIAGNOSTIC_VERSION = "2026-10-24-projected-preflight-v2"
+PREFLIGHT_DIAGNOSTIC_VERSION = "2026-10-24-position-margin-witness-v1"
 
 
 async def read_only_preflight(
@@ -37,6 +38,7 @@ async def read_only_preflight(
     include_raw_consistency: bool = False,
     include_funding_probe: bool = False,
     include_symbol_crosscheck: bool = False,
+    include_position_margin_witness: bool = False,
 ) -> dict[str, Any]:
     controls = T100ExecutionControls.from_env()
     failures = list(controls.readiness_failures())
@@ -121,6 +123,11 @@ async def read_only_preflight(
                 await crosscheck_symbol_scoped_inventory(
                     probe, positions, stops
                 )
+            )
+        if include_position_margin_witness:
+            assets = await probe.raw_account_assets()
+            result["position_inventory_economic_witness"] = (
+                assess_position_margin_witness(positions, assets)
             )
         if positions and not stops:
             result["t100_native_protection_presence"] = (
@@ -285,6 +292,9 @@ def shareable_contract_report(result: dict[str, Any]) -> dict[str, Any]:
         "symbol_scoped_inventory_crosscheck": result.get(
             "symbol_scoped_inventory_crosscheck"
         ),
+        "position_inventory_economic_witness": result.get(
+            "position_inventory_economic_witness"
+        ),
         "raw_inventory_completeness_verified": result.get(
             "raw_inventory_completeness_verified", False
         ),
@@ -302,6 +312,7 @@ async def _run_cli_preflight(*, schema_only: bool) -> dict[str, Any]:
                 include_raw_consistency=schema_only,
                 include_funding_probe=schema_only,
                 include_symbol_crosscheck=schema_only,
+                include_position_margin_witness=schema_only,
             ),
             timeout=45.0,
         )
