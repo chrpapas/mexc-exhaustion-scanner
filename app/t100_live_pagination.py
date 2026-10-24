@@ -62,6 +62,8 @@ async def collect_verified_pages(
     for page in range(1, max_pages + 1):
         try:
             raw = await reader.read_page(page, page_size)
+        except PaginationHalted:
+            raise
         except Exception as exc:
             raise PaginationHalted("PAGE_READ_FAILED") from exc
         if not isinstance(raw, dict):
