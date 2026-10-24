@@ -20,7 +20,10 @@ from app.t100_live_guards import T100ExecutionControls
 
 
 CONTINUITY_SOAK_VERSION = "2026-10-24-rest-ws-rest-soak-v1"
-PASS_STATUSES = frozenset({"REST_WS_REST_CONTINUITY_STABLE"})
+PASS_STATUSES = frozenset({
+    "REST_WS_REST_CONTINUITY_STABLE",
+    "STABLE_REST_WITH_PRIVATE_WS_EVENTS_OBSERVED",
+})
 
 
 @dataclass(frozen=True)
