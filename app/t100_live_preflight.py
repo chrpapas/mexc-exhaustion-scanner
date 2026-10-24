@@ -22,6 +22,7 @@ from app.t100_live_readonly_probe import ReadOnlyMexcProbe
 from app.t100_live_contract_evidence import summarize_inventory_schema
 from app.t100_live_schema_assessment import assess_shadow_schema
 from app.t100_live_consistency import InventoryRead, double_read_raw_inventory
+from app.t100_live_active_tpsl import assess_active_tpsl_semantics
 
 
 async def read_only_preflight(
@@ -100,6 +101,14 @@ async def read_only_preflight(
         result["shadow_schema_assessment"]["active_stop_contract_verified"] = False
         result["open_futures_positions"] = len(positions)
         result["open_futures_stop_orders"] = len(stops)
+        if positions and stops:
+            result["active_tpsl_semantics"] = assess_active_tpsl_semantics(
+                positions, stops
+            )
+        else:
+            result["active_tpsl_semantics"] = assess_active_tpsl_semantics(
+                positions, stops
+            )
         if positions and not stops:
             result["t100_native_protection_presence"] = (
                 "POSITION_WITHOUT_OBSERVED_CURRENT_TPSL"
@@ -190,6 +199,7 @@ def shareable_contract_report(result: dict[str, Any]) -> dict[str, Any]:
         "t100_native_protection_presence": result.get(
             "t100_native_protection_presence"
         ),
+        "active_tpsl_semantics": result.get("active_tpsl_semantics"),
         "raw_inventory_completeness_verified": result.get(
             "raw_inventory_completeness_verified", False
         ),
