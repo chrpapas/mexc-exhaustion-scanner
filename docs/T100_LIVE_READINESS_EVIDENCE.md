@@ -474,3 +474,46 @@ Current real-account state still has an observed position with zero current
 TP/SL rows following the operator's manual cancellation. A raw discovery
 soak may record that condition, but it cannot be interpreted as an
 operational-protection pass.
+
+
+### 2026-10-24 first raw discovery soak: full-row drift exposed a false-positive gate
+
+The first bounded real-account discovery soak requested 12 samples but halted
+after two completed samples. Both completed samples had matching consecutive
+raw reads, one position was present, no current TP/SL was present, and the
+third pair tripped the original full-payload fingerprint with
+INVENTORY_CHANGED_BETWEEN_READS.
+
+This halt was not treated as proof of position identity/quantity drift. MEXC's
+current open-position contract includes naturally moving fields such as
+unRealizedPnl, marginRatio, funding/fee-related fields and other current
+position economics in the same row as stable inventory identity fields.
+Hashing the complete row therefore conflated mark-to-market/accounting drift
+with lifecycle inventory drift.
+
+The discovery soak now computes two comparisons for each pair:
+
+- a strict safety-critical projection, used as the kill gate
+- the full raw response, retained as diagnostic drift evidence only
+
+Critical position projection includes identity, symbol, side/state, quantity,
+open type, frozen/closed quantity, entry/open averages, leverage, initial
+margin/auto-add settings and position provenance fields. Critical TP/SL
+projection includes stop/order/position identity, state/finality, trigger
+side, position side, trigger prices, quantity semantics/types, price
+protection and reverse/limit semantics.
+
+Naturally volatile fields remain visible through:
+- full_raw_drift_samples
+- changed_position_field_names
+- changed_stop_field_names
+
+No values are emitted.
+
+A change in the critical projection still trips
+INVENTORY_CHANGED_BETWEEN_READS. A full-row-only change is counted and the
+bounded discovery soak continues. This does not upgrade completeness or
+atomicity evidence.
+
+The revised diagnostic is version
+2026-10-24-projected-discovery-soak-v2.
