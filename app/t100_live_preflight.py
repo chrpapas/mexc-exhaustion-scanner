@@ -25,6 +25,7 @@ from app.t100_live_schema_assessment import assess_shadow_schema
 async def read_only_preflight(
     *,
     client: MexcTradeClient | None = None,
+    include_historical_stop_schema: bool = False,
 ) -> dict[str, Any]:
     controls = T100ExecutionControls.from_env()
     failures = list(controls.readiness_failures())
@@ -66,7 +67,24 @@ async def read_only_preflight(
         # Shape evidence contains only allowlisted field names and types;
         # never IDs, symbols, quantities, balances or unknown key names.
         result["redacted_inventory_schema"] = summarize_inventory_schema(positions, stops)
-        result["shadow_schema_assessment"] = assess_shadow_schema(result["redacted_inventory_schema"])
+        assessment_evidence = result["redacted_inventory_schema"]
+        result["stop_schema_source"] = "open_orders"
+        if include_historical_stop_schema and not stops:
+            # Schema discovery only. MEXC's documented history response is a
+            # list with requested page_num/page_size but no reported total,
+            # therefore this single page can never certify completeness.
+            historical_stops = await probe.raw_stop_page(1, 100, is_finished=1)
+            result["redacted_historical_stop_schema_page1"] = summarize_inventory_schema(
+                [], historical_stops
+            )["stops"]
+            if historical_stops:
+                assessment_evidence = {
+                    "positions": result["redacted_inventory_schema"]["positions"],
+                    "stops": result["redacted_historical_stop_schema_page1"],
+                }
+                result["stop_schema_source"] = "historical_finished_page1"
+        result["shadow_schema_assessment"] = assess_shadow_schema(assessment_evidence)
+        result["shadow_schema_assessment"]["stop_schema_source"] = result["stop_schema_source"]
         result["open_futures_positions"] = len(positions)
         result["open_futures_stop_orders"] = len(stops)
         await client.refresh_contract_specs()
@@ -102,6 +120,9 @@ def shareable_contract_report(result: dict[str, Any]) -> dict[str, Any]:
         "read_failure_type": result.get("read_failure_type"),
         "redacted_inventory_schema": result.get("redacted_inventory_schema"),
         "shadow_schema_assessment": result.get("shadow_schema_assessment"),
+        "redacted_historical_stop_schema_page1": result.get(
+            "redacted_historical_stop_schema_page1"
+        ),
         "venue_contract_certified": False,
         "pagination_certified": False,
     }
@@ -112,7 +133,9 @@ def main() -> None:
     parser.add_argument("--schema-only", action="store_true",
                         help="Print only shareable redacted API shape evidence")
     args = parser.parse_args()
-    result = asyncio.run(read_only_preflight())
+    result = asyncio.run(read_only_preflight(
+        include_historical_stop_schema=args.schema_only
+    ))
     print(json.dumps(shareable_contract_report(result) if args.schema_only else result,
                      indent=2, sort_keys=True))
     print("NO ORDERS SENT. THIS CHECK DOES NOT ENABLE LIVE TRADING.")
