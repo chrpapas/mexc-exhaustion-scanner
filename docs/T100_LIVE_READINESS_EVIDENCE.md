@@ -647,3 +647,36 @@ A bounded read-only observer was added. It:
 
 The private WS stream is independent continuity evidence only. It does not
 prove the initial REST snapshot is account-wide complete or atomic.
+
+
+### 2026-10-24 projected schema-only preflight v2: corrected consistency pass
+
+A real schema-only preflight with diagnostic version
+2026-10-24-projected-preflight-v2 reported:
+
+- critical_inventory_double_read_consistent=true
+- raw_inventory_double_read_consistent=true
+- changed_position_field_names={}
+- changed_stop_field_names={}
+- symbol_scoped_crosscheck_verified=true
+- aggregate_positions=1
+- aggregate_current_tpsl=0
+- position_symbol_scoped_match=true
+- current_tpsl_symbol_scoped_match=true
+- funding reported_total_rows=491
+- funding pagination_verified_for_observed_position=true
+- funding sign_consistent_rows=491/491
+- funding magnitude_consistent_rows=491/491
+- raw_inventory_completeness_verified=false
+- account-wide completeness remains unverified
+- exchange atomicity remains unverified
+- live_order_submission_possible=false
+- read_only=true
+
+This confirms the corrected preflight no longer conflates unrealized-PnL movement
+with safety-critical inventory drift. On this specific pair even the complete
+raw payload was identical.
+
+The account still had one observed position and zero current TP/SL rows after
+the operator's manual cancellation, so active protection semantics remain
+insufficient for an operational-protection pass.
