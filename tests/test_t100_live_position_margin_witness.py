@@ -34,6 +34,8 @@ class PositionMarginWitnessTests(unittest.TestCase):
         self.assertTrue(r["usdt_position_margin_reconciled"])
         self.assertTrue(r["usdt_unrealized_reconciled"])
         self.assertTrue(r["returned_non_usdt_position_margin_zero"])
+        self.assertTrue(r["position_inventory_margin_witness_observed"])
+        self.assertTrue(r["position_inventory_margin_witness_observed"])
         self.assertTrue(r["position_inventory_economic_witness_observed"])
         self.assertFalse(r["account_wide_completeness_verified"])
         self.assertFalse(r["exchange_atomicity_verified"])
@@ -57,7 +59,12 @@ class PositionMarginWitnessTests(unittest.TestCase):
         )
         self.assertTrue(r["usdt_position_margin_reconciled"])
         self.assertFalse(r["usdt_unrealized_reconciled"])
+        self.assertTrue(r["position_inventory_margin_witness_observed"])
         self.assertFalse(r["position_inventory_economic_witness_observed"])
+        self.assertEqual(
+            r["status"],
+            "POSITION_MARGIN_WITNESS_MATCH_UNREALIZED_NOT_RECONCILED",
+        )
 
     def test_non_usdt_returned_asset_position_margin_blocks(self):
         r = assess_position_margin_witness(
@@ -79,6 +86,7 @@ class PositionMarginWitnessTests(unittest.TestCase):
             ],
         )
         self.assertFalse(r["returned_non_usdt_unrealized_zero"])
+        self.assertTrue(r["position_inventory_margin_witness_observed"])
         self.assertFalse(r["position_inventory_economic_witness_observed"])
 
     def test_non_usdt_position_row_blocks_scope(self):
