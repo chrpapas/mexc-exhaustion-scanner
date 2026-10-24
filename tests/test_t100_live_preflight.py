@@ -72,7 +72,7 @@ class PreflightTests(unittest.IsolatedAsyncioTestCase):
         result = await read_only_preflight(
             client=FakeClient(
                 positions=[{"positionId": 10, "symbol": "SIREN_USDT",
-                            "positionType": 2, "holdVol": 1}],
+                            "positionType": 2, "holdVol": 1, "state": 1}],
                 stops=[],
             ),
             include_raw_consistency=True,
@@ -86,7 +86,7 @@ class PreflightTests(unittest.IsolatedAsyncioTestCase):
     async def test_schema_only_history_can_fill_stop_shape_without_certifying_pagination(self):
         c = FakeClient(
             positions=[{"positionId": 10, "symbol": "SIREN_USDT",
-                        "positionType": 2, "holdVol": 1}],
+                        "positionType": 2, "holdVol": 1, "state": 1}],
             stop_history=[{"id": 99, "positionId": 10, "state": 3,
                            "stopLossPrice": 1.25, "vol": 1}],
         )
