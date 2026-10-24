@@ -21,13 +21,13 @@ from app.t100_live_guards import LIVE_ADAPTER_STATUS, T100ExecutionControls
 from app.t100_live_readonly_probe import ReadOnlyMexcProbe
 from app.t100_live_contract_evidence import summarize_inventory_schema
 from app.t100_live_schema_assessment import assess_shadow_schema
-from app.t100_live_consistency import InventoryRead, double_read_raw_inventory
+from app.t100_live_consistency import InventoryRead, double_read_projected_inventory
 from app.t100_live_active_tpsl import assess_active_tpsl_semantics
 from app.t100_live_stop_transition import assess_recent_finished_tpsl_transition
 from app.t100_live_funding_probe import collect_observed_position_funding
 from app.t100_live_symbol_crosscheck import crosscheck_symbol_scoped_inventory
 
-PREFLIGHT_DIAGNOSTIC_VERSION = "2026-10-24-symbol-redundancy-v1"
+PREFLIGHT_DIAGNOSTIC_VERSION = "2026-10-24-projected-preflight-v2"
 
 
 async def read_only_preflight(
@@ -201,15 +201,27 @@ async def read_only_preflight(
                     positions_complete=False, stops_complete=False,
                 )
             try:
-                evidence = await double_read_raw_inventory(_raw_inventory_read)
-                result["raw_inventory_double_read_consistent"] = True
-                result["raw_inventory_double_read_mode"] = evidence.mode
+                evidence = await double_read_projected_inventory(
+                    _raw_inventory_read
+                )
+                result["critical_inventory_double_read_consistent"] = True
+                result["raw_inventory_double_read_consistent"] = bool(
+                    evidence.full_raw_equal
+                )
+                result["inventory_double_read_mode"] = evidence.mode
+                result["changed_position_field_names"] = list(
+                    evidence.changed_position_field_names
+                )
+                result["changed_stop_field_names"] = list(
+                    evidence.changed_stop_field_names
+                )
                 result["raw_inventory_completeness_verified"] = False
             except Exception as exc:
+                result["critical_inventory_double_read_consistent"] = False
                 result["raw_inventory_double_read_consistent"] = False
-                result["raw_inventory_consistency_failure_type"] = type(exc).__name__
+                result["inventory_consistency_failure_type"] = type(exc).__name__
                 result["raw_inventory_completeness_verified"] = False
-                failures.append("raw_inventory_double_read_unverified")
+                failures.append("critical_inventory_double_read_unverified")
 
         await client.refresh_contract_specs()
         result["public_contract_specs_loaded"] = len(client._spec_cache)
@@ -254,8 +266,17 @@ def shareable_contract_report(result: dict[str, Any]) -> dict[str, Any]:
         "funding_observed_position_probe": result.get(
             "funding_observed_position_probe"
         ),
+        "critical_inventory_double_read_consistent": result.get(
+            "critical_inventory_double_read_consistent"
+        ),
         "raw_inventory_double_read_consistent": result.get(
             "raw_inventory_double_read_consistent"
+        ),
+        "changed_position_field_names": result.get(
+            "changed_position_field_names", []
+        ),
+        "changed_stop_field_names": result.get(
+            "changed_stop_field_names", []
         ),
         "t100_native_protection_presence": result.get(
             "t100_native_protection_presence"
