@@ -263,3 +263,26 @@ timestamps.
 
 This diagnostic is observational only and still does not certify endpoint
 completeness, exchange atomicity, or live readiness.
+
+
+### 2026-10-24 sixth operator sample: cancellation transition confirmed by operator ground truth
+
+The operator confirmed that the previously observed current TP/SL was
+manually canceled. The subsequent GET-only transition diagnostic reported:
+
+- latest_terminal_state=CANCELED
+- latest_trigger_side=UNTRIGGERED
+- latest_is_finished=true
+- transition_semantics_observed=true
+- exactly one finished TP/SL row linked to the still-observed position
+
+This is direct real-account confirmation of the cancellation lifecycle
+mapping for the observed MEXC contract: a current TP/SL row disappeared from
+/open_orders after manual cancellation and appeared in finished history with
+the documented canceled/untriggered semantics. The coarse age bucket was
+OLDER, so no claim is made about transition timing beyond the stored terminal
+state.
+
+This closes the observed cancellation-state semantic evidence gap. It does
+not certify TP/SL execution/trigger semantics, endpoint completeness, or
+exchange atomicity.
