@@ -18,7 +18,6 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable
 
-import websockets
 
 
 WS_URL = "wss://contract.mexc.com/edge"
@@ -130,7 +129,7 @@ async def observe_private_ws(
     api_secret: str,
     duration_seconds: float = 30.0,
     ws_url: str = WS_URL,
-    connect: Callable[..., Any] = websockets.connect,
+    connect: Callable[..., Any] | None = None,
     wall_time_ms: Callable[[], int] = lambda: int(time.time() * 1000),
     monotonic_ns: Callable[[], int] = time.monotonic_ns,
 ) -> PrivateWsReport:
@@ -144,6 +143,13 @@ async def observe_private_ws(
         raise PrivateWsHalted("WS_CREDENTIALS_MISSING")
     if not isinstance(ws_url, str) or not ws_url.startswith("wss://"):
         raise ValueError("INVALID_WS_URL")
+
+    if connect is None:
+        try:
+            import websockets
+        except ImportError as exc:
+            raise PrivateWsHalted("WS_RUNTIME_DEPENDENCY_MISSING") from exc
+        connect = websockets.connect
 
     start = monotonic_ns()
     login_verified = False
