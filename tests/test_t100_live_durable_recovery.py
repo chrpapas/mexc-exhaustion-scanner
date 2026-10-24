@@ -128,10 +128,14 @@ def stop(**extra):
 
 def run(**kw):
     checkpoints = kw.get("checkpoints", [checkpoint()])
-    revisions = kw.get(
-        "revisions",
-        [rev for row in checkpoints for rev in revisions_for(row)],
-    )
+    if "revisions" in kw:
+        revisions = kw["revisions"]
+    elif all(isinstance(row, dict) for row in checkpoints):
+        revisions = [
+            rev for row in checkpoints for rev in revisions_for(row)
+        ]
+    else:
+        revisions = []
     return recover_nonflat(
         checkpoint_rows=checkpoints,
         revision_rows=revisions,
