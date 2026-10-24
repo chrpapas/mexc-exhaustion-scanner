@@ -88,6 +88,7 @@ class OperationalRiskMonitor:
         self.kill.require_untripped()
 
         if type(manual_kill_switch) is not bool:
+            self.kill.trip("RECOVERY_UNVERIFIED")
             raise OperationalRiskHalted("INVALID_MANUAL_KILL_SWITCH")
         if manual_kill_switch:
             self.kill.trip("MANUAL_KILL_SWITCH")
@@ -96,16 +97,23 @@ class OperationalRiskMonitor:
             )
 
         if not isinstance(position_notionals_usdt, Mapping):
+            self.kill.trip("RECOVERY_UNVERIFIED")
             raise OperationalRiskHalted("INVALID_POSITION_NOTIONAL_MAP")
 
         notionals: dict[str, Decimal] = {}
-        for key, raw in position_notionals_usdt.items():
-            if not isinstance(key, str) or not key or key in notionals:
-                raise OperationalRiskHalted("INVALID_POSITION_NOTIONAL_IDENTITY")
-            notionals[key] = _nonnegative(raw, "POSITION_NOTIONAL")
+        try:
+            for key, raw in position_notionals_usdt.items():
+                if not isinstance(key, str) or not key or key in notionals:
+                    raise OperationalRiskHalted(
+                        "INVALID_POSITION_NOTIONAL_IDENTITY"
+                    )
+                notionals[key] = _nonnegative(raw, "POSITION_NOTIONAL")
 
-        total = _nonnegative(total_notional_usdt, "TOTAL_NOTIONAL")
-        loss = _nonnegative(daily_loss_usdt, "DAILY_LOSS")
+            total = _nonnegative(total_notional_usdt, "TOTAL_NOTIONAL")
+            loss = _nonnegative(daily_loss_usdt, "DAILY_LOSS")
+        except OperationalRiskHalted:
+            self.kill.trip("RECOVERY_UNVERIFIED")
+            raise
 
         calculated_total = sum(notionals.values(), Decimal(0))
         tolerance = max(
@@ -113,6 +121,7 @@ class OperationalRiskMonitor:
             total * Decimal("0.00000001"),
         )
         if abs(calculated_total - total) > tolerance:
+            self.kill.trip("RECOVERY_UNVERIFIED")
             raise OperationalRiskHalted("TOTAL_NOTIONAL_RECONCILIATION_DRIFT")
 
         position_ok = all(
