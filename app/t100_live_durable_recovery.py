@@ -132,6 +132,151 @@ def checkpoint_from_row(row: Any) -> PositionCheckpoint:
     )
 
 
+def _validate_revision_history(
+    checkpoints: tuple[PositionCheckpoint, ...],
+    revision_rows: Any,
+) -> None:
+    if (
+        not isinstance(revision_rows, list)
+        or any(not isinstance(row, dict) for row in revision_rows)
+    ):
+        raise DurableRecoveryHalted("CHECKPOINT_REVISION_HISTORY_AMBIGUOUS")
+
+    by_position: dict[str, list[dict[str, Any]]] = {}
+    for row in revision_rows:
+        pid = str(row.get("position_id") or "")
+        if not pid:
+            raise DurableRecoveryHalted("CHECKPOINT_REVISION_POSITION_ID_MISSING")
+        by_position.setdefault(pid, []).append(row)
+
+    expected_positions = {cp.position_id for cp in checkpoints}
+    if set(by_position) != expected_positions:
+        raise DurableRecoveryHalted("CHECKPOINT_REVISION_POSITION_SET_MISMATCH")
+
+    for cp in checkpoints:
+        rows = by_position.get(cp.position_id, [])
+        if len(rows) != cp.checkpoint_version:
+            raise DurableRecoveryHalted("CHECKPOINT_REVISION_COUNT_MISMATCH")
+
+        versions: dict[int, dict[str, Any]] = {}
+        for row in rows:
+            version = _integer(
+                row.get("checkpoint_version"),
+                "CHECKPOINT_REVISION_VERSION",
+            )
+            if version in versions:
+                raise DurableRecoveryHalted(
+                    "DUPLICATE_CHECKPOINT_REVISION_VERSION"
+                )
+            versions[version] = row
+
+        if set(versions) != set(range(1, cp.checkpoint_version + 1)):
+            raise DurableRecoveryHalted("CHECKPOINT_REVISION_SEQUENCE_GAP")
+
+        previous_stop: Decimal | None = None
+        previous_best: Decimal | None = None
+        previous_armed = False
+
+        for version in range(1, cp.checkpoint_version + 1):
+            row = versions[version]
+            reason = row.get("write_reason")
+            lifecycle = row.get("lifecycle_state")
+            if lifecycle != "OPEN":
+                raise DurableRecoveryHalted(
+                    "RECOVERABLE_REVISION_LIFECYCLE_NOT_OPEN"
+                )
+            if version == 1:
+                if reason != "ENTRY_PROTECTED":
+                    raise DurableRecoveryHalted(
+                        "CHECKPOINT_REVISION_INITIAL_REASON_INVALID"
+                    )
+            elif reason != "STOP_VERIFIED":
+                raise DurableRecoveryHalted(
+                    "CHECKPOINT_REVISION_OPEN_REASON_INVALID"
+                )
+
+            immutable_pairs = (
+                ("symbol", cp.symbol),
+                ("external_oid", cp.external_oid),
+                ("exchange_order_id", cp.exchange_order_id),
+                ("position_id", cp.position_id),
+                ("stop_order_id", cp.stop_order_id),
+            )
+            for field, expected in immutable_pairs:
+                if str(row.get(field) or "") != expected:
+                    raise DurableRecoveryHalted(
+                        "CHECKPOINT_REVISION_IMMUTABLE_DRIFT"
+                    )
+
+            if _positive(
+                row.get("contracts"), "CHECKPOINT_REVISION_CONTRACTS"
+            ) != cp.contracts:
+                raise DurableRecoveryHalted(
+                    "CHECKPOINT_REVISION_IMMUTABLE_DRIFT"
+                )
+            if _positive(
+                row.get("entry_price"), "CHECKPOINT_REVISION_ENTRY_PRICE"
+            ) != cp.entry_price:
+                raise DurableRecoveryHalted(
+                    "CHECKPOINT_REVISION_IMMUTABLE_DRIFT"
+                )
+
+            stop_price = _positive(
+                row.get("stop_price"), "CHECKPOINT_REVISION_STOP_PRICE"
+            )
+            best = _nonnegative(
+                row.get("best_profit_pct"),
+                "CHECKPOINT_REVISION_BEST_PROFIT_PCT",
+            )
+            armed = row.get("armed")
+            if type(armed) is not bool:
+                raise DurableRecoveryHalted(
+                    "CHECKPOINT_REVISION_ARMED_INVALID"
+                )
+            if armed != (best >= Decimal("14")):
+                raise DurableRecoveryHalted(
+                    "CHECKPOINT_REVISION_TRAILING_STATE_INCOHERENT"
+                )
+
+            if previous_stop is not None and stop_price >= previous_stop:
+                raise DurableRecoveryHalted(
+                    "CHECKPOINT_REVISION_STOP_NOT_STRICTLY_TIGHTER"
+                )
+            if previous_best is not None and best < previous_best:
+                raise DurableRecoveryHalted(
+                    "CHECKPOINT_REVISION_BEST_PROFIT_REGRESSION"
+                )
+            if previous_armed and not armed:
+                raise DurableRecoveryHalted(
+                    "CHECKPOINT_REVISION_ARMED_REGRESSION"
+                )
+
+            previous_stop = stop_price
+            previous_best = best
+            previous_armed = armed
+
+        final = versions[cp.checkpoint_version]
+        final_pairs = (
+            ("stop_price", cp.stop_price),
+            ("best_profit_pct", cp.best_profit_pct),
+        )
+        for field, expected in final_pairs:
+            try:
+                value = Decimal(str(final.get(field)))
+            except (InvalidOperation, TypeError, ValueError) as exc:
+                raise DurableRecoveryHalted(
+                    "CHECKPOINT_FINAL_REVISION_MISMATCH"
+                ) from exc
+            if value != expected:
+                raise DurableRecoveryHalted(
+                    "CHECKPOINT_FINAL_REVISION_MISMATCH"
+                )
+        if final.get("armed") is not cp.armed:
+            raise DurableRecoveryHalted(
+                "CHECKPOINT_FINAL_REVISION_MISMATCH"
+            )
+
+
 def _validate_intents(
     checkpoints: tuple[PositionCheckpoint, ...],
     intents: Any,
@@ -197,6 +342,7 @@ def _validate_stop_amendments(stop_amendments: Any) -> None:
 def recover_nonflat(
     *,
     checkpoint_rows: Any,
+    revision_rows: Any,
     intent_rows: Any,
     stop_amendment_rows: Any,
     orders: Any,
@@ -229,6 +375,7 @@ def recover_nonflat(
     if len({c.stop_order_id for c in checkpoints}) != len(checkpoints):
         raise DurableRecoveryHalted("DUPLICATE_CHECKPOINT_STOP")
 
+    _validate_revision_history(checkpoints, revision_rows)
     _validate_intents(checkpoints, intent_rows)
     _validate_stop_amendments(stop_amendment_rows)
 
@@ -393,6 +540,19 @@ class DurableRestartRecoveryGate:
                    WHERE lifecycle_state <> 'CLOSED'
                    ORDER BY symbol, position_id"""
             )
+            revisions = await self.ledger.fetch(
+                """SELECT position_id, checkpoint_version, write_reason,
+                          symbol, external_oid, exchange_order_id,
+                          contracts, entry_price, stop_order_id, stop_price,
+                          best_profit_pct, armed, lifecycle_state
+                   FROM t100_live_position_checkpoint_revisions
+                   WHERE position_id IN (
+                       SELECT position_id
+                       FROM t100_live_position_checkpoints
+                       WHERE lifecycle_state <> 'CLOSED'
+                   )
+                   ORDER BY position_id, checkpoint_version"""
+            )
             intents = await self.ledger.fetch(
                 """SELECT symbol, external_oid, exchange_order_id,
                           volume_contracts, stop_price, state
@@ -430,6 +590,7 @@ class DurableRestartRecoveryGate:
 
         return recover_nonflat(
             checkpoint_rows=checkpoints,
+            revision_rows=revisions,
             intent_rows=intents,
             stop_amendment_rows=amendments,
             orders=orders,
