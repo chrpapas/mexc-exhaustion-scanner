@@ -69,6 +69,8 @@ async def read_only_preflight(
         result["redacted_inventory_schema"] = summarize_inventory_schema(positions, stops)
         assessment_evidence = result["redacted_inventory_schema"]
         result["stop_schema_source"] = "open_orders"
+        result["active_stop_schema_observed"] = bool(stops)
+        result["historical_stop_schema_observed"] = False
         if include_historical_stop_schema and not stops:
             # Schema discovery only. MEXC's documented history response is a
             # list with requested page_num/page_size but no reported total,
@@ -78,6 +80,7 @@ async def read_only_preflight(
                 [], historical_stops
             )["stops"]
             if historical_stops:
+                result["historical_stop_schema_observed"] = True
                 assessment_evidence = {
                     "positions": result["redacted_inventory_schema"]["positions"],
                     "stops": result["redacted_historical_stop_schema_page1"],
@@ -85,6 +88,13 @@ async def read_only_preflight(
                 result["stop_schema_source"] = "historical_finished_page1"
         result["shadow_schema_assessment"] = assess_shadow_schema(assessment_evidence)
         result["shadow_schema_assessment"]["stop_schema_source"] = result["stop_schema_source"]
+        result["shadow_schema_assessment"]["active_stop_schema_observed"] = result[
+            "active_stop_schema_observed"
+        ]
+        result["shadow_schema_assessment"]["historical_stop_schema_observed"] = result[
+            "historical_stop_schema_observed"
+        ]
+        result["shadow_schema_assessment"]["active_stop_contract_verified"] = False
         result["open_futures_positions"] = len(positions)
         result["open_futures_stop_orders"] = len(stops)
         await client.refresh_contract_specs()
