@@ -29,6 +29,25 @@ class ProbeTests(unittest.IsolatedAsyncioTestCase):
         self.client.responses = [payload]
         self.assertEqual(await self.probe.raw_open_positions(), payload)
 
+    async def test_symbol_scoped_positions_pass_filter_param(self):
+        payload = [dict(positionId="10", symbol="SIREN_USDT")]
+        self.client.responses = [payload]
+        self.assertEqual(
+            await self.probe.raw_open_positions("SIREN_USDT"), payload)
+        self.assertEqual(
+            self.client.calls[0],
+            (
+                "/api/v1/private/position/open_positions",
+                {"symbol": "SIREN_USDT"},
+            ),
+        )
+
+    async def test_invalid_position_symbol_filter_makes_no_call(self):
+        with self.assertRaisesRegex(
+            VenueReadHalted, "INVALID_POSITION_SYMBOL_FILTER"):
+            await self.probe.raw_open_positions("bad symbol")
+        self.assertEqual(self.client.calls, [])
+
     async def test_null_positions_fail(self):
         self.client.responses = [None]
         with self.assertRaisesRegex(VenueReadHalted, "POSITIONS_RESPONSE"):
@@ -47,6 +66,25 @@ class ProbeTests(unittest.IsolatedAsyncioTestCase):
     async def test_open_stops_empty_preserved(self):
         self.client.responses = [[]]
         self.assertEqual(await self.probe.raw_open_stops(), [])
+
+    async def test_symbol_scoped_stops_pass_filter_param(self):
+        payload = [dict(id="99", symbol="SIREN_USDT")]
+        self.client.responses = [payload]
+        self.assertEqual(
+            await self.probe.raw_open_stops("SIREN_USDT"), payload)
+        self.assertEqual(
+            self.client.calls[0],
+            (
+                "/api/v1/private/stoporder/open_orders",
+                {"symbol": "SIREN_USDT"},
+            ),
+        )
+
+    async def test_invalid_stop_symbol_filter_makes_no_call(self):
+        with self.assertRaisesRegex(
+            VenueReadHalted, "INVALID_STOP_SYMBOL_FILTER"):
+            await self.probe.raw_open_stops("bad symbol")
+        self.assertEqual(self.client.calls, [])
 
     async def test_open_stops_malformed_row_blocks(self):
         self.client.responses = [[dict(id="99"), None]]
