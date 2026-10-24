@@ -36,8 +36,20 @@ class FakeClient:
     async def _private_get(self, path, params=None):
         self.calls.append((path, params))
         if path == "/api/v1/private/position/open_positions":
+            if params and params.get("symbol"):
+                return [
+                    row for row in self.positions
+                    if isinstance(row, dict)
+                    and row.get("symbol") == params["symbol"]
+                ]
             return self.positions
         if path == "/api/v1/private/stoporder/open_orders":
+            if params and params.get("symbol"):
+                return [
+                    row for row in self.stops
+                    if isinstance(row, dict)
+                    and row.get("symbol") == params["symbol"]
+                ]
             return self.stops
         if path == "/api/v1/private/stoporder/list/orders":
             if params != {"page_num": 1, "page_size": 100, "is_finished": 1}:
@@ -180,6 +192,35 @@ class PreflightTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["raw_inventory_double_read_mode"],
                          "READ_ONLY_DISCOVERY")
         self.assertFalse(result["live_order_submission_possible"])
+
+    async def test_symbol_scoped_inventory_crosscheck_is_shareable(self):
+        c = FakeClient(
+            positions=[{
+                "positionId": 10, "symbol": "SIREN_USDT",
+                "positionType": 2, "holdVol": 5, "state": 1,
+                "holdAvgPrice": 100, "unRealizedPnl": 123.45,
+            }],
+            stops=[],
+        )
+        result = await read_only_preflight(
+            client=c, include_symbol_crosscheck=True)
+        cross = result["symbol_scoped_inventory_crosscheck"]
+        self.assertEqual(
+            cross["status"], "SYMBOL_SCOPED_REDUNDANCY_MATCH")
+        self.assertTrue(cross["position_symbol_scoped_match"])
+        self.assertTrue(cross["current_tpsl_symbol_scoped_match"])
+        self.assertTrue(cross["symbol_scoped_crosscheck_verified"])
+        self.assertFalse(cross["account_wide_completeness_verified"])
+        self.assertFalse(cross["exchange_atomicity_verified"])
+        shared = shareable_contract_report(result)
+        self.assertNotIn(
+            "SIREN_USDT",
+            str(shared["symbol_scoped_inventory_crosscheck"]),
+        )
+        self.assertNotIn(
+            "123.45",
+            str(shared["symbol_scoped_inventory_crosscheck"]),
+        )
 
     async def test_schema_only_history_can_fill_stop_shape_without_certifying_pagination(self):
         c = FakeClient(
