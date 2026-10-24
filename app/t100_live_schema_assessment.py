@@ -11,17 +11,20 @@ from typing import Any
 REQUIRED = {
     "positions": {
         "symbol": frozenset({"string"}),
-        "positionId": frozenset({"string", "integer"}),
         "positionType": frozenset({"integer", "string"}),
         "holdVol": frozenset({"integer", "number", "string"}),
     },
     "stops": {
         "positionId": frozenset({"string", "integer"}),
-        "id": frozenset({"string", "integer"}),
         "state": frozenset({"integer", "string"}),
         "stopLossPrice": frozenset({"integer", "number", "string"}),
         "vol": frozenset({"integer", "number", "string"}),
     },
+}
+
+IDENTITY_ALTERNATIVES = {
+    "positions": (("positionId", "id"),),
+    "stops": (("id", "stopPlanOrderId"),),
 }
 
 
@@ -58,6 +61,9 @@ def assess_shadow_schema(evidence: dict[str, Any]) -> dict[str, Any]:
             statuses.append("NO_ROWS_SCHEMA_UNKNOWN")
             continue
         missing = sorted(set(required) - set(types))
+        for alternatives in IDENTITY_ALTERNATIVES[family]:
+            if not any(key in types for key in alternatives):
+                missing.append("ONE_OF_" + "_OR_".join(alternatives))
         incompatible = sorted(
             key for key, permitted in required.items()
             if key in types and (
@@ -65,6 +71,14 @@ def assess_shadow_schema(evidence: dict[str, Any]) -> dict[str, Any]:
                 or any(t not in permitted for t in types[key])
             )
         )
+        for alternatives in IDENTITY_ALTERNATIVES[family]:
+            for key in alternatives:
+                if key in types and (
+                    not isinstance(types[key], list) or not types[key]
+                    or any(t not in {"string", "integer"} for t in types[key])
+                ):
+                    incompatible.append(key)
+        incompatible = sorted(set(incompatible))
         status = "PARSER_SHAPE_COMPATIBLE_UNCERTIFIED"
         if missing or incompatible:
             status = "PARSER_SHAPE_MISMATCH"
