@@ -549,3 +549,41 @@ This is sustained read-only discovery evidence only. The observed account
 still had one position and zero current TP/SL rows following the operator's
 manual TP/SL cancellation, so this cannot be counted as a protected-position
 operational soak.
+
+
+### 2026-10-24 symbol-scoped current-inventory redundancy cross-check
+
+A second GET-only consistency layer now compares the account-wide current
+position/TP-SL lists against the venue's symbol-filtered reads for every
+currently observed symbol, bounded to at most four symbols.
+
+For each observed symbol the checker compares only the same safety-critical
+projection used by projected discovery soak. Naturally volatile fields such
+as unrealized PnL therefore do not create false mismatches.
+
+The cross-check verifies:
+- every aggregate current position row for an observed symbol is reproduced
+  by the symbol-filtered open-positions request with matching critical fields
+- every aggregate current TP/SL row for an observed symbol is reproduced by
+  the symbol-filtered current-TP/SL request with matching critical fields
+- filtered position rows cannot silently return a different symbol
+- stop rows with a symbol field cannot silently return a different symbol
+- more than four observed symbols refuses the bounded check rather than
+  expanding private-read load unexpectedly
+
+Shareable output exposes only counts and booleans:
+- symbols_checked
+- aggregate_positions
+- aggregate_current_tpsl
+- position_symbol_scoped_match
+- current_tpsl_symbol_scoped_match
+- symbol_scoped_crosscheck_verified
+
+It explicitly leaves:
+- account_wide_completeness_verified=false
+- exchange_atomicity_verified=false
+
+This redundancy test is not a substitute for a documented total/truncation
+contract. It can detect an inconsistency between two parameterizations of the
+current inventory API but cannot mathematically exclude an unseen symbol that
+the aggregate endpoint omitted.
