@@ -187,11 +187,49 @@ class PreflightTests(unittest.IsolatedAsyncioTestCase):
             ),
             include_raw_consistency=True,
         )
+        self.assertTrue(result["critical_inventory_double_read_consistent"])
         self.assertTrue(result["raw_inventory_double_read_consistent"])
         self.assertFalse(result["raw_inventory_completeness_verified"])
-        self.assertEqual(result["raw_inventory_double_read_mode"],
-                         "READ_ONLY_DISCOVERY")
+        self.assertEqual(result["inventory_double_read_mode"],
+                         "READ_ONLY_DISCOVERY_PROJECTED")
         self.assertFalse(result["live_order_submission_possible"])
+
+    async def test_projected_preflight_ignores_only_volatile_pnl_drift(self):
+        class VolatileClient(FakeClient):
+            def __init__(self):
+                super().__init__(
+                    positions=[{
+                        "positionId": 10, "symbol": "SIREN_USDT",
+                        "positionType": 2, "holdVol": 1, "state": 1,
+                        "holdAvgPrice": 100, "unRealizedPnl": 1.0,
+                    }],
+                    stops=[],
+                )
+                self.position_reads = 0
+
+            async def _private_get(self, path, params=None):
+                if path == "/api/v1/private/position/open_positions" and not params:
+                    self.position_reads += 1
+                    row = dict(self.positions[0])
+                    if self.position_reads >= 3:
+                        row["unRealizedPnl"] = 2.0
+                    self.calls.append((path, params))
+                    return [row]
+                return await super()._private_get(path, params)
+
+        result = await read_only_preflight(
+            client=VolatileClient(),
+            include_raw_consistency=True,
+        )
+        self.assertTrue(
+            result["critical_inventory_double_read_consistent"])
+        self.assertFalse(result["raw_inventory_double_read_consistent"])
+        self.assertEqual(
+            result["changed_position_field_names"], ["unRealizedPnl"])
+        self.assertNotIn(
+            "critical_inventory_double_read_unverified",
+            result["preflight_failures"],
+        )
 
     async def test_symbol_scoped_inventory_crosscheck_is_shareable(self):
         c = FakeClient(
