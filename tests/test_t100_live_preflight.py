@@ -59,6 +59,7 @@ class PreflightTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(result["live_order_submission_possible"])
         self.assertEqual(len(c.calls), 2)
         self.assertTrue(result["redacted_inventory_schema"]["positions"]["empty_rows_cannot_establish_schema"])
+        self.assertEqual(result["shadow_schema_assessment"]["overall"], "INCOMPLETE_SCHEMA_EVIDENCE")
 
     async def test_schema_evidence_redacts_account_values(self):
         c = FakeClient(positions=[{"positionId": "PRIVATE-123",
@@ -115,6 +116,7 @@ class PreflightTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("DO_NOT_SHARE", str(shared))
         self.assertFalse(shared["venue_contract_certified"])
         self.assertFalse(shared["pagination_certified"])
+        self.assertEqual(shared["shadow_schema_assessment"]["overall"], "INCOMPLETE_SCHEMA_EVIDENCE")
 
     async def test_missing_credentials_makes_no_calls(self):
         with patch.dict(os.environ, {"MEXC_API_KEY": "", "MEXC_API_SECRET": ""}):
