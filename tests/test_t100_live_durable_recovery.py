@@ -106,6 +106,59 @@ class DurableRecoveryTests(unittest.TestCase):
         self.assertEqual(r.recovered[0].stop_order_id, "99")
         self.assertEqual(r.recovered[0].contracts, D("20"))
 
+    def test_four_slot_nonflat_reconstruction(self):
+        checkpoints = []
+        intents = []
+        orders = []
+        positions = []
+        stops = []
+        for i in range(4):
+            symbol = f"S{i}_USDT"
+            oid = f"oid{i}"
+            order_id = str(100 + i)
+            position_id = str(10 + i)
+            stop_id = str(90 + i)
+            checkpoints.append(checkpoint(
+                symbol=symbol,
+                external_oid=oid,
+                exchange_order_id=order_id,
+                position_id=position_id,
+                stop_order_id=stop_id,
+            ))
+            intents.append(intent(
+                symbol=symbol,
+                external_oid=oid,
+                exchange_order_id=order_id,
+            ))
+            orders.append(order(
+                externalOid=oid,
+                orderId=order_id,
+                symbol=symbol,
+                positionId=position_id,
+            ))
+            positions.append(position(
+                symbol=symbol,
+                positionId=position_id,
+            ))
+            stops.append(stop(
+                symbol=symbol,
+                positionId=position_id,
+                id=stop_id,
+            ))
+        r = run(
+            checkpoints=checkpoints,
+            intents=intents,
+            orders=orders,
+            positions=positions,
+            stops=stops,
+        )
+        self.assertEqual(len(r.recovered), 4)
+        self.assertEqual(r.checkpoint_count, 4)
+        self.assertEqual(
+            {x.symbol for x in r.recovered},
+            {"S0_USDT", "S1_USDT", "S2_USDT", "S3_USDT"},
+        )
+
     def test_armed_trailing_state_reconstructs(self):
         r = run(
             checkpoints=[checkpoint(
