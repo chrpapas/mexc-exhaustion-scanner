@@ -814,3 +814,37 @@ It remains:
 - live_authorization=false
 
 Offline safety suite: 456 tests passed on the final multi-window soak head.
+
+
+### 2026-10-24 real multi-window REST-WS-REST continuity soak: 5/5 stable
+
+The bounded real-account continuity soak completed all five requested windows.
+
+Observed result:
+- requested_windows=5
+- completed_windows=5
+- stable_windows=5
+- critical_change_windows=0
+- first_failure_status=null
+- full_raw_position_drift_windows=3
+- full_raw_stop_drift_windows=0
+- changed_position_field_names={unRealizedPnl}
+- changed_stop_field_names={}
+- total_ws_pongs=5
+- total_ws_private_events=0
+- ws_event_windows=0
+- status=COMPLETED_CONTINUITY_SOAK_NON_AUTHORIZING
+- account_wide_completeness_verified=false
+- exchange_atomicity_verified=false
+- entry_allowed=false
+- live_authorization=false
+
+This closes the sustained read-only REST+private-WS continuity evidence item:
+all five windows preserved identical safety-critical position/TP-SL state and
+the authenticated WS channel remained healthy in every window. The only
+complete-raw-position drift was unrealized PnL, consistent with the earlier
+projected-soak diagnosis.
+
+This still does not establish account-wide completeness/atomicity and does not
+validate real private WS lifecycle payload semantics because no private event
+occurred during the soak.
