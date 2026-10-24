@@ -587,3 +587,63 @@ This redundancy test is not a substitute for a documented total/truncation
 contract. It can detect an inconsistency between two parameterizations of the
 current inventory API but cannot mathematically exclude an unseen symbol that
 the aggregate endpoint omitted.
+
+
+### 2026-10-24 symbol-scoped redundancy and 491-row funding refresh
+
+A real schema-only preflight with diagnostic version
+2026-10-24-symbol-redundancy-v1 observed:
+
+- aggregate_positions=1
+- aggregate_current_tpsl=0
+- symbols_checked=1
+- position_symbol_scoped_match=true
+- current_tpsl_symbol_scoped_match=true
+- symbol_scoped_crosscheck_verified=true
+- account_wide_completeness_verified=false
+- exchange_atomicity_verified=false
+- status=SYMBOL_SCOPED_REDUNDANCY_MATCH
+
+This confirms that the account-wide current-position row is reproduced by the
+symbol-filtered position request on all safety-critical fields and that both
+aggregate and symbol-filtered current TP/SL reads return zero rows for the
+observed symbol.
+
+The same preflight re-read funding history. The reported position-scoped
+history advanced naturally from 489 to 491 rows across the same five verified
+pages. All 491 non-zero rows remained sign-consistent and formula-consistent.
+
+The preflight's legacy raw_inventory_double_read_consistent=false was caused
+by the same full-row unrealized-PnL drift already isolated by projected soak.
+The schema-only preflight has now been aligned with projected consistency and
+reports critical_inventory_double_read_consistent separately from full raw
+payload equality. Full raw drift no longer creates a false critical-inventory
+failure.
+
+### 2026-10-24 private WebSocket continuity observer
+
+Current MEXC Futures documentation exposes authenticated private WebSocket
+push channels for:
+- push.personal.position
+- push.personal.stop.planorder
+- push.personal.order.deal
+
+The documented Futures WS endpoint is wss://contract.mexc.com/edge.
+Private login signs accessKey+timestamp with HMAC-SHA256. Login can disable
+default pushes and personal.filter can limit subscriptions to position,
+stop.planorder and order.deal.
+
+A bounded read-only observer was added. It:
+- authenticates only
+- filters to those three private channels
+- sends heartbeat ping messages
+- accepts JSON or gzip-compressed frames
+- records only channel counts and field names/types
+- never emits symbols, IDs, prices, quantities, fees, credentials or raw
+  private payloads
+- performs no REST POST/DELETE, order submission/cancellation, stop mutation
+  or database write
+- remains entry_allowed=false and live_authorization=false
+
+The private WS stream is independent continuity evidence only. It does not
+prove the initial REST snapshot is account-wide complete or atomic.
