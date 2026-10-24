@@ -199,6 +199,7 @@ def recover_nonflat(
     checkpoint_rows: Any,
     intent_rows: Any,
     stop_amendment_rows: Any,
+    orders: Any,
     positions: Any,
     stops: Any,
     positions_complete: bool,
@@ -209,8 +210,10 @@ def recover_nonflat(
         raise DurableRecoveryHalted("EXCHANGE_INVENTORY_COMPLETENESS_UNVERIFIED")
     if (
         not isinstance(checkpoint_rows, list)
+        or not isinstance(orders, list)
         or not isinstance(positions, list)
         or not isinstance(stops, list)
+        or any(not isinstance(x, dict) for x in orders)
         or any(not isinstance(x, dict) for x in positions)
         or any(not isinstance(x, dict) for x in stops)
     ):
@@ -228,6 +231,42 @@ def recover_nonflat(
 
     _validate_intents(checkpoints, intent_rows)
     _validate_stop_amendments(stop_amendment_rows)
+
+    if len(orders) != len(checkpoints):
+        raise DurableRecoveryHalted("EXCHANGE_ORDER_COUNT_MISMATCH")
+    orders_by_external: dict[str, dict[str, Any]] = {}
+    for row in orders:
+        external = row.get("externalOid")
+        if not isinstance(external, str) or not external or external in orders_by_external:
+            raise DurableRecoveryHalted("EXCHANGE_ORDER_IDENTITY_INVALID")
+        orders_by_external[external] = row
+
+    for cp in checkpoints:
+        order = orders_by_external.get(cp.external_oid)
+        if order is None:
+            raise DurableRecoveryHalted("CHECKPOINT_ORDER_NOT_FOUND")
+        if str(order.get("orderId") or "") != cp.exchange_order_id:
+            raise DurableRecoveryHalted("RECOVERED_ORDER_ID_DRIFT")
+        if str(order.get("symbol") or "") != cp.symbol:
+            raise DurableRecoveryHalted("RECOVERED_ORDER_SYMBOL_DRIFT")
+        if _integer(order.get("side"), "ORDER_SIDE") != 3:
+            raise DurableRecoveryHalted("RECOVERED_ORDER_SIDE_DRIFT")
+        if _integer(order.get("state"), "ORDER_STATE") != 3:
+            raise DurableRecoveryHalted("RECOVERED_ORDER_NOT_FINAL_FILLED")
+        if str(order.get("positionId") or "") != cp.position_id:
+            raise DurableRecoveryHalted("RECOVERED_ORDER_POSITION_ID_DRIFT")
+        if _positive(order.get("dealVol"), "ORDER_DEAL_VOLUME") != cp.contracts:
+            raise DurableRecoveryHalted("RECOVERED_ORDER_VOLUME_DRIFT")
+        avg = _positive(order.get("dealAvgPrice"), "ORDER_AVERAGE_PRICE")
+        tolerance = max(
+            Decimal("0.00000001"),
+            cp.entry_price * Decimal("0.00000001"),
+        )
+        if abs(avg - cp.entry_price) > tolerance:
+            raise DurableRecoveryHalted("RECOVERED_ORDER_AVERAGE_PRICE_DRIFT")
+
+    if set(orders_by_external) != {c.external_oid for c in checkpoints}:
+        raise DurableRecoveryHalted("UNRECOGNIZED_EXCHANGE_ORDER")
 
     if len(positions) != len(checkpoints):
         raise DurableRecoveryHalted("EXCHANGE_POSITION_COUNT_MISMATCH")
@@ -321,6 +360,7 @@ class RecoveryLedger(Protocol):
 
 
 class RecoveryExchange(Protocol):
+    async def order_by_external_oid(self, symbol: str, external_oid: str) -> dict[str, Any] | None: ...
     async def open_positions(self, symbol: str | None = None) -> list[dict[str, Any]]: ...
     async def open_stop_orders(self, symbol: str | None = None) -> list[dict[str, Any]]: ...
 
@@ -368,8 +408,23 @@ class DurableRestartRecoveryGate:
             raise DurableRecoveryHalted("RECOVERY_LEDGER_UNAVAILABLE") from exc
 
         try:
+            parsed_checkpoints = tuple(
+                checkpoint_from_row(row) for row in checkpoints
+            )
+            orders: list[dict[str, Any]] = []
+            for cp in parsed_checkpoints:
+                order = await self.exchange.order_by_external_oid(
+                    cp.symbol, cp.external_oid
+                )
+                if not isinstance(order, dict):
+                    raise DurableRecoveryHalted(
+                        "RECOVERY_ORIGIN_ORDER_UNAVAILABLE"
+                    )
+                orders.append(order)
             positions = await self.exchange.open_positions()
             stops = await self.exchange.open_stop_orders()
+        except DurableRecoveryHalted:
+            raise
         except Exception as exc:
             raise DurableRecoveryHalted("RECOVERY_EXCHANGE_READ_UNAVAILABLE") from exc
 
@@ -377,6 +432,7 @@ class DurableRestartRecoveryGate:
             checkpoint_rows=checkpoints,
             intent_rows=intents,
             stop_amendment_rows=amendments,
+            orders=orders,
             positions=positions,
             stops=stops,
             positions_complete=positions_complete,
