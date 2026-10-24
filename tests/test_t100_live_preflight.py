@@ -9,10 +9,12 @@ from app.t100_live_preflight import (
 
 
 class FakeClient:
-    def __init__(self, positions=None, stops=None, stop_history=None):
+    def __init__(self, positions=None, stops=None, stop_history=None,
+                 funding_page=None):
         self.positions = [] if positions is None else positions
         self.stops = [] if stops is None else stops
         self.stop_history = [] if stop_history is None else stop_history
+        self.funding_page = funding_page
         self.calls = []
         self._spec_cache = {"SIREN_USDT": object()}
 
@@ -41,6 +43,12 @@ class FakeClient:
             if params != {"page_num": 1, "page_size": 100, "is_finished": 1}:
                 raise AssertionError("UNEXPECTED_STOP_HISTORY_PARAMS")
             return self.stop_history
+        if path == "/api/v1/private/position/funding_records":
+            if params != {"position_id": 10, "page_num": 1, "page_size": 100}:
+                raise AssertionError("UNEXPECTED_FUNDING_PARAMS")
+            if self.funding_page is None:
+                raise AssertionError("FUNDING_PAGE_NOT_CONFIGURED")
+            return self.funding_page
         raise AssertionError("UNEXPECTED_PRIVATE_READ")
 
 
@@ -70,6 +78,54 @@ class PreflightTests(unittest.IsolatedAsyncioTestCase):
             "NO_POSITION_OR_CURRENT_TPSL_OBSERVED_COMPLETENESS_UNVERIFIED")
         self.assertTrue(result["redacted_inventory_schema"]["positions"]["empty_rows_cannot_establish_schema"])
         self.assertEqual(result["shadow_schema_assessment"]["overall"], "INCOMPLETE_SCHEMA_EVIDENCE")
+
+    async def test_funding_probe_verifies_position_scoped_pagination_only(self):
+        c = FakeClient(
+            positions=[{
+                "positionId": 10, "symbol": "SIREN_USDT",
+                "positionType": 2, "holdVol": 5, "state": 1,
+            }],
+            funding_page={
+                "pageSize": 100, "totalCount": 1, "totalPage": 1,
+                "currentPage": 1,
+                "resultList": [{
+                    "id": 1, "symbol": "SIREN_USDT",
+                    "positionType": 2, "positionValue": 100,
+                    "funding": -0.1, "rate": 0.001,
+                    "settleTime": 123456,
+                }],
+            },
+        )
+        result = await read_only_preflight(
+            client=c, include_funding_probe=True)
+        funding = result["funding_observed_position_probe"]
+        self.assertEqual(
+            funding["status"],
+            "PAGINATION_VERIFIED_SIGN_SEMANTICS_UNCERTIFIED")
+        self.assertTrue(
+            funding["pagination_verified_for_observed_position"])
+        self.assertFalse(funding["funding_sign_semantics_verified"])
+        self.assertFalse(
+            funding["account_wide_funding_completeness_verified"])
+        shared = shareable_contract_report(result)
+        self.assertNotIn("SIREN_USDT", str(shared["funding_observed_position_probe"]))
+        self.assertNotIn("-0.1", str(shared["funding_observed_position_probe"]))
+
+    async def test_funding_probe_runtime_shape_mismatch_is_contained(self):
+        c = FakeClient(
+            positions=[{
+                "positionId": 10, "symbol": "SIREN_USDT",
+                "positionType": 2, "holdVol": 5, "state": 1,
+            }],
+            funding_page={"unexpected": []},
+        )
+        result = await read_only_preflight(
+            client=c, include_funding_probe=True)
+        funding = result["funding_observed_position_probe"]
+        self.assertEqual(funding["status"],
+                         "FUNDING_READ_CONTRACT_UNVERIFIED")
+        self.assertFalse(
+            funding["pagination_verified_for_observed_position"])
 
     async def test_raw_double_read_consistency_is_non_authorizing(self):
         result = await read_only_preflight(
