@@ -170,12 +170,10 @@ class PreflightTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(shared["shadow_schema_assessment"]["overall"], "INCOMPLETE_SCHEMA_EVIDENCE")
 
     async def test_cli_timeout_fails_closed(self):
-        async def never_returns(**kwargs):
+        async def times_out(**kwargs):
             import asyncio
-            await asyncio.sleep(60)
-        with patch("app.t100_live_preflight.read_only_preflight", never_returns), \
-             patch("app.t100_live_preflight.asyncio.wait_for",
-                   side_effect=TimeoutError):
+            raise asyncio.TimeoutError()
+        with patch("app.t100_live_preflight.read_only_preflight", times_out):
             result = await _run_cli_preflight(schema_only=True)
         self.assertEqual(result["credential_status"],
                          "READ_ONLY_PREFLIGHT_TIMED_OUT")
