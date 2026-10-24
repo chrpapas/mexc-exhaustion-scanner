@@ -5,6 +5,7 @@ Uses only injected private GET capability; no POST, order, or stop mutations.
 """
 from __future__ import annotations
 from typing import Any, Protocol
+import re
 
 
 class VenueReadHalted(RuntimeError):
@@ -19,10 +20,15 @@ class ReadOnlyMexcProbe:
     def __init__(self, client: PrivateGet):
         self._client = client
 
-    async def raw_open_positions(self) -> list[dict[str, Any]]:
+    async def raw_open_positions(
+        self, symbol: str | None = None,
+    ) -> list[dict[str, Any]]:
+        if symbol is not None and re.fullmatch(r"[A-Z0-9]+_USDT", symbol) is None:
+            raise VenueReadHalted("INVALID_POSITION_SYMBOL_FILTER")
         try:
             raw = await self._client._private_get(
-                "/api/v1/private/position/open_positions"
+                "/api/v1/private/position/open_positions",
+                None if symbol is None else {"symbol": symbol},
             )
         except Exception as exc:
             raise VenueReadHalted("POSITIONS_GET_FAILED") from exc
@@ -30,10 +36,15 @@ class ReadOnlyMexcProbe:
             raise VenueReadHalted("POSITIONS_RESPONSE_UNVERIFIED")
         return raw
 
-    async def raw_open_stops(self) -> list[dict[str, Any]]:
+    async def raw_open_stops(
+        self, symbol: str | None = None,
+    ) -> list[dict[str, Any]]:
+        if symbol is not None and re.fullmatch(r"[A-Z0-9]+_USDT", symbol) is None:
+            raise VenueReadHalted("INVALID_STOP_SYMBOL_FILTER")
         try:
             raw = await self._client._private_get(
-                "/api/v1/private/stoporder/open_orders"
+                "/api/v1/private/stoporder/open_orders",
+                None if symbol is None else {"symbol": symbol},
             )
         except Exception as exc:
             raise VenueReadHalted("OPEN_STOPS_GET_FAILED") from exc
