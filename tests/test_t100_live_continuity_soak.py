@@ -132,6 +132,29 @@ class ContinuitySoakTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(r["ws_event_windows"], 2)
         self.assertEqual(r["total_ws_private_events"], 4)
 
+    async def test_coherent_private_event_window_continues(self):
+        calls = 0
+        async def runner(**kwargs):
+            nonlocal calls
+            calls += 1
+            row = stable_window(events=1)
+            row["status"] = "STABLE_REST_WITH_PRIVATE_WS_EVENTS_OBSERVED"
+            return row
+
+        r = await run_continuity_soak(
+            config=ContinuitySoakConfig(
+                windows=2, window_seconds=5, pause_seconds=0),
+            client=DummyClient(),
+            continuity_runner=runner,
+            sleep=no_sleep,
+        )
+        self.assertEqual(
+            r["status"], "COMPLETED_CONTINUITY_SOAK_NON_AUTHORIZING")
+        self.assertEqual(r["stable_windows"], 2)
+        self.assertEqual(r["ws_event_windows"], 2)
+        self.assertEqual(r["total_ws_private_events"], 2)
+        self.assertEqual(calls, 2)
+
     async def test_unexpected_ws_status_halts(self):
         async def runner(**kwargs):
             return {
