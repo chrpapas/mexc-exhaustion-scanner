@@ -25,8 +25,9 @@ from app.t100_live_consistency import InventoryRead, double_read_raw_inventory
 from app.t100_live_active_tpsl import assess_active_tpsl_semantics
 from app.t100_live_stop_transition import assess_recent_finished_tpsl_transition
 from app.t100_live_funding_probe import collect_observed_position_funding
+from app.t100_live_symbol_crosscheck import crosscheck_symbol_scoped_inventory
 
-PREFLIGHT_DIAGNOSTIC_VERSION = "2026-10-24-funding-economics-v1"
+PREFLIGHT_DIAGNOSTIC_VERSION = "2026-10-24-symbol-redundancy-v1"
 
 
 async def read_only_preflight(
@@ -35,6 +36,7 @@ async def read_only_preflight(
     include_historical_stop_schema: bool = False,
     include_raw_consistency: bool = False,
     include_funding_probe: bool = False,
+    include_symbol_crosscheck: bool = False,
 ) -> dict[str, Any]:
     controls = T100ExecutionControls.from_env()
     failures = list(controls.readiness_failures())
@@ -114,6 +116,12 @@ async def read_only_preflight(
         result["active_tpsl_semantics"] = assess_active_tpsl_semantics(
             positions, stops
         )
+        if include_symbol_crosscheck:
+            result["symbol_scoped_inventory_crosscheck"] = (
+                await crosscheck_symbol_scoped_inventory(
+                    probe, positions, stops
+                )
+            )
         if positions and not stops:
             result["t100_native_protection_presence"] = (
                 "POSITION_WITHOUT_OBSERVED_CURRENT_TPSL"
@@ -253,6 +261,9 @@ def shareable_contract_report(result: dict[str, Any]) -> dict[str, Any]:
             "t100_native_protection_presence"
         ),
         "active_tpsl_semantics": result.get("active_tpsl_semantics"),
+        "symbol_scoped_inventory_crosscheck": result.get(
+            "symbol_scoped_inventory_crosscheck"
+        ),
         "raw_inventory_completeness_verified": result.get(
             "raw_inventory_completeness_verified", False
         ),
@@ -269,6 +280,7 @@ async def _run_cli_preflight(*, schema_only: bool) -> dict[str, Any]:
                 include_historical_stop_schema=schema_only,
                 include_raw_consistency=schema_only,
                 include_funding_probe=schema_only,
+                include_symbol_crosscheck=schema_only,
             ),
             timeout=45.0,
         )
