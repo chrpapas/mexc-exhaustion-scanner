@@ -45,7 +45,7 @@
    tiny limited-risk live pilot. Do not interpret 'go' or 'continue'
    as permission to place funded orders.
 
-## Read-only schema discovery (operator-local; not yet performed)
+## Read-only schema discovery (operator-local; first redacted sample obtained)
 Run locally with a MEXC API key restricted to **read-only** permissions,
 using process environment variables `MEXC_API_KEY` and `MEXC_API_SECRET`:
 
@@ -121,3 +121,22 @@ A green offline workflow alone is insufficient. The release requires
 documented pass evidence for every gate above, a complete integration
 test on actual read-only MEXC data, an operational shadow soak, and
 separate explicit approval before any real order.
+
+
+## 2026-10-24 operator redacted MEXC evidence
+
+A schema-only authenticated read was run locally with the operator's key.
+No orders were sent. The open-position endpoint returned one row and its
+allowlisted types were compatible with the current shadow position parser
+(positionId integer, symbol string, positionType integer, holdVol integer).
+The current TP/SL endpoint returned zero rows, so open-stop schema remains
+unobserved from the account.
+
+The current official MEXC Futures documentation describes both the current
+TP/SL endpoint and the historical TP/SL endpoint as returning data arrays.
+For /api/v1/private/stoporder/list/orders, page_num/page_size are request
+parameters but the documented response does not include total/page metadata.
+Accordingly, a short/empty page must never be used as proof of pagination
+completeness. The schema-only CLI now optionally samples finished TP/SL page
+1 for redacted field/type evidence when no current stop row exists; that
+sample remains explicitly non-complete and non-authorizing.
