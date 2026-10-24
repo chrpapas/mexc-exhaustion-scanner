@@ -105,6 +105,33 @@ class PreflightTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(result["shadow_schema_assessment"]["active_stop_contract_verified"])
         self.assertEqual(len(c.calls), 3)
 
+    async def test_recent_finished_transition_is_shareable_without_values(self):
+        c = FakeClient(
+            positions=[{
+                "positionId": 10, "symbol": "SIREN_USDT",
+                "positionType": 2, "holdVol": 5, "state": 1,
+            }],
+            stops=[],
+            stop_history=[{
+                "id": 999, "positionId": "10", "symbol": "SIREN_USDT",
+                "state": 2, "triggerSide": 0, "isFinished": 1,
+                "updateTime": 1, "stopLossPrice": 175.0, "vol": 5,
+            }],
+        )
+        with patch("app.t100_live_stop_transition.time.time", return_value=0.001):
+            result = await read_only_preflight(
+                client=c, include_historical_stop_schema=True)
+        transition = result["recent_finished_tpsl_transition"]
+        self.assertEqual(transition["latest_terminal_state"], "CANCELED")
+        self.assertEqual(transition["latest_trigger_side"], "UNTRIGGERED")
+        shared = shareable_contract_report(result)
+        self.assertEqual(
+            shared["recent_finished_tpsl_transition"]["latest_terminal_state"],
+            "CANCELED")
+        for secret in ("SIREN_USDT", "175.0", "999"):
+            self.assertNotIn(
+                secret, str(shared["recent_finished_tpsl_transition"]))
+
     async def test_empty_history_does_not_create_false_stop_schema(self):
         result = await read_only_preflight(
             client=FakeClient(), include_historical_stop_schema=True)
