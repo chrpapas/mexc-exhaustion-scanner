@@ -210,3 +210,32 @@ exchange endpoint is complete; it is a conservative strategy-specific block.
 Official references:
 - https://www.mexc.com/api-docs/futures/account-and-trading-endpoints/get-open-positions
 - https://www.mexc.com/api-docs/futures/account-and-trading-endpoints/get-current-take-profitstop-loss-order-list
+
+
+### 2026-10-24 fourth operator schema-only sample: current active TP/SL observed
+
+After the operator independently added TP/SL to an already-existing real
+position for normal trade management, the schema-only GET probe observed:
+
+- one current position row
+- one current TP/SL row from /api/v1/private/stoporder/open_orders
+- raw_inventory_double_read_consistent=true
+- active_stop_schema_observed=true
+- stop_schema_source=open_orders
+- both position and current TP/SL schemas parser-shape compatible
+- pagination/completeness/atomicity still unverified
+
+The observed current TP/SL row exposed the expected core fields used by the
+shadow parser: id integer, positionId string, state integer, stopLossPrice
+number, vol integer, symbol string, plus documented TP/SL metadata. No raw
+account values are retained in the repository.
+
+Current MEXC documentation for /api/v1/private/stoporder/open_orders defines:
+state=1 untriggered; positionId links the order to a position; positionType
+1/2 identifies long/short; vol is order quantity; isFinished=0 is non-final;
+stopLossPrice is the SL trigger price. The preflight now performs an
+in-process semantic assessment of the observed active rows and emits only
+boolean/count evidence for state, non-final status, position linkage,
+symbol/side consistency, positive protective price/volume, and observed
+protective-volume coverage. This stronger evidence still does not certify
+endpoint completeness, exchange atomicity, or live trading.
