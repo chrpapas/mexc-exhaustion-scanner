@@ -55,7 +55,8 @@ T100_EXECUTION_MODE=paper python -m app.t100_live_preflight --schema-only
 
 The output deliberately omits account balances, position IDs, symbols,
 quantities, unknown field names and secret values; it reports only an
-allowlisted field/type summary. Do **not** share keys, full API payloads,
+allowlisted field/type summary and non-authorizing parser compatibility
+assessment. Do **not** share keys, full API payloads,
 private request headers, or unredacted logs. An empty account yields no
 field schema evidence. This is a discovery probe, not proof of pagination,
 atomicity, API permissions, or safety for real orders. It has not been run
@@ -76,6 +77,11 @@ against the operator account in this PR.
   inventory reads for canonical content equality and timestamp proximity.
   Identical consecutive reads reduce torn-snapshot risk but **cannot**
   prove venue atomicity or exclude intervening changes.
+- `app/t100_live_schema_assessment.py` compares redacted field/type
+  evidence with the current shadow parser's requirements. Missing or
+  nullable fields are flagged, while empty inventories remain
+  INCOMPLETE_SCHEMA_EVIDENCE. Even compatible shapes remain uncertified:
+  no MEXC enum semantics, page completeness or atomicity is inferred.
 - `app/t100_live_contract_evidence.py` creates shareable, allowlisted
   shape-only summaries, never account values or unknown field names.
 - `app/t100_live_preflight.py` now uses strict raw GET inventory reads
