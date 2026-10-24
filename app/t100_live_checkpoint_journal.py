@@ -478,6 +478,21 @@ class PostgresCheckpointJournal:
                         raise CheckpointJournalHalted(
                             "CHECKPOINT_CAS_FAILURE"
                         )
+                    if reason == CLOSE_VERIFIED:
+                        intent_row = await conn.fetchval(
+                            """UPDATE t100_live_order_intents
+                               SET state='CLOSED',updated_at=now()
+                               WHERE external_oid=$1
+                                 AND exchange_order_id=$2
+                                 AND state='ACK'
+                               RETURNING id""",
+                            current.external_oid,
+                            current.exchange_order_id,
+                        )
+                        if intent_row is None:
+                            raise CheckpointJournalHalted(
+                                "CLOSE_INTENT_CAS_FAILURE"
+                            )
                     await self._append_revision(conn, current, reason)
         except CheckpointJournalHalted:
             raise
