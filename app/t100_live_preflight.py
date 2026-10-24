@@ -100,6 +100,24 @@ async def read_only_preflight(
         result["shadow_schema_assessment"]["active_stop_contract_verified"] = False
         result["open_futures_positions"] = len(positions)
         result["open_futures_stop_orders"] = len(stops)
+        if positions and not stops:
+            result["t100_native_protection_presence"] = (
+                "POSITION_WITHOUT_OBSERVED_CURRENT_TPSL"
+            )
+            failures.append("t100_position_without_observed_native_tpsl")
+        elif stops and not positions:
+            result["t100_native_protection_presence"] = (
+                "CURRENT_TPSL_WITHOUT_OBSERVED_POSITION"
+            )
+            failures.append("t100_current_tpsl_without_observed_position")
+        elif positions and stops:
+            result["t100_native_protection_presence"] = (
+                "POSITION_AND_CURRENT_TPSL_PRESENT_LINKAGE_UNVERIFIED"
+            )
+        else:
+            result["t100_native_protection_presence"] = (
+                "NO_POSITION_OR_CURRENT_TPSL_OBSERVED_COMPLETENESS_UNVERIFIED"
+            )
 
         if include_raw_consistency:
             last_observed_ms = -1
@@ -168,6 +186,9 @@ def shareable_contract_report(result: dict[str, Any]) -> dict[str, Any]:
         ),
         "raw_inventory_double_read_consistent": result.get(
             "raw_inventory_double_read_consistent"
+        ),
+        "t100_native_protection_presence": result.get(
+            "t100_native_protection_presence"
         ),
         "raw_inventory_completeness_verified": result.get(
             "raw_inventory_completeness_verified", False
