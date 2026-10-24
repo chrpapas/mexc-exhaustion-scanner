@@ -80,6 +80,9 @@ class PreflightTests(unittest.IsolatedAsyncioTestCase):
             result["shadow_schema_assessment"]["overall"],
             "PARSER_SHAPE_COMPATIBLE_UNCERTIFIED")
         self.assertFalse(result["shadow_schema_assessment"]["pagination_verified"])
+        self.assertFalse(result["shadow_schema_assessment"]["active_stop_schema_observed"])
+        self.assertTrue(result["shadow_schema_assessment"]["historical_stop_schema_observed"])
+        self.assertFalse(result["shadow_schema_assessment"]["active_stop_contract_verified"])
         self.assertEqual(len(c.calls), 3)
 
     async def test_empty_history_does_not_create_false_stop_schema(self):
@@ -89,6 +92,8 @@ class PreflightTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             result["shadow_schema_assessment"]["overall"],
             "INCOMPLETE_SCHEMA_EVIDENCE")
+        self.assertFalse(result["shadow_schema_assessment"]["active_stop_schema_observed"])
+        self.assertFalse(result["shadow_schema_assessment"]["historical_stop_schema_observed"])
 
     async def test_schema_evidence_redacts_account_values(self):
         c = FakeClient(positions=[{"positionId": "PRIVATE-123",
