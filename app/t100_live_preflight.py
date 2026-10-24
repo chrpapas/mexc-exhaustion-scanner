@@ -25,6 +25,8 @@ from app.t100_live_consistency import InventoryRead, double_read_raw_inventory
 from app.t100_live_active_tpsl import assess_active_tpsl_semantics
 from app.t100_live_stop_transition import assess_recent_finished_tpsl_transition
 
+PREFLIGHT_DIAGNOSTIC_VERSION = "2026-10-24-stop-transition-v1"
+
 
 async def read_only_preflight(
     *,
@@ -185,6 +187,7 @@ def shareable_contract_report(result: dict[str, Any]) -> dict[str, Any]:
     """Allowlist-only output for sharing schema evidence without account values."""
     return {
         "exchange": "MEXC",
+        "diagnostic_version": PREFLIGHT_DIAGNOSTIC_VERSION,
         "read_only": True,
         "live_order_submission_possible": False,
         "credential_status": result.get("credential_status", "UNKNOWN"),
