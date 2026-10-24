@@ -270,7 +270,13 @@ class OperationalSoakController:
                 "OPERATIONAL_SOAK_KILLED:RECOVERY_UNVERIFIED"
             )
 
-        expected_count = len(item.expected)
+        try:
+            expected_count = len(item.expected)
+        except Exception as exc:
+            self._trip("RECOVERY_UNVERIFIED")
+            raise SoakHalted(
+                "OPERATIONAL_SOAK_KILLED:RECOVERY_UNVERIFIED"
+            ) from exc
         if len(item.positions) != expected_count:
             self._trip("POSITION_DRIFT")
             raise SoakHalted("OPERATIONAL_SOAK_KILLED:POSITION_DRIFT")
