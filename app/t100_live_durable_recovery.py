@@ -19,7 +19,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
-from typing import Any, Iterable
+from typing import Any, Protocol
 
 from app.t100_live_supervisor import ManagedShort
 
@@ -315,3 +315,71 @@ def recover_nonflat(
         exchange_position_count=len(positions),
         exchange_stop_count=len(stops),
     )
+
+class RecoveryLedger(Protocol):
+    async def fetch(self, query: str) -> list[Any]: ...
+
+
+class RecoveryExchange(Protocol):
+    async def open_positions(self, symbol: str | None = None) -> list[dict[str, Any]]: ...
+    async def open_stop_orders(self, symbol: str | None = None) -> list[dict[str, Any]]: ...
+
+
+class DurableRestartRecoveryGate:
+    """GET/SELECT-only orchestration around the pure recovery policy.
+
+    The caller must independently establish endpoint completeness and pass
+    those booleans explicitly. This class never upgrades an ordinary MEXC
+    list response into completeness evidence.
+    """
+
+    def __init__(self, ledger: RecoveryLedger, exchange: RecoveryExchange):
+        self.ledger = ledger
+        self.exchange = exchange
+
+    async def inspect_nonflat(
+        self,
+        *,
+        positions_complete: bool = False,
+        stops_complete: bool = False,
+    ) -> DurableRecoveryReport:
+        try:
+            checkpoints = await self.ledger.fetch(
+                """SELECT symbol, external_oid, exchange_order_id, position_id,
+                          contracts, entry_price, stop_order_id, stop_price,
+                          best_profit_pct, armed, lifecycle_state,
+                          checkpoint_version
+                   FROM t100_live_position_checkpoints
+                   WHERE lifecycle_state <> 'CLOSED'
+                   ORDER BY symbol, position_id"""
+            )
+            intents = await self.ledger.fetch(
+                """SELECT symbol, external_oid, exchange_order_id,
+                          volume_contracts, stop_price, state
+                   FROM t100_live_order_intents
+                   ORDER BY id"""
+            )
+            amendments = await self.ledger.fetch(
+                """SELECT external_id, position_id, stop_order_id, state
+                   FROM t100_live_stop_amendments
+                   ORDER BY id"""
+            )
+        except Exception as exc:
+            raise DurableRecoveryHalted("RECOVERY_LEDGER_UNAVAILABLE") from exc
+
+        try:
+            positions = await self.exchange.open_positions()
+            stops = await self.exchange.open_stop_orders()
+        except Exception as exc:
+            raise DurableRecoveryHalted("RECOVERY_EXCHANGE_READ_UNAVAILABLE") from exc
+
+        return recover_nonflat(
+            checkpoint_rows=checkpoints,
+            intent_rows=intents,
+            stop_amendment_rows=amendments,
+            positions=positions,
+            stops=stops,
+            positions_complete=positions_complete,
+            stops_complete=stops_complete,
+        )
+
