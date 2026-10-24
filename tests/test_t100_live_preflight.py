@@ -10,11 +10,15 @@ from app.t100_live_preflight import (
 
 class FakeClient:
     def __init__(self, positions=None, stops=None, stop_history=None,
-                 funding_page=None):
+                 funding_page=None, account_assets=None):
         self.positions = [] if positions is None else positions
         self.stops = [] if stops is None else stops
         self.stop_history = [] if stop_history is None else stop_history
         self.funding_page = funding_page
+        self.account_assets = (
+            [{"currency": "USDT", "positionMargin": 0, "unrealized": 0}]
+            if account_assets is None else account_assets
+        )
         self.calls = []
         self._spec_cache = {"SIREN_USDT": object()}
 
@@ -35,6 +39,8 @@ class FakeClient:
 
     async def _private_get(self, path, params=None):
         self.calls.append((path, params))
+        if path == "/api/v1/private/account/assets":
+            return self.account_assets
         if path == "/api/v1/private/position/open_positions":
             if params and params.get("symbol"):
                 return [
@@ -259,6 +265,46 @@ class PreflightTests(unittest.IsolatedAsyncioTestCase):
             "123.45",
             str(shared["symbol_scoped_inventory_crosscheck"]),
         )
+
+    async def test_position_margin_economic_witness_is_shareable(self):
+        c = FakeClient(
+            positions=[{
+                "positionId": 10,
+                "symbol": "SIREN_USDT",
+                "positionType": 2,
+                "holdVol": 5,
+                "state": 1,
+                "holdAvgPrice": 100,
+                "im": 12.5,
+                "unRealizedPnl": -1.25,
+            }],
+            account_assets=[
+                {
+                    "currency": "USDT",
+                    "positionMargin": 12.5,
+                    "unrealized": -1.25,
+                },
+                {
+                    "currency": "MX",
+                    "positionMargin": 0,
+                    "unrealized": 0,
+                },
+            ],
+        )
+        result = await read_only_preflight(
+            client=c,
+            include_position_margin_witness=True,
+        )
+        witness = result["position_inventory_economic_witness"]
+        self.assertTrue(
+            witness["position_inventory_economic_witness_observed"])
+        self.assertTrue(witness["usdt_position_margin_reconciled"])
+        self.assertTrue(witness["usdt_unrealized_reconciled"])
+        self.assertFalse(witness["account_wide_completeness_verified"])
+        shared = shareable_contract_report(result)
+        text = str(shared["position_inventory_economic_witness"])
+        for secret in ("SIREN_USDT", "12.5", "-1.25"):
+            self.assertNotIn(secret, text)
 
     async def test_schema_only_history_can_fill_stop_shape_without_certifying_pagination(self):
         c = FakeClient(
