@@ -14,12 +14,12 @@ class FakeClient:
             [{
                 "symbol": "SIREN_USDT", "positionId": 10,
                 "positionType": 2, "state": 1, "holdVol": 5,
-                "holdAvgPrice": 100, "unRealizedPnl": 1.0,
+                "holdAvgPrice": 98765.4321, "unRealizedPnl": 1.0,
             }],
             [{
                 "symbol": "SIREN_USDT", "positionId": 10,
                 "positionType": 2, "state": 1, "holdVol": 5,
-                "holdAvgPrice": 100, "unRealizedPnl": 2.0,
+                "holdAvgPrice": 98765.4321, "unRealizedPnl": 2.0,
             }],
         ]
         self.stop_reads = [[], []]
@@ -78,7 +78,7 @@ class ContinuityProbeTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(result["live_authorization"])
         self.assertFalse(result["account_wide_completeness_verified"])
         self.assertNotIn("SIREN_USDT", str(result))
-        self.assertNotIn("100", str(result))
+        self.assertNotIn("98765.4321", str(result))
 
     async def test_critical_position_change_is_reported(self):
         client = FakeClient()
