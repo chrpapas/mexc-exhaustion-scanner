@@ -286,3 +286,30 @@ state.
 This closes the observed cancellation-state semantic evidence gap. It does
 not certify TP/SL execution/trigger semantics, endpoint completeness, or
 exchange atomicity.
+
+
+### 2026-10-24 seventh operator sample: funding pagination verified on real position
+
+The schema-only funding probe collected 489 funding rows for the one observed
+position across five pages. The live MEXC response supplied explicit
+pageSize/totalCount/totalPage/currentPage/resultList metadata and the strict
+collector verified:
+
+- reported_total_rows=489
+- page_count=5
+- pagination_verified_for_observed_position=true
+- no duplicate row identities
+- schema fields matched documented funding fields
+- account-wide funding completeness remains unverified
+
+This closes position-scoped funding pagination evidence for the observed
+position.
+
+Funding economics remain a separate semantic layer. MEXC's current funding
+rules state that positive funding rates transfer from longs to shorts and
+negative rates transfer from shorts to longs. The current funding-record API
+exposes positionType, positionValue, funding and rate. The next redacted
+semantic check compares every non-zero row against the expected cashflow
+direction and checks fee magnitude against positionValue*rate within a small
+rounding tolerance. Only counts/booleans are emitted; funding amounts,
+symbols, position IDs and timestamps are never shared.
