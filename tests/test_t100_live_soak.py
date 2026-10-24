@@ -142,6 +142,31 @@ class DiscoverySoakTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(report.position_without_current_tpsl_samples, 1)
         self.assertEqual(report.current_tpsl_presence_samples, 1)
 
+    async def test_volatile_raw_field_drift_is_reported_not_killed(self):
+        p1 = pos()
+        p1[0]["unRealizedPnl"] = "1.0"
+        p2 = pos()
+        p2[0]["unRealizedPnl"] = "1.5"
+        p3 = pos()
+        p3[0]["unRealizedPnl"] = "2.0"
+        p4 = pos()
+        p4[0]["unRealizedPnl"] = "2.5"
+        probe = FakeProbe(
+            [p1, p2, p3, p4],
+            [stop(), stop(), stop(), stop()],
+        )
+        runner = RawDiscoverySoakRunner(
+            probe,
+            DiscoverySoakConfig(
+                samples=2, interval_seconds=0, max_runtime_seconds=10),
+        )
+        report = await runner.run(sleep=no_sleep, monotonic_ns=FakeClock())
+        self.assertFalse(report.kill_tripped)
+        self.assertEqual(report.full_raw_drift_samples, 2)
+        self.assertIn(
+            "unRealizedPnl", report.changed_position_field_names)
+        self.assertEqual(report.status, "COMPLETED_READ_ONLY_DISCOVERY")
+
     async def test_within_pair_inventory_drift_trips_kill(self):
         probe = FakeProbe(
             [pos("20"), pos("19")],
