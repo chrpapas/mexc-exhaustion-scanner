@@ -302,6 +302,15 @@ class OperationalSoakTests(unittest.TestCase):
             soak.observe(observation(positions=bad))
         self.assertEqual(soak.kill.first_reason, "POSITION_DRIFT")
 
+    def test_malformed_expected_state_trips_recovery_unverified(self):
+        soak = OperationalSoakController(minimum_observations=2)
+        bad = observation(expected=None)
+        with self.assertRaisesRegex(
+            SoakHalted, "RECOVERY_UNVERIFIED"):
+            soak.observe(bad)
+        self.assertEqual(
+            soak.kill.first_reason, "RECOVERY_UNVERIFIED")
+
     def test_report_preserves_first_failure_and_non_authorizing(self):
         soak = OperationalSoakController(minimum_observations=2)
         with self.assertRaises(SoakHalted):
