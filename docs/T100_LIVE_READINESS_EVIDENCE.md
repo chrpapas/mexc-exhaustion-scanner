@@ -410,3 +410,67 @@ non-authorizing until that evidence gap is resolved.
 
 The draft checkpoint table is intentionally not migrated and no live database
 writes were performed.
+
+
+### 2026-10-24 bounded read-only soak and operational kill controls
+
+A new one-way OperationalKillLatch is shared by the soak/risk safety layer.
+It preserves the first trip reason, increments diagnostic trip count on later
+trips, exposes no reset/clear/enable method, and never grants entry or live
+authorization.
+
+Two soak evidence levels are intentionally separated:
+
+1. Raw discovery soak
+   - bounded by sample count and wall-clock timeout
+   - uses only authenticated GET reads of open positions/current TP-SL
+   - each sample requires two consecutive canonical raw inventory reads to
+     match within a bounded separation
+   - reports position/TP-SL presence counts and cross-sample count changes
+   - does NOT treat a cross-sample lifecycle transition as corruption because
+     it has no authoritative local lifecycle model
+   - explicitly keeps raw_inventory_completeness_verified=false,
+     exchange_atomicity_verified=false, entry_allowed=false and
+     live_authorization=false
+   - a within-pair drift, transport failure or timeout trips the local kill
+     state and stops the soak
+
+2. Operational soak
+   - requires independently complete position and TP-SL inventory booleans
+   - consumes exact expected ManagedShort state through the existing
+     fail-closed shadow reconciler
+   - requires fresh, monotonic observations with a bounded gap
+   - missing protection trips NATIVE_PROTECTION_LOST
+   - extra/changed protection trips NATIVE_PROTECTION_DRIFT
+   - position count/identity/quantity drift trips POSITION_DRIFT
+   - stale data, observation gaps, malformed expected state or other
+     reconciliation ambiguity trip a permanent kill reason
+   - once tripped, a later healthy observation cannot resume the same process
+   - even after the configured observation threshold is reached, status is
+     SOAK_THRESHOLD_MET_NON_AUTHORIZING and both entry_allowed and
+     live_authorization remain false
+
+A dedicated operator-local CLI app/t100_live_soak_cli.py runs only the raw
+discovery layer. It refuses non-paper T100 execution mode, performs no DB
+writes and no POST requests, and emits only counts/booleans/timing/status.
+The default configuration is 12 samples, five seconds apart, with a bounded
+120-second overall runtime.
+
+Quantitative operational risk controls were also added:
+- manual kill switch
+- maximum per-position notional
+- maximum total portfolio notional
+- maximum daily loss
+- exact reconciliation of reported portfolio total against position totals
+- malformed/unreconciled risk inputs themselves trip RECOVERY_UNVERIFIED
+
+All quantitative kills are one-way in-process. A later below-limit value
+cannot clear an earlier breach.
+
+These controls remain non-authorizing and are not wired to live order
+submission. They define prerequisites for a future coordinator.
+
+Current real-account state still has an observed position with zero current
+TP/SL rows following the operator's manual cancellation. A raw discovery
+soak may record that condition, but it cannot be interpreted as an
+operational-protection pass.
