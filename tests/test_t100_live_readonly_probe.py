@@ -98,3 +98,52 @@ class ProbeTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaisesRegex(VenueReadHalted, "INVALID_STOP_PAGE"):
                 await self.probe.raw_stop_page(1,20,is_finished=finished)
         self.assertEqual(self.client.calls, [])
+
+
+    async def test_funding_page_preserves_documented_dict_shape(self):
+        payload = {
+            "pageSize": 100,
+            "totalCount": 1,
+            "totalPage": 1,
+            "currentPage": 1,
+            "resultList": [{"id": 123}],
+        }
+        self.client.responses = [payload]
+        self.assertEqual(
+            await self.probe.raw_funding_page("10", page=1, size=100),
+            payload,
+        )
+        self.assertEqual(
+            self.client.calls[0],
+            (
+                "/api/v1/private/position/funding_records",
+                {"position_id": 10, "page_num": 1, "page_size": 100},
+            ),
+        )
+
+    async def test_funding_page_rejects_non_dict(self):
+        self.client.responses = [[]]
+        with self.assertRaisesRegex(VenueReadHalted, "FUNDING_PAGE_RESPONSE"):
+            await self.probe.raw_funding_page("10", page=1, size=100)
+
+    async def test_funding_page_rejects_malformed_rows(self):
+        self.client.responses = [{
+            "pageSize": 100, "totalCount": 1, "totalPage": 1,
+            "currentPage": 1, "resultList": [None],
+        }]
+        with self.assertRaisesRegex(VenueReadHalted, "FUNDING_PAGE_ROWS"):
+            await self.probe.raw_funding_page("10", page=1, size=100)
+
+    async def test_funding_page_transport_failure(self):
+        self.client.fail = True
+        with self.assertRaisesRegex(VenueReadHalted, "FUNDING_PAGE_GET_FAILED"):
+            await self.probe.raw_funding_page("10", page=1, size=100)
+
+    async def test_invalid_funding_page_args(self):
+        for pid, page, size in (
+            ("", 1, 100), ("abc", 1, 100), ("0", 1, 100),
+            ("10", 0, 100), ("10", 1, 0), ("10", 1, 101),
+            ("10", True, 100), ("10", 1, True),
+        ):
+            with self.assertRaisesRegex(VenueReadHalted, "INVALID_FUNDING_PAGE"):
+                await self.probe.raw_funding_page(pid, page=page, size=size)
