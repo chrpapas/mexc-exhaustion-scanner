@@ -66,6 +66,21 @@ class PreflightTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result["redacted_inventory_schema"]["positions"]["empty_rows_cannot_establish_schema"])
         self.assertEqual(result["shadow_schema_assessment"]["overall"], "INCOMPLETE_SCHEMA_EVIDENCE")
 
+    async def test_raw_double_read_consistency_is_non_authorizing(self):
+        result = await read_only_preflight(
+            client=FakeClient(
+                positions=[{"positionId": 10, "symbol": "SIREN_USDT",
+                            "positionType": 2, "holdVol": 1}],
+                stops=[],
+            ),
+            include_raw_consistency=True,
+        )
+        self.assertTrue(result["raw_inventory_double_read_consistent"])
+        self.assertFalse(result["raw_inventory_completeness_verified"])
+        self.assertEqual(result["raw_inventory_double_read_mode"],
+                         "READ_ONLY_DISCOVERY")
+        self.assertFalse(result["live_order_submission_possible"])
+
     async def test_schema_only_history_can_fill_stop_shape_without_certifying_pagination(self):
         c = FakeClient(
             positions=[{"positionId": 10, "symbol": "SIREN_USDT",
