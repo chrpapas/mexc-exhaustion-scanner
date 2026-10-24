@@ -773,3 +773,44 @@ field moved.
 No current TP/SL existed before or after the window following the operator's
 manual cancellation, so this is not protected-position operational soak
 evidence.
+
+
+### 2026-10-24 bounded multi-window continuity soak
+
+A bounded multi-window REST-WS-REST continuity soak is now implemented.
+
+Default/manual pilot configuration:
+- 5 windows
+- 30-second private WS observation per window
+- 2-second pause between windows
+
+Each window reuses the same read-only continuity sandwich and must either:
+- REST_WS_REST_CONTINUITY_STABLE, or
+- STABLE_REST_WITH_PRIVATE_WS_EVENTS_OBSERVED
+
+A coherent private lifecycle event is not treated as failure; it is counted
+and the soak continues if the before/after critical REST state remains
+coherent.
+
+The soak halts on the first:
+- critical REST inventory change
+- unexpected private WS channel
+- transport/probe exception
+- other non-pass window status
+
+It accumulates only redacted evidence:
+- completed/stable windows
+- critical change count
+- WS event windows/event count
+- heartbeat count
+- full-raw drift-window counts
+- changed position/stop field names
+- first failure status
+
+It remains:
+- account_wide_completeness_verified=false
+- exchange_atomicity_verified=false
+- entry_allowed=false
+- live_authorization=false
+
+Offline safety suite: 456 tests passed on the final multi-window soak head.
