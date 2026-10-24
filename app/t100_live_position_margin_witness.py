@@ -45,6 +45,7 @@ def assess_position_margin_witness(
         "usdt_unrealized_reconciled": False,
         "returned_non_usdt_position_margin_zero": False,
         "returned_non_usdt_unrealized_zero": False,
+        "position_inventory_margin_witness_observed": False,
         "position_inventory_economic_witness_observed": False,
         "account_wide_completeness_verified": False,
         "exchange_atomicity_verified": False,
@@ -138,15 +139,21 @@ def assess_position_margin_witness(
     result["returned_non_usdt_unrealized_zero"] = (
         non_usdt_unrealized_zero
     )
-    result["position_inventory_economic_witness_observed"] = all((
+    result["position_inventory_margin_witness_observed"] = all((
         margin_match,
-        unrealized_match,
         non_usdt_margin_zero,
+    ))
+    result["position_inventory_economic_witness_observed"] = all((
+        result["position_inventory_margin_witness_observed"],
+        unrealized_match,
         non_usdt_unrealized_zero,
     ))
-    result["status"] = (
-        "POSITION_INVENTORY_ECONOMIC_WITNESS_MATCH"
-        if result["position_inventory_economic_witness_observed"]
-        else "POSITION_INVENTORY_ECONOMIC_WITNESS_MISMATCH"
-    )
+    if result["position_inventory_economic_witness_observed"]:
+        result["status"] = "POSITION_INVENTORY_ECONOMIC_WITNESS_MATCH"
+    elif result["position_inventory_margin_witness_observed"]:
+        result["status"] = (
+            "POSITION_MARGIN_WITNESS_MATCH_UNREALIZED_NOT_RECONCILED"
+        )
+    else:
+        result["status"] = "POSITION_INVENTORY_ECONOMIC_WITNESS_MISMATCH"
     return result
