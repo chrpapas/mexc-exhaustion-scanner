@@ -2,7 +2,7 @@
 import unittest
 from app.t100_live_consistency import (
     InventoryRead, double_read_inventory, double_read_raw_inventory,
-    ConsistencyHalted,
+    double_read_projected_inventory, ConsistencyHalted,
 )
 
 
@@ -151,3 +151,91 @@ class RawConsistencyTests(unittest.IsolatedAsyncioTestCase):
         reader = Reader(read(1000), None)
         with self.assertRaisesRegex(ConsistencyHalted, "RAW_INVENTORY_DOUBLE_READ_UNVERIFIED"):
             await double_read_raw_inventory(reader)
+
+
+class ProjectedConsistencyTests(unittest.IsolatedAsyncioTestCase):
+    async def test_mark_to_market_drift_does_not_trip_critical_inventory(self):
+        p1 = pos()
+        p1["unRealizedPnl"] = "1.0"
+        p1["marginRatio"] = "0.10"
+        p2 = pos()
+        p2["unRealizedPnl"] = "1.5"
+        p2["marginRatio"] = "0.11"
+        reader = Reader(read(1000, [p1], [stop()]),
+                        read(1500, [p2], [stop()]))
+        r = await double_read_projected_inventory(reader)
+        self.assertTrue(r.critical_inventory_equal)
+        self.assertFalse(r.full_raw_equal)
+        self.assertIn("unRealizedPnl", r.changed_position_field_names)
+        self.assertIn("marginRatio", r.changed_position_field_names)
+
+    async def test_update_time_drift_is_diagnostic_only(self):
+        p1 = pos()
+        p1["updateTime"] = 1000
+        p2 = pos()
+        p2["updateTime"] = 1500
+        reader = Reader(read(1000, [p1], []), read(1500, [p2], []))
+        r = await double_read_projected_inventory(reader)
+        self.assertTrue(r.critical_inventory_equal)
+        self.assertFalse(r.full_raw_equal)
+        self.assertEqual(r.changed_position_field_names, ("updateTime",))
+
+    async def test_position_volume_drift_still_blocks(self):
+        reader = Reader(read(1000, [pos("2")], []),
+                        read(1500, [pos("3")], []))
+        with self.assertRaisesRegex(
+            ConsistencyHalted, "CRITICAL_INVENTORY_CHANGED"):
+            await double_read_projected_inventory(reader)
+
+    async def test_entry_price_drift_blocks(self):
+        a = pos()
+        a["holdAvgPrice"] = "100"
+        b = pos()
+        b["holdAvgPrice"] = "101"
+        reader = Reader(read(1000, [a], []), read(1500, [b], []))
+        with self.assertRaisesRegex(
+            ConsistencyHalted, "CRITICAL_INVENTORY_CHANGED"):
+            await double_read_projected_inventory(reader)
+
+    async def test_stop_price_drift_blocks(self):
+        reader = Reader(read(1000, [pos()], [stop("175")]),
+                        read(1500, [pos()], [stop("174")]))
+        with self.assertRaisesRegex(
+            ConsistencyHalted, "CRITICAL_INVENTORY_CHANGED"):
+            await double_read_projected_inventory(reader)
+
+    async def test_stop_update_time_drift_is_diagnostic_only(self):
+        s1 = stop()
+        s1["updateTime"] = 1000
+        s2 = stop()
+        s2["updateTime"] = 1500
+        reader = Reader(read(1000, [pos()], [s1]),
+                        read(1500, [pos()], [s2]))
+        r = await double_read_projected_inventory(reader)
+        self.assertTrue(r.critical_inventory_equal)
+        self.assertFalse(r.full_raw_equal)
+        self.assertEqual(r.changed_stop_field_names, ("updateTime",))
+
+    async def test_projection_still_does_not_claim_completeness(self):
+        reader = Reader(
+            read(1000, [pos()], [], positions_complete=False,
+                 stops_complete=False),
+            read(1500, [pos()], [], positions_complete=False,
+                 stops_complete=False),
+        )
+        r = await double_read_projected_inventory(reader)
+        self.assertEqual(r.mode, "READ_ONLY_DISCOVERY_PROJECTED")
+        self.assertTrue(r.critical_inventory_equal)
+
+    async def test_projected_excessive_gap_blocks(self):
+        reader = Reader(read(1000), read(4001))
+        with self.assertRaisesRegex(
+            ConsistencyHalted, "PROJECTED_INVENTORY_READS_NOT_CONSECUTIVE"):
+            await double_read_projected_inventory(
+                reader, max_separation_ms=3000)
+
+    async def test_projected_malformed_row_blocks(self):
+        reader = Reader(read(1000, [None], []), read(1500, [None], []))
+        with self.assertRaisesRegex(
+            ConsistencyHalted, "INVENTORY_READ_MALFORMED"):
+            await double_read_projected_inventory(reader)
