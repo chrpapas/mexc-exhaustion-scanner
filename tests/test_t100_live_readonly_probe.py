@@ -20,6 +20,36 @@ class ProbeTests(unittest.IsolatedAsyncioTestCase):
         self.client = FakeClient()
         self.probe = ReadOnlyMexcProbe(self.client)
 
+    async def test_account_assets_preserve_strict_list_shape(self):
+        payload = [{
+            "currency": "USDT",
+            "positionMargin": 10,
+            "unrealized": 1,
+        }]
+        self.client.responses = [payload]
+        self.assertEqual(
+            await self.probe.raw_account_assets(), payload)
+        self.assertEqual(
+            self.client.calls[0],
+            ("/api/v1/private/account/assets", None),
+        )
+
+    async def test_account_assets_malformed_response_blocks(self):
+        self.client.responses = [None]
+        with self.assertRaisesRegex(
+            VenueReadHalted, "ACCOUNT_ASSETS_RESPONSE"):
+            await self.probe.raw_account_assets()
+        self.client.responses = [[{"currency": "USDT"}, None]]
+        with self.assertRaisesRegex(
+            VenueReadHalted, "ACCOUNT_ASSETS_RESPONSE"):
+            await self.probe.raw_account_assets()
+
+    async def test_account_assets_transport_failure_blocks(self):
+        self.client.fail = True
+        with self.assertRaisesRegex(
+            VenueReadHalted, "ACCOUNT_ASSETS_GET_FAILED"):
+            await self.probe.raw_account_assets()
+
     async def test_flat_positions_is_list_not_inferred_from_null(self):
         self.client.responses = [[]]
         self.assertEqual(await self.probe.raw_open_positions(), [])
