@@ -5,7 +5,7 @@ from app.t100_live_snapshot import validate_inventory_snapshot, SnapshotHalted
 
 
 def position():
-    return dict(symbol="SIREN_USDT", positionId="10", positionType=2, holdVol="5")
+    return dict(symbol="SIREN_USDT", positionId="10", positionType=2, holdVol="5", state=1)
 
 
 def stop():
@@ -60,6 +60,24 @@ class SnapshotTests(unittest.TestCase):
         p = position()
         p["positionType"] = 9
         with self.assertRaisesRegex(SnapshotHalted, "UNKNOWN_POSITION_SIDE"):
+            snapshot([p])
+
+    def test_system_held_position_blocks(self):
+        p = position()
+        p["state"] = 2
+        with self.assertRaisesRegex(SnapshotHalted, "POSITION_NOT_ORDINARY_HOLDING"):
+            snapshot([p])
+
+    def test_closed_position_blocks(self):
+        p = position()
+        p["state"] = 3
+        with self.assertRaisesRegex(SnapshotHalted, "POSITION_NOT_ORDINARY_HOLDING"):
+            snapshot([p])
+
+    def test_missing_position_state_blocks(self):
+        p = position()
+        del p["state"]
+        with self.assertRaisesRegex(SnapshotHalted, "INVALID_POSITION_STATE"):
             snapshot([p])
 
     def test_missing_quantity_blocks(self):
