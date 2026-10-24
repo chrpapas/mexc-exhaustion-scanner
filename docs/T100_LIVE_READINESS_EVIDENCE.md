@@ -164,3 +164,16 @@ the current MEXC API documentation labels TP/SL positionId as long, while
 the operator's finished TP/SL sample returned positionId as a string. The
 parser therefore deliberately continues to accept both string and integer
 IDs rather than narrowing to the documentation example.
+
+
+### Raw double-read consistency discovery
+
+Schema-only preflight now performs two dedicated consecutive GET-only reads
+of current positions and current TP/SL orders and compares canonical hashes
+inside the process. The shareable report exposes only whether the two reads
+matched; it does not print the hash or account values.
+
+A match is evidence against a torn read during that short interval only.
+It explicitly reports raw_inventory_completeness_verified=false and does not
+claim endpoint completeness, exchange atomicity, active stop semantics, or
+live readiness.
