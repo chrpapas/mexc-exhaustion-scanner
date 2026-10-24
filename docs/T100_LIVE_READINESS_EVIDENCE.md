@@ -906,3 +906,45 @@ checkpoint writes today.
 No migration was applied and no database or exchange state was modified.
 
 Offline safety suite: 500 tests passed. All four branch workflows passed.
+
+
+### 2026-10-24 account-level position-margin economic witness design
+
+Current MEXC documentation exposes:
+- GET /api/v1/private/account/assets with account-level positionMargin and
+  unrealized by settlement currency
+- open-position rows with per-position im and unRealizedPnl
+
+MEXC's current futures calculation guidance describes available balance in
+terms of wallet balance minus position margin/order margin and describes
+unrealized PnL as the floating PnL of open positions.
+
+A redacted read-only economic witness now compares:
+- sum(observed USDT position im) vs USDT asset positionMargin
+- sum(observed USDT position unRealizedPnl) vs USDT asset unrealized
+- returned non-USDT asset rows for zero positionMargin
+- returned non-USDT asset rows for zero unrealized
+
+Because unrealized PnL can move between REST calls, two evidence levels are
+reported separately:
+- position_inventory_margin_witness_observed: stable margin reconciliation
+- position_inventory_economic_witness_observed: margin + unrealized both
+  reconcile in the sampled reads
+
+The margin witness requires:
+- exactly one returned USDT asset row
+- all observed positions are USDT-settled
+- observed position im sum matches account USDT positionMargin
+- every returned non-USDT asset row has zero positionMargin
+
+The output contains only booleans/counts/status and never account balances,
+symbols, margin amounts or PnL values.
+
+Even a successful witness explicitly leaves:
+- account_wide_completeness_verified=false
+- exchange_atomicity_verified=false
+
+This is an independent detector for omitted position exposure, not yet a
+formal replacement for a venue-documented list-completeness contract.
+
+Offline safety suite: 515 tests passed; all four branch workflows passed.
