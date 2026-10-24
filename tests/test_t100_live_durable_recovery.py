@@ -42,6 +42,21 @@ def intent(**extra):
     return row
 
 
+def order(**extra):
+    row = {
+        "externalOid": "t100v1eabc",
+        "orderId": "100",
+        "symbol": "SIREN_USDT",
+        "side": 3,
+        "state": 3,
+        "positionId": "10",
+        "dealVol": D("20"),
+        "dealAvgPrice": D("100"),
+    }
+    row.update(extra)
+    return row
+
+
 def position(**extra):
     row = {
         "symbol": "SIREN_USDT",
@@ -73,6 +88,7 @@ def run(**kw):
         checkpoint_rows=kw.get("checkpoints", [checkpoint()]),
         intent_rows=kw.get("intents", [intent()]),
         stop_amendment_rows=kw.get("amendments", []),
+        orders=kw.get("orders", [order()]),
         positions=kw.get("positions", [position()]),
         stops=kw.get("stops", [stop()]),
         positions_complete=kw.get("positions_complete", True),
@@ -210,6 +226,51 @@ class DurableRecoveryTests(unittest.TestCase):
         r = run(amendments=[{"state": "VERIFIED"}])
         self.assertEqual(len(r.recovered), 1)
 
+    def test_origin_order_count_mismatch_blocks(self):
+        with self.assertRaisesRegex(
+            DurableRecoveryHalted, "ORDER_COUNT_MISMATCH"):
+            run(orders=[])
+
+    def test_origin_order_must_match_external_oid(self):
+        with self.assertRaisesRegex(
+            DurableRecoveryHalted, "ORDER_NOT_FOUND"):
+            run(orders=[order(externalOid="other")])
+
+    def test_origin_order_id_drift_blocks(self):
+        with self.assertRaisesRegex(
+            DurableRecoveryHalted, "RECOVERED_ORDER_ID_DRIFT"):
+            run(orders=[order(orderId="999")])
+
+    def test_origin_order_symbol_drift_blocks(self):
+        with self.assertRaisesRegex(
+            DurableRecoveryHalted, "RECOVERED_ORDER_SYMBOL_DRIFT"):
+            run(orders=[order(symbol="OTHER_USDT")])
+
+    def test_origin_order_side_drift_blocks(self):
+        with self.assertRaisesRegex(
+            DurableRecoveryHalted, "RECOVERED_ORDER_SIDE_DRIFT"):
+            run(orders=[order(side=1)])
+
+    def test_origin_order_must_be_final_filled(self):
+        with self.assertRaisesRegex(
+            DurableRecoveryHalted, "ORDER_NOT_FINAL_FILLED"):
+            run(orders=[order(state=2)])
+
+    def test_origin_order_position_id_drift_blocks(self):
+        with self.assertRaisesRegex(
+            DurableRecoveryHalted, "ORDER_POSITION_ID_DRIFT"):
+            run(orders=[order(positionId="11")])
+
+    def test_origin_order_volume_drift_blocks(self):
+        with self.assertRaisesRegex(
+            DurableRecoveryHalted, "ORDER_VOLUME_DRIFT"):
+            run(orders=[order(dealVol=D("19"))])
+
+    def test_origin_order_average_price_drift_blocks(self):
+        with self.assertRaisesRegex(
+            DurableRecoveryHalted, "ORDER_AVERAGE_PRICE_DRIFT"):
+            run(orders=[order(dealAvgPrice=D("101"))])
+
     def test_position_count_mismatch_blocks(self):
         with self.assertRaisesRegex(
             DurableRecoveryHalted, "POSITION_COUNT_MISMATCH"):
@@ -344,6 +405,14 @@ class Exchange:
         self.fail = False
         self.calls = []
 
+    async def order_by_external_oid(self, symbol, external_oid):
+        self.calls.append(("order", symbol, external_oid))
+        if self.fail:
+            raise TimeoutError()
+        if symbol != "SIREN_USDT" or external_oid != "t100v1eabc":
+            return None
+        return order()
+
     async def open_positions(self, symbol=None):
         self.calls.append(("positions", symbol))
         if self.fail:
@@ -372,7 +441,11 @@ class DurableRecoveryGateTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(all(q.lstrip().startswith("SELECT") for q in self.ledger.queries))
         self.assertEqual(
             self.exchange.calls,
-            [("positions", None), ("stops", None)],
+            [
+                ("order", "SIREN_USDT", "t100v1eabc"),
+                ("positions", None),
+                ("stops", None),
+            ],
         )
 
     async def test_completeness_defaults_false(self):
