@@ -268,6 +268,55 @@ def build_lifecycle_checkpoint(
     )
 
 
+def _validate_checkpoint_shape(cp: PositionCheckpoint) -> None:
+    if not isinstance(cp, PositionCheckpoint):
+        raise CheckpointJournalHalted("CHECKPOINT_INVALID")
+    for field in (
+        "symbol", "external_oid", "exchange_order_id",
+        "position_id", "stop_order_id",
+    ):
+        value = getattr(cp, field)
+        if not isinstance(value, str) or not value:
+            raise CheckpointJournalHalted(
+                f"CHECKPOINT_{field.upper()}_MISSING"
+            )
+    for field in ("contracts", "entry_price", "stop_price"):
+        value = getattr(cp, field)
+        if (
+            not isinstance(value, Decimal)
+            or not value.is_finite()
+            or value <= 0
+        ):
+            raise CheckpointJournalHalted(
+                f"CHECKPOINT_{field.upper()}_INVALID"
+            )
+    if (
+        not isinstance(cp.best_profit_pct, Decimal)
+        or not cp.best_profit_pct.is_finite()
+        or cp.best_profit_pct < 0
+    ):
+        raise CheckpointJournalHalted(
+            "CHECKPOINT_BEST_PROFIT_PCT_INVALID"
+        )
+    if type(cp.armed) is not bool:
+        raise CheckpointJournalHalted("CHECKPOINT_ARMED_INVALID")
+    if cp.armed != (cp.best_profit_pct >= Decimal("14")):
+        raise CheckpointJournalHalted(
+            "CHECKPOINT_TRAILING_STATE_INCOHERENT"
+        )
+    if cp.lifecycle_state not in {"OPEN", "REVIEW", "CLOSING", "CLOSED"}:
+        raise CheckpointJournalHalted(
+            "CHECKPOINT_LIFECYCLE_STATE_INVALID"
+        )
+    if (
+        type(cp.checkpoint_version) is not int
+        or cp.checkpoint_version <= 0
+    ):
+        raise CheckpointJournalHalted(
+            "CHECKPOINT_VERSION_INVALID"
+        )
+
+
 def validate_checkpoint_transition(
     previous: PositionCheckpoint | None,
     current: PositionCheckpoint,
@@ -276,8 +325,7 @@ def validate_checkpoint_transition(
 ) -> None:
     if reason not in WRITE_REASONS:
         raise CheckpointJournalHalted("INVALID_CHECKPOINT_WRITE_REASON")
-    if not isinstance(current, PositionCheckpoint):
-        raise CheckpointJournalHalted("CHECKPOINT_INVALID")
+    _validate_checkpoint_shape(current)
 
     if previous is None:
         if reason != ENTRY_PROTECTED:
@@ -286,9 +334,10 @@ def validate_checkpoint_transition(
             raise CheckpointJournalHalted("INITIAL_CHECKPOINT_STATE_INVALID")
         return
 
+    _validate_checkpoint_shape(previous)
     immutable = (
         "symbol", "external_oid", "exchange_order_id", "position_id",
-        "contracts", "entry_price",
+        "contracts", "entry_price", "stop_order_id",
     )
     for field in immutable:
         if getattr(previous, field) != getattr(current, field):
