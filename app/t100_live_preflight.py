@@ -24,6 +24,7 @@ from app.t100_live_schema_assessment import assess_shadow_schema
 from app.t100_live_consistency import InventoryRead, double_read_raw_inventory
 from app.t100_live_active_tpsl import assess_active_tpsl_semantics
 from app.t100_live_stop_transition import assess_recent_finished_tpsl_transition
+from app.t100_live_funding_probe import collect_observed_position_funding
 
 PREFLIGHT_DIAGNOSTIC_VERSION = "2026-10-24-stop-transition-v1"
 
@@ -33,6 +34,7 @@ async def read_only_preflight(
     client: MexcTradeClient | None = None,
     include_historical_stop_schema: bool = False,
     include_raw_consistency: bool = False,
+    include_funding_probe: bool = False,
 ) -> dict[str, Any]:
     controls = T100ExecutionControls.from_env()
     failures = list(controls.readiness_failures())
@@ -131,6 +133,34 @@ async def read_only_preflight(
                 "NO_POSITION_OR_CURRENT_TPSL_OBSERVED_COMPLETENESS_UNVERIFIED"
             )
 
+        if include_funding_probe:
+            if len(positions) == 1:
+                pid_raw = positions[0].get("positionId") or positions[0].get("id")
+                try:
+                    result["funding_observed_position_probe"] = (
+                        await collect_observed_position_funding(
+                            probe, position_id=str(pid_raw or "")
+                        )
+                    )
+                    result["funding_observed_position_probe"]["status"] = (
+                        "PAGINATION_VERIFIED_SIGN_SEMANTICS_UNCERTIFIED"
+                    )
+                except Exception as exc:
+                    result["funding_observed_position_probe"] = {
+                        "status": "FUNDING_READ_CONTRACT_UNVERIFIED",
+                        "failure_type": type(exc).__name__,
+                        "pagination_verified_for_observed_position": False,
+                        "funding_sign_semantics_verified": False,
+                        "account_wide_funding_completeness_verified": False,
+                    }
+            else:
+                result["funding_observed_position_probe"] = {
+                    "status": "NOT_RUN_REQUIRES_EXACTLY_ONE_OBSERVED_POSITION",
+                    "pagination_verified_for_observed_position": False,
+                    "funding_sign_semantics_verified": False,
+                    "account_wide_funding_completeness_verified": False,
+                }
+
         if include_raw_consistency:
             last_observed_ms = -1
 
@@ -200,6 +230,9 @@ def shareable_contract_report(result: dict[str, Any]) -> dict[str, Any]:
         "recent_finished_tpsl_transition": result.get(
             "recent_finished_tpsl_transition"
         ),
+        "funding_observed_position_probe": result.get(
+            "funding_observed_position_probe"
+        ),
         "raw_inventory_double_read_consistent": result.get(
             "raw_inventory_double_read_consistent"
         ),
@@ -222,6 +255,7 @@ async def _run_cli_preflight(*, schema_only: bool) -> dict[str, Any]:
             read_only_preflight(
                 include_historical_stop_schema=schema_only,
                 include_raw_consistency=schema_only,
+                include_funding_probe=schema_only,
             ),
             timeout=45.0,
         )
