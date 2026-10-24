@@ -177,3 +177,36 @@ A match is evidence against a torn read during that short interval only.
 It explicitly reports raw_inventory_completeness_verified=false and does not
 claim endpoint completeness, exchange atomicity, active stop semantics, or
 live readiness.
+
+
+### 2026-10-24 third operator schema-only sample: repeated inventory
+
+The updated schema-only preflight completed successfully against the real
+MEXC account and reported:
+
+- raw_inventory_double_read_consistent=true
+- raw_inventory_completeness_verified=false
+- one current position row observed
+- zero current TP/SL rows observed
+- two finished historical TP/SL rows observed
+- active_stop_contract_verified=false
+- pagination_verified=false
+
+This is evidence that two consecutive current position/current TP/SL reads
+were identical during the observation window. It is not evidence that either
+endpoint is complete or atomic.
+
+The current MEXC Get Open Positions documentation defines position state as
+1=holding, 2=system-held, 3=closed. The shadow inventory validator now
+requires state=1 and fails closed on missing, system-held or closed states.
+The schema assessment also requires the state field.
+
+For T100 readiness, a current position with no current native TP/SL row is
+now surfaced explicitly as
+POSITION_WITHOUT_OBSERVED_CURRENT_TPSL and adds the readiness failure
+t100_position_without_observed_native_tpsl. This does not assert that the
+exchange endpoint is complete; it is a conservative strategy-specific block.
+
+Official references:
+- https://www.mexc.com/api-docs/futures/account-and-trading-endpoints/get-open-positions
+- https://www.mexc.com/api-docs/futures/account-and-trading-endpoints/get-current-take-profitstop-loss-order-list
