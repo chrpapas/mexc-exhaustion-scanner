@@ -75,7 +75,7 @@ def summarize_funding_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
             key: sorted(values) for key, values in sorted(types.items())
         },
         "unlisted_field_occurrences": unknown,
-        "funding_sign_semantics_verified": False,
+        "semantic_verification_not_part_of_shape_summary": True,
     }
 
 
