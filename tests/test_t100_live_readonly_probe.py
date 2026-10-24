@@ -58,17 +58,32 @@ class ProbeTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaisesRegex(VenueReadHalted, "OPEN_STOPS_GET_FAILED"):
             await self.probe.raw_open_stops()
 
-    async def test_stop_page_passes_raw_contract(self):
-        payload = dict(page_num=2, page_size=100, total=101,
-                       resultList=[dict(id="100")])
+    async def test_stop_page_preserves_documented_list_shape(self):
+        payload = [dict(id="100"), dict(id="101")]
         self.client.responses = [payload]
         self.assertEqual(await self.probe.raw_stop_page(2,100), payload)
         self.assertEqual(self.client.calls[0][1]["page_num"], 2)
+        self.assertEqual(self.client.calls[0][1]["is_finished"], 1)
 
-    async def test_stop_list_shape_not_guessed(self):
-        self.client.responses = [[dict(id="100")]]
+    async def test_unfinished_stop_page_is_explicit(self):
+        self.client.responses = [[]]
+        self.assertEqual(await self.probe.raw_stop_page(1,20,is_finished=0), [])
+        self.assertEqual(self.client.calls[0][1]["is_finished"], 0)
+
+    async def test_stop_page_dict_shape_rejected(self):
+        self.client.responses = [dict(page_num=1, resultList=[])]
         with self.assertRaisesRegex(VenueReadHalted, "STOP_PAGE_RESPONSE"):
             await self.probe.raw_stop_page(1,100)
+
+    async def test_stop_page_malformed_row_rejected(self):
+        self.client.responses = [[dict(id="100"), None]]
+        with self.assertRaisesRegex(VenueReadHalted, "STOP_PAGE_RESPONSE"):
+            await self.probe.raw_stop_page(1,100)
+
+    async def test_stop_page_overflow_rejected(self):
+        self.client.responses = [[dict(id=str(i)) for i in range(3)]]
+        with self.assertRaisesRegex(VenueReadHalted, "STOP_PAGE_OVERFLOW"):
+            await self.probe.raw_stop_page(1,2)
 
     async def test_stop_page_transport_failure(self):
         self.client.fail = True
@@ -79,4 +94,7 @@ class ProbeTests(unittest.IsolatedAsyncioTestCase):
         for page, size in ((0,100),(1,0),(1,101),(True,100),(1,True)):
             with self.assertRaisesRegex(VenueReadHalted, "INVALID_STOP_PAGE"):
                 await self.probe.raw_stop_page(page,size)
+        for finished in (-1,2,True,None):
+            with self.assertRaisesRegex(VenueReadHalted, "INVALID_STOP_PAGE"):
+                await self.probe.raw_stop_page(1,20,is_finished=finished)
         self.assertEqual(self.client.calls, [])
