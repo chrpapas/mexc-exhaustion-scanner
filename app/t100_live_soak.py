@@ -261,6 +261,30 @@ class OperationalSoakController:
             self._trip("STALE_OBSERVATION")
             raise SoakHalted("OPERATIONAL_SOAK_KILLED:STALE_OBSERVATION")
 
+        if (
+            not isinstance(item.positions, list)
+            or not isinstance(item.stops, list)
+        ):
+            self._trip("RECOVERY_UNVERIFIED")
+            raise SoakHalted(
+                "OPERATIONAL_SOAK_KILLED:RECOVERY_UNVERIFIED"
+            )
+
+        expected_count = len(item.expected)
+        if len(item.positions) != expected_count:
+            self._trip("POSITION_DRIFT")
+            raise SoakHalted("OPERATIONAL_SOAK_KILLED:POSITION_DRIFT")
+        if len(item.stops) < expected_count:
+            self._trip("NATIVE_PROTECTION_LOST")
+            raise SoakHalted(
+                "OPERATIONAL_SOAK_KILLED:NATIVE_PROTECTION_LOST"
+            )
+        if len(item.stops) > expected_count:
+            self._trip("NATIVE_PROTECTION_DRIFT")
+            raise SoakHalted(
+                "OPERATIONAL_SOAK_KILLED:NATIVE_PROTECTION_DRIFT"
+            )
+
         if self._last_at is not None:
             if item.observed_at_ms <= self._last_at:
                 self._trip("NONMONOTONIC_OBSERVATION")
