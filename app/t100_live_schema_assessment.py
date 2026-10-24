@@ -12,6 +12,7 @@ REQUIRED = {
     "positions": {
         "symbol": frozenset({"string"}),
         "positionType": frozenset({"integer", "string"}),
+        "state": frozenset({"integer", "string"}),
         "holdVol": frozenset({"integer", "number", "string"}),
     },
     "stops": {
