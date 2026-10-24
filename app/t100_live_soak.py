@@ -22,7 +22,7 @@ from typing import Any, Awaitable, Callable, Protocol
 from app.t100_live_consistency import (
     ConsistencyHalted,
     InventoryRead,
-    double_read_raw_inventory,
+    double_read_projected_inventory,
 )
 from app.t100_live_kill import OperationalKillLatch
 from app.t100_live_shadow_session import (
@@ -82,6 +82,9 @@ class DiscoverySoakReport:
     current_tpsl_presence_samples: int
     position_without_current_tpsl_samples: int
     cross_sample_inventory_count_changes: int
+    full_raw_drift_samples: int
+    changed_position_field_names: tuple[str, ...]
+    changed_stop_field_names: tuple[str, ...]
     elapsed_ms: int
     kill_tripped: bool
     kill_reason: str | None
@@ -115,6 +118,9 @@ class RawDiscoverySoakRunner:
         completed = consistent = 0
         pos_present = stop_present = pos_without_stop = 0
         count_changes = 0
+        full_raw_drift_samples = 0
+        changed_position_fields: set[str] = set()
+        changed_stop_fields: set[str] = set()
         last_counts: tuple[int, int] | None = None
         last_observed_ms = -1
 
@@ -147,14 +153,22 @@ class RawDiscoverySoakRunner:
                 return last_read
 
             try:
-                await double_read_raw_inventory(
+                evidence = await double_read_projected_inventory(
                     reader,
                     max_separation_ms=self.config.max_pair_separation_ms,
                 )
+                if not evidence.full_raw_equal:
+                    full_raw_drift_samples += 1
+                    changed_position_fields.update(
+                        evidence.changed_position_field_names
+                    )
+                    changed_stop_fields.update(
+                        evidence.changed_stop_field_names
+                    )
             except ConsistencyHalted as exc:
                 reason = (
                     "INVENTORY_CHANGED_BETWEEN_READS"
-                    if "CHANGED_BETWEEN_READS" in str(exc)
+                    if "CRITICAL_INVENTORY_CHANGED_BETWEEN_READS" in str(exc)
                     else "READ_FAILURE"
                 )
                 self.kill.trip(reason)
@@ -198,6 +212,9 @@ class RawDiscoverySoakRunner:
             current_tpsl_presence_samples=stop_present,
             position_without_current_tpsl_samples=pos_without_stop,
             cross_sample_inventory_count_changes=count_changes,
+            full_raw_drift_samples=full_raw_drift_samples,
+            changed_position_field_names=tuple(sorted(changed_position_fields)),
+            changed_stop_field_names=tuple(sorted(changed_stop_fields)),
             elapsed_ms=elapsed_ms,
             kill_tripped=snapshot.tripped,
             kill_reason=snapshot.first_reason,
