@@ -714,3 +714,28 @@ validate position/stop/fill event payload semantics. Those remain unobserved
 until a real account lifecycle event naturally occurs.
 
 No account mutation was performed for the purpose of generating a WS event.
+
+
+### 2026-10-24 REST-WS-REST continuity sandwich probe
+
+A bounded read-only continuity probe was added after the successful private WS
+quiet observation.
+
+The probe performs:
+1. strict REST current positions + current TP/SL read
+2. bounded authenticated private WS observation
+3. strict REST current positions + current TP/SL read
+4. comparison of safety-critical REST projections before vs after
+
+It separately reports complete raw-field drift names so naturally volatile
+fields can change without masking critical inventory continuity.
+
+Possible outcomes distinguish:
+- REST_WS_REST_CONTINUITY_STABLE
+- STABLE_REST_WITH_PRIVATE_WS_EVENTS_OBSERVED
+- STABLE_REST_WITH_UNEXPECTED_PRIVATE_WS_CHANNELS
+- CRITICAL_REST_INVENTORY_CHANGED_DURING_WS_WINDOW
+
+The report is redacted and non-authorizing. It exposes only counts, booleans,
+field names/types and status. It does not prove account-wide completeness or
+exchange atomicity.
