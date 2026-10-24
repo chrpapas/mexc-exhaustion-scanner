@@ -313,3 +313,49 @@ semantic check compares every non-zero row against the expected cashflow
 direction and checks fee magnitude against positionValue*rate within a small
 rounding tolerance. Only counts/booleans are emitted; funding amounts,
 symbols, position IDs and timestamps are never shared.
+
+
+### 2026-10-24 eighth operator sample: funding economics fully consistent
+
+The funding-economics probe re-read the complete 489-row, five-page funding
+history for the observed position and reported:
+
+- nonzero_rows_examined=489
+- sign_consistent_rows=489
+- magnitude_consistent_rows=489
+- all_nonzero_rows_sign_consistent=true
+- all_nonzero_rows_magnitude_consistent=true
+- funding_cashflow_sign_semantics_observed=true
+- funding_formula_semantics_observed=true
+- status=FUNDING_SIGN_AND_FORMULA_CONSISTENT
+
+This is real-account evidence that the signed MEXC funding field behaves as
+account cashflow for the observed rows and follows the documented stablecoin
+perpetual rule: positive rates debit longs/credit shorts, negative rates credit
+longs/debit shorts, with magnitude consistent with positionValue*rate.
+
+Together with the prior five-page pagination proof, this closes
+position-scoped funding ingestion semantics for the observed position.
+Account-wide completeness remains unverified.
+
+### Order-specific fill ingestion design
+
+Current MEXC documentation exposes two GET-only endpoints suitable for exact
+fill reconciliation:
+- GET /api/v1/private/order/get/{orderId}
+- GET /api/v1/private/order/deal_details/{orderId}
+
+The order response supplies dealVol/dealAvgPrice/symbol/side/state and the
+deal-details response supplies immutable trade IDs, orderId, symbol, side,
+vol, price and signed fee. MEXC documents fee as positive when paid by the
+user and negative when received. The offline accounting layer now accepts
+signed fill fees, including rebates.
+
+A new privacy-preserving order-specific fill reconciler requires all fill
+order IDs, symbols and sides to match the immutable order; requires distinct
+trade IDs; requires summed fill volume to equal order dealVol; reconciles
+volume-weighted fill price against dealAvgPrice; and requires consistent fee
+currency. No broad account history is used to infer ownership of an order.
+Real fill evidence will require a known order ID that T100 owns or that the
+operator deliberately designates for audit; no order will be created for
+testing.
