@@ -73,3 +73,38 @@ class ReadOnlyMexcProbe:
         if len(raw) > size:
             raise VenueReadHalted("STOP_PAGE_OVERFLOW")
         return raw
+
+    async def raw_funding_page(
+        self, position_id: str, *, page: int, size: int,
+    ) -> dict[str, Any]:
+        """Read one funding-record page for an observed position.
+
+        MEXC documents explicit pageSize/totalCount/totalPage/currentPage
+        metadata for this endpoint. This method preserves the venue payload;
+        completeness is established separately by the strict page collector.
+        """
+        if (
+            not isinstance(position_id, str) or not position_id.isdigit()
+            or int(position_id) <= 0
+            or type(page) is not int or page < 1
+            or type(size) is not int or not 1 <= size <= 100
+        ):
+            raise VenueReadHalted("INVALID_FUNDING_PAGE_ARGUMENTS")
+        try:
+            raw = await self._client._private_get(
+                "/api/v1/private/position/funding_records",
+                {
+                    "position_id": int(position_id),
+                    "page_num": page,
+                    "page_size": size,
+                },
+            )
+        except Exception as exc:
+            raise VenueReadHalted("FUNDING_PAGE_GET_FAILED") from exc
+        if not isinstance(raw, dict):
+            raise VenueReadHalted("FUNDING_PAGE_RESPONSE_UNVERIFIED")
+        rows = raw.get("resultList")
+        if not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows):
+            raise VenueReadHalted("FUNDING_PAGE_ROWS_UNVERIFIED")
+        return raw
+
