@@ -239,3 +239,27 @@ boolean/count evidence for state, non-final status, position linkage,
 symbol/side consistency, positive protective price/volume, and observed
 protective-volume coverage. This stronger evidence still does not certify
 endpoint completeness, exchange atomicity, or live trading.
+
+
+### 2026-10-24 fifth operator schema-only sample: active TP/SL transitioned to history
+
+A subsequent read-only probe observed the position still present but zero
+current TP/SL rows. Finished TP/SL page 1 increased from two rows to three.
+The repeated current inventory read remained consistent.
+
+This is evidence that the previously observed current TP/SL row moved out of
+/open_orders and is now represented in finished history, but the schema-only
+output alone cannot distinguish cancellation, execution, invalidation, or
+execution failure.
+
+MEXC documents finished stoporder states as:
+2=canceled, 3=executed, 4=invalid, 5=execution failed, and triggerSide as
+0=untriggered, 1=take-profit, 2=stop-loss. A new redacted transition
+diagnostic therefore examines only finished rows linked to currently observed
+position IDs, chooses the latest by updateTime/createTime, and exposes only
+the terminal enum label, trigger-side label, finished flag, a coarse age
+bucket, and counts. It never returns IDs, symbols, prices, volumes, or raw
+timestamps.
+
+This diagnostic is observational only and still does not certify endpoint
+completeness, exchange atomicity, or live readiness.
