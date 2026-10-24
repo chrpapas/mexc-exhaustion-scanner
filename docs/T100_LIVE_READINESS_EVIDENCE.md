@@ -848,3 +848,61 @@ projected-soak diagnosis.
 This still does not establish account-wide completeness/atomicity and does not
 validate real private WS lifecycle payload semantics because no private event
 occurred during the soak.
+
+
+### 2026-10-24 durable checkpoint persistence protocol implemented offline
+
+The durable non-flat restart design now has a complete draft persistence side.
+It remains intentionally undeployed.
+
+Draft schema now contains:
+- t100_live_position_checkpoints current state
+- t100_live_position_checkpoint_revisions append-only revision history
+
+Every revision stores the complete recovery snapshot and one explicit reason:
+- ENTRY_PROTECTED
+- STOP_VERIFIED
+- REVIEW_LATCHED
+- CLOSING_LATCHED
+- CLOSE_VERIFIED
+
+Persistence invariants:
+- exchange evidence must be verified before checkpoint advancement
+- current checkpoint + append-only revision commit in one DB transaction
+- updates use checkpoint_version/lifecycle compare-and-swap
+- versions advance exactly by one
+- immutable entry/order/position/stop identity cannot drift
+- short stops never loosen
+- trailing best-profit never regresses
+- armed trailing state can never disarm
+- unresolved mutation outcomes never advance the checkpoint
+- REVIEW and CLOSING are deliberately non-recoverable states
+- final CLOSE_VERIFIED atomically updates the checkpoint to CLOSED, advances
+  the originating order intent ACK->CLOSED, and appends the close revision
+
+Restart recovery now requires the full revision chain rather than trusting only
+the mutable current row. For every recoverable OPEN checkpoint it requires:
+- exact revisions 1..checkpoint_version with no gaps or duplicates
+- version 1 reason ENTRY_PROTECTED
+- later OPEN revisions reason STOP_VERIFIED
+- immutable provenance across every revision
+- strictly tightening stop history
+- non-regressing trailing progress
+- coherent armed state
+- final revision identical to the current checkpoint
+
+A persistence-only coordinator was added for initial protected entry, verified
+stop advancement, REVIEW latch, CLOSING latch and verified CLOSED state.
+Initial/stop/close persistence requires all four external evidence gates:
+- evidence_fresh=true
+- account_reconciled=true
+- positions_complete=true
+- stops_complete=true
+
+Because current MEXC discovery still cannot set account-wide positions/stops
+completeness true, the coordinator is intentionally unusable for real live
+checkpoint writes today.
+
+No migration was applied and no database or exchange state was modified.
+
+Offline safety suite: 500 tests passed. All four branch workflows passed.
