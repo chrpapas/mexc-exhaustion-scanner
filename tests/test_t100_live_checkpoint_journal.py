@@ -4,7 +4,7 @@ from dataclasses import replace
 from decimal import Decimal as D
 
 from app.t100_live_checkpoint_journal import (
-    CHECKPOINTJournalHalted if False else CheckpointJournalHalted,
+    CheckpointJournalHalted,
     CLOSE_VERIFIED,
     CLOSING_LATCHED,
     ENTRY_PROTECTED,
