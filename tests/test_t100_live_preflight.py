@@ -127,6 +127,45 @@ class PreflightTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(
             funding["pagination_verified_for_observed_position"])
 
+    async def test_funding_economics_can_be_observed_without_values(self):
+        c = FakeClient(
+            positions=[{
+                "positionId": 10, "symbol": "SIREN_USDT",
+                "positionType": 2, "holdVol": 5, "state": 1,
+            }],
+            funding_page={
+                "pageSize": 100, "totalCount": 2, "totalPage": 1,
+                "currentPage": 1,
+                "resultList": [
+                    {
+                        "id": 1, "symbol": "SIREN_USDT",
+                        "positionType": 2, "positionValue": 100,
+                        "funding": 0.1, "rate": 0.001,
+                        "settleTime": 123456,
+                    },
+                    {
+                        "id": 2, "symbol": "SIREN_USDT",
+                        "positionType": 2, "positionValue": 100,
+                        "funding": -0.1, "rate": -0.001,
+                        "settleTime": 123457,
+                    },
+                ],
+            },
+        )
+        result = await read_only_preflight(
+            client=c, include_funding_probe=True)
+        funding = result["funding_observed_position_probe"]
+        self.assertEqual(
+            funding["status"],
+            "PAGINATION_AND_FUNDING_ECONOMICS_OBSERVED")
+        self.assertTrue(funding["funding_sign_semantics_verified"])
+        self.assertTrue(funding["funding_formula_semantics_verified"])
+        self.assertEqual(
+            funding["funding_economics"]["sign_consistent_rows"], 2)
+        shared = shareable_contract_report(result)
+        for secret in ("SIREN_USDT", "0.1", "123456"):
+            self.assertNotIn(secret, str(shared["funding_observed_position_probe"]))
+
     async def test_raw_double_read_consistency_is_non_authorizing(self):
         result = await read_only_preflight(
             client=FakeClient(
