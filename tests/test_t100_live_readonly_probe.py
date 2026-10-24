@@ -147,3 +147,47 @@ class ProbeTests(unittest.IsolatedAsyncioTestCase):
         ):
             with self.assertRaisesRegex(VenueReadHalted, "INVALID_FUNDING_PAGE"):
                 await self.probe.raw_funding_page(pid, page=page, size=size)
+
+
+    async def test_order_by_id_preserves_dict_shape(self):
+        payload = {"orderId": "100", "dealVol": 2}
+        self.client.responses = [payload]
+        self.assertEqual(await self.probe.raw_order_by_id("100"), payload)
+        self.assertEqual(
+            self.client.calls[0][0],
+            "/api/v1/private/order/get/100",
+        )
+
+    async def test_order_by_id_rejects_non_dict(self):
+        self.client.responses = [[]]
+        with self.assertRaisesRegex(VenueReadHalted, "ORDER_RESPONSE"):
+            await self.probe.raw_order_by_id("100")
+
+    async def test_order_deals_preserve_list_shape(self):
+        payload = [{"id": "1", "orderId": "100"}]
+        self.client.responses = [payload]
+        self.assertEqual(
+            await self.probe.raw_order_deal_details("100"), payload)
+        self.assertEqual(
+            self.client.calls[0][0],
+            "/api/v1/private/order/deal_details/100",
+        )
+
+    async def test_order_deals_reject_malformed_rows(self):
+        self.client.responses = [[{"id": "1"}, None]]
+        with self.assertRaisesRegex(VenueReadHalted, "ORDER_DEALS_RESPONSE"):
+            await self.probe.raw_order_deal_details("100")
+
+    async def test_order_read_transport_failures(self):
+        self.client.fail = True
+        with self.assertRaisesRegex(VenueReadHalted, "ORDER_GET_FAILED"):
+            await self.probe.raw_order_by_id("100")
+        with self.assertRaisesRegex(VenueReadHalted, "ORDER_DEALS_GET_FAILED"):
+            await self.probe.raw_order_deal_details("100")
+
+    async def test_invalid_order_ids_make_no_calls(self):
+        for value in ("", "abc", "0", "-1"):
+            with self.assertRaisesRegex(VenueReadHalted, "INVALID_ORDER_ID"):
+                await self.probe.raw_order_by_id(value)
+            with self.assertRaisesRegex(VenueReadHalted, "INVALID_ORDER_ID"):
+                await self.probe.raw_order_deal_details(value)
