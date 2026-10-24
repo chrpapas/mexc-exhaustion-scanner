@@ -65,6 +65,9 @@ class PreflightTests(unittest.IsolatedAsyncioTestCase):
                       result["preflight_failures"])
         self.assertFalse(result["live_order_submission_possible"])
         self.assertEqual(len(c.calls), 2)
+        self.assertEqual(
+            result["t100_native_protection_presence"],
+            "NO_POSITION_OR_CURRENT_TPSL_OBSERVED_COMPLETENESS_UNVERIFIED")
         self.assertTrue(result["redacted_inventory_schema"]["positions"]["empty_rows_cannot_establish_schema"])
         self.assertEqual(result["shadow_schema_assessment"]["overall"], "INCOMPLETE_SCHEMA_EVIDENCE")
 
@@ -128,11 +131,19 @@ class PreflightTests(unittest.IsolatedAsyncioTestCase):
         result = await read_only_preflight(
             client=FakeClient(positions=[{"positionId": "10"}]))
         self.assertIn("account_has_existing_positions", result["preflight_failures"])
+        self.assertIn("t100_position_without_observed_native_tpsl",
+                      result["preflight_failures"])
+        self.assertEqual(result["t100_native_protection_presence"],
+                         "POSITION_WITHOUT_OBSERVED_CURRENT_TPSL")
 
     async def test_orphan_stop_blocks(self):
         result = await read_only_preflight(
             client=FakeClient(stops=[{"id": "99"}]))
         self.assertIn("account_has_existing_stop_orders", result["preflight_failures"])
+        self.assertIn("t100_current_tpsl_without_observed_position",
+                      result["preflight_failures"])
+        self.assertEqual(result["t100_native_protection_presence"],
+                         "CURRENT_TPSL_WITHOUT_OBSERVED_POSITION")
 
     async def test_malformed_positions_cannot_look_flat(self):
         result = await read_only_preflight(
