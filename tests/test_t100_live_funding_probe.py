@@ -1,7 +1,9 @@
 """Offline MEXC funding pagination and redaction tests."""
 import unittest
 
-from app.t100_live_funding_probe import collect_observed_position_funding
+from app.t100_live_funding_probe import (
+    collect_observed_position_funding, assess_funding_economics,
+)
 from app.t100_live_pagination import PaginationHalted
 
 
@@ -124,3 +126,83 @@ class FundingProbeTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaisesRegex(PaginationHalted, "DUPLICATE_ROW|IDENTITY"):
             await collect_observed_position_funding(
                 probe, position_id="10")
+
+
+class FundingEconomicsTests(unittest.TestCase):
+    def test_long_positive_rate_is_debit(self):
+        r = assess_funding_economics([{
+            "positionType": 1, "positionValue": 100,
+            "rate": 0.001, "funding": -0.1,
+        }])
+        self.assertTrue(r["funding_cashflow_sign_semantics_observed"])
+        self.assertTrue(r["funding_formula_semantics_observed"])
+
+    def test_long_negative_rate_is_credit(self):
+        r = assess_funding_economics([{
+            "positionType": 1, "positionValue": 100,
+            "rate": -0.001, "funding": 0.1,
+        }])
+        self.assertTrue(r["funding_cashflow_sign_semantics_observed"])
+        self.assertTrue(r["funding_formula_semantics_observed"])
+
+    def test_short_positive_rate_is_credit(self):
+        r = assess_funding_economics([{
+            "positionType": 2, "positionValue": 100,
+            "rate": 0.001, "funding": 0.1,
+        }])
+        self.assertTrue(r["funding_cashflow_sign_semantics_observed"])
+        self.assertTrue(r["funding_formula_semantics_observed"])
+
+    def test_short_negative_rate_is_debit(self):
+        r = assess_funding_economics([{
+            "positionType": 2, "positionValue": 100,
+            "rate": -0.001, "funding": -0.1,
+        }])
+        self.assertTrue(r["funding_cashflow_sign_semantics_observed"])
+        self.assertTrue(r["funding_formula_semantics_observed"])
+
+    def test_wrong_cashflow_sign_is_detected(self):
+        r = assess_funding_economics([{
+            "positionType": 2, "positionValue": 100,
+            "rate": 0.001, "funding": -0.1,
+        }])
+        self.assertFalse(r["funding_cashflow_sign_semantics_observed"])
+        self.assertEqual(r["status"], "FUNDING_SIGN_SEMANTIC_MISMATCH")
+
+    def test_formula_drift_is_separate_from_sign(self):
+        r = assess_funding_economics([{
+            "positionType": 2, "positionValue": 100,
+            "rate": 0.001, "funding": 0.2,
+        }])
+        self.assertTrue(r["funding_cashflow_sign_semantics_observed"])
+        self.assertFalse(r["funding_formula_semantics_observed"])
+        self.assertEqual(r["status"],
+                         "FUNDING_SIGN_CONSISTENT_FORMULA_DRIFT")
+
+    def test_all_rows_must_be_consistent(self):
+        r = assess_funding_economics([
+            {"positionType": 1, "positionValue": 100,
+             "rate": -0.001, "funding": 0.1},
+            {"positionType": 2, "positionValue": 100,
+             "rate": 0.001, "funding": 0.1},
+        ])
+        self.assertEqual(r["nonzero_rows_examined"], 2)
+        self.assertEqual(r["sign_consistent_rows"], 2)
+        self.assertEqual(r["magnitude_consistent_rows"], 2)
+        self.assertTrue(r["funding_cashflow_sign_semantics_observed"])
+        self.assertTrue(r["funding_formula_semantics_observed"])
+
+    def test_zero_rate_zero_funding_is_neutral(self):
+        r = assess_funding_economics([{
+            "positionType": 2, "positionValue": 100,
+            "rate": 0, "funding": 0,
+        }])
+        self.assertEqual(r["zero_rate_or_funding_rows"], 1)
+        self.assertFalse(r["funding_cashflow_sign_semantics_observed"])
+
+    def test_invalid_side_fails_closed(self):
+        r = assess_funding_economics([{
+            "positionType": 9, "positionValue": 100,
+            "rate": 0.001, "funding": 0.1,
+        }])
+        self.assertEqual(r["status"], "FUNDING_ROW_SEMANTICS_INVALID")
