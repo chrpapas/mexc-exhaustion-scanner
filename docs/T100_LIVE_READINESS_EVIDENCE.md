@@ -140,3 +140,27 @@ Accordingly, a short/empty page must never be used as proof of pagination
 completeness. The schema-only CLI now optionally samples finished TP/SL page
 1 for redacted field/type evidence when no current stop row exists; that
 sample remains explicitly non-complete and non-authorizing.
+
+
+### 2026-10-24 second operator schema-only sample
+
+The schema-only rerun returned two finished TP/SL rows from page 1. The
+shareable evidence contained no account values. Observed allowlisted types:
+
+- position: positionId=integer, symbol=string, positionType=integer,
+  holdVol=integer; other observed numeric/time fields were integer/number.
+- historical TP/SL: id=integer, positionId=string, state=integer,
+  stopLossPrice=number, vol=integer, symbol=string, create/update times
+  integer, profitLossVolType=string, volType/stopLossType=integer.
+
+This is parser-shape compatible with the current defensive decoder, which
+accepts string or integer identifiers and numeric strings/numbers for
+volumes/prices. It remains non-authorizing evidence: the rows are FINISHED
+history, not currently-open protection. In particular, active-stop state=1
+semantics have not yet been observed from this account.
+
+There is also a documentation/runtime type discrepancy worth preserving:
+the current MEXC API documentation labels TP/SL positionId as long, while
+the operator's finished TP/SL sample returned positionId as a string. The
+parser therefore deliberately continues to accept both string and integer
+IDs rather than narrowing to the documentation example.
