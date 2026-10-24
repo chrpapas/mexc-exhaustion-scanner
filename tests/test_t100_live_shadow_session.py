@@ -13,7 +13,7 @@ def managed():
 
 def observation(t=1000, now=None, **changes):
     payload = dict(
-        positions=[dict(symbol="SIREN_USDT", positionId="10", positionType=2, holdVol="20")],
+        positions=[dict(symbol="SIREN_USDT", positionId="10", positionType=2, holdVol="20", state=1)],
         stops=[dict(positionId="10", id="99", state=1, stopLossPrice="175", vol="20")],
         expected=[managed()],
         observed_at_ms=t,
