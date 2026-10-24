@@ -7,7 +7,7 @@ from app.t100_live_shadow_replay import replay_shadow_records, ReplayHalted
 def record(t=1000):
     return {
         "positions": [{"symbol":"SIREN_USDT","positionId":"10",
-                       "positionType":2,"holdVol":"20"}],
+                       "positionType":2,"holdVol":"20","state":1}],
         "stops": [{"positionId":"10","id":"99","state":1,
                    "stopLossPrice":"175","vol":"20"}],
         "expected": [{"symbol":"SIREN_USDT","position_id":"10",
