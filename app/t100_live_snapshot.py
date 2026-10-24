@@ -77,6 +77,12 @@ def validate_inventory_snapshot(
         side = _integer(position.get("positionType"), "POSITION_SIDE")
         if side not in {1, 2}:
             raise SnapshotHalted("UNKNOWN_POSITION_SIDE")
+        state = _integer(position.get("state"), "POSITION_STATE")
+        if state != 1:
+            # MEXC documents: 1 holding, 2 system-held, 3 closed.
+            # Only an ordinary holding state is acceptable to the shadow
+            # lifecycle parser; all other states require operator review.
+            raise SnapshotHalted("POSITION_NOT_ORDINARY_HOLDING")
         qty = _positive(position.get("holdVol"), "POSITION_VOLUME")
         if side == 2:
             total_short += qty
