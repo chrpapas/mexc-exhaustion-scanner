@@ -26,7 +26,7 @@ from app.t100_live_active_tpsl import assess_active_tpsl_semantics
 from app.t100_live_stop_transition import assess_recent_finished_tpsl_transition
 from app.t100_live_funding_probe import collect_observed_position_funding
 
-PREFLIGHT_DIAGNOSTIC_VERSION = "2026-10-24-stop-transition-v1"
+PREFLIGHT_DIAGNOSTIC_VERSION = "2026-10-24-funding-pagination-v1"
 
 
 async def read_only_preflight(
