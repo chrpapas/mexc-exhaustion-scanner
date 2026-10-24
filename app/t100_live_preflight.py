@@ -177,15 +177,33 @@ def shareable_contract_report(result: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+async def _run_cli_preflight(*, schema_only: bool) -> dict[str, Any]:
+    """Bound the entire operator-local diagnostic, not just each HTTP call."""
+    try:
+        return await asyncio.wait_for(
+            read_only_preflight(
+                include_historical_stop_schema=schema_only,
+                include_raw_consistency=schema_only,
+            ),
+            timeout=45.0,
+        )
+    except asyncio.TimeoutError:
+        return {
+            "exchange": "MEXC",
+            "read_only": True,
+            "live_order_submission_possible": False,
+            "credential_status": "READ_ONLY_PREFLIGHT_TIMED_OUT",
+            "read_failure_type": "TimeoutError",
+            "preflight_failures": ["overall_read_only_preflight_timeout"],
+        }
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Read-only T100 MEXC preflight")
     parser.add_argument("--schema-only", action="store_true",
                         help="Print only shareable redacted API shape evidence")
     args = parser.parse_args()
-    result = asyncio.run(read_only_preflight(
-        include_historical_stop_schema=args.schema_only,
-        include_raw_consistency=args.schema_only,
-    ))
+    result = asyncio.run(_run_cli_preflight(schema_only=args.schema_only))
     print(json.dumps(shareable_contract_report(result) if args.schema_only else result,
                      indent=2, sort_keys=True))
     print("NO ORDERS SENT. THIS CHECK DOES NOT ENABLE LIVE TRADING.")
