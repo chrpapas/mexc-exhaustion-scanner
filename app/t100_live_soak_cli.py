@@ -23,7 +23,7 @@ from app.t100_live_soak import (
     RawDiscoverySoakRunner,
 )
 
-SOAK_DIAGNOSTIC_VERSION = "2026-10-24-raw-discovery-soak-v1"
+SOAK_DIAGNOSTIC_VERSION = "2026-10-24-projected-discovery-soak-v2"
 
 
 def _base_result() -> dict[str, Any]:
