@@ -1,8 +1,14 @@
 """Read-only, fail-closed venue pagination verifier for shadow inventory.
 
-The MEXC response contract is not yet certified. This module validates
-explicitly paginated responses from a *read-only* transport; it never
-invents completeness from a short or empty page, or sends POST requests.
+This module validates an explicit metadata-bearing pagination contract from
+a *read-only* transport; it never invents completeness from a short or empty
+page, or sends POST requests.
+
+Important: current MEXC documentation for
+/api/v1/private/stoporder/list/orders describes data as a bare list and does
+not report total/page metadata. Therefore this verifier MUST NOT be applied
+directly to that endpoint unless MEXC later provides independently observed
+metadata that satisfies this contract.
 """
 from __future__ import annotations
 
