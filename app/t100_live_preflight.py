@@ -101,14 +101,9 @@ async def read_only_preflight(
         result["shadow_schema_assessment"]["active_stop_contract_verified"] = False
         result["open_futures_positions"] = len(positions)
         result["open_futures_stop_orders"] = len(stops)
-        if positions and stops:
-            result["active_tpsl_semantics"] = assess_active_tpsl_semantics(
-                positions, stops
-            )
-        else:
-            result["active_tpsl_semantics"] = assess_active_tpsl_semantics(
-                positions, stops
-            )
+        result["active_tpsl_semantics"] = assess_active_tpsl_semantics(
+            positions, stops
+        )
         if positions and not stops:
             result["t100_native_protection_presence"] = (
                 "POSITION_WITHOUT_OBSERVED_CURRENT_TPSL"
