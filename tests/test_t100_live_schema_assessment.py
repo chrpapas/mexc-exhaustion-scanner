@@ -92,3 +92,51 @@ class SchemaAssessmentTests(unittest.TestCase):
             [pos()], [stop()]))
         self.assertNotIn("SIREN_USDT", str(r))
         self.assertNotIn("175", str(r))
+
+
+class ObservedMexcRuntimeShapeTests(unittest.TestCase):
+    """Redacted 2026-10-24 operator evidence; dummy values, real observed types."""
+
+    def test_observed_position_and_historical_stop_shapes_are_parser_compatible(self):
+        positions = [{
+            "createTime": 1,
+            "holdAvgPrice": 1.0,
+            "holdVol": 1,
+            "leverage": 1,
+            "liquidatePrice": 1.0,
+            "openType": 1,
+            "positionId": 1,
+            "positionType": 2,
+            "state": 1,
+            "symbol": "REDACTED_USDT",
+            "updateTime": 1,
+        }]
+        historical_stops = [{
+            "createTime": 1,
+            "id": 1,
+            "positionId": "1",
+            "profitLossVolType": "REDACTED",
+            "state": 3,
+            "stopLossPrice": 1.0,
+            "stopLossType": 0,
+            "symbol": "REDACTED_USDT",
+            "updateTime": 1,
+            "vol": 1,
+            "volType": 1,
+        }]
+        evidence = summarize_inventory_schema(positions, historical_stops)
+        r = assess_shadow_schema(evidence)
+        self.assertEqual(r["overall"], "PARSER_SHAPE_COMPATIBLE_UNCERTIFIED")
+        self.assertFalse(r["venue_semantics_verified"])
+        self.assertFalse(r["pagination_verified"])
+
+    def test_runtime_stop_position_id_string_is_supported(self):
+        evidence = summarize_inventory_schema(
+            [{"symbol": "X_USDT", "positionId": 1,
+              "positionType": 2, "holdVol": 1}],
+            [{"id": 1, "positionId": "1", "state": 3,
+              "stopLossPrice": 1.0, "vol": 1}],
+        )
+        r = assess_shadow_schema(evidence)
+        self.assertNotIn(
+            "positionId", r["families"]["stops"]["incompatible_fields"])
