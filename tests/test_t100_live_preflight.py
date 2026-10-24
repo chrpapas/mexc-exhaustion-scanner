@@ -7,9 +7,10 @@ from app.t100_live_preflight import read_only_preflight, shareable_contract_repo
 
 
 class FakeClient:
-    def __init__(self, positions=None, stops=None):
+    def __init__(self, positions=None, stops=None, stop_history=None):
         self.positions = [] if positions is None else positions
         self.stops = [] if stops is None else stops
+        self.stop_history = [] if stop_history is None else stop_history
         self.calls = []
         self._spec_cache = {"SIREN_USDT": object()}
 
@@ -34,6 +35,10 @@ class FakeClient:
             return self.positions
         if path == "/api/v1/private/stoporder/open_orders":
             return self.stops
+        if path == "/api/v1/private/stoporder/list/orders":
+            if params != {"page_num": 1, "page_size": 100, "is_finished": 1}:
+                raise AssertionError("UNEXPECTED_STOP_HISTORY_PARAMS")
+            return self.stop_history
         raise AssertionError("UNEXPECTED_PRIVATE_READ")
 
 
@@ -60,6 +65,30 @@ class PreflightTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(c.calls), 2)
         self.assertTrue(result["redacted_inventory_schema"]["positions"]["empty_rows_cannot_establish_schema"])
         self.assertEqual(result["shadow_schema_assessment"]["overall"], "INCOMPLETE_SCHEMA_EVIDENCE")
+
+    async def test_schema_only_history_can_fill_stop_shape_without_certifying_pagination(self):
+        c = FakeClient(
+            positions=[{"positionId": 10, "symbol": "SIREN_USDT",
+                        "positionType": 2, "holdVol": 1}],
+            stop_history=[{"id": 99, "positionId": 10, "state": 3,
+                           "stopLossPrice": 1.25, "vol": 1}],
+        )
+        result = await read_only_preflight(
+            client=c, include_historical_stop_schema=True)
+        self.assertEqual(result["stop_schema_source"], "historical_finished_page1")
+        self.assertEqual(
+            result["shadow_schema_assessment"]["overall"],
+            "PARSER_SHAPE_COMPATIBLE_UNCERTIFIED")
+        self.assertFalse(result["shadow_schema_assessment"]["pagination_verified"])
+        self.assertEqual(len(c.calls), 3)
+
+    async def test_empty_history_does_not_create_false_stop_schema(self):
+        result = await read_only_preflight(
+            client=FakeClient(), include_historical_stop_schema=True)
+        self.assertEqual(result["stop_schema_source"], "open_orders")
+        self.assertEqual(
+            result["shadow_schema_assessment"]["overall"],
+            "INCOMPLETE_SCHEMA_EVIDENCE")
 
     async def test_schema_evidence_redacts_account_values(self):
         c = FakeClient(positions=[{"positionId": "PRIVATE-123",
