@@ -43,7 +43,7 @@ class ExecutionFill:
     side: str   # OPEN_SHORT or CLOSE_SHORT, never inferred from sign
     contracts: Decimal
     price: Decimal
-    fee_usdt: Decimal
+    fee_usdt: Decimal  # signed expense: + paid by user, - rebate received
 
 
 @dataclass(frozen=True)
@@ -101,7 +101,7 @@ def reconcile_short(
             raise AccountingHalted("POSITION_ID_MISMATCH")
         if f.side not in {"OPEN_SHORT", "CLOSE_SHORT"}:
             raise AccountingHalted("UNSUPPORTED_FILL_SIDE")
-        qty, price, fee = number(f.contracts), number(f.price), number(f.fee_usdt, zero_ok=True)
+        qty, price, fee = number(f.contracts), number(f.price), signed(f.fee_usdt)
         fees += fee
         if f.side == "OPEN_SHORT":
             opened += qty
