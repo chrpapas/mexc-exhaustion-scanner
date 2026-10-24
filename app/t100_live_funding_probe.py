@@ -40,7 +40,10 @@ class FundingPageAdapter:
         if page_size < 1 or total < 0 or total_page < 0 or current < 1:
             raise PaginationHalted("FUNDING_PAGE_METADATA_INVALID")
         expected_pages = 0 if total == 0 else (total + page_size - 1) // page_size
-        if total_page != expected_pages:
+        if total == 0:
+            if total_page not in {0, 1}:
+                raise PaginationHalted("FUNDING_TOTAL_PAGE_MISMATCH")
+        elif total_page != expected_pages:
             raise PaginationHalted("FUNDING_TOTAL_PAGE_MISMATCH")
         if current != page:
             raise PaginationHalted("FUNDING_CURRENT_PAGE_MISMATCH")
