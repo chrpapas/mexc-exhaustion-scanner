@@ -12,6 +12,7 @@ import argparse
 import asyncio
 import json
 import os
+import time
 from typing import Any, TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -20,12 +21,14 @@ from app.t100_live_guards import LIVE_ADAPTER_STATUS, T100ExecutionControls
 from app.t100_live_readonly_probe import ReadOnlyMexcProbe
 from app.t100_live_contract_evidence import summarize_inventory_schema
 from app.t100_live_schema_assessment import assess_shadow_schema
+from app.t100_live_consistency import InventoryRead, double_read_raw_inventory
 
 
 async def read_only_preflight(
     *,
     client: MexcTradeClient | None = None,
     include_historical_stop_schema: bool = False,
+    include_raw_consistency: bool = False,
 ) -> dict[str, Any]:
     controls = T100ExecutionControls.from_env()
     failures = list(controls.readiness_failures())
@@ -97,6 +100,26 @@ async def read_only_preflight(
         result["shadow_schema_assessment"]["active_stop_contract_verified"] = False
         result["open_futures_positions"] = len(positions)
         result["open_futures_stop_orders"] = len(stops)
+
+        if include_raw_consistency:
+            async def _raw_inventory_read() -> InventoryRead:
+                p = await probe.raw_open_positions()
+                s = await probe.raw_open_stops()
+                return InventoryRead(
+                    p, s, time.monotonic_ns() // 1_000_000,
+                    positions_complete=False, stops_complete=False,
+                )
+            try:
+                evidence = await double_read_raw_inventory(_raw_inventory_read)
+                result["raw_inventory_double_read_consistent"] = True
+                result["raw_inventory_double_read_mode"] = evidence.mode
+                result["raw_inventory_completeness_verified"] = False
+            except Exception as exc:
+                result["raw_inventory_double_read_consistent"] = False
+                result["raw_inventory_consistency_failure_type"] = type(exc).__name__
+                result["raw_inventory_completeness_verified"] = False
+                failures.append("raw_inventory_double_read_unverified")
+
         await client.refresh_contract_specs()
         result["public_contract_specs_loaded"] = len(client._spec_cache)
 
@@ -133,6 +156,12 @@ def shareable_contract_report(result: dict[str, Any]) -> dict[str, Any]:
         "redacted_historical_stop_schema_page1": result.get(
             "redacted_historical_stop_schema_page1"
         ),
+        "raw_inventory_double_read_consistent": result.get(
+            "raw_inventory_double_read_consistent"
+        ),
+        "raw_inventory_completeness_verified": result.get(
+            "raw_inventory_completeness_verified", False
+        ),
         "venue_contract_certified": False,
         "pagination_certified": False,
     }
@@ -144,7 +173,8 @@ def main() -> None:
                         help="Print only shareable redacted API shape evidence")
     args = parser.parse_args()
     result = asyncio.run(read_only_preflight(
-        include_historical_stop_schema=args.schema_only
+        include_historical_stop_schema=args.schema_only,
+        include_raw_consistency=args.schema_only,
     ))
     print(json.dumps(shareable_contract_report(result) if args.schema_only else result,
                      indent=2, sort_keys=True))
