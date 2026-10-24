@@ -1,7 +1,8 @@
 """Offline double-read consistency checks using synthetic account snapshots."""
 import unittest
 from app.t100_live_consistency import (
-    InventoryRead, double_read_inventory, ConsistencyHalted,
+    InventoryRead, double_read_inventory, double_read_raw_inventory,
+    ConsistencyHalted,
 )
 
 
@@ -112,3 +113,41 @@ class ConsistencyTests(unittest.IsolatedAsyncioTestCase):
         p["extra"]=float("nan")
         with self.assertRaisesRegex(ConsistencyHalted,"DOUBLE_READ_UNVERIFIED"):
             await verify(read(1000,[p]),read(1500,[p]))
+
+
+
+class RawConsistencyTests(unittest.IsolatedAsyncioTestCase):
+    async def test_identical_raw_reads_pass_without_completeness_claim(self):
+        reader = Reader(
+            read(1000, [pos()], [], positions_complete=False, stops_complete=False),
+            read(1500, [pos()], [], positions_complete=False, stops_complete=False),
+        )
+        r = await double_read_raw_inventory(reader)
+        self.assertEqual(r.mode, "READ_ONLY_DISCOVERY")
+        self.assertEqual((r.positions, r.stops), (1, 0))
+
+    async def test_raw_value_drift_blocks(self):
+        reader = Reader(
+            read(1000, [pos("2")], []),
+            read(1500, [pos("3")], []),
+        )
+        with self.assertRaisesRegex(ConsistencyHalted, "RAW_INVENTORY_CHANGED"):
+            await double_read_raw_inventory(reader)
+
+    async def test_raw_row_order_does_not_matter(self):
+        rows = [pos(), dict(symbol="OTHER_USDT", positionId="2",
+                            positionType=1, holdVol="1")]
+        reader = Reader(read(1000, rows, []),
+                        read(1500, list(reversed(rows)), []))
+        r = await double_read_raw_inventory(reader)
+        self.assertEqual(r.positions, 2)
+
+    async def test_raw_excessive_gap_blocks(self):
+        reader = Reader(read(1000), read(4001))
+        with self.assertRaisesRegex(ConsistencyHalted, "RAW_INVENTORY_READS_NOT_CONSECUTIVE"):
+            await double_read_raw_inventory(reader, max_separation_ms=3000)
+
+    async def test_raw_bad_type_blocks(self):
+        reader = Reader(read(1000), None)
+        with self.assertRaisesRegex(ConsistencyHalted, "RAW_INVENTORY_DOUBLE_READ_UNVERIFIED"):
+            await double_read_raw_inventory(reader)
