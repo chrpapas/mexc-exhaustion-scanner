@@ -23,6 +23,7 @@ from app.t100_live_contract_evidence import summarize_inventory_schema
 from app.t100_live_schema_assessment import assess_shadow_schema
 from app.t100_live_consistency import InventoryRead, double_read_raw_inventory
 from app.t100_live_active_tpsl import assess_active_tpsl_semantics
+from app.t100_live_stop_transition import assess_recent_finished_tpsl_transition
 
 
 async def read_only_preflight(
@@ -83,6 +84,11 @@ async def read_only_preflight(
             result["redacted_historical_stop_schema_page1"] = summarize_inventory_schema(
                 [], historical_stops
             )["stops"]
+            result["recent_finished_tpsl_transition"] = (
+                assess_recent_finished_tpsl_transition(
+                    positions, historical_stops
+                )
+            )
             if historical_stops:
                 result["historical_stop_schema_observed"] = True
                 assessment_evidence = {
@@ -187,6 +193,9 @@ def shareable_contract_report(result: dict[str, Any]) -> dict[str, Any]:
         "shadow_schema_assessment": result.get("shadow_schema_assessment"),
         "redacted_historical_stop_schema_page1": result.get(
             "redacted_historical_stop_schema_page1"
+        ),
+        "recent_finished_tpsl_transition": result.get(
+            "recent_finished_tpsl_transition"
         ),
         "raw_inventory_double_read_consistent": result.get(
             "raw_inventory_double_read_consistent"
