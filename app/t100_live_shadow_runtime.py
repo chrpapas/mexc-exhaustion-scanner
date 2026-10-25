@@ -300,6 +300,28 @@ class T100LiveShadowRuntime:
             if positions > 0 and stops > 0
             else positions == 0
         )
+        if positions > 0 and stops > 0 and not protection_semantics_verified:
+            LOGGER.warning(
+                "T100 native protection semantic check failed "
+                "status=%s state_untriggered=%s nonfinal=%s "
+                "position_link=%s symbol_link=%s side_link=%s "
+                "positive_stop_price=%s positive_volume=%s "
+                "every_position_covered=%s volume_covers=%s",
+                active_tpsl.get("status"),
+                active_tpsl.get("all_rows_state_untriggered"),
+                active_tpsl.get("all_rows_nonfinal_if_field_present"),
+                active_tpsl.get("all_rows_link_to_observed_position"),
+                active_tpsl.get("all_rows_symbol_link_consistent"),
+                active_tpsl.get(
+                    "all_rows_position_side_consistent_if_field_present"
+                ),
+                active_tpsl.get("all_rows_positive_stop_loss_price"),
+                active_tpsl.get("all_rows_positive_protective_volume"),
+                active_tpsl.get("every_observed_position_has_current_tpsl"),
+                active_tpsl.get(
+                    "observed_stop_loss_volume_covers_positions"
+                ),
+            )
 
         if read_failed:
             self._trip("READ_FAILURE")
