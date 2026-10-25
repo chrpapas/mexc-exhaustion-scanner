@@ -39,6 +39,7 @@ def preflight(
     redundancy=True,
     margin=True,
     protection=None,
+    protection_semantics_verified=None,
     read_failure_type=None,
 ):
     if protection is None:
@@ -48,6 +49,8 @@ def preflight(
             protection = "POSITION_AND_CURRENT_TPSL_PRESENT_LINKAGE_UNVERIFIED"
         else:
             protection = "NO_POSITION_OR_CURRENT_TPSL_OBSERVED_COMPLETENESS_UNVERIFIED"
+    if protection_semantics_verified is None:
+        protection_semantics_verified = bool(positions and stops)
     return {
         "credential_status": "SIGNED_PRIVATE_READS_SUCCEEDED_UNCERTIFIED_SCHEMA",
         "read_failure_type": read_failure_type,
@@ -55,6 +58,9 @@ def preflight(
         "open_futures_positions": positions,
         "open_futures_stop_orders": stops,
         "t100_native_protection_presence": protection,
+        "active_tpsl_semantics": {
+            "active_tpsl_row_semantics_verified": protection_semantics_verified,
+        },
         "symbol_scoped_inventory_crosscheck": {
             "symbol_scoped_crosscheck_verified": redundancy,
         },
@@ -126,6 +132,30 @@ class ShadowRuntimeTests(unittest.IsolatedAsyncioTestCase):
             if "KILL LATCHED" in n.title
         ]
         self.assertEqual(len(kills), 1)
+
+    async def test_present_but_unverified_protection_latches(self):
+        runtime = self.make_runtime(
+            pf=preflight(
+                positions=1,
+                stops=1,
+                protection_semantics_verified=False,
+            )
+        )
+        report = await runtime.cycle()
+        self.assertEqual(
+            report.kill_reason, "NATIVE_PROTECTION_UNVERIFIED"
+        )
+
+    async def test_verified_protection_does_not_latch(self):
+        runtime = self.make_runtime(
+            pf=preflight(
+                positions=1,
+                stops=1,
+                protection_semantics_verified=True,
+            )
+        )
+        report = await runtime.cycle()
+        self.assertFalse(report.kill_tripped)
 
     async def test_inventory_change_latches_kill(self):
         runtime = self.make_runtime(
