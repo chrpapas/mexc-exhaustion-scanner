@@ -306,8 +306,8 @@ class T100LiveShadowRuntime:
                 "status=%s state_untriggered=%s nonfinal=%s "
                 "position_link=%s symbol_link=%s side_link=%s "
                 "positive_stop_price=%s positive_volume=%s "
-                "every_position_covered=%s volume_covers=%s "
-                "partial_rows=%s entire_rows=%s same_rows=%s "
+                "effective_quantity=%s every_position_covered=%s "
+                "volume_covers=%s partial_rows=%s entire_rows=%s same_rows=%s "
                 "separate_rows=%s unknown_vol_type=%s "
                 "unknown_profit_loss_vol_type=%s",
                 active_tpsl.get("status"),
@@ -320,6 +320,9 @@ class T100LiveShadowRuntime:
                 ),
                 active_tpsl.get("all_rows_positive_stop_loss_price"),
                 active_tpsl.get("all_rows_positive_protective_volume"),
+                active_tpsl.get(
+                    "all_rows_effective_protective_quantity_verified"
+                ),
                 active_tpsl.get("every_observed_position_has_current_tpsl"),
                 active_tpsl.get(
                     "observed_stop_loss_volume_covers_positions"
