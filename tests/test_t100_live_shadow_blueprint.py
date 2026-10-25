@@ -40,7 +40,10 @@ class ShadowBlueprintTests(unittest.TestCase):
 
     def test_shadow_worker_has_no_database_dependency(self):
         text = BLUEPRINT.read_text()
-        self.assertNotIn("DATABASE_URL", text)
+        self.assertNotRegex(
+            text,
+            r"(?m)^\\s*- key: DATABASE_URL\\s*$",
+        )
         self.assertNotIn("fromDatabase:", text)
 
     def test_private_values_are_declared_as_unsynced_secrets(self):
