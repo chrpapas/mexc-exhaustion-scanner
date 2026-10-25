@@ -11,8 +11,10 @@ checkpoint writer. A healthy cycle is evidence only and never authorizes entry.
 """
 from __future__ import annotations
 
+import argparse
 import asyncio
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
+import json
 import logging
 import os
 import signal
@@ -464,7 +466,7 @@ class T100LiveShadowRuntime:
                 await self.close()
 
 
-async def main() -> None:
+async def main(*, once: bool = False) -> None:
     logging.basicConfig(
         level=getattr(
             logging,
@@ -477,8 +479,33 @@ async def main() -> None:
     loop = asyncio.get_running_loop()
     for system_signal in (signal.SIGINT, signal.SIGTERM):
         loop.add_signal_handler(system_signal, runtime.stop_event.set)
-    await runtime.run()
+
+    if not once:
+        await runtime.run()
+        return
+
+    try:
+        report = await runtime.cycle()
+        print(json.dumps(asdict(report), indent=2, sort_keys=True))
+        print(
+            "NO ORDERS SENT. LIVE-SHADOW ONCE MODE DOES NOT ENABLE LIVE TRADING."
+        )
+    finally:
+        await runtime.close()
+
+
+def cli() -> None:
+    parser = argparse.ArgumentParser(
+        description="Continuous read-only T100 Render shadow supervisor"
+    )
+    parser.add_argument(
+        "--once",
+        action="store_true",
+        help="Run one read-only supervision cycle, print redacted summary, exit",
+    )
+    args = parser.parse_args()
+    asyncio.run(main(once=args.once))
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    cli()
