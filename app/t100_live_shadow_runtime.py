@@ -294,6 +294,12 @@ class T100LiveShadowRuntime:
         margin_witness = (
             witness.get("position_inventory_margin_witness_observed") is True
         )
+        active_tpsl = preflight.get("active_tpsl_semantics") or {}
+        protection_semantics_verified = (
+            active_tpsl.get("active_tpsl_row_semantics_verified") is True
+            if positions > 0 and stops > 0
+            else positions == 0
+        )
 
         if read_failed:
             self._trip("READ_FAILURE")
@@ -305,6 +311,8 @@ class T100LiveShadowRuntime:
             self._trip("RECOVERY_UNVERIFIED")
         elif positions > 0 and stops == 0:
             self._trip("NATIVE_PROTECTION_LOST")
+        elif positions > 0 and stops > 0 and not protection_semantics_verified:
+            self._trip("NATIVE_PROTECTION_UNVERIFIED")
 
         await self._notify_state_change(
             positions=positions,
