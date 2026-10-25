@@ -8,9 +8,6 @@ from dataclasses import dataclass
 import time
 from typing import Any, Callable
 
-from app.trader_notifier import TraderNotifier
-
-
 @dataclass(frozen=True)
 class OpsNotice:
     key: str
@@ -41,6 +38,7 @@ class T100LiveOpsNotifier:
         *,
         cooldown_seconds: float = 900.0,
         clock: Callable[[], float] = time.monotonic,
+        sender: Any | None = None,
     ) -> None:
         if (
             isinstance(cooldown_seconds, bool)
@@ -48,14 +46,18 @@ class T100LiveOpsNotifier:
             or cooldown_seconds < 0
         ):
             raise ValueError("INVALID_NOTIFICATION_COOLDOWN")
-        self._notifier = TraderNotifier(webhook_url)
+        if sender is None:
+            # Keep pure offline safety tests free of network dependencies.
+            from app.trader_notifier import TraderNotifier
+            sender = TraderNotifier(webhook_url)
+        self._notifier = sender
         self._cooldown = float(cooldown_seconds)
         self._clock = clock
         self._last_sent: dict[str, float] = {}
 
     @property
     def configured(self) -> bool:
-        return bool(self._notifier.webhook_url)
+        return bool(getattr(self._notifier, "webhook_url", None))
 
     async def close(self) -> None:
         await self._notifier.close()
