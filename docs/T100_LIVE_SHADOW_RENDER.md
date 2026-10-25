@@ -128,6 +128,32 @@ A low-frequency health message confirms:
 
 Routine polling and heartbeat traffic are not sent to Discord.
 
+## One-cycle operator acceptance mode
+
+Before creating the Render worker, run the exact shadow supervisor once with:
+
+```bash
+T100_EXECUTION_MODE=paper \
+T100_LIVE_ORDER_API_ENABLED=false \
+python -m app.t100_live_shadow_runtime --once
+```
+
+The process performs one signed preflight + one private-WS continuity window,
+sends the same state/kill/health Discord notifications used by Render, prints a
+redacted `ShadowCycleReport`, and exits.
+
+The printed report is non-authorizing and always contains:
+
+```text
+entry_allowed=false
+live_authorization=false
+account_wide_completeness_verified=false
+exchange_atomicity_verified=false
+```
+
+This is the preferred local acceptance check before any Render service is
+created.
+
 ## Render configuration
 
 Secrets must be configured only in Render:
