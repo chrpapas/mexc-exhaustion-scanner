@@ -18,14 +18,13 @@ class FakeTraderNotifier:
 class OpsNotifierTests(unittest.IsolatedAsyncioTestCase):
     async def test_deduplicates_noncritical_notice(self):
         now = [100.0]
+        fake = FakeTraderNotifier()
         notifier = T100LiveOpsNotifier(
             "https://example.invalid",
             cooldown_seconds=60,
             clock=lambda: now[0],
+            sender=fake,
         )
-        fake = FakeTraderNotifier()
-        await notifier._notifier.close()
-        notifier._notifier = fake
 
         notice = OpsNotice(
             key="health",
@@ -41,14 +40,13 @@ class OpsNotifierTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(fake.calls), 2)
 
     async def test_force_bypasses_cooldown(self):
+        fake = FakeTraderNotifier()
         notifier = T100LiveOpsNotifier(
             "https://example.invalid",
             cooldown_seconds=60,
             clock=lambda: 100.0,
+            sender=fake,
         )
-        fake = FakeTraderNotifier()
-        await notifier._notifier.close()
-        notifier._notifier = fake
         notice = OpsNotice(
             key="state",
             title="State",
@@ -60,7 +58,7 @@ class OpsNotifierTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(fake.calls), 2)
 
     async def test_invalid_notice_rejected(self):
-        notifier = T100LiveOpsNotifier(None)
+        notifier = T100LiveOpsNotifier(None, sender=FakeTraderNotifier())
         with self.assertRaises(ValueError):
             await notifier.send(OpsNotice(
                 key="x", title="x", description="x", severity="invalid"))
@@ -69,8 +67,15 @@ class OpsNotifierTests(unittest.IsolatedAsyncioTestCase):
                 key="", title="x", description="x", severity="info"))
 
     async def test_configured_reflects_webhook(self):
-        self.assertFalse(T100LiveOpsNotifier(None).configured)
-        n = T100LiveOpsNotifier("https://example.invalid")
+        no_webhook = FakeTraderNotifier()
+        no_webhook.webhook_url = None
+        self.assertFalse(
+            T100LiveOpsNotifier(None, sender=no_webhook).configured
+        )
+        yes_webhook = FakeTraderNotifier()
+        n = T100LiveOpsNotifier(
+            "https://example.invalid", sender=yes_webhook
+        )
         self.assertTrue(n.configured)
         await n.close()
 
