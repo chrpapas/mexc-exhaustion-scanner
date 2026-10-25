@@ -37,6 +37,12 @@ def assess_active_tpsl_semantics(
     result: dict[str, Any] = {
         "observed_positions": 0,
         "observed_current_tpsl_rows": 0,
+        "partial_position_tpsl_rows": 0,
+        "entire_position_tpsl_rows": 0,
+        "same_volume_tpsl_rows": 0,
+        "separate_volume_tpsl_rows": 0,
+        "unknown_vol_type_rows": 0,
+        "unknown_profit_loss_vol_type_rows": 0,
         "all_rows_state_untriggered": False,
         "all_rows_nonfinal_if_field_present": False,
         "all_rows_link_to_observed_position": False,
@@ -87,6 +93,22 @@ def assess_active_tpsl_semantics(
     volume_ok = True
 
     for s in stops:
+        vol_type = _integer(s.get("volType"))
+        if vol_type == 1:
+            result["partial_position_tpsl_rows"] += 1
+        elif vol_type == 2:
+            result["entire_position_tpsl_rows"] += 1
+        else:
+            result["unknown_vol_type_rows"] += 1
+
+        profit_loss_vol_type = s.get("profitLossVolType")
+        if profit_loss_vol_type == "SAME":
+            result["same_volume_tpsl_rows"] += 1
+        elif profit_loss_vol_type == "SEPARATE":
+            result["separate_volume_tpsl_rows"] += 1
+        else:
+            result["unknown_profit_loss_vol_type_rows"] += 1
+
         pid_raw = s.get("positionId")
         pid = str(pid_raw) if pid_raw is not None else ""
         p = pos_by_id.get(pid)
