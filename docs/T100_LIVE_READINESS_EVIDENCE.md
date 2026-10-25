@@ -948,3 +948,79 @@ This is an independent detector for omitted position exposure, not yet a
 formal replacement for a venue-documented list-completeness contract.
 
 Offline safety suite: 515 tests passed; all four branch workflows passed.
+
+
+### 2026-10-25 Render live-shadow + Discord operations layer implemented offline
+
+A continuous T100 live-shadow supervisor is now implemented for the intended
+Render operating model.
+
+Runtime module:
+- app/t100_live_shadow_runtime.py
+
+Discord operations module:
+- app/t100_live_ops_notifier.py
+
+Draft Render worker definition:
+- render.t100-live-shadow.draft.yaml
+
+Deployment/runbook:
+- docs/T100_LIVE_SHADOW_RENDER.md
+
+The supervisor is observation-only and deliberately separate from the current
+scanner and paper trader workers. It:
+- requires T100_EXECUTION_MODE=paper
+- refuses startup if T100_LIVE_ORDER_API_ENABLED=true
+- requires signed MEXC read credentials
+- requires Discord by default
+- imports no live order gateway
+- has no DATABASE_URL in the draft Render service
+- performs signed GET-only preflight checks
+- performs projected inventory consistency checks
+- performs symbol-scoped REST redundancy
+- performs account-level position-margin witness checks
+- observes native current TP/SL state
+- performs bounded private WS observations
+- reconciles REST -> WS -> REST continuity
+- uses the existing one-way operational kill latch
+- continues read-only observation after a kill so Discord remains useful
+- never clears the kill latch
+- never sets entry_allowed or live_authorization true
+
+Discord notifications are limited to meaningful operational events:
+- startup/shutdown
+- account position/protection state changes
+- private WS position/stop/fill events
+- first kill latch
+- read/continuity failures
+- low-frequency health reports
+
+Repeated identical errors are cooldown-deduplicated. Forced first-event/state
+notifications bypass the cooldown.
+
+The draft Render worker uses autoDeployTrigger=off and is not part of the
+active render.yaml. Existing Render scanner/paper-trader services were not
+modified.
+
+A one-cycle operator mode is available:
+
+  python -m app.t100_live_shadow_runtime --once
+
+It runs one signed preflight + one private WS continuity window, sends the same
+Discord operational notifications, prints a redacted non-authorizing report,
+and exits.
+
+Static Blueprint safety tests ensure:
+- manual deploy only
+- paper execution mode
+- live order API disabled
+- kill switch engaged
+- no database dependency
+- MEXC/Discord values remain unsynced secrets
+- Discord is required
+
+No Render service was created, no deploy was triggered, no environment
+variables were changed, and no exchange/database mutation was performed.
+
+Offline safety suite: 540 tests passed on the final Render-shadow code head.
+All four branch workflows passed.
