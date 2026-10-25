@@ -50,6 +50,7 @@ def assess_active_tpsl_semantics(
         "all_rows_position_side_consistent_if_field_present": False,
         "all_rows_positive_stop_loss_price": False,
         "all_rows_positive_protective_volume": False,
+        "all_rows_effective_protective_quantity_verified": False,
         "every_observed_position_has_current_tpsl": False,
         "observed_stop_loss_volume_covers_positions": False,
         "active_tpsl_row_semantics_verified": False,
@@ -91,6 +92,7 @@ def assess_active_tpsl_semantics(
     side_ok = True
     price_ok = True
     volume_ok = True
+    effective_quantity_ok = True
 
     for s in stops:
         vol_type = _integer(s.get("volType"))
@@ -141,14 +143,32 @@ def assess_active_tpsl_semantics(
             price_ok = False
 
         protective_raw = s.get("vol")
-        if s.get("profitLossVolType") == "SEPARATE":
+        if profit_loss_vol_type == "SEPARATE":
             protective_raw = s.get("stopLossVol")
         protective = _positive(protective_raw)
         if protective is None:
             volume_ok = False
+
+        # MEXC documents volType=2 as position TP/SL, and its current
+        # product guidance says Entire Position TP/SL tracks the whole
+        # position quantity automatically. Real read-only evidence also
+        # shows a volType=2 + SAME row without a positive explicit volume.
+        # Infer effective stop coverage only for that exact whole-position
+        # mode. Partial TP/SL and SEPARATE quantity modes still require an
+        # explicit positive stop-loss quantity.
+        whole_position_dynamic = (
+            vol_type == 2 and profit_loss_vol_type == "SAME"
+        )
+        effective_protective = protective
+        if whole_position_dynamic and p is not None:
+            effective_protective = position_qty.get(pid)
+
+        if effective_protective is None:
+            effective_quantity_ok = False
         elif p is not None:
             protective_by_position[pid] = (
-                protective_by_position.get(pid, Decimal(0)) + protective
+                protective_by_position.get(pid, Decimal(0))
+                + effective_protective
             )
 
     result["all_rows_state_untriggered"] = state_ok
@@ -158,6 +178,9 @@ def assess_active_tpsl_semantics(
     result["all_rows_position_side_consistent_if_field_present"] = side_ok
     result["all_rows_positive_stop_loss_price"] = price_ok
     result["all_rows_positive_protective_volume"] = volume_ok
+    result["all_rows_effective_protective_quantity_verified"] = (
+        effective_quantity_ok
+    )
     result["every_observed_position_has_current_tpsl"] = (
         set(pos_by_id) == linked
     )
@@ -173,7 +196,7 @@ def assess_active_tpsl_semantics(
         symbol_ok,
         side_ok,
         price_ok,
-        volume_ok,
+        effective_quantity_ok,
         result["every_observed_position_has_current_tpsl"],
         result["observed_stop_loss_volume_covers_positions"],
     ))
