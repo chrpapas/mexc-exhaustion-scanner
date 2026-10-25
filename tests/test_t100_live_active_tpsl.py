@@ -91,6 +91,42 @@ class ActiveTpslTests(unittest.TestCase):
         r = assess_active_tpsl_semantics([pos()], [stop(vol=0)])
         self.assertFalse(r["all_rows_positive_protective_volume"])
 
+    def test_entire_position_same_quantity_can_infer_dynamic_coverage(self):
+        r = assess_active_tpsl_semantics(
+            [pos(holdVol=5)],
+            [
+                stop(
+                    vol=0,
+                    volType=2,
+                    profitLossVolType="SAME",
+                )
+            ],
+        )
+        self.assertFalse(r["all_rows_positive_protective_volume"])
+        self.assertTrue(
+            r["all_rows_effective_protective_quantity_verified"]
+        )
+        self.assertTrue(r["observed_stop_loss_volume_covers_positions"])
+        self.assertTrue(r["active_tpsl_row_semantics_verified"])
+
+    def test_entire_position_separate_quantity_still_requires_stop_loss_volume(self):
+        r = assess_active_tpsl_semantics(
+            [pos(holdVol=5)],
+            [
+                stop(
+                    vol=0,
+                    volType=2,
+                    profitLossVolType="SEPARATE",
+                    stopLossVol=0,
+                )
+            ],
+        )
+        self.assertFalse(
+            r["all_rows_effective_protective_quantity_verified"]
+        )
+        self.assertFalse(r["observed_stop_loss_volume_covers_positions"])
+        self.assertFalse(r["active_tpsl_row_semantics_verified"])
+
     def test_separate_quantity_uses_stop_loss_volume(self):
         r = assess_active_tpsl_semantics(
             [pos(holdVol=5)],
