@@ -28,8 +28,10 @@ SEVERITY_COLORS = {
 class T100LiveOpsNotifier:
     """Deduplicated important-event notifier.
 
-    Critical notices bypass cooldown. Other notices with the same key are
-    suppressed for cooldown_seconds to avoid Discord spam.
+    Repeated notices with the same key are suppressed for cooldown_seconds
+    unless the caller explicitly forces delivery. This prevents recurring
+    read failures from spamming Discord while preserving forced first-event
+    notifications such as startup, state changes and the initial kill latch.
     """
 
     def __init__(
@@ -72,7 +74,6 @@ class T100LiveOpsNotifier:
         last = self._last_sent.get(notice.key)
         if (
             not force
-            and notice.severity != "critical"
             and last is not None
             and now - last < self._cooldown
         ):
