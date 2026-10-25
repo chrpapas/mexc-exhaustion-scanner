@@ -144,6 +144,7 @@ class T100LiveShadowRuntime:
     def _trip(self, reason: str) -> None:
         if not self.kill.tripped:
             self.kill.trip(reason)
+            LOGGER.warning("T100 live-shadow kill latched reason=%s", reason)
 
     async def _notify_kill_once(self) -> None:
         if not self.kill.tripped or self._kill_notified:
