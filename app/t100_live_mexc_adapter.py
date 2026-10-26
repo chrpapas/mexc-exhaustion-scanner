@@ -61,7 +61,7 @@ class LiveMexcAdapter:
                 "positionMode": 1,
                 "externalOid": intent.external_oid,
                 "stopLossPrice": str(intent.stop_price),
-                "lossTrend": 2,
+                "lossTrend": 1,
             },
         )
         if not isinstance(result, dict) or not result.get("orderId"):
@@ -103,7 +103,7 @@ class LiveMexcAdapter:
             "/api/v1/private/stoporder/change_plan_price",
             {
                 "stopPlanOrderId": stop_order_id,
-                "lossTrend": 2,
+                "lossTrend": 1,
                 "stopLossPrice": str(requested),
             },
         )
