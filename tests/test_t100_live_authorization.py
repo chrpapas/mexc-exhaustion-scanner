@@ -42,7 +42,7 @@ def evidence(**overrides):
         native_stop_mutation_contract_verified=True,
         entry_reconciliation_verified=True,
         fill_and_accounting_verified=True,
-        private_ws_lifecycle_semantics_verified=True,
+        private_ws_pre_pilot_contract_verified=True,
         unresolved_mutations_absent=True,
         independent_review_completed=True,
         operator_tiny_pilot_authorized=True,
