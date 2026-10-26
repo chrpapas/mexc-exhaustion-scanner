@@ -37,23 +37,54 @@ class LiveMexcAdapter:
             raise RuntimeError("MEXC did not return orderId")
         return str(result["orderId"])
 
+    async def submit_native_short_stop_tightening(
+        self,
+        *,
+        stop_order_id: int,
+        new_stop_price: str,
+        previous_stop_price: str,
+    ) -> None:
+        """Send exactly one native TP/SL price amendment request.
+
+        This transport method never retries and never interprets an exception
+        as proof the exchange did not mutate. Durable callers must journal
+        SUBMITTING before invoking it and reconcile UNKNOWN outcomes by GET.
+        """
+        from decimal import Decimal
+        current = Decimal(previous_stop_price)
+        requested = Decimal(new_stop_price)
+        if (
+            not current.is_finite()
+            or not requested.is_finite()
+            or current <= 0
+            or requested <= 0
+            or requested >= current
+            or isinstance(stop_order_id, bool)
+            or not isinstance(stop_order_id, int)
+            or stop_order_id <= 0
+        ):
+            raise ValueError(
+                "non-tightening or invalid short stop modification"
+            )
+        await self.client._private_post(
+            "/api/v1/private/stoporder/change_plan_price",
+            {
+                "stopPlanOrderId": stop_order_id,
+                "lossTrend": 2,
+                "stopLossPrice": str(requested),
+            },
+        )
+
     async def tighten_native_short_stop(self, *, symbol: str, stop_order_id: int,
                                         position_id: int, new_stop_price: str,
                                         previous_stop_price: str) -> None:
-        """In-place TP/SL modification; never loosen a short protective stop.
-
-        Ambiguous mutation or missing post-update verification MUST halt the
-        caller, not trigger a blind retry.
-        """
+        """Legacy send-then-read helper; never retries ambiguous mutations."""
         from decimal import Decimal
-        current, requested = Decimal(previous_stop_price), Decimal(new_stop_price)
-        if not (current.is_finite() and requested.is_finite()
-                and current > 0 and requested > 0 and requested < current):
-            raise ValueError("non-tightening or invalid short stop modification")
-        await self.client._private_post(
-            "/api/v1/private/stoporder/change_plan_price",
-            {"stopPlanOrderId": stop_order_id, "lossTrend": 2,
-             "stopLossPrice": str(requested)},
+        requested = Decimal(new_stop_price)
+        await self.submit_native_short_stop_tightening(
+            stop_order_id=stop_order_id,
+            new_stop_price=new_stop_price,
+            previous_stop_price=previous_stop_price,
         )
         orders = await self.open_stop_orders(symbol)
         ok = any(
@@ -75,4 +106,9 @@ class LiveMexcAdapter:
         return data
 
     async def open_stop_orders(self, symbol: str | None = None) -> list[dict[str, Any]]:
-        return await self.client.stop_orders(symbol=symbol, finished=False)
+        data = await self.client.open_stop_orders(symbol)
+        if not isinstance(data, list) or not all(
+            isinstance(item, dict) for item in data
+        ):
+            raise RuntimeError("MEXC_OPEN_STOP_RESPONSE_UNVERIFIED")
+        return data
