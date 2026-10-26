@@ -179,7 +179,7 @@ class LiveMexcAdapterContractTests(unittest.IsolatedAsyncioTestCase):
                 "/api/v1/private/stoporder/change_plan_price",
                 {
                     "stopPlanOrderId": 99,
-                    "lossTrend": 2,
+                    "lossTrend": 1,
                     "stopLossPrice": "90",
                 },
             )],
