@@ -62,6 +62,11 @@ def assess_order_deal_reconciliation(
         "weighted_fill_price_matches_order_average": False,
         "fee_currency_consistent": False,
         "fee_semantics_signed_expense_supported": True,
+        "order_fill_endpoint_contract_reviewed": True,
+        "order_fill_endpoint_nonpaginated": True,
+        "fills_complete_for_observed_order_aggregate": False,
+        "final_order_fill_history_complete": False,
+        "strategy_fully_filled_order_complete": False,
         "order_specific_fill_reconciliation_verified": False,
     }
     if (
@@ -107,6 +112,14 @@ def assess_order_deal_reconciliation(
         result["weighted_fill_price_matches_order_average"] = len(fills) == 0
         result["fee_currency_consistent"] = len(fills) == 0
         result["order_specific_fill_reconciliation_verified"] = len(fills) == 0
+        result["fills_complete_for_observed_order_aggregate"] = (
+            result["order_specific_fill_reconciliation_verified"]
+        )
+        result["final_order_fill_history_complete"] = (
+            result["order_specific_fill_reconciliation_verified"]
+            and state in {3, 4, 5}
+        )
+        result["strategy_fully_filled_order_complete"] = False
         result["status"] = (
             "ZERO_FILL_ORDER_RECONCILED"
             if len(fills) == 0 else "ZERO_DEALVOL_WITH_FILL_ROWS"
@@ -175,6 +188,18 @@ def assess_order_deal_reconciliation(
         result["fill_volume_matches_order_deal_volume"],
         result["weighted_fill_price_matches_order_average"],
         result["fee_currency_consistent"],
+    ))
+    result["fills_complete_for_observed_order_aggregate"] = (
+        result["order_specific_fill_reconciliation_verified"]
+    )
+    result["final_order_fill_history_complete"] = (
+        result["order_specific_fill_reconciliation_verified"]
+        and state in {3, 4, 5}
+    )
+    result["strategy_fully_filled_order_complete"] = all((
+        result["order_specific_fill_reconciliation_verified"],
+        state == 3,
+        deal_vol > 0,
     ))
     result["status"] = (
         "ORDER_SPECIFIC_FILLS_RECONCILED"
