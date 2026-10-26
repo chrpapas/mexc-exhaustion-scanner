@@ -339,14 +339,117 @@ def _validate_intents(
         raise DurableRecoveryHalted("ACK_INTENT_WITHOUT_OPEN_CHECKPOINT")
 
 
-def _validate_stop_amendments(stop_amendments: Any) -> None:
+def _validate_stop_amendments(
+    checkpoints: tuple[PositionCheckpoint, ...],
+    revision_rows: Any,
+    stop_amendments: Any,
+) -> None:
     if (
         not isinstance(stop_amendments, list)
         or any(not isinstance(x, dict) for x in stop_amendments)
+        or not isinstance(revision_rows, list)
+        or any(not isinstance(x, dict) for x in revision_rows)
     ):
         raise DurableRecoveryHalted("STOP_AMENDMENT_LEDGER_RESPONSE_AMBIGUOUS")
     if any(row.get("state") != "VERIFIED" for row in stop_amendments):
         raise DurableRecoveryHalted("UNRESOLVED_STOP_AMENDMENT")
+
+    parsed: list[dict[str, Any]] = []
+    seen_external: set[str] = set()
+    for row in stop_amendments:
+        external_id = row.get("external_id")
+        symbol = row.get("symbol")
+        position_id = row.get("position_id")
+        old_stop_id = row.get("stop_order_id")
+        verified_stop_id = row.get("verified_stop_order_id")
+        if (
+            not isinstance(external_id, str)
+            or not external_id
+            or external_id in seen_external
+            or not isinstance(symbol, str)
+            or not symbol
+            or not isinstance(position_id, str)
+            or not position_id
+            or not isinstance(old_stop_id, str)
+            or not old_stop_id
+            or not isinstance(verified_stop_id, str)
+            or not verified_stop_id
+        ):
+            raise DurableRecoveryHalted(
+                "STOP_AMENDMENT_VERIFIED_PROVENANCE_INVALID"
+            )
+        seen_external.add(external_id)
+        previous_stop = _positive(
+            row.get("previous_stop"), "STOP_AMENDMENT_PREVIOUS_STOP"
+        )
+        proposed_stop = _positive(
+            row.get("proposed_stop"), "STOP_AMENDMENT_PROPOSED_STOP"
+        )
+        if proposed_stop >= previous_stop:
+            raise DurableRecoveryHalted(
+                "STOP_AMENDMENT_NOT_TIGHTENING"
+            )
+        parsed.append({
+            "external_id": external_id,
+            "symbol": symbol,
+            "position_id": position_id,
+            "stop_order_id": old_stop_id,
+            "verified_stop_order_id": verified_stop_id,
+            "previous_stop": previous_stop,
+            "proposed_stop": proposed_stop,
+        })
+
+    revisions_by_position: dict[str, dict[int, dict[str, Any]]] = {}
+    for row in revision_rows:
+        pid = str(row.get("position_id") or "")
+        version = _integer(
+            row.get("checkpoint_version"),
+            "CHECKPOINT_REVISION_VERSION",
+        )
+        revisions_by_position.setdefault(pid, {})[version] = row
+
+    used: set[str] = set()
+    open_position_ids = {cp.position_id for cp in checkpoints}
+    for cp in checkpoints:
+        revisions = revisions_by_position.get(cp.position_id, {})
+        for version in range(2, cp.checkpoint_version + 1):
+            previous = revisions[version - 1]
+            current = revisions[version]
+            previous_stop = _positive(
+                previous.get("stop_price"),
+                "CHECKPOINT_REVISION_STOP_PRICE",
+            )
+            current_stop = _positive(
+                current.get("stop_price"),
+                "CHECKPOINT_REVISION_STOP_PRICE",
+            )
+            previous_id = str(previous.get("stop_order_id") or "")
+            current_id = str(current.get("stop_order_id") or "")
+            matching = [
+                row for row in parsed
+                if row["external_id"] not in used
+                and row["position_id"] == cp.position_id
+                and row["symbol"] == cp.symbol
+                and row["stop_order_id"] == previous_id
+                and row["verified_stop_order_id"] == current_id
+                and row["previous_stop"] == previous_stop
+                and current_stop <= row["proposed_stop"] < previous_stop
+            ]
+            if len(matching) != 1:
+                raise DurableRecoveryHalted(
+                    "STOP_AMENDMENT_REVISION_PROVENANCE_MISMATCH"
+                )
+            used.add(matching[0]["external_id"])
+
+    extra_for_open = [
+        row for row in parsed
+        if row["position_id"] in open_position_ids
+        and row["external_id"] not in used
+    ]
+    if extra_for_open:
+        raise DurableRecoveryHalted(
+            "STOP_AMENDMENT_WITHOUT_CHECKPOINT_REVISION"
+        )
 
 
 def recover_nonflat(
@@ -387,7 +490,11 @@ def recover_nonflat(
 
     _validate_revision_history(checkpoints, revision_rows)
     _validate_intents(checkpoints, intent_rows)
-    _validate_stop_amendments(stop_amendment_rows)
+    _validate_stop_amendments(
+        checkpoints,
+        revision_rows,
+        stop_amendment_rows,
+    )
 
     if len(orders) != len(checkpoints):
         raise DurableRecoveryHalted("EXCHANGE_ORDER_COUNT_MISMATCH")
@@ -574,7 +681,9 @@ class DurableRestartRecoveryGate:
                    ORDER BY id"""
             )
             amendments = await self.ledger.fetch(
-                """SELECT external_id, position_id, stop_order_id, state
+                """SELECT external_id, symbol, position_id, stop_order_id,
+                          verified_stop_order_id, previous_stop,
+                          proposed_stop, state
                    FROM t100_live_stop_amendments
                    ORDER BY id"""
             )
