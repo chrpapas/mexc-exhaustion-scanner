@@ -35,6 +35,24 @@ class SupervisorTests(unittest.IsolatedAsyncioTestCase):
         self.exchange.stops[0]["vol"]="19"
         with self.assertRaisesRegex(SupervisionHalted,"COVERAGE"):
             await self.s.verify([position()])
+
+    async def test_entire_position_same_mode_covers_without_explicit_volume(self):
+        self.exchange.stops[0].update(
+            vol="0",
+            volType=2,
+            profitLossVolType="SAME",
+        )
+        await self.s.verify([position()])
+
+    async def test_separate_mode_requires_explicit_stop_loss_volume(self):
+        self.exchange.stops[0].update(
+            vol="0",
+            volType=2,
+            profitLossVolType="SEPARATE",
+            stopLossVol="0",
+        )
+        with self.assertRaisesRegex(SupervisionHalted,"COVERAGE"):
+            await self.s.verify([position()])
     async def test_drifted_contracts(self):
         self.exchange.positions[0]["holdVol"]="19"
         with self.assertRaisesRegex(SupervisionHalted,"VOLUME_DRIFT"):
