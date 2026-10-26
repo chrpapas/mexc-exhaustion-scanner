@@ -1,5 +1,6 @@
 """Offline exactly-once-attempt stop mutation tests."""
 import unittest
+from dataclasses import replace
 from decimal import Decimal as D
 
 from app.t100_live_authorization import (
@@ -189,6 +190,22 @@ class StopMutationExecutorTests(unittest.IsolatedAsyncioTestCase):
                 self.amendment,
                 permit=permit(),
             )
+        self.assertEqual(self.transport.posts, 0)
+
+    async def test_invalid_stop_id_blocks_before_submitting(self):
+        bad = replace(self.amendment, stop_order_id="not-numeric")
+        with self.assertRaisesRegex(
+            StopMutationExecutionHalted,
+            "STOP_ORDER_ID_INVALID_BEFORE_SUBMISSION",
+        ):
+            await self.executor.submit_once(
+                bad,
+                permit=permit(),
+            )
+        self.assertEqual(
+            self.journal.states[self.amendment.external_id],
+            "PREPARED",
+        )
         self.assertEqual(self.transport.posts, 0)
 
     async def test_missing_permit_blocks_before_journal_or_post(self):
