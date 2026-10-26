@@ -23,6 +23,9 @@ from app.t100_live_checkpoint_journal import (
     build_verified_stop_checkpoint,
 )
 from app.t100_live_durable_recovery import PositionCheckpoint
+from app.t100_live_position_accounting import (
+    VerifiedClosedPositionAccounting,
+)
 
 
 class CheckpointCoordinatorHalted(RuntimeError):
@@ -230,7 +233,7 @@ class CheckpointPersistenceCoordinator:
         *,
         positions: Any,
         stops: Any,
-        close_provenance_verified: bool,
+        final_accounting: VerifiedClosedPositionAccounting,
         evidence_fresh: bool,
         account_reconciled: bool,
         positions_complete: bool,
@@ -272,9 +275,32 @@ class CheckpointPersistenceCoordinator:
             raise CheckpointCoordinatorHalted(
                 "CHECKPOINT_CLOSE_STOP_STILL_PRESENT"
             )
-        if close_provenance_verified is not True:
+        if not isinstance(
+            final_accounting,
+            VerifiedClosedPositionAccounting,
+        ):
             raise CheckpointCoordinatorHalted(
-                "CHECKPOINT_CLOSE_PROVENANCE_UNVERIFIED"
+                "CHECKPOINT_FINAL_ACCOUNTING_UNVERIFIED"
+            )
+        reconciled = final_accounting.reconciliation
+        if (
+            final_accounting.close_provenance_verified is not True
+            or final_accounting.fill_history_complete is not True
+            or final_accounting.funding_history_complete is not True
+            or reconciled.status != "CLOSED_RECONCILED"
+            or reconciled.position_id != previous.position_id
+            or reconciled.opened_contracts != previous.contracts
+            or reconciled.closed_contracts != previous.contracts
+            or reconciled.remaining_contracts != 0
+            or final_accounting.entry_order_id
+            != previous.exchange_order_id
+            or final_accounting.stop_order_id
+            != previous.stop_order_id
+            or not isinstance(final_accounting.close_order_id, str)
+            or not final_accounting.close_order_id
+        ):
+            raise CheckpointCoordinatorHalted(
+                "CHECKPOINT_FINAL_ACCOUNTING_PROVENANCE_MISMATCH"
             )
 
         try:
