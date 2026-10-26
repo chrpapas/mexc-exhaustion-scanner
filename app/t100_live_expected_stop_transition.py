@@ -253,3 +253,133 @@ def assess_expected_stop_transition(
     result["expected_transition_verified"] = True
     result["status"] = "EXPECTED_STOP_AMENDMENT_REPLACEMENT_VERIFIED"
     return result
+
+
+def assess_expected_stop_current_outcome(
+    *,
+    current_stops: Any,
+    expected: ExpectedStopTransition,
+    finished_stops: Any | None = None,
+) -> dict[str, Any]:
+    """Verify an amendment outcome after restart from durable prior state.
+
+    The durable checkpoint/journal supplies the already-verified prior stop
+    identity and price. Current exchange state must show exactly one active
+    protective stop for the target position at or tighter than the proposed
+    price. If the native stop identity changed, terminal history must prove
+    the previous stop was canceled untriggered and finished.
+
+    An unchanged old stop at the previous price is unresolved, not evidence
+    that a POST failed and never permission to retry blindly.
+    """
+    result: dict[str, Any] = {
+        "expected_transition_verified": False,
+        "same_stop_identity": False,
+        "replacement_stop_identity": False,
+        "old_stop_terminal_cancel_verified": False,
+        "current_stop_active": False,
+        "current_price_tightened_to_expected_level": False,
+        "protection_gap_observed": False,
+        "account_wide_completeness_verified": False,
+        "exchange_atomicity_verified": False,
+        "entry_allowed": False,
+        "live_authorization": False,
+    }
+
+    if not isinstance(expected, ExpectedStopTransition):
+        result["status"] = "INVALID_EXPECTED_TRANSITION"
+        return result
+    if (
+        not isinstance(current_stops, list)
+        or any(not isinstance(row, dict) for row in current_stops)
+    ):
+        result["status"] = "INVALID_CURRENT_STOP_EVIDENCE"
+        return result
+    if finished_stops is not None and (
+        not isinstance(finished_stops, list)
+        or any(not isinstance(row, dict) for row in finished_stops)
+    ):
+        result["status"] = "INVALID_FINISHED_STOP_EVIDENCE"
+        return result
+
+    current = _target_rows(current_stops, expected)
+    result["current_matching_rows"] = len(current)
+    if len(current) == 0:
+        result["protection_gap_observed"] = True
+        result["status"] = "PROTECTION_GAP_NOT_ACCEPTED"
+        return result
+    if len(current) != 1:
+        result["status"] = "CURRENT_STOP_NOT_UNIQUE"
+        return result
+
+    row = current[0]
+    current_id = _stop_id(row)
+    if not current_id:
+        result["status"] = "STOP_IDENTITY_MISSING"
+        return result
+
+    active = (
+        _integer(row.get("state")) == 1
+        and (
+            "isFinished" not in row
+            or _integer(row.get("isFinished")) == 0
+        )
+    )
+    result["current_stop_active"] = active
+    if not active:
+        result["status"] = "ACTIVE_STOP_STATE_INVALID"
+        return result
+
+    current_price = _positive_decimal(row.get("stopLossPrice"))
+    if current_price is None:
+        result["status"] = "STOP_PRICE_INVALID"
+        return result
+
+    tightened = (
+        current_price <= expected.proposed_stop
+        and current_price < expected.previous_stop
+    )
+    result["current_price_tightened_to_expected_level"] = tightened
+    if not tightened:
+        result["status"] = "CURRENT_STOP_OUTCOME_UNRESOLVED"
+        return result
+
+    if current_id == expected.previous_stop_order_id:
+        result["same_stop_identity"] = True
+        result["expected_transition_verified"] = True
+        result["status"] = (
+            "EXPECTED_STOP_CURRENT_OUTCOME_IN_PLACE_VERIFIED"
+        )
+        return result
+
+    result["replacement_stop_identity"] = True
+    if finished_stops is None:
+        result["status"] = "STOP_REPLACEMENT_TERMINAL_PROVENANCE_REQUIRED"
+        return result
+
+    terminal = [
+        old for old in finished_stops
+        if str(old.get("positionId") or "") == expected.position_id
+        and old.get("symbol") == expected.symbol
+        and _stop_id(old) == expected.previous_stop_order_id
+    ]
+    if len(terminal) != 1:
+        result["status"] = "OLD_STOP_TERMINAL_ROW_NOT_UNIQUE"
+        return result
+
+    old = terminal[0]
+    terminal_cancel = (
+        _integer(old.get("state")) == 2
+        and _integer(old.get("triggerSide")) == 0
+        and _integer(old.get("isFinished")) == 1
+    )
+    result["old_stop_terminal_cancel_verified"] = terminal_cancel
+    if not terminal_cancel:
+        result["status"] = "OLD_STOP_TERMINAL_CANCEL_UNVERIFIED"
+        return result
+
+    result["expected_transition_verified"] = True
+    result["status"] = (
+        "EXPECTED_STOP_CURRENT_OUTCOME_REPLACEMENT_VERIFIED"
+    )
+    return result
