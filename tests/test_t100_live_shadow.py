@@ -72,6 +72,29 @@ class ShadowTests(unittest.TestCase):
         with self.assertRaisesRegex(ShadowHalted, "UNKNOWN_POSITION_OR_STOP"):
             run(stops=[s])
 
+    def test_entire_position_same_stop_covers_without_explicit_volume(self):
+        s = stop()
+        s.update(
+            vol="0",
+            volType=2,
+            profitLossVolType="SAME",
+        )
+        r = run(stops=[s])
+        self.assertEqual(r.protected_positions, 1)
+
+    def test_separate_mode_requires_explicit_stop_loss_volume(self):
+        s = stop()
+        s.update(
+            vol="0",
+            volType=2,
+            profitLossVolType="SEPARATE",
+            stopLossVol="0",
+        )
+        with self.assertRaisesRegex(
+            ShadowHalted, "INSUFFICIENT_NATIVE_STOP"
+        ):
+            run(stops=[s])
+
     def test_undercovered_stop_fails(self):
         s = stop()
         s["vol"] = "19"
