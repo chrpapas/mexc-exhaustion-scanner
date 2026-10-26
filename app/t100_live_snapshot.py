@@ -9,6 +9,8 @@ from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
+from app.t100_live_active_tpsl import effective_protective_quantity
+
 
 class SnapshotHalted(RuntimeError):
     pass
@@ -61,6 +63,7 @@ def validate_inventory_snapshot(
     if not 0 <= now_ms - observed_at_ms <= max_age_ms <= 2000:
         raise SnapshotHalted("INVENTORY_SNAPSHOT_STALE_OR_FUTURE")
     position_ids: set[tuple[str, str]] = set()
+    position_qty_by_id: dict[str, Decimal] = {}
     stop_ids: set[str] = set()
     total_short = Decimal(0)
     for position in positions:
@@ -84,19 +87,31 @@ def validate_inventory_snapshot(
             # lifecycle parser; all other states require operator review.
             raise SnapshotHalted("POSITION_NOT_ORDINARY_HOLDING")
         qty = _positive(position.get("holdVol"), "POSITION_VOLUME")
+        position_qty_by_id[pid] = qty
         if side == 2:
             total_short += qty
     for stop in stops:
         if not isinstance(stop, dict):
             raise SnapshotHalted("MALFORMED_STOP")
         sid = str(stop.get("id") or stop.get("stopPlanOrderId") or "")
-        if not sid or not stop.get("positionId"):
+        pid = str(stop.get("positionId") or "")
+        if not sid or not pid:
             raise SnapshotHalted("MISSING_STOP_IDENTITY")
         if sid in stop_ids:
             raise SnapshotHalted("DUPLICATE_STOP")
         stop_ids.add(sid)
         _positive(stop.get("stopLossPrice"), "STOP_PRICE")
-        _positive(stop.get("vol"), "STOP_VOLUME")
+        position_qty = position_qty_by_id.get(pid)
+        effective_qty = (
+            effective_protective_quantity(
+                stop,
+                position_quantity=position_qty,
+            )
+            if position_qty is not None
+            else None
+        )
+        if effective_qty is None:
+            raise SnapshotHalted("INVALID_STOP_VOLUME")
         state = _integer(stop.get("state"), "STOP_STATE")
         if state != 1:
             raise SnapshotHalted("INACTIVE_STOP_IN_OPEN_INVENTORY")
