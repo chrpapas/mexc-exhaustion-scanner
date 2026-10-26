@@ -31,6 +31,42 @@ def _positive(raw: Any) -> Decimal | None:
     return value
 
 
+
+def effective_protective_quantity(
+    stop: Any,
+    *,
+    position_quantity: Decimal,
+) -> Decimal | None:
+    """Return effective SL quantity for one observed MEXC TP/SL row.
+
+    MEXC Entire Position TP/SL is represented by volType=2 with
+    profitLossVolType=SAME and may omit/zero the explicit vol field. In that
+    exact documented mode the native protection dynamically tracks the whole
+    position, so the observed position quantity is the effective quantity.
+
+    All other modes require an explicit positive protective quantity:
+    stopLossVol for SEPARATE mode, otherwise vol. Unknown modes fail closed.
+    """
+    if (
+        not isinstance(stop, dict)
+        or not isinstance(position_quantity, Decimal)
+        or not position_quantity.is_finite()
+        or position_quantity <= 0
+    ):
+        return None
+
+    vol_type = _integer(stop.get("volType"))
+    quantity_mode = stop.get("profitLossVolType")
+
+    if vol_type == 2 and quantity_mode == "SAME":
+        return position_quantity
+
+    protective_raw = stop.get("vol")
+    if quantity_mode == "SEPARATE":
+        protective_raw = stop.get("stopLossVol")
+
+    return _positive(protective_raw)
+
 def assess_active_tpsl_semantics(
     positions: Any, stops: Any,
 ) -> dict[str, Any]:
@@ -149,20 +185,14 @@ def assess_active_tpsl_semantics(
         if protective is None:
             volume_ok = False
 
-        # MEXC documents volType=2 as position TP/SL, and its current
-        # product guidance says Entire Position TP/SL tracks the whole
-        # position quantity automatically. Real read-only evidence also
-        # shows a volType=2 + SAME row without a positive explicit volume.
-        # Infer effective stop coverage only for that exact whole-position
-        # mode. Partial TP/SL and SEPARATE quantity modes still require an
-        # explicit positive stop-loss quantity.
-        whole_position_dynamic = (
-            vol_type == 2 and profit_loss_vol_type == "SAME"
+        effective_protective = (
+            effective_protective_quantity(
+                s,
+                position_quantity=position_qty[pid],
+            )
+            if p is not None
+            else None
         )
-        effective_protective = protective
-        if whole_position_dynamic and p is not None:
-            effective_protective = position_qty.get(pid)
-
         if effective_protective is None:
             effective_quantity_ok = False
         elif p is not None:
