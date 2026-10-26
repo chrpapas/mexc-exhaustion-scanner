@@ -367,7 +367,7 @@ class CoordinatorTests(unittest.IsolatedAsyncioTestCase):
             await self.coordinator.persist_initial_protected(
                 intent=intent(), order=order(),
                 positions=[position()], stops=[stop()],
-                **gates(),
+                **initial_gates(),
             )
 
 
