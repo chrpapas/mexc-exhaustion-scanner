@@ -8,6 +8,7 @@ class Journal:
     def __init__(self):
         self.states = {}
         self.transitions = []
+        self.verified_stop_ids = {}
     async def prepare(self, a):
         if a.external_id in self.states:
             return False
@@ -20,6 +21,14 @@ class Journal:
         if self.states[oid] != expected:
             return False
         self.states[oid] = target
+        return True
+
+    async def mark_verified(self, oid, expected, verified_stop_order_id):
+        self.transitions.append((expected, "VERIFIED"))
+        if self.states[oid] != expected:
+            return False
+        self.states[oid] = "VERIFIED"
+        self.verified_stop_ids[oid] = verified_stop_order_id
         return True
 
 
@@ -53,6 +62,10 @@ class StopJournalTests(unittest.IsolatedAsyncioTestCase):
     async def test_verified_stop(self):
         self.assertEqual(await self.reconciler.verify(self.a), "VERIFIED_READ_ONLY")
         self.assertEqual(self.journal.states[self.a.external_id], "VERIFIED")
+        self.assertEqual(
+            self.journal.verified_stop_ids[self.a.external_id],
+            self.a.stop_order_id,
+        )
         self.assertEqual(self.exchange.reads, 1)
 
     async def test_idempotent_recheck(self):
