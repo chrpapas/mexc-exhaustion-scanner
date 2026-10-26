@@ -2,7 +2,13 @@
 import unittest
 from decimal import Decimal as D
 
+from app.t100_live_authorization import (
+    LiveAuthorizationHalted,
+    LivePilotReadinessEvidence,
+    issue_live_mutation_permit,
+)
 from app.t100_live_execution import EntryIntent
+from app.t100_live_guards import LIVE_CONFIRMATION, T100ExecutionControls
 from app.t100_live_mexc_adapter import LiveMexcAdapter
 
 
@@ -31,6 +37,35 @@ class FakeClient:
     async def open_stop_orders(self, symbol=None):
         self.open_stop_calls.append(symbol)
         return [dict(x) for x in self.current_stops]
+
+
+def permit(max_position="100"):
+    controls = T100ExecutionControls.from_env({
+        "T100_EXECUTION_MODE": "live",
+        "T100_LIVE_ORDER_API_ENABLED": "true",
+        "T100_LIVE_KILL_SWITCH": "false",
+        "T100_LIVE_OPERATOR_CONFIRM": LIVE_CONFIRMATION,
+        "T100_LIVE_MAX_POSITION_NOTIONAL_USDT": max_position,
+        "T100_LIVE_MAX_TOTAL_NOTIONAL_USDT": "100",
+        "T100_LIVE_MAX_DAILY_LOSS_USDT": "25",
+        "T100_LIVE_LEVERAGE": "1",
+    })
+    evidence = LivePilotReadinessEvidence(
+        code_revision_verified=True,
+        durable_schema_deployed_verified=True,
+        current_inventory_completeness_verified=True,
+        account_reconciled=True,
+        protected_position_soak_verified=True,
+        restart_recovery_verified=True,
+        native_stop_mutation_contract_verified=True,
+        entry_reconciliation_verified=True,
+        fill_and_accounting_verified=True,
+        private_ws_lifecycle_semantics_verified=True,
+        unresolved_mutations_absent=True,
+        independent_review_completed=True,
+        operator_tiny_pilot_authorized=True,
+    )
+    return issue_live_mutation_permit(controls, evidence)
 
 
 def intent():
@@ -80,12 +115,30 @@ class LiveMexcAdapterContractTests(unittest.IsolatedAsyncioTestCase):
                     await self.adapter.order_deal_details(bad)
                 self.assertEqual(self.client.get_calls, [])
 
+    async def test_mutation_without_valid_permit_never_posts(self):
+        with self.assertRaises(LiveAuthorizationHalted):
+            await self.adapter.submit_short_with_stop(
+                intent(), permit=None
+            )
+        self.assertEqual(self.client.posts, [])
+
+        with self.assertRaises(LiveAuthorizationHalted):
+            await self.adapter.submit_native_short_stop_tightening(
+                stop_order_id=99,
+                previous_stop_price="175",
+                new_stop_price="90",
+                permit=None,
+            )
+        self.assertEqual(self.client.posts, [])
+
     async def test_entry_uses_current_place_order_contract(self):
         self.client.post_result = {
             "orderId": "739113577038255616",
             "ts": 1761888808839,
         }
-        order_id = await self.adapter.submit_short_with_stop(intent())
+        order_id = await self.adapter.submit_short_with_stop(
+            intent(), permit=permit()
+        )
         self.assertEqual(order_id, "739113577038255616")
         self.assertEqual(len(self.client.posts), 1)
         path, body = self.client.posts[0]
@@ -108,13 +161,16 @@ class LiveMexcAdapterContractTests(unittest.IsolatedAsyncioTestCase):
                 with self.assertRaisesRegex(
                     RuntimeError, "did not return orderId"
                 ):
-                    await self.adapter.submit_short_with_stop(intent())
+                    await self.adapter.submit_short_with_stop(
+                        intent(), permit=permit()
+                    )
 
     async def test_one_shot_stop_tightening_contract(self):
         await self.adapter.submit_native_short_stop_tightening(
             stop_order_id=99,
             previous_stop_price="175",
             new_stop_price="90",
+            permit=permit(),
         )
         self.assertEqual(
             self.client.posts,
@@ -135,6 +191,7 @@ class LiveMexcAdapterContractTests(unittest.IsolatedAsyncioTestCase):
                 stop_order_id=99,
                 previous_stop_price="175",
                 new_stop_price="90",
+            permit=permit(),
             )
         self.assertEqual(len(self.client.posts), 1)
 
@@ -156,6 +213,7 @@ class LiveMexcAdapterContractTests(unittest.IsolatedAsyncioTestCase):
                         stop_order_id=stop_id,
                         previous_stop_price=previous,
                         new_stop_price=requested,
+                        permit=permit(),
                     )
                 self.assertEqual(self.client.posts, [])
 
@@ -184,6 +242,7 @@ class LiveMexcAdapterContractTests(unittest.IsolatedAsyncioTestCase):
             position_id=10,
             previous_stop_price="175",
             new_stop_price="90",
+            permit=permit(),
         )
         self.assertEqual(len(self.client.posts), 1)
         self.assertEqual(self.client.open_stop_calls, ["SIREN_USDT"])
@@ -199,6 +258,7 @@ class LiveMexcAdapterContractTests(unittest.IsolatedAsyncioTestCase):
                 position_id=10,
                 previous_stop_price="175",
                 new_stop_price="90",
+            permit=permit(),
             )
         self.assertEqual(len(self.client.posts), 1)
 
