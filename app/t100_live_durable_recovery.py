@@ -201,13 +201,18 @@ def _validate_revision_history(
                 ("external_oid", cp.external_oid),
                 ("exchange_order_id", cp.exchange_order_id),
                 ("position_id", cp.position_id),
-                ("stop_order_id", cp.stop_order_id),
             )
             for field, expected in immutable_pairs:
                 if str(row.get(field) or "") != expected:
                     raise DurableRecoveryHalted(
                         "CHECKPOINT_REVISION_IMMUTABLE_DRIFT"
                     )
+
+            stop_order_id = str(row.get("stop_order_id") or "")
+            if not stop_order_id:
+                raise DurableRecoveryHalted(
+                    "CHECKPOINT_REVISION_STOP_ID_MISSING"
+                )
 
             if _positive(
                 row.get("contracts"), "CHECKPOINT_REVISION_CONTRACTS"
@@ -275,6 +280,10 @@ def _validate_revision_history(
         if final.get("armed") is not cp.armed:
             raise DurableRecoveryHalted(
                 "CHECKPOINT_FINAL_REVISION_MISMATCH"
+            )
+        if str(final.get("stop_order_id") or "") != cp.stop_order_id:
+            raise DurableRecoveryHalted(
+                "CHECKPOINT_FINAL_REVISION_STOP_ID_MISMATCH"
             )
 
 
