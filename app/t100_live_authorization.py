@@ -22,6 +22,7 @@ class LiveAuthorizationHalted(RuntimeError):
 @dataclass(frozen=True)
 class LivePilotReadinessEvidence:
     code_revision_verified: bool
+    strategy_parity_verified: bool
     durable_schema_deployed_verified: bool
     current_inventory_completeness_verified: bool
     account_reconciled: bool
@@ -38,6 +39,7 @@ class LivePilotReadinessEvidence:
     def failures(self) -> tuple[str, ...]:
         mapping = (
             ("code_revision_unverified", self.code_revision_verified),
+            ("strategy_parity_unverified", self.strategy_parity_verified),
             ("durable_schema_not_deployed", self.durable_schema_deployed_verified),
             (
                 "current_inventory_completeness_unverified",
