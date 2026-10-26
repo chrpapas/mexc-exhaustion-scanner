@@ -1,0 +1,172 @@
+"""Offline current MEXC live-adapter contract tests. No HTTP is sent."""
+import unittest
+from decimal import Decimal as D
+
+from app.t100_live_execution import EntryIntent
+from app.t100_live_mexc_adapter import LiveMexcAdapter
+
+
+class FakeClient:
+    def __init__(self):
+        self.posts = []
+        self.open_stop_calls = []
+        self.post_result = None
+        self.post_error = None
+        self.current_stops = []
+
+    async def _private_post(self, path, body):
+        self.posts.append((path, body))
+        if self.post_error is not None:
+            raise self.post_error
+        return self.post_result
+
+    async def _private_get(self, path, params=None):
+        raise AssertionError("unexpected _private_get")
+
+    async def open_stop_orders(self, symbol=None):
+        self.open_stop_calls.append(symbol)
+        return [dict(x) for x in self.current_stops]
+
+
+def intent():
+    return EntryIntent(
+        signal_id=1,
+        symbol="SIREN_USDT",
+        reference_price=D("100"),
+        notional_usdt=D("500"),
+        volume_contracts=D("5"),
+        stop_price=D("175"),
+        external_oid="t100v1eabc",
+    )
+
+
+class LiveMexcAdapterContractTests(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        self.client = FakeClient()
+        self.adapter = LiveMexcAdapter(self.client)
+
+    async def test_entry_uses_current_place_order_contract(self):
+        self.client.post_result = {
+            "orderId": "739113577038255616",
+            "ts": 1761888808839,
+        }
+        order_id = await self.adapter.submit_short_with_stop(intent())
+        self.assertEqual(order_id, "739113577038255616")
+        self.assertEqual(len(self.client.posts), 1)
+        path, body = self.client.posts[0]
+        self.assertEqual(path, "/api/v1/private/order/create")
+        self.assertEqual(body["symbol"], "SIREN_USDT")
+        self.assertEqual(body["side"], 3)
+        self.assertEqual(body["type"], 5)
+        self.assertEqual(body["openType"], 1)
+        self.assertEqual(body["positionMode"], 1)
+        self.assertEqual(body["externalOid"], "t100v1eabc")
+        self.assertEqual(body["leverage"], 1)
+        self.assertEqual(body["stopLossPrice"], "175")
+        self.assertEqual(body["lossTrend"], 2)
+
+    async def test_entry_requires_order_id_in_unwrapped_data(self):
+        for bad in (None, {}, {"ts": 1}, "123"):
+            with self.subTest(bad=bad):
+                self.client.posts = []
+                self.client.post_result = bad
+                with self.assertRaisesRegex(
+                    RuntimeError, "did not return orderId"
+                ):
+                    await self.adapter.submit_short_with_stop(intent())
+
+    async def test_one_shot_stop_tightening_contract(self):
+        await self.adapter.submit_native_short_stop_tightening(
+            stop_order_id=99,
+            previous_stop_price="175",
+            new_stop_price="90",
+        )
+        self.assertEqual(
+            self.client.posts,
+            [(
+                "/api/v1/private/stoporder/change_plan_price",
+                {
+                    "stopPlanOrderId": 99,
+                    "lossTrend": 2,
+                    "stopLossPrice": "90",
+                },
+            )],
+        )
+
+    async def test_stop_tightening_never_retries_ambiguous_post(self):
+        self.client.post_error = TimeoutError("unknown outcome")
+        with self.assertRaises(TimeoutError):
+            await self.adapter.submit_native_short_stop_tightening(
+                stop_order_id=99,
+                previous_stop_price="175",
+                new_stop_price="90",
+            )
+        self.assertEqual(len(self.client.posts), 1)
+
+    async def test_non_tightening_or_invalid_stop_never_posts(self):
+        cases = (
+            (99, "175", "175"),
+            (99, "175", "176"),
+            (99, "175", "0"),
+            (0, "175", "90"),
+            (True, "175", "90"),
+        )
+        for stop_id, previous, requested in cases:
+            with self.subTest(
+                stop_id=stop_id, previous=previous, requested=requested
+            ):
+                self.client.posts = []
+                with self.assertRaises(ValueError):
+                    await self.adapter.submit_native_short_stop_tightening(
+                        stop_order_id=stop_id,
+                        previous_stop_price=previous,
+                        new_stop_price=requested,
+                    )
+                self.assertEqual(self.client.posts, [])
+
+    async def test_open_stops_uses_dedicated_current_endpoint_wrapper(self):
+        self.client.current_stops = [{
+            "id": 99,
+            "positionId": 10,
+            "symbol": "SIREN_USDT",
+            "state": 1,
+        }]
+        rows = await self.adapter.open_stop_orders("SIREN_USDT")
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(self.client.open_stop_calls, ["SIREN_USDT"])
+
+    async def test_legacy_send_then_read_verifies_without_second_post(self):
+        self.client.current_stops = [{
+            "id": 99,
+            "positionId": 10,
+            "symbol": "SIREN_USDT",
+            "state": 1,
+            "stopLossPrice": "89",
+        }]
+        await self.adapter.tighten_native_short_stop(
+            symbol="SIREN_USDT",
+            stop_order_id=99,
+            position_id=10,
+            previous_stop_price="175",
+            new_stop_price="90",
+        )
+        self.assertEqual(len(self.client.posts), 1)
+        self.assertEqual(self.client.open_stop_calls, ["SIREN_USDT"])
+
+    async def test_legacy_send_then_read_fails_if_current_stop_not_verified(self):
+        self.client.current_stops = []
+        with self.assertRaisesRegex(
+            RuntimeError, "NATIVE_STOP_MODIFICATION_UNVERIFIED"
+        ):
+            await self.adapter.tighten_native_short_stop(
+                symbol="SIREN_USDT",
+                stop_order_id=99,
+                position_id=10,
+                previous_stop_price="175",
+                new_stop_price="90",
+            )
+        self.assertEqual(len(self.client.posts), 1)
+
+
+if __name__ == "__main__":
+    unittest.main()
