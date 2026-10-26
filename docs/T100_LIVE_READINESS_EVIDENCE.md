@@ -1,6 +1,6 @@
 # T100 live readiness: evidence and release gates
 
-**Status: BLOCKED — draft branch only. No Render deployment, no real orders.**
+**Status: BLOCKED FOR LIVE TRADING — read-only Render shadow deployed; no real orders.**
 
 ## Verified offline evidence
 - V40 exported historical parity: 146 candidates; 2,376 gate rows,
@@ -59,8 +59,7 @@ allowlisted field/type summary and non-authorizing parser compatibility
 assessment. Do **not** share keys, full API payloads,
 private request headers, or unredacted logs. An empty account yields no
 field schema evidence. This is a discovery probe, not proof of pagination,
-atomicity, API permissions, or safety for real orders. It has not been run
-against the operator account in this PR.
+atomicity, API permissions, or safety for real orders. It has been run against the operator account in read-only mode; those observations remain non-authorizing.
 
 ## Current architecture boundaries
 - `app/t100_live_guards.py` blocks the production paper portfolio
@@ -1024,3 +1023,52 @@ variables were changed, and no exchange/database mutation was performed.
 
 Offline safety suite: 540 tests passed on the final Render-shadow code head.
 All four branch workflows passed.
+
+
+### 2026-10-26 current-account inventory completeness contract and probe
+
+Official MEXC Futures documentation was re-reviewed on 2026-10-26 for the
+current inventory endpoints.
+
+Documented current contracts:
+- GET /api/v1/private/position/open_positions — optional symbol/positionId
+  filters; no pagination request parameters or pagination response metadata.
+- GET /api/v1/private/stoporder/open_orders — optional symbol filter; no
+  pagination request parameters or pagination response metadata.
+- GET /api/v1/private/order/open_order_total_count — account-level current
+  order counts including stopOrderCount for TP/SL orders.
+
+A new fail-closed current-inventory certificate and coherent GET-only probe
+were added:
+- app/t100_live_inventory_completeness.py
+- app/t100_live_inventory_completeness_probe.py
+
+The probe bookends its independent witnesses:
+1. account-wide current positions + current TP/SL
+2. symbol-scoped redundancy
+3. account position-margin witness
+4. account open-order counts / stopOrderCount
+5. account-wide current positions + current TP/SL again
+
+Certification requires all of:
+- the pinned reviewed account-scope/non-paginated current endpoint contract
+- identical safety-critical inventory before vs after the witness window
+- position-margin reconciliation against account assets
+- exact current TP/SL row count == stopOrderCount
+- symbol-scoped redundancy when any symbol is observed
+
+The resulting account_wide_completeness_verified flag applies only to CURRENT
+position/current-TP/SL inventory for that coherent evidence window. It does
+not certify:
+- exchange atomicity
+- historical TP/SL pagination
+- historical fills/funding completeness
+- order mutation safety
+- entry_allowed or live_authorization
+
+The read-only preflight now exposes this probe as an optional diagnostic.
+The running Render soak worker was deliberately not redeployed for this code,
+so the existing protected-position soak remains uninterrupted.
+
+All five branch workflows passed at head
+3a24ce58352749cef7b59c6b857765111cd1ed53.
