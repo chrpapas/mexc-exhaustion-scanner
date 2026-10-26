@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from decimal import Decimal
 from typing import Protocol
 
+from app.t100_live_active_tpsl import effective_protective_quantity
 from app.t100_live_trailing import next_short_stop
 
 
@@ -132,8 +133,15 @@ class LivePositionSupervisor:
             if len(matched) != 1:
                 raise SupervisionHalted("NATIVE_STOP_MISSING_OR_DUPLICATE")
             stop = matched[0]
-            if (_decimal(stop.get("stopLossPrice")) > wanted.stop_price
-                    or _decimal(stop.get("vol")) < wanted.contracts):
+            effective_qty = effective_protective_quantity(
+                stop,
+                position_quantity=wanted.contracts,
+            )
+            if (
+                _decimal(stop.get("stopLossPrice")) > wanted.stop_price
+                or effective_qty is None
+                or effective_qty < wanted.contracts
+            ):
                 raise SupervisionHalted("STOP_PRICE_OR_COVERAGE_DRIFT")
 
     def propose(self, position: ManagedShort, *, observed_low: Decimal,
