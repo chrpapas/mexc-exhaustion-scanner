@@ -72,6 +72,29 @@ def revisions_for(row):
     return rows
 
 
+def amendments_for(revisions):
+    by_position = {}
+    for row in revisions:
+        by_position.setdefault(row["position_id"], []).append(row)
+    out = []
+    for position_id, rows in by_position.items():
+        ordered = sorted(rows, key=lambda row: int(row["checkpoint_version"]))
+        for previous, current in zip(ordered, ordered[1:]):
+            out.append({
+                "external_id": (
+                    f"amend-{position_id}-{current['checkpoint_version']}"
+                ),
+                "symbol": current["symbol"],
+                "position_id": position_id,
+                "stop_order_id": previous["stop_order_id"],
+                "verified_stop_order_id": current["stop_order_id"],
+                "previous_stop": previous["stop_price"],
+                "proposed_stop": current["stop_price"],
+                "state": "VERIFIED",
+            })
+    return out
+
+
 def intent(**extra):
     row = {
         "symbol": "SIREN_USDT",
@@ -140,7 +163,9 @@ def run(**kw):
         checkpoint_rows=checkpoints,
         revision_rows=revisions,
         intent_rows=kw.get("intents", [intent()]),
-        stop_amendment_rows=kw.get("amendments", []),
+        stop_amendment_rows=kw.get(
+            "amendments", amendments_for(revisions)
+        ),
         orders=kw.get("orders", [order()]),
         positions=kw.get("positions", [position()]),
         stops=kw.get("stops", [stop()]),
@@ -367,9 +392,14 @@ class DurableRecoveryTests(unittest.TestCase):
             checkpoints=[base],
             revisions=rows,
             amendments=[{
+                "external_id": "replace-1",
+                "symbol": "SIREN_USDT",
+                "position_id": "10",
                 "state": "VERIFIED",
                 "stop_order_id": "99",
                 "verified_stop_order_id": "100",
+                "previous_stop": rows[0]["stop_price"],
+                "proposed_stop": rows[1]["stop_price"],
             }],
             stops=[stop(id="100", stopLossPrice=D("90"))],
         )
@@ -448,9 +478,37 @@ class DurableRecoveryTests(unittest.TestCase):
                 DurableRecoveryHalted, "UNRESOLVED_STOP_AMENDMENT"):
                 run(amendments=[{"state": state}])
 
-    def test_verified_stop_amendment_does_not_block(self):
-        r = run(amendments=[{"state": "VERIFIED"}])
+    def test_verified_stop_amendment_chain_does_not_block(self):
+        base = checkpoint(
+            stop_price=D("90"),
+            best_profit_pct=D("14"),
+            armed=True,
+            checkpoint_version=2,
+        )
+        rows = revisions_for(base)
+        r = run(
+            checkpoints=[base],
+            revisions=rows,
+            amendments=amendments_for(rows),
+            stops=[stop(stopLossPrice=D("90"))],
+        )
         self.assertEqual(len(r.recovered), 1)
+
+    def test_verified_amendment_without_checkpoint_revision_blocks(self):
+        with self.assertRaisesRegex(
+            DurableRecoveryHalted,
+            "WITHOUT_CHECKPOINT_REVISION",
+        ):
+            run(amendments=[{
+                "external_id": "orphan",
+                "symbol": "SIREN_USDT",
+                "position_id": "10",
+                "stop_order_id": "99",
+                "verified_stop_order_id": "100",
+                "previous_stop": D("175"),
+                "proposed_stop": D("90"),
+                "state": "VERIFIED",
+            }])
 
     def test_origin_order_count_mismatch_blocks(self):
         with self.assertRaisesRegex(
