@@ -91,7 +91,7 @@ class ShadowTests(unittest.TestCase):
             stopLossVol="0",
         )
         with self.assertRaisesRegex(
-            ShadowHalted, "INSUFFICIENT_NATIVE_STOP"
+            SnapshotHalted, "INVALID_STOP_VOLUME"
         ):
             run(stops=[s])
 
