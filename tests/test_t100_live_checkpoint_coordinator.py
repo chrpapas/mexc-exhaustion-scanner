@@ -154,6 +154,17 @@ def gates(**overrides):
     return data
 
 
+def initial_gates(**overrides):
+    data = dict(
+        evidence_fresh=True,
+        pre_entry_account_reconciled=True,
+        positions_complete=True,
+        stops_complete=True,
+    )
+    data.update(overrides)
+    return data
+
+
 class CoordinatorTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.writer = Writer()
@@ -162,7 +173,7 @@ class CoordinatorTests(unittest.IsolatedAsyncioTestCase):
     async def test_initial_persist_requires_all_evidence_gates(self):
         for key in (
             "evidence_fresh",
-            "account_reconciled",
+            "pre_entry_account_reconciled",
             "positions_complete",
             "stops_complete",
         ):
@@ -173,7 +184,7 @@ class CoordinatorTests(unittest.IsolatedAsyncioTestCase):
                         order=order(),
                         positions=[position()],
                         stops=[stop()],
-                        **gates(**{key: False}),
+                        **initial_gates(**{key: False}),
                     )
         self.assertEqual(self.writer.calls, [])
 
@@ -183,7 +194,7 @@ class CoordinatorTests(unittest.IsolatedAsyncioTestCase):
             order=order(),
             positions=[position()],
             stops=[stop()],
-            **gates(),
+            **initial_gates(),
         )
         self.assertEqual(current, cp())
         self.assertEqual(len(self.writer.calls), 1)
