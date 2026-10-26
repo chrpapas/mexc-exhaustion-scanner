@@ -10,7 +10,8 @@ from app.t100_live_preflight import (
 
 class FakeClient:
     def __init__(self, positions=None, stops=None, stop_history=None,
-                 funding_page=None, account_assets=None):
+                 funding_page=None, account_assets=None,
+                 open_order_counts=None):
         self.positions = [] if positions is None else positions
         self.stops = [] if stops is None else stops
         self.stop_history = [] if stop_history is None else stop_history
@@ -18,6 +19,16 @@ class FakeClient:
         self.account_assets = (
             [{"currency": "USDT", "positionMargin": 0, "unrealized": 0}]
             if account_assets is None else account_assets
+        )
+        self.open_order_counts = (
+            {
+                "sumCount": len(self.stops),
+                "limitOrderCount": 0,
+                "stopOrderCount": len(self.stops),
+                "planOrderCount": 0,
+                "trackOrderCount": 0,
+            }
+            if open_order_counts is None else open_order_counts
         )
         self.calls = []
         self._spec_cache = {"SIREN_USDT": object()}
@@ -41,6 +52,8 @@ class FakeClient:
         self.calls.append((path, params))
         if path == "/api/v1/private/account/assets":
             return self.account_assets
+        if path == "/api/v1/private/order/open_order_total_count":
+            return self.open_order_counts
         if path == "/api/v1/private/position/open_positions":
             if params and params.get("symbol"):
                 return [
@@ -305,6 +318,76 @@ class PreflightTests(unittest.IsolatedAsyncioTestCase):
         text = str(shared["position_inventory_economic_witness"])
         for secret in ("SIREN_USDT", "12.5", "-1.25"):
             self.assertNotIn(secret, text)
+
+    async def test_current_inventory_completeness_can_be_certified_nonatomic(self):
+        c = FakeClient(
+            positions=[{
+                "positionId": 10,
+                "symbol": "SIREN_USDT",
+                "positionType": 2,
+                "holdVol": 5,
+                "state": 1,
+                "im": 12.5,
+                "unRealizedPnl": -1.25,
+            }],
+            stops=[{
+                "id": 99,
+                "positionId": "10",
+                "symbol": "SIREN_USDT",
+                "positionType": 2,
+                "state": 1,
+                "isFinished": 0,
+                "stopLossPrice": 175.0,
+                "vol": 5,
+            }],
+            account_assets=[{
+                "currency": "USDT",
+                "positionMargin": 12.5,
+                "unrealized": -1.25,
+            }],
+        )
+        result = await read_only_preflight(
+            client=c,
+            include_current_inventory_completeness=True,
+        )
+        proof = result["current_inventory_completeness_probe"]
+        self.assertTrue(proof["account_wide_completeness_verified"])
+        self.assertTrue(result["account_wide_completeness_verified"])
+        self.assertFalse(proof["exchange_atomicity_verified"])
+        self.assertFalse(result["live_order_submission_possible"])
+        self.assertNotIn(
+            "current_account_inventory_completeness_not_certified",
+            result["preflight_failures"],
+        )
+        shared = shareable_contract_report(result)
+        self.assertTrue(shared["account_wide_completeness_verified"])
+        self.assertNotIn("SIREN_USDT", str(
+            shared["current_inventory_completeness_probe"][
+                "current_inventory_completeness"
+            ]
+        ))
+
+    async def test_current_inventory_count_mismatch_stays_uncertified(self):
+        c = FakeClient(
+            positions=[],
+            stops=[],
+            open_order_counts={
+                "sumCount": 1,
+                "limitOrderCount": 0,
+                "stopOrderCount": 1,
+                "planOrderCount": 0,
+                "trackOrderCount": 0,
+            },
+        )
+        result = await read_only_preflight(
+            client=c,
+            include_current_inventory_completeness=True,
+        )
+        self.assertFalse(result["account_wide_completeness_verified"])
+        self.assertIn(
+            "current_account_inventory_completeness_not_certified",
+            result["preflight_failures"],
+        )
 
     async def test_schema_only_history_can_fill_stop_shape_without_certifying_pagination(self):
         c = FakeClient(
