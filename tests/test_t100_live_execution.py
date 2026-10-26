@@ -24,6 +24,7 @@ def permit(max_position="1000", max_total="2000", max_daily_loss="100"):
     })
     evidence = LivePilotReadinessEvidence(
         code_revision_verified=True,
+        strategy_parity_verified=True,
         durable_schema_deployed_verified=True,
         current_inventory_completeness_verified=True,
         account_reconciled=True,
