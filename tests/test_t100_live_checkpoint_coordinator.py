@@ -137,7 +137,7 @@ def final_accounting(**kw):
         stop_order_id="99",
         fill_history_complete=True,
         funding_history_complete=True,
-        final_accounting=final_accounting(),
+        close_provenance_verified=True,
     )
     data.update(kw)
     return VerifiedClosedPositionAccounting(**data)
