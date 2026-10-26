@@ -190,6 +190,13 @@ def build_verified_stop_checkpoint(
         raise CheckpointJournalHalted("AMENDMENT_POSITION_ID_DRIFT")
     if str(amendment.get("stop_order_id") or "") != previous.stop_order_id:
         raise CheckpointJournalHalted("AMENDMENT_STOP_ID_DRIFT")
+    verified_stop_order_id = str(
+        amendment.get("verified_stop_order_id") or ""
+    )
+    if not verified_stop_order_id:
+        raise CheckpointJournalHalted(
+            "AMENDMENT_VERIFIED_STOP_ID_MISSING"
+        )
 
     previous_stop = _positive(
         amendment.get("previous_stop"), "AMENDMENT_PREVIOUS_STOP"
@@ -205,7 +212,7 @@ def build_verified_stop_checkpoint(
     if str(stop.get("positionId") or "") != previous.position_id:
         raise CheckpointJournalHalted("STOP_POSITION_ID_DRIFT")
     current_stop_id = str(stop.get("id") or stop.get("stopPlanOrderId") or "")
-    if current_stop_id != previous.stop_order_id:
+    if current_stop_id != verified_stop_order_id:
         raise CheckpointJournalHalted("STOP_ID_DRIFT")
     if stop.get("symbol") not in (None, previous.symbol):
         raise CheckpointJournalHalted("STOP_SYMBOL_DRIFT")
@@ -233,6 +240,7 @@ def build_verified_stop_checkpoint(
 
     return replace(
         previous,
+        stop_order_id=current_stop_id,
         stop_price=actual_stop,
         best_profit_pct=best,
         armed=armed,
@@ -346,7 +354,7 @@ def validate_checkpoint_transition(
     _validate_checkpoint_shape(previous)
     immutable = (
         "symbol", "external_oid", "exchange_order_id", "position_id",
-        "contracts", "entry_price", "stop_order_id",
+        "contracts", "entry_price",
     )
     for field in immutable:
         if getattr(previous, field) != getattr(current, field):
@@ -368,6 +376,10 @@ def validate_checkpoint_transition(
         if current.stop_price >= previous.stop_price:
             raise CheckpointJournalHalted("STOP_VERIFIED_MUST_TIGHTEN")
     elif reason == REVIEW_LATCHED:
+        if current.stop_order_id != previous.stop_order_id:
+            raise CheckpointJournalHalted(
+                "REVIEW_MUST_NOT_MUTATE_STOP_IDENTITY"
+            )
         expected = ("OPEN", "REVIEW", REVIEW_LATCHED)
         if (
             current.stop_price != previous.stop_price
@@ -376,6 +388,10 @@ def validate_checkpoint_transition(
         ):
             raise CheckpointJournalHalted("REVIEW_MUST_NOT_MUTATE_POSITION_STATE")
     elif reason == CLOSING_LATCHED:
+        if current.stop_order_id != previous.stop_order_id:
+            raise CheckpointJournalHalted(
+                "CLOSING_MUST_NOT_MUTATE_STOP_IDENTITY"
+            )
         if previous.lifecycle_state not in {"OPEN", "REVIEW"}:
             raise CheckpointJournalHalted("CLOSING_SOURCE_INVALID")
         expected = (previous.lifecycle_state, "CLOSING", CLOSING_LATCHED)
@@ -386,6 +402,10 @@ def validate_checkpoint_transition(
         ):
             raise CheckpointJournalHalted("CLOSING_MUST_NOT_MUTATE_POSITION_STATE")
     elif reason == CLOSE_VERIFIED:
+        if current.stop_order_id != previous.stop_order_id:
+            raise CheckpointJournalHalted(
+                "CLOSE_MUST_NOT_MUTATE_STOP_IDENTITY"
+            )
         expected = ("CLOSING", "CLOSED", CLOSE_VERIFIED)
         if (
             current.stop_price != previous.stop_price
