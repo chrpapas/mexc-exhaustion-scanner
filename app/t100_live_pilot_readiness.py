@@ -26,6 +26,7 @@ class PilotReadinessEvidence:
     append_only_permissions_verified: bool
     leader_fencing_verified: bool
     symbol_execution_eligible: bool
+    clock_skew_verified: bool
     no_unresolved_order_intents: bool
     no_unresolved_stop_amendments: bool
     protected_entry_recovery_tested: bool
@@ -80,6 +81,10 @@ def assess_pilot_readiness(
         (
             "symbol_execution_ineligible",
             evidence.symbol_execution_eligible,
+        ),
+        (
+            "clock_skew_unverified",
+            evidence.clock_skew_verified,
         ),
         (
             "unresolved_order_intents_present",
