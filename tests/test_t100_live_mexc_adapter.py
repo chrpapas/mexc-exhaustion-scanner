@@ -39,14 +39,14 @@ class FakeClient:
         return [dict(x) for x in self.current_stops]
 
 
-def permit(max_position="100"):
+def permit(max_position="1000"):
     controls = T100ExecutionControls.from_env({
         "T100_EXECUTION_MODE": "live",
         "T100_LIVE_ORDER_API_ENABLED": "true",
         "T100_LIVE_KILL_SWITCH": "false",
         "T100_LIVE_OPERATOR_CONFIRM": LIVE_CONFIRMATION,
         "T100_LIVE_MAX_POSITION_NOTIONAL_USDT": max_position,
-        "T100_LIVE_MAX_TOTAL_NOTIONAL_USDT": "100",
+        "T100_LIVE_MAX_TOTAL_NOTIONAL_USDT": "1000",
         "T100_LIVE_MAX_DAILY_LOSS_USDT": "25",
         "T100_LIVE_LEVERAGE": "1",
     })
@@ -191,7 +191,7 @@ class LiveMexcAdapterContractTests(unittest.IsolatedAsyncioTestCase):
                 stop_order_id=99,
                 previous_stop_price="175",
                 new_stop_price="90",
-            permit=permit(),
+                permit=permit(),
             )
         self.assertEqual(len(self.client.posts), 1)
 
@@ -258,7 +258,7 @@ class LiveMexcAdapterContractTests(unittest.IsolatedAsyncioTestCase):
                 position_id=10,
                 previous_stop_price="175",
                 new_stop_price="90",
-            permit=permit(),
+                permit=permit(),
             )
         self.assertEqual(len(self.client.posts), 1)
 
