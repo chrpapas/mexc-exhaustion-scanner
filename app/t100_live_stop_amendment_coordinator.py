@@ -17,6 +17,7 @@ from typing import Any
 
 from app.t100_live_expected_stop_transition import (
     ExpectedStopTransition,
+    assess_expected_stop_current_outcome,
     assess_expected_stop_transition,
 )
 from app.t100_live_stop_journal import (
@@ -159,9 +160,71 @@ class StopAmendmentLifecycleCoordinator:
                 f"STOP_TRANSITION_UNVERIFIED:{report.get('status', 'UNKNOWN')}"
             )
 
+        return await self._finalize_verified_report(
+            amendment,
+            state=state,
+            current_stops=after_stops,
+            report=report,
+        )
+
+    async def reconcile_current_outcome(
+        self,
+        amendment: StopAmendment,
+        *,
+        current_stops: Any,
+        finished_stops: Any | None = None,
+    ) -> StopReconciliationOutcome:
+        """Reconcile after restart without a pre-mutation REST snapshot.
+
+        Only SUBMITTING/UNKNOWN/VERIFIED journal states are eligible. The
+        durable amendment itself is the prior-state witness. An unchanged
+        current stop remains unresolved and is never permission to retry.
+        """
+        state = await self._state(amendment)
+        if state == "PREPARED":
+            raise StopAmendmentCoordinatorHalted(
+                "STOP_CHANGE_NOT_OWNED_JOURNAL_NOT_SUBMITTING"
+            )
+        if state not in {"SUBMITTING", "UNKNOWN", "VERIFIED"}:
+            raise StopAmendmentCoordinatorHalted(
+                "STOP_JOURNAL_STATE_INVALID"
+            )
+
+        expected = ExpectedStopTransition.build(
+            external_id=amendment.external_id,
+            symbol=amendment.symbol,
+            position_id=amendment.position_id,
+            previous_stop_order_id=amendment.stop_order_id,
+            previous_stop=amendment.previous_stop,
+            proposed_stop=amendment.proposed_stop,
+        )
+        report = assess_expected_stop_current_outcome(
+            current_stops=current_stops,
+            expected=expected,
+            finished_stops=finished_stops,
+        )
+        if report.get("expected_transition_verified") is not True:
+            raise StopAmendmentCoordinatorHalted(
+                f"STOP_CURRENT_OUTCOME_UNVERIFIED:{report.get('status', 'UNKNOWN')}"
+            )
+        return await self._finalize_verified_report(
+            amendment,
+            state=state,
+            current_stops=current_stops,
+            report=report,
+        )
+
+    async def _finalize_verified_report(
+        self,
+        amendment: StopAmendment,
+        *,
+        state: str,
+        current_stops: Any,
+        report: dict[str, Any],
+    ) -> StopReconciliationOutcome:
         candidates = [
             row
-            for row in after_stops
+            for row in current_stops
             if isinstance(row, dict)
             and str(row.get("positionId") or "") == amendment.position_id
             and row.get("symbol") == amendment.symbol
