@@ -13,6 +13,8 @@ from dataclasses import dataclass
 from decimal import Decimal, ROUND_DOWN, ROUND_UP
 from typing import Any, Protocol
 
+from app.t100_live_active_tpsl import effective_protective_quantity
+
 
 class ExecutionHalted(RuntimeError):
     pass
@@ -215,7 +217,17 @@ class LiveOrderGateway:
                 and int(s.get("state", 0)) == 1
                 and Decimal(str(s.get("stopLossPrice") or "0")) > 0
                 and Decimal(str(s.get("stopLossPrice") or "0")) <= intent.stop_price
-                and Decimal(str(s.get("vol") or 0)) >= dealt
+                and (
+                    effective_protective_quantity(
+                        s,
+                        position_quantity=dealt,
+                    )
+                    is not None
+                )
+                and effective_protective_quantity(
+                    s,
+                    position_quantity=dealt,
+                ) >= dealt
                 for s in stops
             )
             if not protected:
