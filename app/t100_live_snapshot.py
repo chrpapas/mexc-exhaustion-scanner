@@ -101,20 +101,26 @@ def validate_inventory_snapshot(
             raise SnapshotHalted("DUPLICATE_STOP")
         stop_ids.add(sid)
         _positive(stop.get("stopLossPrice"), "STOP_PRICE")
-        position_qty = position_qty_by_id.get(pid)
-        effective_qty = (
-            effective_protective_quantity(
-                stop,
-                position_quantity=position_qty,
-            )
-            if position_qty is not None
-            else None
-        )
-        if effective_qty is None:
-            raise SnapshotHalted("INVALID_STOP_VOLUME")
         state = _integer(stop.get("state"), "STOP_STATE")
         if state != 1:
             raise SnapshotHalted("INACTIVE_STOP_IN_OPEN_INVENTORY")
+
+        position_qty = position_qty_by_id.get(pid)
+        if position_qty is not None:
+            effective_qty = effective_protective_quantity(
+                stop,
+                position_quantity=position_qty,
+            )
+            if effective_qty is None:
+                raise SnapshotHalted("INVALID_STOP_VOLUME")
+        else:
+            # A standalone stop can still be validated structurally from an
+            # explicit quantity. Whole-position dynamic coverage cannot be
+            # inferred without its linked position quantity.
+            protective_raw = stop.get("vol")
+            if stop.get("profitLossVolType") == "SEPARATE":
+                protective_raw = stop.get("stopLossVol")
+            _positive(protective_raw, "STOP_VOLUME")
     return InventorySnapshot(
         observed_at_ms, len(positions), len(stops), total_short,
         not positions and not stops,
