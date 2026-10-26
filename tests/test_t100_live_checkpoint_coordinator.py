@@ -13,6 +13,10 @@ from app.t100_live_checkpoint_journal import (
     STOP_VERIFIED,
 )
 from app.t100_live_durable_recovery import PositionCheckpoint
+from app.t100_live_accounting import ShortReconciliation
+from app.t100_live_position_accounting import (
+    VerifiedClosedPositionAccounting,
+)
 
 
 def cp(**kw):
@@ -110,6 +114,33 @@ class Writer:
         self.calls.append(("advance", previous, current, reason))
         if self.fail:
             raise self.fail
+
+
+def final_accounting(**kw):
+    reconciliation = ShortReconciliation(
+        position_id=kw.pop("position_id", "10"),
+        opened_contracts=kw.pop("opened_contracts", D("20")),
+        closed_contracts=kw.pop("closed_contracts", D("20")),
+        remaining_contracts=kw.pop("remaining_contracts", D("0")),
+        open_notional_usdt=D("2000"),
+        close_notional_usdt=D("1800"),
+        realized_gross_usdt=D("200"),
+        fees_usdt=D("2"),
+        funding_cashflow_usdt=D("1"),
+        realized_net_usdt=D("199"),
+        status=kw.pop("status", "CLOSED_RECONCILED"),
+    )
+    data = dict(
+        reconciliation=reconciliation,
+        entry_order_id="100",
+        close_order_id="200",
+        stop_order_id="99",
+        fill_history_complete=True,
+        funding_history_complete=True,
+        final_accounting=final_accounting(),
+    )
+    data.update(kw)
+    return VerifiedClosedPositionAccounting(**data)
 
 
 def gates(**overrides):
@@ -240,7 +271,7 @@ class CoordinatorTests(unittest.IsolatedAsyncioTestCase):
                 closing,
                 positions=[position()],
                 stops=[],
-                close_provenance_verified=True,
+                final_accounting=final_accounting(),
                 **gates(),
             )
         with self.assertRaisesRegex(
@@ -249,18 +280,60 @@ class CoordinatorTests(unittest.IsolatedAsyncioTestCase):
                 closing,
                 positions=[],
                 stops=[stop()],
-                close_provenance_verified=True,
+                final_accounting=final_accounting(),
                 **gates(),
             )
         with self.assertRaisesRegex(
-            CheckpointCoordinatorHalted, "PROVENANCE_UNVERIFIED"):
+            CheckpointCoordinatorHalted, "ACCOUNTING_PROVENANCE_MISMATCH"):
             await self.coordinator.persist_verified_closed(
                 closing,
                 positions=[],
                 stops=[],
-                close_provenance_verified=False,
+                final_accounting=final_accounting(
+                    close_provenance_verified=False
+                ),
                 **gates(),
             )
+
+    async def test_close_requires_typed_final_accounting(self):
+        closing = cp(lifecycle_state="CLOSING", checkpoint_version=2)
+        with self.assertRaisesRegex(
+            CheckpointCoordinatorHalted, "FINAL_ACCOUNTING_UNVERIFIED"
+        ):
+            await self.coordinator.persist_verified_closed(
+                closing,
+                positions=[],
+                stops=[],
+                final_accounting=None,
+                **gates(),
+            )
+
+    async def test_close_accounting_must_match_checkpoint_identity_and_volume(self):
+        closing = cp(lifecycle_state="CLOSING", checkpoint_version=2)
+        cases = (
+            final_accounting(entry_order_id="999"),
+            final_accounting(stop_order_id="100"),
+            final_accounting(position_id="11"),
+            final_accounting(opened_contracts=D("19")),
+            final_accounting(closed_contracts=D("19")),
+            final_accounting(remaining_contracts=D("1")),
+            final_accounting(status="OPEN_RECONCILED_NOT_CLOSED"),
+            final_accounting(fill_history_complete=False),
+            final_accounting(funding_history_complete=False),
+        )
+        for accounting in cases:
+            with self.subTest(accounting=accounting):
+                with self.assertRaisesRegex(
+                    CheckpointCoordinatorHalted,
+                    "ACCOUNTING_PROVENANCE_MISMATCH",
+                ):
+                    await self.coordinator.persist_verified_closed(
+                        closing,
+                        positions=[],
+                        stops=[],
+                        final_accounting=accounting,
+                        **gates(),
+                    )
 
     async def test_close_verified_persists_closed_checkpoint(self):
         closing = cp(lifecycle_state="CLOSING", checkpoint_version=2)
@@ -268,7 +341,7 @@ class CoordinatorTests(unittest.IsolatedAsyncioTestCase):
             closing,
             positions=[],
             stops=[],
-            close_provenance_verified=True,
+            final_accounting=final_accounting(),
             **gates(),
         )
         self.assertEqual(current.lifecycle_state, "CLOSED")
