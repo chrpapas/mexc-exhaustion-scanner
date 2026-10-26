@@ -1,7 +1,16 @@
 """Offline symbol/account execution eligibility tests."""
 import unittest
+from dataclasses import dataclass
 
-from app.mexc_trade import ContractSpec
+@dataclass(frozen=True)
+class ContractSpec:
+    symbol: str
+    contract_size: float
+    vol_unit: float
+    min_vol: float
+    max_vol: float
+    api_allowed: bool
+    position_open_type: int
 from app.t100_live_symbol_eligibility import (
     SymbolEligibilityHalted,
     assess_symbol_execution_eligibility,
