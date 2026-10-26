@@ -94,6 +94,30 @@ class LiveTests(unittest.IsolatedAsyncioTestCase):
             await self.gateway.reconcile(self.intent)
         self.mexc.stops = [dict(positionId="199", state=1, stopLossPrice="3.5", vol="250")]
         self.assertEqual(await self.gateway.reconcile(self.intent), "VERIFIED_PROTECTED")
+
+    async def test_entire_position_same_stop_reconciles_without_explicit_volume(self):
+        self.ledger.values[self.intent.external_oid] = "ACK"
+        self.mexc.order = dict(
+            orderId="98765",
+            symbol=self.intent.symbol,
+            externalOid=self.intent.external_oid,
+            side=3,
+            state=3,
+            dealVol="250",
+            positionId="199",
+        )
+        self.mexc.stops = [dict(
+            positionId="199",
+            state=1,
+            stopLossPrice="3.5",
+            vol="0",
+            volType=2,
+            profitLossVolType="SAME",
+        )]
+        self.assertEqual(
+            await self.gateway.reconcile(self.intent),
+            "VERIFIED_PROTECTED",
+        )
     async def test_gates_reject_before_order(self):
         for kw in (dict(book_age_ms=1501), dict(signal_age_seconds=901),
                    dict(today_loss_usdt=Decimal("100")),
