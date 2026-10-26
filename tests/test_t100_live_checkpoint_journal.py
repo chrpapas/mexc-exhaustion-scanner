@@ -98,6 +98,7 @@ def amendment(**kw):
         symbol="SIREN_USDT",
         position_id="10",
         stop_order_id="99",
+        verified_stop_order_id="99",
         previous_stop=D("175"),
         proposed_stop=D("90"),
     )
@@ -241,7 +242,18 @@ class BuilderTests(unittest.TestCase):
                         stop=stop(stopLossPrice=D("90")),
                         best_profit_pct=D("14"), armed=True)
 
-    def test_stop_update_requires_exchange_stop_tighter_and_same(self):
+    def test_verified_replacement_stop_identity_is_persisted(self):
+        current = build_verified_stop_checkpoint(
+            cp(),
+            amendment=amendment(verified_stop_order_id="100"),
+            stop=stop(id="100", stopLossPrice=D("89")),
+            best_profit_pct=D("14.5"),
+            armed=True,
+        )
+        self.assertEqual(current.stop_order_id, "100")
+        self.assertEqual(current.stop_price, D("89"))
+
+    def test_stop_update_requires_exchange_stop_tighter_and_verified(self):
         cases = [
             (stop(id="100", stopLossPrice=D("90")), "STOP_ID_DRIFT"),
             (stop(state=2, stopLossPrice=D("90")), "STOP_NOT_ACTIVE"),
@@ -332,7 +344,7 @@ class TransitionValidationTests(unittest.TestCase):
                 cp(), replace(current, stop_price=D("175")),
                 reason=STOP_VERIFIED)
 
-    def test_immutable_entry_and_stop_identity_cannot_change(self):
+    def test_immutable_entry_identity_cannot_change(self):
         current = cp(
             stop_price=D("90"), best_profit_pct=D("14"),
             armed=True, checkpoint_version=2)
@@ -343,7 +355,6 @@ class TransitionValidationTests(unittest.TestCase):
             ("position_id", "11"),
             ("contracts", D("21")),
             ("entry_price", D("101")),
-            ("stop_order_id", "100"),
         ):
             with self.subTest(field=field):
                 with self.assertRaisesRegex(
@@ -351,6 +362,24 @@ class TransitionValidationTests(unittest.TestCase):
                     validate_checkpoint_transition(
                         cp(), replace(current, **{field: value}),
                         reason=STOP_VERIFIED)
+
+    def test_stop_identity_may_change_only_on_stop_verified(self):
+        current = cp(
+            stop_order_id="100",
+            stop_price=D("90"),
+            best_profit_pct=D("14"),
+            armed=True,
+            checkpoint_version=2,
+        )
+        validate_checkpoint_transition(
+            cp(), current, reason=STOP_VERIFIED)
+
+        review = build_lifecycle_checkpoint(cp(), target="REVIEW")
+        with self.assertRaisesRegex(
+            CheckpointJournalHalted, "STOP_IDENTITY"):
+            validate_checkpoint_transition(
+                cp(), replace(review, stop_order_id="100"),
+                reason=REVIEW_LATCHED)
 
     def test_review_and_closing_do_not_mutate_trading_state(self):
         review = build_lifecycle_checkpoint(cp(), target="REVIEW")
