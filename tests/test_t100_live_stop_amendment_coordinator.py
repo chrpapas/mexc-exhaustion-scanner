@@ -206,6 +206,48 @@ class StopAmendmentCoordinatorTests(unittest.IsolatedAsyncioTestCase):
                 after_stops=[current_stop(stopLossPrice="90")],
             )
 
+    async def test_restart_current_outcome_verifies_unknown_without_retry(self):
+        await self.coordinator.mark_submitting(self.amendment)
+        await self.coordinator.mark_unknown(self.amendment)
+        outcome = await self.coordinator.reconcile_current_outcome(
+            self.amendment,
+            current_stops=[current_stop(stopLossPrice="90")],
+        )
+        self.assertEqual(outcome.verified_stop_order_id, "99")
+        self.assertEqual(
+            self.journal.states[self.amendment.external_id],
+            "VERIFIED",
+        )
+
+    async def test_restart_unchanged_stop_remains_unresolved(self):
+        await self.coordinator.mark_submitting(self.amendment)
+        await self.coordinator.mark_unknown(self.amendment)
+        with self.assertRaisesRegex(
+            StopAmendmentCoordinatorHalted,
+            "CURRENT_STOP_OUTCOME_UNRESOLVED",
+        ):
+            await self.coordinator.reconcile_current_outcome(
+                self.amendment,
+                current_stops=[current_stop(stopLossPrice="175")],
+            )
+        self.assertEqual(
+            self.journal.states[self.amendment.external_id],
+            "UNKNOWN",
+        )
+
+    async def test_restart_replacement_verifies_with_terminal_history(self):
+        await self.coordinator.mark_submitting(self.amendment)
+        await self.coordinator.mark_unknown(self.amendment)
+        outcome = await self.coordinator.reconcile_current_outcome(
+            self.amendment,
+            current_stops=[
+                current_stop(id="100", stopLossPrice="89")
+            ],
+            finished_stops=[finished_old()],
+        )
+        self.assertEqual(outcome.verified_stop_order_id, "100")
+        self.assertTrue(outcome.replacement_stop_identity)
+
     async def test_unknown_requires_submitting(self):
         with self.assertRaisesRegex(
             StopAmendmentCoordinatorHalted,
