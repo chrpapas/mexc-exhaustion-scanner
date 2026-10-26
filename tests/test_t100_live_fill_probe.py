@@ -41,6 +41,9 @@ class FillProbeTests(unittest.TestCase):
         )
         self.assertTrue(r["fill_volume_matches_order_deal_volume"])
         self.assertTrue(r["order_specific_fill_reconciliation_verified"])
+        self.assertTrue(r["fills_complete_for_observed_order_aggregate"])
+        self.assertTrue(r["final_order_fill_history_complete"])
+        self.assertTrue(r["strategy_fully_filled_order_complete"])
 
     def test_order_id_mismatch_blocks(self):
         r = assess_order_deal_reconciliation(
@@ -88,6 +91,26 @@ class FillProbeTests(unittest.TestCase):
             "100", order(), [fill(1, 5, 100, fee=-0.01)])
         self.assertTrue(r["fee_semantics_signed_expense_supported"])
         self.assertTrue(r["order_specific_fill_reconciliation_verified"])
+
+    def test_canceled_partial_order_can_have_complete_final_fill_history(self):
+        r = assess_order_deal_reconciliation(
+            "100",
+            order(state=4, dealVol=2, dealAvgPrice=100),
+            [fill(1, 2, 100)],
+        )
+        self.assertTrue(r["fills_complete_for_observed_order_aggregate"])
+        self.assertTrue(r["final_order_fill_history_complete"])
+        self.assertFalse(r["strategy_fully_filled_order_complete"])
+
+    def test_nonfinal_partial_order_is_complete_to_observed_aggregate_only(self):
+        r = assess_order_deal_reconciliation(
+            "100",
+            order(state=2, dealVol=2, dealAvgPrice=100),
+            [fill(1, 2, 100)],
+        )
+        self.assertTrue(r["fills_complete_for_observed_order_aggregate"])
+        self.assertFalse(r["final_order_fill_history_complete"])
+        self.assertFalse(r["strategy_fully_filled_order_complete"])
 
     def test_zero_fill_order_with_empty_details_reconciles(self):
         r = assess_order_deal_reconciliation(
