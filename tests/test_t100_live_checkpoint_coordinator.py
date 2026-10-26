@@ -206,13 +206,13 @@ class CoordinatorTests(unittest.IsolatedAsyncioTestCase):
             await self.coordinator.persist_initial_protected(
                 intent=intent(), order=order(),
                 positions=[position(), position()],
-                stops=[stop()], **gates())
+                stops=[stop()], **initial_gates())
         with self.assertRaisesRegex(
             CheckpointCoordinatorHalted, "STOP_NOT_UNIQUE"):
             await self.coordinator.persist_initial_protected(
                 intent=intent(), order=order(),
                 positions=[position()],
-                stops=[stop(), stop()], **gates())
+                stops=[stop(), stop()], **initial_gates())
 
     async def test_verified_stop_persist_requires_complete_reconciled_evidence(self):
         with self.assertRaisesRegex(
