@@ -18,6 +18,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable
 
+from app.t100_live_ws_semantics import assess_private_ws_payload
 
 
 WS_URL = "wss://contract.mexc.com/edge"
@@ -118,6 +119,11 @@ class PrivateWsReport:
     channel_schema: dict[str, Any]
     elapsed_ms: int
     status: str
+    payload_semantic_events_verified: int = 0
+    payload_semantic_failures: int = 0
+    documented_payload_semantics_observed: bool = False
+    rest_correlation_verified: bool = False
+    lifecycle_semantics_verified: bool = False
     read_only: bool = True
     entry_allowed: bool = False
     live_authorization: bool = False
@@ -156,10 +162,13 @@ async def observe_private_ws(
     filter_sent = False
     pongs = 0
     unexpected: set[str] = set()
+    semantic_verified = 0
+    semantic_failures = 0
     evidence = {channel: ChannelEvidence() for channel in ALLOWED_CHANNELS}
 
     async def _observe() -> None:
         nonlocal login_verified, filter_sent, pongs
+        nonlocal semantic_verified, semantic_failures
         async with connect(
             ws_url,
             ping_interval=None,
@@ -240,6 +249,19 @@ async def observe_private_ws(
                         raise PrivateWsHalted(
                             "WS_PRIVATE_EVENT_BEFORE_AUTH_FILTER"
                         )
+                    semantic = assess_private_ws_payload(
+                        channel,
+                        message.get("data"),
+                        envelope_ts=message.get("ts"),
+                    )
+                    if semantic.get(
+                        "payload_semantics_verified"
+                    ) is not True:
+                        semantic_failures += 1
+                        raise PrivateWsHalted(
+                            "WS_PRIVATE_PAYLOAD_SEMANTICS_INVALID"
+                        )
+                    semantic_verified += 1
                     evidence[channel].observe(message.get("data"))
 
     try:
@@ -280,4 +302,9 @@ async def observe_private_ws(
             if not unexpected
             else "COMPLETED_WITH_UNEXPECTED_PRIVATE_CHANNELS"
         ),
+        payload_semantic_events_verified=semantic_verified,
+        payload_semantic_failures=semantic_failures,
+        documented_payload_semantics_observed=semantic_verified > 0,
+        rest_correlation_verified=False,
+        lifecycle_semantics_verified=False,
     )
