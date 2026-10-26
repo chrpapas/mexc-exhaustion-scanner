@@ -2,6 +2,10 @@
 from __future__ import annotations
 from typing import Any
 from app.mexc_trade import MexcTradeClient
+from app.t100_live_authorization import (
+    LiveMutationPermit,
+    require_live_mutation_permit,
+)
 from app.t100_live_execution import EntryIntent
 
 class LiveMexcAdapter:
@@ -35,7 +39,15 @@ class LiveMexcAdapter:
             raise RuntimeError("MEXC_ORDER_DEAL_DETAILS_UNVERIFIED")
         return data
 
-    async def submit_short_with_stop(self, intent: EntryIntent) -> str:
+    async def submit_short_with_stop(
+        self,
+        intent: EntryIntent,
+        *,
+        permit: LiveMutationPermit,
+    ) -> str:
+        permit = require_live_mutation_permit(permit)
+        if intent.notional_usdt > permit.max_position_notional_usdt:
+            raise RuntimeError("MEXC_ENTRY_EXCEEDS_PERMIT")
         result = await self.client._private_post(
             "/api/v1/private/order/create",
             {
@@ -62,6 +74,7 @@ class LiveMexcAdapter:
         stop_order_id: int,
         new_stop_price: str,
         previous_stop_price: str,
+        permit: LiveMutationPermit,
     ) -> None:
         """Send exactly one native TP/SL price amendment request.
 
@@ -70,6 +83,7 @@ class LiveMexcAdapter:
         SUBMITTING before invoking it and reconcile UNKNOWN outcomes by GET.
         """
         from decimal import Decimal
+        require_live_mutation_permit(permit)
         current = Decimal(previous_stop_price)
         requested = Decimal(new_stop_price)
         if (
@@ -94,9 +108,11 @@ class LiveMexcAdapter:
             },
         )
 
-    async def tighten_native_short_stop(self, *, symbol: str, stop_order_id: int,
-                                        position_id: int, new_stop_price: str,
-                                        previous_stop_price: str) -> None:
+    async def tighten_native_short_stop(
+        self, *, symbol: str, stop_order_id: int, position_id: int,
+        new_stop_price: str, previous_stop_price: str,
+        permit: LiveMutationPermit,
+    ) -> None:
         """Legacy send-then-read helper; never retries ambiguous mutations."""
         from decimal import Decimal
         requested = Decimal(new_stop_price)
@@ -104,6 +120,7 @@ class LiveMexcAdapter:
             stop_order_id=stop_order_id,
             new_stop_price=new_stop_price,
             previous_stop_price=previous_stop_price,
+            permit=permit,
         )
         orders = await self.open_stop_orders(symbol)
         ok = any(
