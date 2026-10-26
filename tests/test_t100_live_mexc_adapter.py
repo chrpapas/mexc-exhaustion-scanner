@@ -13,6 +13,8 @@ class FakeClient:
         self.post_result = None
         self.post_error = None
         self.current_stops = []
+        self.get_results = {}
+        self.get_calls = []
 
     async def _private_post(self, path, body):
         self.posts.append((path, body))
@@ -21,7 +23,10 @@ class FakeClient:
         return self.post_result
 
     async def _private_get(self, path, params=None):
-        raise AssertionError("unexpected _private_get")
+        self.get_calls.append((path, params))
+        if path not in self.get_results:
+            raise AssertionError("unexpected _private_get")
+        return self.get_results[path]
 
     async def open_stop_orders(self, symbol=None):
         self.open_stop_calls.append(symbol)
@@ -44,6 +49,36 @@ class LiveMexcAdapterContractTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.client = FakeClient()
         self.adapter = LiveMexcAdapter(self.client)
+
+    async def test_order_deal_details_uses_immutable_order_endpoint(self):
+        self.client.get_results[
+            "/api/v1/private/order/deal_details/100"
+        ] = [{"id": "f1", "orderId": "100"}]
+        rows = await self.adapter.order_deal_details("100")
+        self.assertEqual(rows, [{"id": "f1", "orderId": "100"}])
+        self.assertEqual(
+            self.client.get_calls,
+            [("/api/v1/private/order/deal_details/100", None)],
+        )
+
+    async def test_order_deal_details_fails_closed_on_bad_shape(self):
+        for bad in (None, {}, [None]):
+            with self.subTest(bad=bad):
+                self.client.get_results[
+                    "/api/v1/private/order/deal_details/100"
+                ] = bad
+                with self.assertRaisesRegex(
+                    RuntimeError, "DEAL_DETAILS_UNVERIFIED"
+                ):
+                    await self.adapter.order_deal_details("100")
+
+    async def test_order_deal_details_rejects_invalid_order_id_before_get(self):
+        for bad in ("", "abc", "0", "-1"):
+            with self.subTest(bad=bad):
+                self.client.get_calls = []
+                with self.assertRaises(ValueError):
+                    await self.adapter.order_deal_details(bad)
+                self.assertEqual(self.client.get_calls, [])
 
     async def test_entry_uses_current_place_order_contract(self):
         self.client.post_result = {
