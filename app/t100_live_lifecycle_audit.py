@@ -10,6 +10,8 @@ from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 from typing import Any, Protocol
 
+from app.t100_live_active_tpsl import effective_protective_quantity
+
 
 class LifecycleHalted(RuntimeError):
     pass
@@ -138,7 +140,17 @@ class LifecycleAuditor:
                 and str(s.get("positionId")) == position_id
                 and integer(s.get("state")) == 1
                 and dec(s.get("stopLossPrice")) > 0
-                and dec(s.get("vol")) >= holding
+                and (
+                    effective_protective_quantity(
+                        s,
+                        position_quantity=holding,
+                    )
+                    is not None
+                )
+                and effective_protective_quantity(
+                    s,
+                    position_quantity=holding,
+                ) >= holding
             ]
             if len(matching_stops) != 1:
                 raise LifecycleHalted("FILLED_POSITION_NOT_UNIQUELY_PROTECTED")
