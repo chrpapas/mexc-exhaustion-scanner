@@ -76,8 +76,16 @@ class StopMutationExecutor:
                 "STOP_AMENDMENT_INVALID"
             )
 
+        if (
+            not amendment.stop_order_id.isdigit()
+            or int(amendment.stop_order_id) <= 0
+        ):
+            raise StopMutationExecutionHalted(
+                "STOP_ORDER_ID_INVALID_BEFORE_SUBMISSION"
+            )
+
         try:
-            state = await self.lifecycle._state(amendment)
+            state = await self.lifecycle.state(amendment)
         except StopAmendmentCoordinatorHalted as exc:
             raise StopMutationExecutionHalted(
                 f"STOP_JOURNAL_STATE_UNAVAILABLE:{exc}"
