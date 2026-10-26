@@ -43,6 +43,12 @@ class StopJournal(Protocol):
     async def prepare(self, amendment: StopAmendment) -> bool: ...
     async def state(self, external_id: str) -> str: ...
     async def transition(self, external_id: str, expected: str, target: str) -> bool: ...
+    async def mark_verified(
+        self,
+        external_id: str,
+        expected: str,
+        verified_stop_order_id: str,
+    ) -> bool: ...
 
 
 class StopReader(Protocol):
@@ -77,6 +83,27 @@ class PostgresStopJournal:
             """UPDATE t100_live_stop_amendments SET state=$3, updated_at=now()
                WHERE external_id=$1 AND state=$2 RETURNING id""",
             external_id, expected, target,
+        )
+        return row is not None
+
+    async def mark_verified(
+        self,
+        external_id: str,
+        expected: str,
+        verified_stop_order_id: str,
+    ) -> bool:
+        if not isinstance(verified_stop_order_id, str) or not verified_stop_order_id:
+            raise StopJournalHalted("VERIFIED_STOP_ID_MISSING")
+        row = await self.pool.fetchval(
+            """UPDATE t100_live_stop_amendments
+               SET state='VERIFIED',
+                   verified_stop_order_id=$3,
+                   updated_at=now()
+               WHERE external_id=$1 AND state=$2
+               RETURNING id""",
+            external_id,
+            expected,
+            verified_stop_order_id,
         )
         return row is not None
 
@@ -119,6 +146,10 @@ class ReadOnlyStopReconciler:
             # and is never authorization to send/retry.
             raise StopJournalHalted("STOP_NOT_TIGHTENED_UNRESOLVED")
         if state != "VERIFIED":
-            if not await self.journal.transition(amendment.external_id, state, "VERIFIED"):
+            if not await self.journal.mark_verified(
+                amendment.external_id,
+                state,
+                amendment.stop_order_id,
+            ):
                 raise StopJournalHalted("STOP_JOURNAL_CAS_FAILURE")
         return "VERIFIED_READ_ONLY"
