@@ -42,6 +42,7 @@ class StopAmendment:
 class StopJournal(Protocol):
     async def prepare(self, amendment: StopAmendment) -> bool: ...
     async def state(self, external_id: str) -> str: ...
+    async def verified_stop_order_id(self, external_id: str) -> str | None: ...
     async def transition(self, external_id: str, expected: str, target: str) -> bool: ...
     async def mark_verified(
         self,
@@ -76,6 +77,17 @@ class PostgresStopJournal:
         )
         if result is None:
             raise StopJournalHalted("STOP_AMENDMENT_NOT_FOUND")
+        return str(result)
+
+    async def verified_stop_order_id(self, external_id: str) -> str | None:
+        result = await self.pool.fetchval(
+            """SELECT verified_stop_order_id
+               FROM t100_live_stop_amendments
+               WHERE external_id=$1""",
+            external_id,
+        )
+        if result is None:
+            return None
         return str(result)
 
     async def transition(self, external_id: str, expected: str, target: str) -> bool:
@@ -152,4 +164,12 @@ class ReadOnlyStopReconciler:
                 amendment.stop_order_id,
             ):
                 raise StopJournalHalted("STOP_JOURNAL_CAS_FAILURE")
+        else:
+            verified_id = await self.journal.verified_stop_order_id(
+                amendment.external_id
+            )
+            if verified_id != amendment.stop_order_id:
+                raise StopJournalHalted(
+                    "VERIFIED_STOP_ID_PERSISTENCE_MISMATCH"
+                )
         return "VERIFIED_READ_ONLY"
