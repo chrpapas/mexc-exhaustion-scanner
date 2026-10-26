@@ -352,6 +352,47 @@ class DurableRecoveryTests(unittest.TestCase):
                 stops=[stop(stopLossPrice=D("90"))],
             )
 
+    def test_verified_replacement_stop_identity_can_recover(self):
+        base = checkpoint(
+            stop_order_id="100",
+            stop_price=D("90"),
+            best_profit_pct=D("14"),
+            armed=True,
+            checkpoint_version=2,
+        )
+        rows = revisions_for(base)
+        rows[0]["stop_order_id"] = "99"
+        rows[1]["stop_order_id"] = "100"
+        r = run(
+            checkpoints=[base],
+            revisions=rows,
+            amendments=[{
+                "state": "VERIFIED",
+                "stop_order_id": "99",
+                "verified_stop_order_id": "100",
+            }],
+            stops=[stop(id="100", stopLossPrice=D("90"))],
+        )
+        self.assertEqual(r.recovered[0].stop_order_id, "100")
+
+    def test_final_revision_stop_identity_must_match_checkpoint(self):
+        base = checkpoint(
+            stop_order_id="100",
+            stop_price=D("90"),
+            best_profit_pct=D("14"),
+            armed=True,
+            checkpoint_version=2,
+        )
+        rows = revisions_for(base)
+        rows[-1]["stop_order_id"] = "101"
+        with self.assertRaisesRegex(
+            DurableRecoveryHalted, "FINAL_REVISION_STOP_ID_MISMATCH"):
+            run(
+                checkpoints=[base],
+                revisions=rows,
+                stops=[stop(id="100", stopLossPrice=D("90"))],
+            )
+
     def test_unresolved_order_intent_blocks(self):
         for state in ("PREPARED", "SUBMITTING", "UNKNOWN", "REVIEW"):
             with self.assertRaisesRegex(
