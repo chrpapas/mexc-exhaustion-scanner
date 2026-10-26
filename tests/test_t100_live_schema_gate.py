@@ -6,6 +6,7 @@ from app.t100_live_schema_gate import (
     LIVE_TABLE_COLUMNS,
     MUTABLE_TABLES,
     REQUIRED_INDEXES,
+    REQUIRED_SEQUENCES,
     assess_live_schema_and_privileges,
 )
 
@@ -19,6 +20,15 @@ class Pool:
             for table, cols in LIVE_TABLE_COLUMNS.items()
         }
         self.indexes = set(REQUIRED_INDEXES)
+        self.sequences = set(REQUIRED_SEQUENCES)
+        self.sequence_privileges = {
+            name: {
+                "can_usage": True,
+                "can_select": True,
+                "can_update": False,
+            }
+            for name in REQUIRED_SEQUENCES
+        }
         self.privileges = {}
         for table in self.tables:
             self.privileges[table] = {
@@ -44,6 +54,16 @@ class Pool:
             ]
         if "pg_indexes" in sql:
             return [{"indexname": x} for x in self.indexes]
+        if "information_schema.sequences" in sql:
+            return [{"sequence_name": x} for x in self.sequences]
+        if "has_sequence_privilege" in sql:
+            return [
+                {
+                    "sequence_name": name,
+                    **self.sequence_privileges[name],
+                }
+                for name in self.sequences
+            ]
         if "has_table_privilege" in sql:
             return [
                 {"table_name": table, **self.privileges[table]}
@@ -83,6 +103,32 @@ class SchemaGateTests(unittest.IsolatedAsyncioTestCase):
         p.indexes.pop()
         r = await assess_live_schema_and_privileges(p)
         self.assertEqual(r["status"], "LIVE_SCHEMA_INDEXES_MISSING")
+
+    async def test_missing_required_sequence_blocks(self):
+        p = Pool()
+        p.sequences.pop()
+        r = await assess_live_schema_and_privileges(p)
+        self.assertFalse(r["durable_schema_deployed_verified"])
+        self.assertEqual(r["status"], "LIVE_SCHEMA_SEQUENCES_MISSING")
+
+    async def test_sequence_requires_usage_select_and_no_update(self):
+        name = next(iter(REQUIRED_SEQUENCES))
+        for privilege, value in (
+            ("can_usage", False),
+            ("can_select", False),
+            ("can_update", True),
+        ):
+            p = Pool()
+            p.sequence_privileges[name][privilege] = value
+            with self.subTest(privilege=privilege):
+                r = await assess_live_schema_and_privileges(p)
+                self.assertFalse(
+                    r["durable_schema_deployed_verified"]
+                )
+                self.assertEqual(
+                    r["status"],
+                    "LIVE_SCHEMA_SEQUENCE_PRIVILEGE_MISMATCH",
+                )
 
     async def test_append_only_update_delete_or_truncate_blocks(self):
         table = next(iter(APPEND_ONLY_TABLES))
