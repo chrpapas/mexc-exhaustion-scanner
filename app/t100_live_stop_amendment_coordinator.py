@@ -75,6 +75,10 @@ class StopAmendmentLifecycleCoordinator:
             )
         return amendment, f"EXISTING_{state}"
 
+    async def state(self, amendment: StopAmendment) -> str:
+        """Return durable amendment state through the coordinator boundary."""
+        return await self._state(amendment)
+
     async def mark_submitting(self, amendment: StopAmendment) -> str:
         state = await self._state(amendment)
         if state == "SUBMITTING":
