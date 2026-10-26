@@ -31,7 +31,7 @@ class LivePilotReadinessEvidence:
     native_stop_mutation_contract_verified: bool
     entry_reconciliation_verified: bool
     fill_and_accounting_verified: bool
-    private_ws_lifecycle_semantics_verified: bool
+    private_ws_pre_pilot_contract_verified: bool
     unresolved_mutations_absent: bool
     independent_review_completed: bool
     operator_tiny_pilot_authorized: bool
@@ -64,8 +64,8 @@ class LivePilotReadinessEvidence:
                 self.fill_and_accounting_verified,
             ),
             (
-                "private_ws_lifecycle_semantics_unverified",
-                self.private_ws_lifecycle_semantics_verified,
+                "private_ws_pre_pilot_contract_unverified",
+                self.private_ws_pre_pilot_contract_verified,
             ),
             (
                 "unresolved_mutations_present",
