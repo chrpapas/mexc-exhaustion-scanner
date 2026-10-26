@@ -15,6 +15,7 @@ from datetime import datetime
 import io
 import json
 import math
+import hashlib
 from collections import Counter, defaultdict
 from pathlib import Path
 from zipfile import ZipFile
@@ -49,7 +50,16 @@ def key_for(c: dict[str, str]) -> tuple[str, int]:
     return c['symbol'], int(c['entry_ts'])
 
 
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def run(path: Path) -> dict:
+    archive_sha256 = _sha256(path)
     with ZipFile(path) as z:
         manifest = json.loads(z.read('manifest.json').decode())
         if manifest.get('candidate_count') != 146 or manifest.get('preceding_candles_exported') != 7154:
@@ -179,6 +189,7 @@ def run(path: Path) -> dict:
             results[str(capital)] = summary
         return {
             'status': 'V40_ENTRY_FILTER_AND_REFERENCE_CAPACITY_PARITY_PASS',
+            'archive_sha256': archive_sha256,
             'scope': 'historical gate decisions, causal volatility/turnover, and REFERENCE entries; not full replay, not actual fills',
             'archive_manifest': manifest,
             'candidates': len(candidates), 'prior_candles': len(candles),
