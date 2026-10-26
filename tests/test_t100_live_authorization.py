@@ -33,6 +33,7 @@ def controls(**overrides):
 def evidence(**overrides):
     data = dict(
         code_revision_verified=True,
+        strategy_parity_verified=True,
         durable_schema_deployed_verified=True,
         current_inventory_completeness_verified=True,
         account_reconciled=True,
