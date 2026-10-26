@@ -35,3 +35,17 @@ class PostgresIntentLedger:
         if state is None:
             raise RuntimeError("UNKNOWN_EXTERNAL_OID")
         return str(state)
+
+
+    async def record(self, oid: str) -> dict:
+        row = await self.pool.fetchrow(
+            """SELECT signal_id,symbol,external_oid,reference_price,
+                      notional_usdt,volume_contracts,stop_price,state,
+                      exchange_order_id,failure_reason,created_at,updated_at
+               FROM t100_live_order_intents
+               WHERE external_oid=$1""",
+            oid,
+        )
+        if row is None:
+            raise RuntimeError("UNKNOWN_EXTERNAL_OID")
+        return dict(row)
