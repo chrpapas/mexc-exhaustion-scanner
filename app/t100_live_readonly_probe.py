@@ -50,6 +50,37 @@ class ReadOnlyMexcProbe:
             raise VenueReadHalted("POSITIONS_RESPONSE_UNVERIFIED")
         return raw
 
+    async def raw_open_order_counts(self) -> dict[str, int]:
+        """Read MEXC account-level in-flight order counts via GET only."""
+        try:
+            raw = await self._client._private_get(
+                "/api/v1/private/order/open_order_total_count"
+            )
+        except Exception as exc:
+            raise VenueReadHalted("OPEN_ORDER_COUNTS_GET_FAILED") from exc
+        if not isinstance(raw, dict):
+            raise VenueReadHalted("OPEN_ORDER_COUNTS_RESPONSE_UNVERIFIED")
+        required = (
+            "sumCount",
+            "limitOrderCount",
+            "stopOrderCount",
+            "planOrderCount",
+            "trackOrderCount",
+        )
+        result: dict[str, int] = {}
+        for field in required:
+            value = raw.get(field)
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                raise VenueReadHalted("OPEN_ORDER_COUNTS_RESPONSE_UNVERIFIED")
+            result[field] = value
+        if result["sumCount"] != sum(
+            result[field]
+            for field in required
+            if field != "sumCount"
+        ):
+            raise VenueReadHalted("OPEN_ORDER_COUNTS_SUM_MISMATCH")
+        return result
+
     async def raw_open_stops(
         self, symbol: str | None = None,
     ) -> list[dict[str, Any]]:
