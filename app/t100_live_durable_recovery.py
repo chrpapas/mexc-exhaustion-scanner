@@ -21,6 +21,7 @@ from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 from typing import Any, Protocol
 
+from app.t100_live_active_tpsl import effective_protective_quantity
 from app.t100_live_supervisor import ManagedShort
 
 
@@ -471,7 +472,11 @@ def recover_nonflat(
             raise DurableRecoveryHalted("RECOVERED_STOP_SYMBOL_DRIFT")
         if _positive(stop.get("stopLossPrice"), "STOP_PRICE") != cp.stop_price:
             raise DurableRecoveryHalted("RECOVERED_STOP_PRICE_DRIFT")
-        if _positive(stop.get("vol"), "STOP_VOLUME") != cp.contracts:
+        effective_qty = effective_protective_quantity(
+            stop,
+            position_quantity=cp.contracts,
+        )
+        if effective_qty is None or effective_qty != cp.contracts:
             raise DurableRecoveryHalted("RECOVERED_STOP_VOLUME_DRIFT")
 
         recovered.append(
