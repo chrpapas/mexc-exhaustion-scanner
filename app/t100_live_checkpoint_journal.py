@@ -13,6 +13,7 @@ from dataclasses import dataclass, replace
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
+from app.t100_live_active_tpsl import effective_protective_quantity
 from app.t100_live_durable_recovery import PositionCheckpoint
 
 
@@ -143,7 +144,11 @@ def build_initial_checkpoint(
     stop_price = _positive(stop.get("stopLossPrice"), "STOP_PRICE")
     if stop_price > entry_stop:
         raise CheckpointJournalHalted("INITIAL_STOP_LOOSER_THAN_INTENT")
-    if _positive(stop.get("vol"), "STOP_VOLUME") != contracts:
+    effective_qty = effective_protective_quantity(
+        stop,
+        position_quantity=contracts,
+    )
+    if effective_qty is None or effective_qty != contracts:
         raise CheckpointJournalHalted("STOP_VOLUME_DRIFT")
 
     return PositionCheckpoint(
@@ -209,7 +214,11 @@ def build_verified_stop_checkpoint(
     actual_stop = _positive(stop.get("stopLossPrice"), "STOP_PRICE")
     if actual_stop > proposed_stop or actual_stop >= previous.stop_price:
         raise CheckpointJournalHalted("STOP_NOT_VERIFIED_TIGHTER")
-    if _positive(stop.get("vol"), "STOP_VOLUME") != previous.contracts:
+    effective_qty = effective_protective_quantity(
+        stop,
+        position_quantity=previous.contracts,
+    )
+    if effective_qty is None or effective_qty != previous.contracts:
         raise CheckpointJournalHalted("STOP_VOLUME_DRIFT")
 
     best = _nonnegative(best_profit_pct, "BEST_PROFIT_PCT")
