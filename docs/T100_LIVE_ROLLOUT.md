@@ -12,10 +12,11 @@ positions based on completed Min30 OHLC bars. It does not submit MEXC orders,
 reconcile real fills, or require exchange-native stop protection.
 
 The V40 **VOL30_SKIP+H4** results were produced by a separate *historical*
-replay. Live T100 production currently lacks the V40 5% prior-30min turnover
-cap, VOL30_SKIP decision logic, 120-minute child-order window and a
-production-faithful 100/200-bps cost model. Simply routing Stage-2 to MEXC
-would NOT replicate the studied portfolio.
+replay. Live T100 production currently lacks the complete frozen V40
+admission/sizing bridge and a production-faithful 100/200-bps execution-cost
+mapping. H4 is a four-bar stressed **exit-capacity** horizon in the research
+model, not a 120-minute entry child-order window. Simply routing Stage-2 to
+MEXC would NOT replicate the studied portfolio.
 
 ## What this branch does
 
@@ -60,10 +61,12 @@ against the real exchange (no sandbox).
 5. Before/alongside each exposure, verify an exchange-side protective stop or
    explicit fail-closed emergency procedure for stop placement failure; use
    actual filled contracts and hedge/one-way position mode correctly.
-6. Implement 5%-of-prior-30min-turnover child-order scheduling, **fresh** Level-2
-   book and adverse reference-slippage checks, 120-minute window, partial
-   fills and cancellations, fees, funding, dynamic free margin and account
-   exposure. No same-candle fantasy fills.
+6. Preserve the frozen V40 5%-of-prior-30min-turnover admission/size cap and
+   H4 stressed exit-capacity logic. Live execution must separately use a
+   **fresh** Level-2 book, adverse reference-slippage checks, partial-fill
+   handling, fees, funding, dynamic free margin and account exposure. Do not
+   reinterpret H4 as a 120-minute entry execution window, and do not use
+   same-candle fantasy fills.
 7. Implement full exchange/order/position/stop reconciliation on startup and
    each cycle, leader fencing across Render rolling deployments, circuit
    breakers, daily-loss limits and operator kill-switch behavior.
