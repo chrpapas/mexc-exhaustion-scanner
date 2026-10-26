@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from decimal import Decimal
 from typing import Any, Sequence
 
+from app.t100_live_active_tpsl import effective_protective_quantity
 from app.t100_live_snapshot import validate_inventory_snapshot
 from app.t100_live_supervisor import ManagedShort
 from app.t100_live_trailing import next_short_stop
@@ -72,7 +73,11 @@ def shadow_reconcile(
             raise ShadowHalted("UNKNOWN_POSITION_OR_STOP")
         if int(p["positionType"]) != 2 or Decimal(str(p["holdVol"])) != wanted.contracts:
             raise ShadowHalted("POSITION_SIDE_OR_VOLUME_DRIFT")
-        if Decimal(str(s["vol"])) < wanted.contracts:
+        effective_qty = effective_protective_quantity(
+            s,
+            position_quantity=wanted.contracts,
+        )
+        if effective_qty is None or effective_qty < wanted.contracts:
             raise ShadowHalted("INSUFFICIENT_NATIVE_STOP_COVERAGE")
         if Decimal(str(s["stopLossPrice"])) > wanted.stop_price:
             raise ShadowHalted("NATIVE_STOP_LOOSENED")
