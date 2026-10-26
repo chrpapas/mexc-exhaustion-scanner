@@ -14,6 +14,10 @@ from decimal import Decimal, ROUND_DOWN, ROUND_UP
 from typing import Any, Protocol
 
 from app.t100_live_active_tpsl import effective_protective_quantity
+from app.t100_live_authorization import (
+    LiveMutationPermit,
+    require_live_mutation_permit,
+)
 
 
 class ExecutionHalted(RuntimeError):
@@ -124,7 +128,12 @@ class IntentLedger(Protocol):
 
 class ExchangeClient(Protocol):
     async def order_by_external_oid(self, symbol: str, external_oid: str) -> dict[str, Any] | None: ...
-    async def submit_short_with_stop(self, intent: EntryIntent) -> str: ...
+    async def submit_short_with_stop(
+        self,
+        intent: EntryIntent,
+        *,
+        permit: LiveMutationPermit,
+    ) -> str: ...
     async def open_positions(self, symbol: str | None = None) -> list[dict[str, Any]]: ...
     async def open_stop_orders(self, symbol: str | None = None) -> list[dict[str, Any]]: ...
 
@@ -133,16 +142,29 @@ class LiveOrderGateway:
     def __init__(self, ledger: IntentLedger, exchange: ExchangeClient, caps: LiveCaps) -> None:
         self.ledger, self.exchange, self.caps = ledger, exchange, caps
 
-    async def send_one(self, intent: EntryIntent, *, equity_usdt: Decimal,
-                       portfolio_notional: Decimal, today_loss_usdt: Decimal,
-                       observed_vwap: Decimal, book_age_ms: int,
-                       signal_age_seconds: float) -> str:
+    async def send_one(self, intent: EntryIntent, *, permit: LiveMutationPermit,
+                       equity_usdt: Decimal, portfolio_notional: Decimal,
+                       today_loss_usdt: Decimal, observed_vwap: Decimal,
+                       book_age_ms: int, signal_age_seconds: float) -> str:
         """This method performs a REAL POST after validated independent inputs.
 
         A future coordinator must obtain the inputs from fresh exchange/book
         snapshots, reconcile the account and enforce strategy parity and kill
         switches. Do not invoke this method without that coordinator.
         """
+        permit = require_live_mutation_permit(permit)
+        if intent.notional_usdt > permit.max_position_notional_usdt:
+            raise ExecutionHalted("PERMIT_ORDER_CAP")
+        if (
+            portfolio_notional + intent.notional_usdt
+            > permit.max_total_notional_usdt
+        ):
+            raise ExecutionHalted("PERMIT_PORTFOLIO_CAP")
+        if today_loss_usdt >= permit.max_daily_loss_usdt:
+            raise ExecutionHalted("PERMIT_DAILY_LOSS_CAP")
+        if permit.leverage != self.caps.leverage:
+            raise ExecutionHalted("PERMIT_LEVERAGE_MISMATCH")
+
         if intent.notional_usdt > self.caps.max_order_usdt:
             raise ExecutionHalted("ORDER_CAP")
         if portfolio_notional + intent.notional_usdt > self.caps.max_portfolio_usdt:
@@ -166,7 +188,10 @@ class LiveOrderGateway:
             raise ExecutionHalted("ORDER_INTENT_CAS_FAILED")
         try:
             # stopLossPrice is attached in the same MEXC create request.
-            order_id = await self.exchange.submit_short_with_stop(intent)
+            order_id = await self.exchange.submit_short_with_stop(
+                intent,
+                permit=permit,
+            )
         except Exception as exc:
             await self.ledger.transition(intent.external_oid, "SUBMITTING", "UNKNOWN",
                                          reason=type(exc).__name__)
