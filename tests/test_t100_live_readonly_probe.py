@@ -93,6 +93,48 @@ class ProbeTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaisesRegex(VenueReadHalted, "POSITIONS_GET_FAILED"):
             await self.probe.raw_open_positions()
 
+    async def test_open_order_counts_preserve_documented_shape(self):
+        payload = {
+            "sumCount": 3,
+            "limitOrderCount": 1,
+            "stopOrderCount": 1,
+            "planOrderCount": 1,
+            "trackOrderCount": 0,
+        }
+        self.client.responses = [payload]
+        self.assertEqual(
+            await self.probe.raw_open_order_counts(), payload)
+        self.assertEqual(
+            self.client.calls[0],
+            ("/api/v1/private/order/open_order_total_count", None),
+        )
+
+    async def test_open_order_counts_malformed_or_inconsistent_blocks(self):
+        for payload in (
+            None,
+            {"sumCount": 0},
+            {
+                "sumCount": 1, "limitOrderCount": 0,
+                "stopOrderCount": -1, "planOrderCount": 0,
+                "trackOrderCount": 0,
+            },
+            {
+                "sumCount": 2, "limitOrderCount": 0,
+                "stopOrderCount": 1, "planOrderCount": 0,
+                "trackOrderCount": 0,
+            },
+        ):
+            with self.subTest(payload=payload):
+                self.client.responses = [payload]
+                with self.assertRaises(VenueReadHalted):
+                    await self.probe.raw_open_order_counts()
+
+    async def test_open_order_counts_transport_failure_blocks(self):
+        self.client.fail = True
+        with self.assertRaisesRegex(
+            VenueReadHalted, "OPEN_ORDER_COUNTS_GET_FAILED"):
+            await self.probe.raw_open_order_counts()
+
     async def test_open_stops_empty_preserved(self):
         self.client.responses = [[]]
         self.assertEqual(await self.probe.raw_open_stops(), [])
