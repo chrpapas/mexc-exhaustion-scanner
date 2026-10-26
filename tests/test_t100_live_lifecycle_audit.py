@@ -38,6 +38,18 @@ class AuditTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(r.filled_contracts, D("20"))
         self.assertEqual(self.exchange.reads, 3)
 
+    async def test_entire_position_same_mode_is_protective(self):
+        self.exchange.stops[0].update(
+            vol="0",
+            volType=2,
+            profitLossVolType="SAME",
+        )
+        r = await self.audit.inspect(self.tracked)
+        self.assertEqual(
+            r.status,
+            "FILLED_PROTECTED_NEEDS_FEE_FUNDING_RECONCILIATION",
+        )
+
     async def test_partial_protected_blocks_new_entry(self):
         self.exchange.order["dealVol"] = "8"
         self.exchange.positions[0]["holdVol"] = "8"
