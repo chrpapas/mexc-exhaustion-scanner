@@ -138,6 +138,10 @@ async def observe_private_ws(
     connect: Callable[..., Any] | None = None,
     wall_time_ms: Callable[[], int] = lambda: int(time.time() * 1000),
     monotonic_ns: Callable[[], int] = time.monotonic_ns,
+    on_private_event: Callable[
+        [str, dict[str, Any], Any | None],
+        Awaitable[None],
+    ] | None = None,
 ) -> PrivateWsReport:
     if (
         isinstance(duration_seconds, bool)
@@ -262,7 +266,21 @@ async def observe_private_ws(
                             "WS_PRIVATE_PAYLOAD_SEMANTICS_INVALID"
                         )
                     semantic_verified += 1
-                    evidence[channel].observe(message.get("data"))
+                    data = message.get("data")
+                    if on_private_event is not None:
+                        try:
+                            await on_private_event(
+                                channel,
+                                data,
+                                message.get("ts"),
+                            )
+                        except PrivateWsHalted:
+                            raise
+                        except Exception as exc:
+                            raise PrivateWsHalted(
+                                "WS_PRIVATE_EVENT_CALLBACK_FAILED"
+                            ) from exc
+                    evidence[channel].observe(data)
 
     try:
         await asyncio.wait_for(
