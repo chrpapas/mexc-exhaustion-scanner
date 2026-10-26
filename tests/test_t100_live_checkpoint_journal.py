@@ -169,6 +169,33 @@ class BuilderTests(unittest.TestCase):
                         intent=intent(), order=order(),
                         position=position(), stop=bad)
 
+    def test_initial_accepts_entire_position_same_without_explicit_volume(self):
+        x = build_initial_checkpoint(
+            intent=intent(),
+            order=order(),
+            position=position(),
+            stop=stop(
+                vol=D("0"),
+                volType=2,
+                profitLossVolType="SAME",
+            ),
+        )
+        self.assertEqual(x.stop_order_id, "99")
+
+    def test_initial_separate_mode_requires_stop_loss_volume(self):
+        with self.assertRaisesRegex(CheckpointJournalHalted, "STOP_VOLUME_DRIFT"):
+            build_initial_checkpoint(
+                intent=intent(),
+                order=order(),
+                position=position(),
+                stop=stop(
+                    vol=D("0"),
+                    volType=2,
+                    profitLossVolType="SEPARATE",
+                    stopLossVol=D("0"),
+                ),
+            )
+
     def test_verified_stop_checkpoint_records_actual_tighter_stop(self):
         current = build_verified_stop_checkpoint(
             cp(),
@@ -181,6 +208,21 @@ class BuilderTests(unittest.TestCase):
         self.assertEqual(current.best_profit_pct, D("14.5"))
         self.assertTrue(current.armed)
         self.assertEqual(current.checkpoint_version, 2)
+
+    def test_verified_stop_accepts_entire_position_same_without_explicit_volume(self):
+        current = build_verified_stop_checkpoint(
+            cp(),
+            amendment=amendment(),
+            stop=stop(
+                stopLossPrice=D("89"),
+                vol=D("0"),
+                volType=2,
+                profitLossVolType="SAME",
+            ),
+            best_profit_pct=D("14.5"),
+            armed=True,
+        )
+        self.assertEqual(current.stop_price, D("89"))
 
     def test_stop_update_requires_verified_matching_amendment(self):
         cases = [
