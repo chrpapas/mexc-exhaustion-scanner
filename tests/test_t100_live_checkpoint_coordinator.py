@@ -69,8 +69,8 @@ def position():
     }
 
 
-def stop(price=D("175")):
-    return {
+def stop(price=D("175"), **kw):
+    row = {
         "id": "99",
         "positionId": "10",
         "symbol": "SIREN_USDT",
@@ -78,10 +78,12 @@ def stop(price=D("175")):
         "stopLossPrice": price,
         "vol": D("20"),
     }
+    row.update(kw)
+    return row
 
 
-def amendment():
-    return {
+def amendment(**kw):
+    row = {
         "state": "VERIFIED",
         "symbol": "SIREN_USDT",
         "position_id": "10",
@@ -90,6 +92,8 @@ def amendment():
         "previous_stop": D("175"),
         "proposed_stop": D("90"),
     }
+    row.update(kw)
+    return row
 
 
 class Writer:
@@ -193,6 +197,18 @@ class CoordinatorTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(current.stop_price, D("90"))
         self.assertEqual(current.checkpoint_version, 2)
         self.assertEqual(self.writer.calls[0][3], STOP_VERIFIED)
+
+    async def test_verified_replacement_stop_id_persists(self):
+        current = await self.coordinator.persist_verified_stop(
+            cp(),
+            amendment=amendment(verified_stop_order_id="100"),
+            stops=[stop(D("89"), id="100")],
+            best_profit_pct=D("14.5"),
+            armed=True,
+            **gates(),
+        )
+        self.assertEqual(current.stop_order_id, "100")
+        self.assertEqual(current.stop_price, D("89"))
 
     async def test_verified_stop_requires_unique_matching_stop(self):
         with self.assertRaisesRegex(
