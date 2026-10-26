@@ -4,6 +4,7 @@ import unittest
 from app.t100_live_readiness_bundle import run_dynamic_readiness_bundle
 from app.t100_live_schema_gate import (
     LIVE_TABLE_COLUMNS, MUTABLE_TABLES, REQUIRED_INDEXES,
+    REQUIRED_SEQUENCES,
 )
 
 
@@ -14,6 +15,7 @@ class Pool:
             table: set(cols) for table, cols in LIVE_TABLE_COLUMNS.items()
         }
         self.indexes = set(REQUIRED_INDEXES)
+        self.sequences = set(REQUIRED_SEQUENCES)
         self.unresolved = {
             "prepared_order_intents": 0,
             "submitting_order_intents": 0,
@@ -34,6 +36,15 @@ class Pool:
             ]
         if "pg_indexes" in sql:
             return [{"indexname": x} for x in self.indexes]
+        if "information_schema.sequences" in sql:
+            return [{"sequence_name": x} for x in self.sequences]
+        if "has_sequence_privilege" in sql:
+            return [{
+                "sequence_name": name,
+                "can_usage": True,
+                "can_select": True,
+                "can_update": False,
+            } for name in self.sequences]
         if "has_table_privilege" in sql:
             return [{
                 "table_name": table,
