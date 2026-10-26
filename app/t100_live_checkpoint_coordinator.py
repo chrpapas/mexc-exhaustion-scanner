@@ -154,11 +154,18 @@ class CheckpointPersistenceCoordinator:
             raise CheckpointCoordinatorHalted(
                 "CHECKPOINT_STOP_RESPONSE_AMBIGUOUS"
             )
+        verified_stop_order_id = str(
+            amendment.get("verified_stop_order_id") or ""
+        )
+        if not verified_stop_order_id:
+            raise CheckpointCoordinatorHalted(
+                "CHECKPOINT_VERIFIED_STOP_ID_MISSING"
+            )
         matching = [
             row for row in stops
             if str(row.get("positionId") or "") == previous.position_id
             and str(row.get("id") or row.get("stopPlanOrderId") or "")
-            == previous.stop_order_id
+            == verified_stop_order_id
         ]
         if len(matching) != 1:
             raise CheckpointCoordinatorHalted(
