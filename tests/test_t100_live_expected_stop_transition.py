@@ -4,6 +4,7 @@ from decimal import Decimal as D
 
 from app.t100_live_expected_stop_transition import (
     ExpectedStopTransition,
+    assess_expected_stop_current_outcome,
     assess_expected_stop_transition,
 )
 
@@ -154,6 +155,61 @@ class ExpectedStopTransitionTests(unittest.TestCase):
             expected=expected(),
         )
         self.assertEqual(result["status"], "AFTER_STOP_NOT_UNIQUE")
+
+    def test_restart_current_same_id_tightened_is_verified(self):
+        result = assess_expected_stop_current_outcome(
+            current_stops=[stop(stopLossPrice="90")],
+            expected=expected(),
+        )
+        self.assertTrue(result["expected_transition_verified"])
+        self.assertTrue(result["same_stop_identity"])
+        self.assertEqual(
+            result["status"],
+            "EXPECTED_STOP_CURRENT_OUTCOME_IN_PLACE_VERIFIED",
+        )
+
+    def test_restart_unchanged_old_stop_remains_unresolved(self):
+        result = assess_expected_stop_current_outcome(
+            current_stops=[stop(stopLossPrice="175")],
+            expected=expected(),
+        )
+        self.assertFalse(result["expected_transition_verified"])
+        self.assertEqual(
+            result["status"],
+            "CURRENT_STOP_OUTCOME_UNRESOLVED",
+        )
+
+    def test_restart_replacement_requires_terminal_cancel(self):
+        result = assess_expected_stop_current_outcome(
+            current_stops=[stop(id="100", stopLossPrice="90")],
+            expected=expected(),
+        )
+        self.assertFalse(result["expected_transition_verified"])
+        self.assertEqual(
+            result["status"],
+            "STOP_REPLACEMENT_TERMINAL_PROVENANCE_REQUIRED",
+        )
+
+    def test_restart_replacement_with_terminal_cancel_is_verified(self):
+        result = assess_expected_stop_current_outcome(
+            current_stops=[stop(id="100", stopLossPrice="89")],
+            finished_stops=[finished()],
+            expected=expected(),
+        )
+        self.assertTrue(result["expected_transition_verified"])
+        self.assertTrue(result["replacement_stop_identity"])
+        self.assertEqual(
+            result["status"],
+            "EXPECTED_STOP_CURRENT_OUTCOME_REPLACEMENT_VERIFIED",
+        )
+
+    def test_restart_protection_gap_never_verifies(self):
+        result = assess_expected_stop_current_outcome(
+            current_stops=[],
+            expected=expected(),
+        )
+        self.assertFalse(result["expected_transition_verified"])
+        self.assertTrue(result["protection_gap_observed"])
 
     def test_no_raw_identifiers_or_prices_returned(self):
         exp = ExpectedStopTransition.build(
