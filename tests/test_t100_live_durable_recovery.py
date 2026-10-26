@@ -523,6 +523,25 @@ class DurableRecoveryTests(unittest.TestCase):
             DurableRecoveryHalted, "STOP_VOLUME_DRIFT"):
             run(stops=[stop(vol=D("19"))])
 
+    def test_entire_position_same_mode_recovers_without_explicit_volume(self):
+        r = run(stops=[stop(
+            vol=D("0"),
+            volType=2,
+            profitLossVolType="SAME",
+        )])
+        self.assertEqual(len(r.recovered), 1)
+        self.assertEqual(r.recovered[0].contracts, D("20"))
+
+    def test_separate_mode_requires_stop_loss_volume_on_recovery(self):
+        with self.assertRaisesRegex(
+            DurableRecoveryHalted, "STOP_VOLUME_DRIFT"):
+            run(stops=[stop(
+                vol=D("0"),
+                volType=2,
+                profitLossVolType="SEPARATE",
+                stopLossVol=D("0"),
+            )])
+
     def test_duplicate_checkpoint_symbol_blocks(self):
         c2 = checkpoint(
             external_oid="oid2", exchange_order_id="200",
