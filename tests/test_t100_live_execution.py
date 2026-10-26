@@ -3,7 +3,41 @@ from __future__ import annotations
 
 import unittest
 from decimal import Decimal
+from app.t100_live_authorization import (
+    LivePilotReadinessEvidence,
+    issue_live_mutation_permit,
+)
 from app.t100_live_execution import EntryIntent, LiveCaps, LiveOrderGateway, ExecutionHalted, displayed_vwap
+from app.t100_live_guards import LIVE_CONFIRMATION, T100ExecutionControls
+
+
+def permit(max_position="1000", max_total="2000", max_daily_loss="100"):
+    controls = T100ExecutionControls.from_env({
+        "T100_EXECUTION_MODE": "live",
+        "T100_LIVE_ORDER_API_ENABLED": "true",
+        "T100_LIVE_KILL_SWITCH": "false",
+        "T100_LIVE_OPERATOR_CONFIRM": LIVE_CONFIRMATION,
+        "T100_LIVE_MAX_POSITION_NOTIONAL_USDT": max_position,
+        "T100_LIVE_MAX_TOTAL_NOTIONAL_USDT": max_total,
+        "T100_LIVE_MAX_DAILY_LOSS_USDT": max_daily_loss,
+        "T100_LIVE_LEVERAGE": "1",
+    })
+    evidence = LivePilotReadinessEvidence(
+        code_revision_verified=True,
+        durable_schema_deployed_verified=True,
+        current_inventory_completeness_verified=True,
+        account_reconciled=True,
+        protected_position_soak_verified=True,
+        restart_recovery_verified=True,
+        native_stop_mutation_contract_verified=True,
+        entry_reconciliation_verified=True,
+        fill_and_accounting_verified=True,
+        private_ws_lifecycle_semantics_verified=True,
+        unresolved_mutations_absent=True,
+        independent_review_completed=True,
+        operator_tiny_pilot_authorized=True,
+    )
+    return issue_live_mutation_permit(controls, evidence)
 
 
 def intent():
@@ -35,7 +69,7 @@ class MemoryLedger:
 class MemoryMexc:
     def __init__(self):
         self.posts, self.fail, self.order, self.stops, self.positions = 0, False, None, [], []
-    async def submit_short_with_stop(self, intent):
+    async def submit_short_with_stop(self, intent, *, permit):
         self.posts += 1
         if self.fail:
             raise TimeoutError()
@@ -58,11 +92,22 @@ class LiveTests(unittest.IsolatedAsyncioTestCase):
             LiveCaps(Decimal("1000"), Decimal("2000"), Decimal("100")))
     async def send(self, **overrides):
         data = dict(
+            permit=permit(),
             equity_usdt=Decimal("1200"), portfolio_notional=Decimal(0),
             today_loss_usdt=Decimal(0), observed_vwap=Decimal("2"),
             book_age_ms=100, signal_age_seconds=20)
         data.update(overrides)
         return await self.gateway.send_one(self.intent, **data)
+
+    async def test_permit_caps_block_before_order(self):
+        with self.assertRaisesRegex(ExecutionHalted, "PERMIT_ORDER_CAP"):
+            await self.send(permit=permit(max_position="400"))
+        self.assertEqual(self.mexc.posts, 0)
+
+    async def test_invalid_permit_blocks_before_order(self):
+        with self.assertRaises(Exception):
+            await self.send(permit=None)
+        self.assertEqual(self.mexc.posts, 0)
 
     async def test_persist_before_post(self):
         self.assertEqual(await self.send(), "98765")
