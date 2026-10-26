@@ -16,6 +16,25 @@ class LiveMexcAdapter:
             raise RuntimeError("unexpected external order response")
         return data
 
+    async def order_deal_details(
+        self,
+        order_id: str,
+    ) -> list[dict[str, Any]]:
+        if (
+            not isinstance(order_id, str)
+            or not order_id.isdigit()
+            or int(order_id) <= 0
+        ):
+            raise ValueError("invalid MEXC order id")
+        data = await self.client._private_get(
+            f"/api/v1/private/order/deal_details/{order_id}"
+        )
+        if not isinstance(data, list) or not all(
+            isinstance(item, dict) for item in data
+        ):
+            raise RuntimeError("MEXC_ORDER_DEAL_DETAILS_UNVERIFIED")
+        return data
+
     async def submit_short_with_stop(self, intent: EntryIntent) -> str:
         result = await self.client._private_post(
             "/api/v1/private/order/create",
