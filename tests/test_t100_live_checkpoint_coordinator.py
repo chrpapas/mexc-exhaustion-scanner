@@ -86,6 +86,7 @@ def amendment():
         "symbol": "SIREN_USDT",
         "position_id": "10",
         "stop_order_id": "99",
+        "verified_stop_order_id": "99",
         "previous_stop": D("175"),
         "proposed_stop": D("90"),
     }
