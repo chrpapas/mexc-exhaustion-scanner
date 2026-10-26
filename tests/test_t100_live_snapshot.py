@@ -32,6 +32,23 @@ class SnapshotTests(unittest.TestCase):
         self.assertFalse(r.flat)
         self.assertEqual(r.total_short_contracts, Decimal("5"))
 
+    def test_entire_position_same_mode_allows_zero_explicit_volume(self):
+        s = stop()
+        s.update(vol="0", volType=2, profitLossVolType="SAME")
+        r = snapshot([position()], [s])
+        self.assertFalse(r.flat)
+
+    def test_separate_mode_requires_positive_stop_loss_volume(self):
+        s = stop()
+        s.update(
+            vol="0",
+            volType=2,
+            profitLossVolType="SEPARATE",
+            stopLossVol="0",
+        )
+        with self.assertRaisesRegex(SnapshotHalted, "INVALID_STOP_VOLUME"):
+            snapshot([position()], [s])
+
     def test_partial_position_pages_block(self):
         with self.assertRaisesRegex(SnapshotHalted, "PAGINATION"):
             snapshot(positions_complete=False)
