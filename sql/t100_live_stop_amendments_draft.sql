@@ -8,10 +8,16 @@ CREATE TABLE IF NOT EXISTS t100_live_stop_amendments (
     stop_order_id TEXT NOT NULL,
     previous_stop NUMERIC NOT NULL CHECK (previous_stop > 0),
     proposed_stop NUMERIC NOT NULL CHECK (proposed_stop > 0 AND proposed_stop < previous_stop),
+    verified_stop_order_id TEXT,
     state TEXT NOT NULL DEFAULT 'PREPARED'
         CHECK (state IN ('PREPARED','SUBMITTING','UNKNOWN','VERIFIED')),
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CHECK (
+        (state = 'VERIFIED' AND verified_stop_order_id IS NOT NULL)
+        OR
+        (state <> 'VERIFIED' AND verified_stop_order_id IS NULL)
+    )
 );
 -- Never delete unresolved records to force a new submission.
 CREATE INDEX IF NOT EXISTS idx_t100_stop_amendments_unresolved
