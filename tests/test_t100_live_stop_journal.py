@@ -16,6 +16,9 @@ class Journal:
         return True
     async def state(self, oid):
         return self.states[oid]
+
+    async def verified_stop_order_id(self, oid):
+        return self.verified_stop_ids.get(oid)
     async def transition(self, oid, expected, target):
         self.transitions.append((expected,target))
         if self.states[oid] != expected:
@@ -72,6 +75,14 @@ class StopJournalTests(unittest.IsolatedAsyncioTestCase):
         await self.reconciler.verify(self.a)
         await self.reconciler.verify(self.a)
         self.assertEqual(len(self.journal.transitions), 1)
+
+    async def test_verified_recheck_requires_persisted_stop_identity(self):
+        await self.reconciler.verify(self.a)
+        self.journal.verified_stop_ids[self.a.external_id] = "different"
+        with self.assertRaisesRegex(
+            StopJournalHalted, "PERSISTENCE_MISMATCH"
+        ):
+            await self.reconciler.verify(self.a)
 
     async def test_unapplied_stop_blocks(self):
         self.exchange.stops[0]["stopLossPrice"] = "175"
