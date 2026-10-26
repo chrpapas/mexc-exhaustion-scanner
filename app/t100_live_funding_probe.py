@@ -170,20 +170,38 @@ def assess_funding_economics(rows: list[dict[str, Any]]) -> dict[str, Any]:
     return result
 
 
+async def collect_verified_position_funding_pages(
+    probe: ReadOnlyMexcProbe,
+    *,
+    position_id: str,
+    page_size: int = 100,
+):
+    """Return internally complete position-scoped pages with raw rows.
+
+    Callers must keep rows private; use collect_observed_position_funding for
+    redacted/shareable diagnostics.
+    """
+    if not isinstance(position_id, str) or not position_id:
+        raise VenueReadHalted("INVALID_FUNDING_POSITION_ID")
+    return await collect_verified_pages(
+        FundingPageAdapter(probe, position_id),
+        page_size=page_size,
+        max_pages=20,
+        max_rows=2000,
+        identity=lambda row: str(row["id"]) if row.get("id") is not None else "",
+    )
+
+
 async def collect_observed_position_funding(
     probe: ReadOnlyMexcProbe,
     *,
     position_id: str,
     page_size: int = 100,
 ) -> dict[str, Any]:
-    if not isinstance(position_id, str) or not position_id:
-        raise VenueReadHalted("INVALID_FUNDING_POSITION_ID")
-    pages = await collect_verified_pages(
-        FundingPageAdapter(probe, position_id),
+    pages = await collect_verified_position_funding_pages(
+        probe,
+        position_id=position_id,
         page_size=page_size,
-        max_pages=20,
-        max_rows=2000,
-        identity=lambda row: str(row["id"]) if row.get("id") is not None else "",
     )
     rows = list(pages.rows)
     economics = assess_funding_economics(rows)
