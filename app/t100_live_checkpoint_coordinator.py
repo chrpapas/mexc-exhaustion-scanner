@@ -72,16 +72,29 @@ class CheckpointPersistenceCoordinator:
         positions: Any,
         stops: Any,
         evidence_fresh: bool,
-        account_reconciled: bool,
+        pre_entry_account_reconciled: bool,
         positions_complete: bool,
         stops_complete: bool,
     ) -> PositionCheckpoint:
-        _require_evidence_gate(
-            evidence_fresh=evidence_fresh,
-            account_reconciled=account_reconciled,
-            positions_complete=positions_complete,
-            stops_complete=stops_complete,
-        )
+        if type(evidence_fresh) is not bool or evidence_fresh is not True:
+            raise CheckpointCoordinatorHalted(
+                "CHECKPOINT_EVIDENCE_NOT_FRESH"
+            )
+        if (
+            type(pre_entry_account_reconciled) is not bool
+            or pre_entry_account_reconciled is not True
+        ):
+            raise CheckpointCoordinatorHalted(
+                "CHECKPOINT_PRE_ENTRY_ACCOUNT_NOT_RECONCILED"
+            )
+        if type(positions_complete) is not bool or positions_complete is not True:
+            raise CheckpointCoordinatorHalted(
+                "CHECKPOINT_POSITIONS_INCOMPLETE"
+            )
+        if type(stops_complete) is not bool or stops_complete is not True:
+            raise CheckpointCoordinatorHalted(
+                "CHECKPOINT_STOPS_INCOMPLETE"
+            )
         if (
             not isinstance(positions, list)
             or not isinstance(stops, list)
