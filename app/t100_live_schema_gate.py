@@ -71,6 +71,12 @@ MUTABLE_TABLES = frozenset({
 
 APPEND_ONLY_TABLES = frozenset(LIVE_TABLE_COLUMNS) - MUTABLE_TABLES
 
+REQUIRED_SEQUENCES = frozenset({
+    "t100_live_order_intents_id_seq",
+    "t100_live_position_checkpoint_revisions_revision_id_seq",
+    "t100_live_stop_amendments_id_seq",
+})
+
 REQUIRED_INDEXES = frozenset({
     "t100_live_order_intents_state_idx",
     "uq_t100_live_checkpoint_symbol_open",
@@ -88,6 +94,8 @@ async def assess_live_schema_and_privileges(pool: Any) -> dict[str, Any]:
         "tables_present": 0,
         "required_columns_present": False,
         "required_indexes_present": False,
+        "required_sequences_present": False,
+        "required_sequence_usage_verified": False,
         "mutable_tables_have_required_write_privileges": False,
         "append_only_tables_insert_select_only": False,
         "delete_privilege_absent_on_all_live_tables": False,
@@ -121,6 +129,33 @@ async def assess_live_schema_and_privileges(pool: Any) -> dict[str, Any]:
                WHERE schemaname='public'
                  AND indexname = ANY($1::text[])""",
             list(sorted(REQUIRED_INDEXES)),
+        )
+        sequence_rows = await pool.fetch(
+            """SELECT sequence_name
+               FROM information_schema.sequences
+               WHERE sequence_schema='public'
+                 AND sequence_name = ANY($1::text[])""",
+            list(sorted(REQUIRED_SEQUENCES)),
+        )
+        sequence_privilege_rows = await pool.fetch(
+            """SELECT sequence_name,
+                      has_sequence_privilege(
+                          current_user,
+                          format('public.%I',sequence_name),
+                          'USAGE'
+                      ) AS can_usage,
+                      has_sequence_privilege(
+                          current_user,
+                          format('public.%I',sequence_name),
+                          'SELECT'
+                      ) AS can_select,
+                      has_sequence_privilege(
+                          current_user,
+                          format('public.%I',sequence_name),
+                          'UPDATE'
+                      ) AS can_update
+               FROM unnest($1::text[]) AS sequence_name""",
+            list(sorted(REQUIRED_SEQUENCES)),
         )
         privilege_rows = await pool.fetch(
             """SELECT table_name,
@@ -193,6 +228,39 @@ async def assess_live_schema_and_privileges(pool: Any) -> dict[str, Any]:
         result["status"] = "LIVE_SCHEMA_INDEXES_MISSING"
         return result
 
+    sequences = {
+        str(row["sequence_name"])
+        for row in sequence_rows
+        if row.get("sequence_name") is not None
+    }
+    sequences_ok = REQUIRED_SEQUENCES <= sequences
+    result["required_sequences_present"] = sequences_ok
+    if not sequences_ok:
+        result["status"] = "LIVE_SCHEMA_SEQUENCES_MISSING"
+        return result
+
+    sequence_privileges: dict[str, dict[str, bool]] = {}
+    for row in sequence_privilege_rows:
+        name = str(row.get("sequence_name") or "")
+        if name not in REQUIRED_SEQUENCES:
+            continue
+        sequence_privileges[name] = {
+            "usage": row.get("can_usage") is True,
+            "select": row.get("can_select") is True,
+            "update": row.get("can_update") is True,
+        }
+    if set(sequence_privileges) != set(REQUIRED_SEQUENCES):
+        result["status"] = "LIVE_SCHEMA_SEQUENCE_PRIVILEGES_INCOMPLETE"
+        return result
+    sequence_privileges_ok = all(
+        item["usage"] and item["select"] and not item["update"]
+        for item in sequence_privileges.values()
+    )
+    result["required_sequence_usage_verified"] = sequence_privileges_ok
+    if not sequence_privileges_ok:
+        result["status"] = "LIVE_SCHEMA_SEQUENCE_PRIVILEGE_MISMATCH"
+        return result
+
     privileges: dict[str, dict[str, bool]] = {}
     for row in privilege_rows:
         table = str(row.get("table_name") or "")
@@ -235,6 +303,7 @@ async def assess_live_schema_and_privileges(pool: Any) -> dict[str, Any]:
     result["delete_privilege_absent_on_all_live_tables"] = no_delete
     result["truncate_privilege_absent_on_all_live_tables"] = no_truncate
     result["durable_schema_deployed_verified"] = all((
+        sequence_privileges_ok,
         mutable_ok,
         append_only_ok,
         no_delete,
