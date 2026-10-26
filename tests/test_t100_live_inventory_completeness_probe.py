@@ -125,10 +125,15 @@ class CompletenessProbeTests(unittest.IsolatedAsyncioTestCase):
     async def test_no_private_values_in_certificate(self):
         p = Probe()
         p.positions[0]["symbol"] = "SECRET_USDT"
+        p.positions[0]["positionId"] = "PRIVATE-POSITION-ID"
         p.stops[0]["symbol"] = "SECRET_USDT"
+        p.stops[0]["positionId"] = "PRIVATE-POSITION-ID"
+        p.stops[0]["id"] = "PRIVATE-STOP-ID"
         r = await run_current_inventory_completeness_probe(p)
         cert = str(r["current_inventory_completeness"])
-        for secret in ("SECRET_USDT", "10", "99", "175"):
+        for secret in (
+            "SECRET_USDT", "PRIVATE-POSITION-ID", "PRIVATE-STOP-ID"
+        ):
             self.assertNotIn(secret, cert)
 
 
