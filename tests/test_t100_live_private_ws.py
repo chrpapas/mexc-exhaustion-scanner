@@ -98,8 +98,11 @@ class PrivateWsTests(unittest.IsolatedAsyncioTestCase):
                     "symbol": "SECRET_USDT",
                     "holdVol": 77,
                     "positionType": 2,
+                    "openType": 1,
                     "state": 1,
                     "holdAvgPrice": 987.65,
+                    "createTime": 1234567889000,
+                    "updateTime": 1234567890000,
                 },
             }),
             json.dumps({
@@ -111,6 +114,13 @@ class PrivateWsTests(unittest.IsolatedAsyncioTestCase):
                     "state": 1,
                     "stopLossPrice": 1234.5,
                     "vol": 77,
+                    "stopLossVol": 77,
+                    "realityVol": 0,
+                    "positionType": 2,
+                    "triggerSide": 0,
+                    "isFinished": 0,
+                    "profitLossVolType": "SAME",
+                    "volType": 2,
                 },
             }),
             json.dumps({
@@ -122,7 +132,12 @@ class PrivateWsTests(unittest.IsolatedAsyncioTestCase):
                     "side": 3,
                     "vol": 77,
                     "price": 987.65,
+                    "feeCurrency": "USDT",
                     "fee": -0.01,
+                    "timestamp": 1234567890000,
+                    "category": 1,
+                    "orderId": 444,
+                    "positionMode": 1,
                 },
             }),
         ]
@@ -141,6 +156,13 @@ class PrivateWsTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(report.stop_plan_events_seen, 1)
         self.assertEqual(report.fill_events_seen, 1)
         self.assertEqual(report.private_events_seen, 3)
+        self.assertEqual(
+            report.payload_semantic_events_verified, 3
+        )
+        self.assertEqual(report.payload_semantic_failures, 0)
+        self.assertTrue(report.documented_payload_semantics_observed)
+        self.assertFalse(report.rest_correlation_verified)
+        self.assertFalse(report.lifecycle_semantics_verified)
         self.assertFalse(report.entry_allowed)
         self.assertFalse(report.live_authorization)
         self.assertEqual(
@@ -163,6 +185,29 @@ class PrivateWsTests(unittest.IsolatedAsyncioTestCase):
             report.channel_schema[
                 "push.personal.position"]["field_types"],
         )
+
+    async def test_documented_channel_with_invalid_payload_halts(self):
+        connect = FakeConnect([
+            json.dumps({"channel": "rs.login", "data": "success"}),
+            json.dumps({
+                "channel": "push.personal.position",
+                "data": {
+                    "positionId": 1,
+                    "symbol": "SECRET_USDT",
+                    "holdVol": 1,
+                    "positionType": 2,
+                    "state": 1,
+                },
+                "ts": 1234567890000,
+            }),
+        ])
+        with self.assertRaisesRegex(
+            PrivateWsHalted, "PAYLOAD_SEMANTICS_INVALID"
+        ):
+            await observe_private_ws(
+                api_key="a", api_secret="b",
+                duration_seconds=1, connect=connect,
+            )
 
     async def test_login_rejection_fails_closed(self):
         connect = FakeConnect([
