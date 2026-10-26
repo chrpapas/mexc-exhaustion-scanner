@@ -27,6 +27,9 @@ from app.t100_live_stop_transition import assess_recent_finished_tpsl_transition
 from app.t100_live_funding_probe import collect_observed_position_funding
 from app.t100_live_symbol_crosscheck import crosscheck_symbol_scoped_inventory
 from app.t100_live_position_margin_witness import assess_position_margin_witness
+from app.t100_live_inventory_completeness_probe import (
+    run_current_inventory_completeness_probe,
+)
 
 PREFLIGHT_DIAGNOSTIC_VERSION = "2026-10-24-position-margin-witness-v1"
 
@@ -39,6 +42,7 @@ async def read_only_preflight(
     include_funding_probe: bool = False,
     include_symbol_crosscheck: bool = False,
     include_position_margin_witness: bool = False,
+    include_current_inventory_completeness: bool = False,
 ) -> dict[str, Any]:
     controls = T100ExecutionControls.from_env()
     failures = list(controls.readiness_failures())
@@ -189,6 +193,20 @@ async def read_only_preflight(
                     "account_wide_funding_completeness_verified": False,
                 }
 
+        if include_current_inventory_completeness:
+            completeness = await run_current_inventory_completeness_probe(
+                probe
+            )
+            result["current_inventory_completeness_probe"] = completeness
+            result["account_wide_completeness_verified"] = (
+                completeness.get(
+                    "account_wide_completeness_verified"
+                )
+                is True
+            )
+        else:
+            result["account_wide_completeness_verified"] = False
+
         if include_raw_consistency:
             last_observed_ms = -1
 
@@ -242,7 +260,15 @@ async def read_only_preflight(
         if result["usdt_available"] <= 0:
             failures.append("no_available_futures_usdt")
         result["credential_status"] = "SIGNED_PRIVATE_READS_SUCCEEDED_UNCERTIFIED_SCHEMA"
-        failures.append("venue_read_contract_and_pagination_not_certified")
+        if include_current_inventory_completeness:
+            if result.get("account_wide_completeness_verified") is not True:
+                failures.append(
+                    "current_account_inventory_completeness_not_certified"
+                )
+        else:
+            failures.append(
+                "venue_read_contract_and_pagination_not_certified"
+            )
     except Exception as exc:
         # Do not emit secrets, raw URLs, request bodies, or credentials.
         failures.append("private_or_public_read_failed")
@@ -295,6 +321,12 @@ def shareable_contract_report(result: dict[str, Any]) -> dict[str, Any]:
         "position_inventory_economic_witness": result.get(
             "position_inventory_economic_witness"
         ),
+        "current_inventory_completeness_probe": result.get(
+            "current_inventory_completeness_probe"
+        ),
+        "account_wide_completeness_verified": result.get(
+            "account_wide_completeness_verified", False
+        ),
         "raw_inventory_completeness_verified": result.get(
             "raw_inventory_completeness_verified", False
         ),
@@ -313,6 +345,7 @@ async def _run_cli_preflight(*, schema_only: bool) -> dict[str, Any]:
                 include_funding_probe=schema_only,
                 include_symbol_crosscheck=schema_only,
                 include_position_margin_witness=schema_only,
+                include_current_inventory_completeness=schema_only,
             ),
             timeout=45.0,
         )
