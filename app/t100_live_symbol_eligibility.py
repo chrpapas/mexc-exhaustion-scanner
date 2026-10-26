@@ -7,9 +7,17 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from decimal import Decimal
-from typing import Any
+from typing import Any, Protocol
 
-from app.mexc_trade import ContractSpec
+
+class ContractSpecLike(Protocol):
+    symbol: str
+    contract_size: float
+    vol_unit: float
+    min_vol: float
+    max_vol: float
+    api_allowed: bool
+    position_open_type: int
 
 
 class SymbolEligibilityHalted(RuntimeError):
@@ -29,13 +37,13 @@ class SymbolExecutionEligibility:
 def assess_symbol_execution_eligibility(
     *,
     symbol: str,
-    contract_spec: ContractSpec,
+    contract_spec: ContractSpecLike,
     position_mode: Any,
 ) -> SymbolExecutionEligibility:
     if (
         not isinstance(symbol, str)
         or not symbol
-        or not isinstance(contract_spec, ContractSpec)
+        or not hasattr(contract_spec, "symbol")
         or contract_spec.symbol != symbol
     ):
         raise SymbolEligibilityHalted("SYMBOL_CONTRACT_IDENTITY_INVALID")
