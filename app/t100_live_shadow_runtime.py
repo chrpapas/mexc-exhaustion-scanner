@@ -337,6 +337,20 @@ class T100LiveShadowRuntime:
             )
 
         if read_failed:
+            # Only internal status codes / exception class names. Never log
+            # private response payloads, HTTP exception messages, URLs or IDs.
+            LOGGER.warning(
+                "T100 shadow preflight read failed "
+                "failure_type=%s read_step=%s credential_status=%s "
+                "inventory_consistency_failure_type=%s",
+                str(preflight.get("read_failure_type") or "none")[:64],
+                str(preflight.get("read_failure_step") or "unknown")[:64],
+                credential_status[:96],
+                str(
+                    preflight.get("inventory_consistency_failure_type")
+                    or "none"
+                )[:64],
+            )
             self._trip("READ_FAILURE")
         elif not critical_consistent:
             self._trip("INVENTORY_CHANGED_BETWEEN_READS")
@@ -349,11 +363,14 @@ class T100LiveShadowRuntime:
         elif positions > 0 and stops > 0 and not protection_semantics_verified:
             self._trip("NATIVE_PROTECTION_UNVERIFIED")
 
-        await self._notify_state_change(
-            positions=positions,
-            stops=stops,
-            protection=protection,
-        )
+        # Absent fields after a failed read are NOT evidence of a flat
+        # account. Never advertise zero positions/protection from missing data.
+        if not read_failed:
+            await self._notify_state_change(
+                positions=positions,
+                stops=stops,
+                protection=protection,
+            )
 
         continuity = await self._continuity_runner(
             duration_seconds=self.config.ws_window_seconds
@@ -370,6 +387,11 @@ class T100LiveShadowRuntime:
             "HALTED_REST_WS_REST_CONTINUITY",
             "STABLE_REST_WITH_UNEXPECTED_PRIVATE_WS_CHANNELS",
         }:
+            LOGGER.warning(
+                "T100 shadow continuity read failed status=%s failure_type=%s",
+                continuity_status,
+                str(continuity.get("failure_type") or "none")[:64],
+            )
             self._trip("READ_FAILURE")
 
         if ws_events > 0:
