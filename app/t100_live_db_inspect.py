@@ -283,10 +283,15 @@ async def inspect_live_database(conn: Any) -> dict[str, Any]:
         return result
 
 
-async def _main() -> None:
+async def _main(*, prompt_dsn: bool = False) -> None:
     if os.getenv("T100_EXECUTION_MODE", "paper").lower() != "paper":
         raise RuntimeError("DB_INSPECTION_REQUIRES_PAPER_MODE")
-    dsn = os.getenv("DATABASE_URL") or ""
+    if prompt_dsn:
+        import getpass
+        # Never save the supplied DSN to os.environ or print it.
+        dsn = getpass.getpass("Render PostgreSQL External URL (hidden): ")
+    else:
+        dsn = os.getenv("DATABASE_URL") or ""
     if not dsn:
         raise RuntimeError("DATABASE_URL_REQUIRED")
 
@@ -319,7 +324,18 @@ async def _main() -> None:
 
 
 def cli() -> None:
-    asyncio.run(_main())
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        description="TLS read-only T100 live PostgreSQL commissioning inspector"
+    )
+    parser.add_argument(
+        "--prompt-dsn",
+        action="store_true",
+        help="Prompt for the external PostgreSQL URL without echo or export",
+    )
+    args = parser.parse_args()
+    asyncio.run(_main(prompt_dsn=args.prompt_dsn))
 
 
 if __name__ == "__main__":
