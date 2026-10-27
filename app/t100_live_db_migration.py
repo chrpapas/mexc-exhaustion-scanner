@@ -61,7 +61,7 @@ class LiveMigrationBlocked(RuntimeError):
 
 def _git_blob_sha(content: bytes) -> str:
     return hashlib.sha1(
-        b"blob " + str(len(content)).encode() + b"\\0" + content
+        b"blob " + str(len(content)).encode() + bytes([0]) + content
     ).hexdigest()
 
 
@@ -90,7 +90,7 @@ async def _tables(conn: Any) -> set[str]:
     rows = await conn.fetch(
         """SELECT table_name FROM information_schema.tables
            WHERE table_schema='public'
-             AND table_name LIKE 't100_live_%'"""
+             AND left(table_name,10)='t100_live_'"""
     )
     return {str(row["table_name"]) for row in rows}
 
