@@ -14,8 +14,8 @@ scanner/trader services. Shadow worker is a separate read-only service.
 - Do **not** weaken the external allowlist to make the hosted connector work.
 - The Render connector exposes only read-only SQL, so migrations cannot be
   applied through that connection even if connectivity is restored.
-- Migrations 027, 029, 030 and a runtime privileges template exist on the
-  feature branch. They have **not** been run on the existing database.
+- Migrations 027, 028, 029, 030 and a runtime privileges template exist on the
+  feature branch. Their applied status on the existing database is **unverified**.
 - A live runtime must not use the existing table-owner/scanner credential for
   append-only accounting: ownership and application write permissions must
   be separated before permitting trading.
@@ -43,7 +43,9 @@ write SQL, submit orders, or change the Render deployment.
 Possible expected statuses:
 - `DATABASE_CONNECTION_FAILED`: TLS/network/credentials prevented connection.
 - `LIVE_DATABASE_MIGRATION_PREREQUISITES_MISSING`: some new tables are absent.
-- `LIVE_SCHEMA_OR_RUNTIME_PRIVILEGES_NOT_VERIFIED`: table/privilege mismatch.
+- `FULL_STRATEGY_STORAGE_SHAPE_UNVERIFIED`: VOL30/lease schema mismatch.
+- `FULL_STRATEGY_STORAGE_PRIVILEGES_UNVERIFIED`: VOL30/lease runtime grants mismatch.
+- `LIVE_SCHEMA_OR_RUNTIME_PRIVILEGES_NOT_VERIFIED`: ledger table/privilege mismatch.
 - `LIVE_DURABLE_STATE_NOT_CLEAN`: unresolved intent/amendment/review state.
 - `LIVE_DATABASE_READ_ONLY_PRECHECK_PASSED`: the queried role passed the
   schema/privilege and unresolved-state gates; **not** live authorization.
@@ -56,8 +58,9 @@ runtime role after a reviewed migration/permission rollout.
 
 1. Review a recoverable backup/restore point.
 2. Confirm migration sequencing and identify a *separate* live runtime role.
-3. Apply migrations only from a trusted, authorized connection while orders
-   remain disabled.
+3. Apply **027, 028, 029, 030 in order** only from a trusted, authorized
+   connection after examining existing table definitions and confirming a
+   recoverable backup. Keep orders disabled.
 4. Verify exact table/column/index/sequence definitions, privileges, and
    clean durable state. Do not infer migration success from IF NOT EXISTS alone.
 5. Exercise lease renewal/expiry/takeover against PostgreSQL with a test
