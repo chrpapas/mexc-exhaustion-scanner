@@ -53,6 +53,43 @@ If this first check runs under the table-owner credential, a privileges gate
 failure may be expected. Run the final gate again under a separately restricted
 runtime role after a reviewed migration/permission rollout.
 
+## Operator backup and atomic migration gate
+
+1. Open `mexc-exhaustion-db` in the Render Dashboard. On **Recovery**,
+   click **Create export** (Render's logical backup), wait for it to finish
+   and record the export timestamp. Prefer downloading the export and
+   verifying it is readable, and confirm the database has PITR available.
+   A pending export is not a verified backup.
+2. Before SQL writes, run the guarded read-only plan:
+
+```bash
+cd ~/trader-backtest/mexc-exhaustion-scanner-live-readiness-git
+git pull --ff-only origin feature/t100-live-readiness-gates-20261023
+source .venv-t100/bin/activate
+T100_EXECUTION_MODE=paper python -m app.t100_live_db_migration --plan
+```
+
+   Supply the same Render external URL at the hidden prompt. Expected result:
+   `MIGRATION_PLAN_READY_AFTER_BACKUP` and
+   `SAFE_EMPTY_LIVE_NAMESPACE` with `live_tables_present=0`.
+3. The separate `--apply --backup-export-verified` command is available
+   only when an export has actually succeeded and been independently
+   reviewed. It is an explicit operator action: it requires typing
+   `APPLY 027-030 TO mexc_exhaustion`, pins all four SQL file contents to
+   reviewed Git blob SHA-1 checksums, locks migrations with a Postgres
+   advisory transaction lock, refuses partial/pre-existing live namespaces,
+   and creates all twelve live tables atomically with post-DDL checks.
+   It will *never* change the existing scanner/trader tables.
+4. **Do not run apply without backup/recovery verification and independent
+   migration review**, even if the read-only plan passes. The script does not
+   create the runtime DB role. After DDL, configure the role with
+   `sql/t100_live_runtime_privileges_template.sql` separately, then run
+   `app.t100_live_db_inspect --prompt-dsn` with that restricted credential.
+
+There is no safe one-command action that completes DDL, restricted role
+creation, real Postgres fencing tests, and MEXC execution certification
+simultaneously. Each gate must be checked before the next.
+
 ## Next phase — gated, not yet performed
 
 1. Review a recoverable backup/restore point.
