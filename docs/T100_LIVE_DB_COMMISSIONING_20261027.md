@@ -29,19 +29,18 @@ into ChatGPT, PR comments, logs, or screenshots.
 cd ~/trader-backtest/mexc-exhaustion-scanner-live-readiness-git
 git pull --ff-only origin feature/t100-live-readiness-gates-20261023
 source .venv-t100/bin/activate
-export T100_EXECUTION_MODE=paper
-read -s -p "Render external PostgreSQL URL (hidden): " DATABASE_URL; echo
-export DATABASE_URL
-python -m app.t100_live_db_inspect
-unset DATABASE_URL
+T100_EXECUTION_MODE=paper python -m app.t100_live_db_inspect --prompt-dsn
 ```
 
-The inspector opens one `ssl=require` PostgreSQL connection and wraps
-all inspection queries in `READ ONLY`. It does not use exchange credentials,
+The inspector prompts for the URL with hidden input, does not export the URL
+into the shell environment, checks database identity against `mexc_exhaustion`,
+opens one `ssl=require` PostgreSQL connection and wraps all queries in
+`READ ONLY`. It does not use exchange credentials,
 write SQL, submit orders, or change the Render deployment.
 
 Possible expected statuses:
 - `DATABASE_CONNECTION_FAILED`: TLS/network/credentials prevented connection.
+- `WRONG_DATABASE_IDENTITY`: the URL did not point to `mexc_exhaustion`.
 - `LIVE_DATABASE_MIGRATION_PREREQUISITES_MISSING`: some new tables are absent.
 - `FULL_STRATEGY_STORAGE_SHAPE_UNVERIFIED`: VOL30/lease schema mismatch.
 - `FULL_STRATEGY_STORAGE_PRIVILEGES_UNVERIFIED`: VOL30/lease runtime grants mismatch.
