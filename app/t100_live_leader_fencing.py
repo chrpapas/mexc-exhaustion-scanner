@@ -159,6 +159,7 @@ class PostgresLeaderLeaseStore:
                SET holder_id=EXCLUDED.holder_id,
                    fencing_token=CASE
                      WHEN t100_live_executor_leases.holder_id=EXCLUDED.holder_id
+                      AND t100_live_executor_leases.lease_expires_at > now()
                      THEN t100_live_executor_leases.fencing_token
                      ELSE t100_live_executor_leases.fencing_token+1
                    END,
