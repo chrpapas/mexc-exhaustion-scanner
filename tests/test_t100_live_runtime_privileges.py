@@ -23,12 +23,32 @@ class RuntimePrivilegeTemplateTests(unittest.TestCase):
     def test_append_only_tables_are_select_insert_only(self):
         marker = "-- immutable evidence: append + read only."
         start = self.sql.index(marker)
-        end = self.sql.index("-- bigserial", start)
+        end = self.sql.index("-- research/v40 full-strategy", start)
         block = self.sql[start:end]
         self.assertIn("grant select, insert on table", block)
         self.assertNotIn("update", block)
         self.assertNotIn("delete", block)
         self.assertNotIn("truncate", block)
+
+    def test_full_v40_state_only_grants_column_level_updates(self):
+        self.assertIn("grant update (status) on table", self.sql)
+        self.assertIn("t100_live_vol30_parents", self.sql)
+        self.assertIn(
+            "grant update (state, filled_notional_usdt, "
+            "exchange_order_id, updated_at)",
+            self.sql,
+        )
+        self.assertIn("t100_live_vol30_children", self.sql)
+        self.assertIn(
+            "grant update (holder_id, fencing_token, "
+            "lease_expires_at, updated_at)",
+            self.sql,
+        )
+        self.assertIn("t100_live_executor_leases", self.sql)
+        self.assertNotIn(
+            "grant select, insert, update on table\n"
+            "    t100_live_vol30_parents", self.sql,
+        )
 
     def test_sequences_get_usage_select_without_update(self):
         marker = "grant usage, select on sequence"
