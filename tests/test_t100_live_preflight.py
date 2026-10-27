@@ -95,6 +95,17 @@ class PreflightTests(unittest.IsolatedAsyncioTestCase):
     async def asyncTearDown(self):
         self.env.stop()
 
+    async def test_preflight_failure_stage_is_redacted_and_shareable(self):
+        class TimeoutClient(FakeClient):
+            async def ping(self):
+                raise TimeoutError("DO_NOT_LOG_SECRET")
+        result = await read_only_preflight(client=TimeoutClient())
+        self.assertEqual(result["read_failure_type"], "TimeoutError")
+        self.assertEqual(result["read_failure_step"], "server_ping")
+        shared = shareable_contract_report(result)
+        self.assertEqual(shared["read_failure_step"], "server_ping")
+        self.assertNotIn("DO_NOT_LOG_SECRET", str(shared))
+
     async def test_empty_inventory_is_still_uncertified(self):
         c = FakeClient()
         result = await read_only_preflight(client=c)
