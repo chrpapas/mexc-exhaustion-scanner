@@ -16,7 +16,7 @@ class Store:
     async def acquire(self, name, holder, ttl):
         if self.current and self.holder != holder:
             return 0, False
-        if self.holder != holder:
+        if self.holder != holder or not self.current:
             self.token += 1
         self.holder = holder
         self.current = True
@@ -77,6 +77,35 @@ class LeaderFencingTests(unittest.IsolatedAsyncioTestCase):
         ):
             await self.c.require_current(first)
         await self.c.require_current(second)
+
+    async def test_same_holder_reacquires_expired_lease_with_new_token(self):
+        first = await self.c.acquire("render-instance-a")
+        self.store.expire()
+        second = await self.c.acquire("render-instance-a")
+        self.assertEqual(first.fencing_token, 1)
+        self.assertEqual(second.fencing_token, 2)
+        with self.assertRaisesRegex(
+            LeaderLeaseHalted, "FENCING_TOKEN_STALE"
+        ):
+            await self.c.require_current(first)
+        with self.assertRaisesRegex(
+            LeaderLeaseHalted, "LEASE_LOST"
+        ):
+            await self.c.renew(first)
+        await self.c.require_current(second)
+
+    def test_postgres_acquire_fences_expired_same_holder_in_sql(self):
+        from app.t100_live_leader_fencing import PostgresLeaderLeaseStore
+        import inspect
+        source = inspect.getsource(PostgresLeaderLeaseStore.acquire)
+        self.assertIn(
+            "t100_live_executor_leases.lease_expires_at > now()",
+            source,
+        )
+        self.assertIn(
+            "t100_live_executor_leases.fencing_token+1",
+            source,
+        )
 
     async def test_old_holder_cannot_renew_after_takeover(self):
         first = await self.c.acquire("a")
