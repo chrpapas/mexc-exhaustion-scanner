@@ -69,17 +69,23 @@ async def read_only_preflight(
         from app.mexc_trade import MexcTradeClient
         client = MexcTradeClient("https://api.mexc.com", api_key=key, api_secret=secret)
     assert client is not None
+    read_step = "server_ping"
     try:
         # No mutation method (_private_post, create, cancel, close, stop) is invoked.
         result["server_ping"] = await client.ping()
+        read_step = "usdt_asset"
         asset = await client.usdt_asset()
         result["usdt_equity"] = float(asset.get("equity") or 0)
+        read_step = "usdt_available_balance"
         result["usdt_available"] = await client.usdt_available_balance()
+        read_step = "position_mode"
         result["position_mode"] = await client.position_mode()
         # The legacy open_positions()/open_stop_orders() helpers silently
         # discard malformed rows. Never infer an empty account from them.
         probe = ReadOnlyMexcProbe(client)
+        read_step = "open_positions"
         positions = await probe.raw_open_positions()
+        read_step = "current_tpsl"
         stops = await probe.raw_open_stops()
         # Shape evidence contains only allowlisted field names and types;
         # never IDs, symbols, quantities, balances or unknown key names.
@@ -92,6 +98,7 @@ async def read_only_preflight(
             # Schema discovery only. MEXC's documented history response is a
             # list with requested page_num/page_size but no reported total,
             # therefore this single page can never certify completeness.
+            read_step = "finished_tpsl_page1"
             historical_stops = await probe.raw_stop_page(1, 100, is_finished=1)
             result["redacted_historical_stop_schema_page1"] = summarize_inventory_schema(
                 [], historical_stops
@@ -123,12 +130,14 @@ async def read_only_preflight(
             positions, stops
         )
         if include_symbol_crosscheck:
+            read_step = "symbol_crosscheck"
             result["symbol_scoped_inventory_crosscheck"] = (
                 await crosscheck_symbol_scoped_inventory(
                     probe, positions, stops
                 )
             )
         if include_position_margin_witness:
+            read_step = "account_assets"
             assets = await probe.raw_account_assets()
             result["position_inventory_economic_witness"] = (
                 assess_position_margin_witness(positions, assets)
@@ -248,6 +257,7 @@ async def read_only_preflight(
                 result["raw_inventory_completeness_verified"] = False
                 failures.append("critical_inventory_double_read_unverified")
 
+        read_step = "contract_specs"
         await client.refresh_contract_specs()
         result["public_contract_specs_loaded"] = len(client._spec_cache)
 
@@ -273,6 +283,7 @@ async def read_only_preflight(
         # Do not emit secrets, raw URLs, request bodies, or credentials.
         failures.append("private_or_public_read_failed")
         result["read_failure_type"] = type(exc).__name__
+        result["read_failure_step"] = read_step
     finally:
         if owned:
             await client.close()
