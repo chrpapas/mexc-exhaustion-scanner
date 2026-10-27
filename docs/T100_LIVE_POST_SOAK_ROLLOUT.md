@@ -27,12 +27,19 @@ being reviewed.
 1. Keep all T100 execution settings in paper/read-only mode.
 2. Take/verify the available database backup/recovery point.
 3. Using the migration/table-owner credential, apply:
-   - existing migration 027 if it is not already present;
-   - `migrations/029_t100_live_durable_state.sql`.
+   - `migrations/027_t100_live_order_intents.sql`;
+   - `migrations/028_t100_live_vol30_h4.sql` (full V40 parent/child state);
+   - `migrations/029_t100_live_durable_state.sql`;
+   - `migrations/030_t100_live_executor_lease.sql`.
+   Apply each only after inspecting existing objects and matching expected
+   definitions, inside a reviewed transaction from a trusted permitted
+   connection. `CREATE TABLE IF NOT EXISTS` is not schema-drift validation.
 4. Do not point an order-capable worker at the database.
 5. Verify all expected tables, columns, indexes and BIGSERIAL sequences exist.
 
-Migration 029 is create-only and does not alter the paper portfolio tables.
+These four migrations are create-only and have no references to paper portfolio
+tables. They do not establish V40 execution-parity or authorize trading.
+The read-only `app.t100_live_db_inspect` checks the full 027–030 table set.
 
 ## Phase 3 — dedicated restricted runtime database credential
 
@@ -58,12 +65,21 @@ Required policy:
   - no UPDATE
   - no DELETE
   - no TRUNCATE
+- VOL30 parent/child tables:
+  - SELECT, INSERT
+  - UPDATE only on explicit lifecycle/ack/fill columns
+  - no DELETE/TRUNCATE and no table-wide UPDATE
+- executor lease:
+  - SELECT, INSERT
+  - UPDATE only holder/fencing/expiry fields
+  - no DELETE/TRUNCATE and no table-wide UPDATE
 - required BIGSERIAL sequences:
   - USAGE, SELECT
   - no UPDATE / setval authority
 
-Run `app.t100_live_schema_gate` through the runtime credential. The rollout
-must stop unless `durable_schema_deployed_verified=true`.
+Run `app.t100_live_db_inspect` through the runtime credential. The rollout
+must stop unless both the durable-schema checks and strategy/lease
+column-level privilege checks pass.
 
 ## Phase 4 — clean durable state
 
