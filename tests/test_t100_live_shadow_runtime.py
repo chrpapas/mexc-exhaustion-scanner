@@ -217,8 +217,48 @@ class ShadowRuntimeTests(unittest.IsolatedAsyncioTestCase):
     async def test_read_failure_latches(self):
         runtime = self.make_runtime(
             pf=preflight(read_failure_type="TimeoutError"))
-        report = await runtime.cycle()
+        with self.assertLogs(
+            "app.t100_live_shadow_runtime", level="WARNING"
+        ) as captured:
+            report = await runtime.cycle()
         self.assertEqual(report.kill_reason, "READ_FAILURE")
+        self.assertTrue(any(
+            "failure_type=TimeoutError" in msg
+            for msg in captured.output
+        ))
+
+    async def test_failed_read_does_not_falsely_announce_flat_account(self):
+        runtime = self.make_runtime(
+            pf={
+                "credential_status": "",
+                "read_failure_type": "TimeoutError",
+                "read_failure_step": "current_tpsl",
+            }
+        )
+        with self.assertLogs(
+            "app.t100_live_shadow_runtime", level="WARNING"
+        ):
+            report = await runtime.cycle()
+        self.assertTrue(report.kill_tripped)
+        self.assertFalse(any(
+            "ACCOUNT STATE" in notice.title
+            for notice, _force in self.notifier.calls
+        ))
+
+    async def test_continuity_halt_logs_only_safe_failure_class(self):
+        cont = continuity("HALTED_REST_WS_REST_CONTINUITY")
+        cont["failure_type"] = "TimeoutError"
+        runtime = self.make_runtime(cont=cont)
+        with self.assertLogs(
+            "app.t100_live_shadow_runtime", level="WARNING"
+        ) as captured:
+            report = await runtime.cycle()
+        self.assertEqual(report.kill_reason, "READ_FAILURE")
+        self.assertTrue(any(
+            "continuity read failed" in msg
+            and "failure_type=TimeoutError" in msg
+            for msg in captured.output
+        ))
 
     async def test_refuses_live_mode(self):
         with patch.dict(
