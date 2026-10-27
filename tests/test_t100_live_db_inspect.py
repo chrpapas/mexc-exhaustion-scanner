@@ -1,7 +1,10 @@
 """Offline unit checks of fail-closed DB commissioning inspector."""
 import unittest
+from unittest.mock import AsyncMock, patch
 from app.t100_live_db_inspect import (
     inspect_live_database, LEASE_TABLE, STRATEGY_TABLE_COLUMNS,
+    LEASE_COLUMNS, REQUIRED_STRATEGY_INDEXES,
+    ALLOWED_STRATEGY_UPDATES, IMMUTABLE_STRATEGY_COLUMNS,
 )
 from app.t100_live_schema_gate import LIVE_TABLE_COLUMNS
 
@@ -28,6 +31,61 @@ class FakeConnection:
         if self.error:
             raise TimeoutError()
         return [{"table_name": n} for n in sorted(self.present)]
+
+
+class CompleteConnection(FakeConnection):
+    def __init__(self, *, allow_immutable_update=False):
+        super().__init__(present=(
+            set(LIVE_TABLE_COLUMNS) | set(STRATEGY_TABLE_COLUMNS)
+            | {LEASE_TABLE}
+        ))
+        self.allow_immutable_update = allow_immutable_update
+
+    async def fetch(self, query, *args):
+        self.calls.append(query)
+        if "information_schema.tables" in query:
+            return [{"table_name": name} for name in self.present]
+        if "information_schema.columns" in query:
+            cols = dict(STRATEGY_TABLE_COLUMNS)
+            cols[LEASE_TABLE] = LEASE_COLUMNS
+            return [
+                {"table_name": name, "column_name": col}
+                for name, required in cols.items()
+                for col in required
+            ]
+        if "FROM pg_indexes" in query:
+            return [
+                {"indexname": name}
+                for name in REQUIRED_STRATEGY_INDEXES
+            ]
+        if "has_table_privilege" in query:
+            return [
+                {
+                    "table_name": name,
+                    "can_select": True, "can_insert": True,
+                    "can_update": False,
+                    "can_delete": False, "can_truncate": False,
+                }
+                for name in (set(STRATEGY_TABLE_COLUMNS) | {LEASE_TABLE})
+            ]
+        if "has_column_privilege" in query:
+            rows = []
+            for table, column in zip(args[0], args[1]):
+                can_update = column in ALLOWED_STRATEGY_UPDATES[table]
+                if self.allow_immutable_update and column in (
+                    IMMUTABLE_STRATEGY_COLUMNS[table]
+                ):
+                    can_update = True
+                rows.append({
+                    "table_name": table, "column_name": column,
+                    "can_update": can_update,
+                })
+            return rows
+        raise AssertionError("UNEXPECTED_READ_ONLY_QUERY")
+
+    async def fetchrow(self, query, *args):
+        self.calls.append(query)
+        return {"can_usage": True, "can_select": True, "can_update": False}
 
 
 class DBInspectionTests(unittest.IsolatedAsyncioTestCase):
@@ -70,6 +128,50 @@ class DBInspectionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             r["status"], "LIVE_DATABASE_MIGRATION_PREREQUISITES_MISSING"
         )
+
+    async def test_full_strategy_table_and_privilege_check_passes(self):
+        c = CompleteConnection()
+        with (
+            patch(
+                "app.t100_live_db_inspect.assess_live_schema_and_privileges",
+                new_callable=AsyncMock,
+                return_value={"durable_schema_deployed_verified": True},
+            ),
+            patch(
+                "app.t100_live_db_inspect.assess_unresolved_live_state",
+                new_callable=AsyncMock,
+                return_value={"unresolved_mutations_absent": True},
+            ),
+        ):
+            r = await inspect_live_database(c)
+        self.assertEqual(
+            r["status"], "LIVE_DATABASE_READ_ONLY_PRECHECK_PASSED"
+        )
+        self.assertTrue(r["strategy_storage_columns_verified"])
+        self.assertTrue(r["strategy_storage_indexes_verified"])
+        self.assertTrue(r["strategy_storage_privileges_verified"])
+        self.assertFalse(r["live_authorization"])
+
+    async def test_immutable_column_update_permission_blocks(self):
+        c = CompleteConnection(allow_immutable_update=True)
+        with (
+            patch(
+                "app.t100_live_db_inspect.assess_live_schema_and_privileges",
+                new_callable=AsyncMock,
+                return_value={"durable_schema_deployed_verified": True},
+            ),
+            patch(
+                "app.t100_live_db_inspect.assess_unresolved_live_state",
+                new_callable=AsyncMock,
+                return_value={"unresolved_mutations_absent": True},
+            ),
+        ):
+            r = await inspect_live_database(c)
+        self.assertEqual(
+            r["status"], "FULL_STRATEGY_STORAGE_PRIVILEGES_UNVERIFIED"
+        )
+        self.assertFalse(r["strategy_storage_privileges_verified"])
+        self.assertFalse(r["live_authorization"])
 
     async def test_failure_is_redacted_fail_closed(self):
         c = FakeConnection(error=True)
