@@ -299,6 +299,7 @@ def shareable_contract_report(result: dict[str, Any]) -> dict[str, Any]:
         "live_order_submission_possible": False,
         "credential_status": result.get("credential_status", "UNKNOWN"),
         "read_failure_type": result.get("read_failure_type"),
+        "read_failure_step": result.get("read_failure_step"),
         "redacted_inventory_schema": result.get("redacted_inventory_schema"),
         "shadow_schema_assessment": result.get("shadow_schema_assessment"),
         "redacted_historical_stop_schema_page1": result.get(
