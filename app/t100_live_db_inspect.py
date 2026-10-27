@@ -49,6 +49,28 @@ REQUIRED_STRATEGY_INDEXES = frozenset({
 })
 EXPECTED_DATABASE = "mexc_exhaustion"
 
+# Only these columns are allowed to change after an initial INSERT.
+ALLOWED_STRATEGY_UPDATES: dict[str, frozenset[str]] = {
+    "t100_live_vol30_parents": frozenset({"status"}),
+    "t100_live_vol30_children": frozenset({
+        "state", "filled_notional_usdt", "exchange_order_id", "updated_at",
+    }),
+    LEASE_TABLE: frozenset({
+        "holder_id", "fencing_token", "lease_expires_at", "updated_at",
+    }),
+}
+IMMUTABLE_STRATEGY_COLUMNS: dict[str, frozenset[str]] = {
+    "t100_live_vol30_parents": frozenset({
+        "signal_id", "symbol", "admitted_equity_usdt", "target_notional_usdt",
+    }),
+    "t100_live_vol30_children": frozenset({
+        "id", "signal_id", "child_seq", "symbol", "external_oid",
+        "reserved_notional_usdt", "volume_contracts",
+    }),
+    LEASE_TABLE: frozenset({"lease_name"}),
+}
+STRATEGY_SEQUENCE = "t100_live_vol30_children_id_seq"
+
 
 async def inspect_live_database(conn: Any) -> dict[str, Any]:
     """Summarize current live tables, privileges and unresolved states."""
@@ -62,6 +84,7 @@ async def inspect_live_database(conn: Any) -> dict[str, Any]:
         "database_name_verified": False,
         "strategy_storage_columns_verified": False,
         "strategy_storage_indexes_verified": False,
+        "strategy_storage_privileges_verified": False,
         "live_tables_present": 0,
         "lease_table_present": False,
         "schema_gate_verified": False,
@@ -131,6 +154,97 @@ async def inspect_live_database(conn: Any) -> dict[str, Any]:
                 REQUIRED_STRATEGY_INDEXES
                 <= {str(row["indexname"]) for row in indexes}
             )
+            if (
+                result["strategy_storage_columns_verified"]
+                and result["strategy_storage_indexes_verified"]
+            ):
+                table_privileges = await conn.fetch(
+                    """SELECT table_name,
+                              has_table_privilege(current_user,
+                                  format('public.%I',table_name),'SELECT')
+                                  AS can_select,
+                              has_table_privilege(current_user,
+                                  format('public.%I',table_name),'INSERT')
+                                  AS can_insert,
+                              has_table_privilege(current_user,
+                                  format('public.%I',table_name),'UPDATE')
+                                  AS can_update,
+                              has_table_privilege(current_user,
+                                  format('public.%I',table_name),'DELETE')
+                                  AS can_delete,
+                              has_table_privilege(current_user,
+                                  format('public.%I',table_name),'TRUNCATE')
+                                  AS can_truncate
+                       FROM unnest($1::text[]) AS table_name""",
+                    sorted(extra_tables),
+                )
+                table_flags = {
+                    str(row["table_name"]): row for row in table_privileges
+                }
+                tables_ok = (
+                    set(table_flags) == extra_tables
+                    and all(
+                        row.get("can_select") is True
+                        and row.get("can_insert") is True
+                        and row.get("can_update") is False
+                        and row.get("can_delete") is False
+                        and row.get("can_truncate") is False
+                        for row in table_flags.values()
+                    )
+                )
+                pairs = sorted(
+                    (table, column)
+                    for table, selected in ALLOWED_STRATEGY_UPDATES.items()
+                    for column in (
+                        selected | IMMUTABLE_STRATEGY_COLUMNS[table]
+                    )
+                )
+                column_privileges = await conn.fetch(
+                    """SELECT table_name,column_name,
+                              has_column_privilege(
+                                  current_user,
+                                  format('public.%I',table_name),
+                                  column_name,'UPDATE'
+                              ) AS can_update
+                       FROM unnest($1::text[], $2::text[])
+                         AS t(table_name,column_name)""",
+                    [table for table, _ in pairs],
+                    [column for _, column in pairs],
+                )
+                observed_column_flags = {
+                    (str(row["table_name"]), str(row["column_name"])):
+                        row.get("can_update")
+                    for row in column_privileges
+                }
+                columns_ok = (
+                    set(observed_column_flags) == set(pairs)
+                    and all(
+                        observed_column_flags[(table, column)]
+                        is (column in ALLOWED_STRATEGY_UPDATES[table])
+                        for table, column in pairs
+                    )
+                )
+                seq = await conn.fetchrow(
+                    """SELECT
+                         has_sequence_privilege(current_user,
+                             'public.t100_live_vol30_children_id_seq',
+                             'USAGE') AS can_usage,
+                         has_sequence_privilege(current_user,
+                             'public.t100_live_vol30_children_id_seq',
+                             'SELECT') AS can_select,
+                         has_sequence_privilege(current_user,
+                             'public.t100_live_vol30_children_id_seq',
+                             'UPDATE') AS can_update"""
+                )
+                sequence_ok = (
+                    seq is not None
+                    and seq.get("can_usage") is True
+                    and seq.get("can_select") is True
+                    and seq.get("can_update") is False
+                )
+                result["strategy_storage_privileges_verified"] = bool(
+                    tables_ok and columns_ok and sequence_ok
+                )
 
         if set(LIVE_TABLE_COLUMNS) <= present:
             schema = await assess_live_schema_and_privileges(conn)
@@ -154,6 +268,8 @@ async def inspect_live_database(conn: Any) -> dict[str, Any]:
             and result["strategy_storage_indexes_verified"]
         ):
             result["status"] = "FULL_STRATEGY_STORAGE_SHAPE_UNVERIFIED"
+        elif not result["strategy_storage_privileges_verified"]:
+            result["status"] = "FULL_STRATEGY_STORAGE_PRIVILEGES_UNVERIFIED"
         elif not result["schema_gate_verified"]:
             result["status"] = "LIVE_SCHEMA_OR_RUNTIME_PRIVILEGES_NOT_VERIFIED"
         elif not result["unresolved_mutations_absent"]:
