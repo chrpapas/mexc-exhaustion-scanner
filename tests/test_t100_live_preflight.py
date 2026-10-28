@@ -5,6 +5,7 @@ from unittest.mock import patch
 
 from app.t100_live_preflight import (
     read_only_preflight, shareable_contract_report, _run_cli_preflight,
+    _refresh_public_contract_specs_bounded,
 )
 
 
@@ -94,6 +95,73 @@ class PreflightTests(unittest.IsolatedAsyncioTestCase):
 
     async def asyncTearDown(self):
         self.env.stop()
+
+    async def test_public_contract_transient_timeout_one_retry_recovers(self):
+        class ReadTimeout(Exception):
+            pass
+        class Intermittent(FakeClient):
+            attempts = 0
+            async def refresh_contract_specs(self):
+                self.attempts += 1
+                if self.attempts == 1:
+                    raise ReadTimeout("NEVER_SHOW_PRIVATE_DIAGNOSTIC")
+        async def no_sleep(_):
+            return None
+        client = Intermittent()
+        result = {}
+        await _refresh_public_contract_specs_bounded(
+            client, result, sleep=no_sleep
+        )
+        self.assertEqual(client.attempts, 2)
+        self.assertEqual(result["public_contract_specs_retries_used"], 1)
+        self.assertEqual(result["public_contract_specs_attempt_count"], 2)
+        self.assertEqual(result["public_contract_specs_status"], "SUCCESS_AFTER_RETRY")
+        self.assertEqual(result["public_contract_specs_failure_type"], "ReadTimeout")
+        self.assertNotIn("NEVER_SHOW_PRIVATE", str(result))
+
+    async def test_public_contract_double_timeout_remains_fail_closed(self):
+        class ConnectTimeout(Exception):
+            pass
+        class Offline(FakeClient):
+            attempts = 0
+            async def refresh_contract_specs(self):
+                self.attempts += 1
+                raise ConnectTimeout("DO_NOT_LOG")
+        async def no_sleep(_):
+            return None
+        client = Offline()
+        result = {}
+        with self.assertRaises(ConnectTimeout):
+            await _refresh_public_contract_specs_bounded(
+                client, result, sleep=no_sleep
+            )
+        self.assertEqual(client.attempts, 2)
+        self.assertEqual(result["public_contract_specs_status"], "FAILED_CLOSED")
+        self.assertEqual(result["public_contract_specs_retries_used"], 1)
+        self.assertNotIn("DO_NOT_LOG", str(result))
+
+    async def test_public_contract_invalid_response_is_never_retried(self):
+        class BadShape(FakeClient):
+            attempts = 0
+            async def refresh_contract_specs(self):
+                self.attempts += 1
+                raise ValueError("INTERNAL_RESPONSE_DO_NOT_SHOW")
+        client = BadShape()
+        result = {}
+        with self.assertRaises(ValueError):
+            await _refresh_public_contract_specs_bounded(client, result)
+        self.assertEqual(client.attempts, 1)
+        self.assertEqual(result["public_contract_specs_status"], "FAILED_CLOSED")
+        self.assertEqual(result["public_contract_specs_retries_used"], 0)
+
+    async def test_public_contract_healthy_path_never_retries(self):
+        client = FakeClient()
+        result = {}
+        await _refresh_public_contract_specs_bounded(client, result)
+        self.assertEqual(result["public_contract_specs_attempt_count"], 1)
+        self.assertEqual(result["public_contract_specs_retries_used"], 0)
+        self.assertEqual(result["public_contract_specs_status"], "SUCCESS")
+        self.assertEqual(result["public_contract_specs_loaded"], 1)
 
     async def test_preflight_failure_stage_is_redacted_and_shareable(self):
         class TimeoutClient(FakeClient):
