@@ -107,6 +107,18 @@ def _positive(raw: Any) -> Decimal:
     return value
 
 
+def _nonnegative(raw: Any) -> Decimal:
+    if type(raw) is bool:
+        raise ValueError("BOOL_NOT_DECIMAL")
+    try:
+        value = Decimal(str(raw))
+    except (ValueError, InvalidOperation, TypeError):
+        raise ValueError("BAD_DECIMAL") from None
+    if not value.is_finite() or value < 0:
+        raise ValueError("BAD_DECIMAL")
+    return value
+
+
 def _canonical(raw: Any) -> str:
     # Do not stringify arbitrary object reprs or tolerate NaN JSON.
     def encode(value: Any) -> str:
@@ -177,7 +189,13 @@ def _frame(
     for key in ("cashBalance", "equity", "availableBalance"):
         if key not in usdt_assets[0]:
             raise ValueError("ASSET_COLLATERAL_SCHEMA_INCOMPLETE")
-        _positive(usdt_assets[0][key])
+        # Zero withdrawable and available balances are valid observations
+        # on a margin-constrained account. This is NOT a trade-readiness
+        # test or a verified cross-wallet collateral determination.
+        if key == "equity":
+            _positive(usdt_assets[0][key])
+        else:
+            _nonnegative(usdt_assets[0][key])
 
     symbols = []
     pos_ids = []
