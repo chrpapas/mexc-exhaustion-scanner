@@ -212,7 +212,7 @@ class AttemptJournalTests(unittest.IsolatedAsyncioTestCase):
             await self.journal.stage(**self.params(r))
         self.assertEqual(len(self.pg.new_intents), 1)
 
-    async def test_six_concurrent_stage_requests_allow_only_one_unresolved(self):
+    async def test_four_concurrent_stage_requests_allow_only_one_unresolved(self):
         reservations = [
             await self.reserve(1000+i, f"SIGNAL{i}_USDT")
             for i in range(4)
