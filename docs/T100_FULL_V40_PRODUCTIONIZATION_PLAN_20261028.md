@@ -100,3 +100,30 @@ This decision is **not authorization to transmit exchange orders**.
   injection, followed by durable, atomic four-slot reservations and
   single-attempt exchange submission. Existing one-slot pilot paths are
   not used as live release interfaces.
+
+## Implementation checkpoint: four-slot read-only provenance bookend (2026-10-28)
+
+- `app/t100_live_four_slot_snapshot_coordinator.py` consumes four ledger
+  collections, exact GET-by-externalOid orders, complete account positions,
+  current native TP/SL rows and an independently produced account inventory
+  completeness report. It bookends the MEXC critical fields and the entire
+  selected ledger state, blocking on drift, absent origins, unknown states,
+  extra orders, unrelated positions/stops and duplicate identities. Successful
+  1–4 position reconstruction uses `recover_nonflat` and remains explicitly
+  NONAUTHORIZING; a count-only or manual MEXC position cannot be adopted.
+- `app/t100_live_four_slot_ledger_reader.py` supplies the four ledger
+  collections from one verified restricted-role, expected-database, read-only
+  REPEATABLE READ PostgreSQL transaction. No SQL mutations are permitted.
+- The coordinator is not yet wired to a runtime MEXC inventory completeness
+  adapter or to the continuous Render supervisor, and does not establish a
+  distributed atomic snapshot, fresh leader lease or live-fill certification.
+  An external caller must not treat its return value as permission to POST.
+- The deliberately strict flat-history rule blocks accounts with historical
+  intents/amendments until a separate completed-position/closed-ledger audit
+  is implemented. This is a known release blocker after the first full cycle,
+  not a reason to delete historical records or relax provenance checks.
+- Deterministic offline tests cover complete 3/4 slots, frozen V40 admission,
+  read-only transaction/context enforcement, unowned existing positions,
+  duplicate identities, missing order, stop-price and volume drift, DB change,
+  unknown intent state, unrelated orders, incomplete and unstable inventory,
+  and source outages.
