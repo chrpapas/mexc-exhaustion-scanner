@@ -203,9 +203,7 @@ class PostgresFourSlotAttemptJournal:
                         or row["snapshot_observed_at"] != observed_at
                     ):
                         raise FourSlotAttemptHalted("FOUR_SLOT_WITNESS_NOT_RESERVED")
-                    age = _d(await conn.fetchval(
-                        SNAPSHOT_AGE_SQL, observed_at.astimezone(timezone.utc),
-                    )) if False else Decimal(str(await conn.fetchval(
+                    age = Decimal(str(await conn.fetchval(
                         SNAPSHOT_AGE_SQL, observed_at.astimezone(timezone.utc),
                     )))
                     if not age.is_finite() or not Decimal("-0.25") <= age <= Decimal("2"):
@@ -242,7 +240,9 @@ class PostgresFourSlotAttemptJournal:
                         sym, state = str(other["symbol"]), str(other["state"])
                         if state in {"SUBMITTING", "UNKNOWN", "ACK", "HALTED"}:
                             raise FourSlotAttemptHalted("OTHER_ORDER_OUTCOME_UNRESOLVED")
-                        if sym not in cp and sym in symbols:
+                        if (sym not in cp and sym in symbols) or (
+                            sym in cp and state != "PROTECTED"
+                        ):
                             raise FourSlotAttemptHalted("DUPLICATE_RESERVATION_SYMBOL")
                         symbols.add(sym)
                         if int(other["signal_id"]) == intent.signal_id:
