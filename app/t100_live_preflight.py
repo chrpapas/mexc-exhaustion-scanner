@@ -33,6 +33,57 @@ from app.t100_live_inventory_completeness_probe import (
 
 PREFLIGHT_DIAGNOSTIC_VERSION = "2026-10-24-position-margin-witness-v1"
 
+# Only transient public-HTTP transport failures qualify for one bounded retry.
+# Do not retry authentication failures, invalid response schemas, HTTP 429s,
+# or ambiguous private REST outcomes. Existing READ_FAILURE kill remains intact.
+RETRYABLE_PUBLIC_CONTRACT_TRANSPORT_FAILURES = frozenset({
+    "ReadTimeout", "ConnectTimeout", "ConnectError",
+    "ReadError", "RemoteProtocolError",
+})
+
+
+async def _refresh_public_contract_specs_bounded(
+    client: Any,
+    result: dict[str, Any],
+    *,
+    sleep=asyncio.sleep,
+) -> None:
+    """Read-only full-universe contract refresh with at most one retry.
+
+    Status includes only timing/count/exception CLASS, never response bodies.
+    An unrecovered transport exception still flows to the outer fail-closed
+    preflight and triggers the existing shadow READ_FAILURE latch.
+    """
+    start = time.monotonic()
+    result["public_contract_specs_attempt_count"] = 0
+    result["public_contract_specs_retries_used"] = 0
+    try:
+        for attempt in range(1, 3):
+            result["public_contract_specs_attempt_count"] = attempt
+            try:
+                await client.refresh_contract_specs()
+                result["public_contract_specs_loaded"] = len(client._spec_cache)
+                result["public_contract_specs_status"] = (
+                    "SUCCESS_AFTER_RETRY" if attempt == 2 else "SUCCESS"
+                )
+                return
+            except Exception as exc:
+                failure_class = type(exc).__name__
+                result["public_contract_specs_failure_type"] = failure_class
+                if (
+                    attempt == 2
+                    or failure_class not in RETRYABLE_PUBLIC_CONTRACT_TRANSPORT_FAILURES
+                ):
+                    result["public_contract_specs_status"] = "FAILED_CLOSED"
+                    raise
+                result["public_contract_specs_retries_used"] = 1
+                await sleep(1.0)
+    finally:
+        result["public_contract_specs_elapsed_ms"] = max(
+            0, round((time.monotonic() - start) * 1000)
+        )
+
+
 
 async def read_only_preflight(
     *,
@@ -258,8 +309,7 @@ async def read_only_preflight(
                 failures.append("critical_inventory_double_read_unverified")
 
         read_step = "contract_specs"
-        await client.refresh_contract_specs()
-        result["public_contract_specs_loaded"] = len(client._spec_cache)
+        await _refresh_public_contract_specs_bounded(client, result)
 
         if result["position_mode"] != 1:
             failures.append("hedge_position_mode_not_verified")
