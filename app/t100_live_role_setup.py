@@ -207,6 +207,7 @@ async def independent_runtime_audit(conn: Any) -> dict[str, Any]:
                 if clean else "RESTRICTED_T100_RUNTIME_ROLE_VERIFICATION_FAILED"
             ),
             "role_name_verified": True,
+            "effective_privileges_verified": bool(clean),
             "new_role_attributes_verified": bool(flags_ok),
             "runtime_create_privileges_absent": bool(create_absent),
             "production_tables_inspected": len(prod_rows),
