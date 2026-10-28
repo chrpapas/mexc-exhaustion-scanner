@@ -161,13 +161,49 @@ class DynamicReadinessTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertFalse(blocked["account_reconciled"])
 
-        recovered = await run_dynamic_readiness_bundle(
+        # A client-provided bool is not an audited revision/position proof.
+        # Even an otherwise perfectly stable open position + native stop
+        # must remain blocked until the real durable restart gate runs.
+        override = await run_dynamic_readiness_bundle(
             client=c,
             pool=Pool(),
             durable_nonflat_recovery_verified=True,
         )
-        self.assertTrue(recovered["account_reconciled"])
-        self.assertTrue(recovered["dynamic_readiness_verified"])
+        self.assertFalse(override["dynamic_readiness_verified"])
+        self.assertEqual(
+            override["status"], "DYNAMIC_RECOVERY_BOOL_OVERRIDE_REJECTED"
+        )
+        self.assertIn(
+            "durable_nonflat_recovery_evidence_missing",
+            override["dynamic_blockers"],
+        )
+        self.assertFalse(override["live_authorization"])
+        self.assertFalse(override["entry_allowed"])
+        self.assertFalse(blocked["durable_nonflat_recovery_evidence_verified"])
+
+    async def test_flat_account_cannot_pass_with_untrusted_override(self):
+        result = await run_dynamic_readiness_bundle(
+            client=Client(),
+            pool=Pool(),
+            durable_nonflat_recovery_verified=True,
+        )
+        self.assertEqual(
+            result["status"], "DYNAMIC_RECOVERY_BOOL_OVERRIDE_REJECTED"
+        )
+        self.assertFalse(result["dynamic_readiness_verified"])
+        self.assertFalse(result["live_authorization"])
+
+    async def test_invalid_override_type_is_rejected_before_any_reads(self):
+        for value in (1, "true", None):
+            result = await run_dynamic_readiness_bundle(
+                client=Client(),
+                pool=Pool(),
+                durable_nonflat_recovery_verified=value,
+            )
+            self.assertEqual(
+                result["status"], "DYNAMIC_READINESS_INPUT_INVALID"
+            )
+            self.assertFalse(result["live_authorization"])
 
 
 if __name__ == "__main__":
