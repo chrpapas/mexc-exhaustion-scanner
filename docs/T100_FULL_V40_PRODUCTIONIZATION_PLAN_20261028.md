@@ -333,3 +333,44 @@ authorizes an order.
 - The current unrelated MEXC position is never adopted by this module.
   No new migration, MEXC POST, leverage setting, Render deployment or
   production enablement occurred.
+
+## Implementation checkpoint: GET-only risk frame collector (2026-10-28)
+
+- `app/t100_live_cross_risk_collector.py` builds a genuine **transport-facing
+  GET-only frame contract** from an injected `ReadOnlyMexcProbe` and a
+  public HTTP GET client, with no credential handling or side-effect calls.
+  It is **not** connected to a Render worker or executed against a personal
+  live account yet; current tests use fake GET responses only.
+- The collector performs account-wide positions/current TP-SL GET, redundant
+  symbol-scoped GETs, all-assets GET, account-wide order counts, separate
+  private risk-limit GET for each exact observed symbol, COUNTRY contract
+  metadata GET, and dedicated **FAIR-price GET with exchange timestamp**.
+  It ends with another account-wide positions/current TP-SL GET, checking
+  critical-field continuity and the established current-inventory
+  completeness model. Only supported 1–4 non-flat symbols are observed;
+  this is *not* T100 ownership evidence.
+- Primary sources:
+  [GET risk limits](https://www.mexc.co/api-docs/futures/account-and-trading-endpoints/get-risk-limits),
+  [GET country contract details](https://www.mexc.co/api-docs/futures/market-endpoints/get-contract-info),
+  [GET fair price](https://www.mexc.co/api-docs/futures/market-endpoints/get-fair-price),
+  [GET account assets](https://www.mexc.co/api-docs/futures/account-and-trading-endpoints/get-all-account-assets).
+  Specifically, fair-price data includes a **system timestamp**;
+  the ticker `timestamp` is a **trade timestamp**, not a substitute.
+- Bound the full GET frame duration, reject stale/future fair marks, changed
+  positions/stops, symbol/risk/contract response mismatches, inconsistent
+  account counts, transport errors, and mismatched asset economics. No
+  output contains symbols, IDs, balances or account secrets.
+- The successful `CrossRiskRead` output can be consumed by the existing
+  `observe_cross_risk_window` double-read witness, but does not set
+  `account_wide_completeness_certified`,
+  `future_stressed_tiers_certified`,
+  `venue_liquidation_certified` or trading authorization. An actual
+  end-to-end GET collection may fail the 2.5-second time bound; this must
+  be measured with real latency and either explicitly retuned/reviewed
+  or left blocked rather than silently claiming freshness.
+- A complete cross-margin wallet/liquidation balance cannot be inferred
+  from `cashBalance` (withdrawable), and MEXC historical partial-
+  liquidation and dynamic risk-tier behavior remain unmodeled. Next
+  is an opt-in, redacted **read-only** operator diagnostic with
+  independently checked venue session/time, account ownership isolation,
+  and complete collateral reconciliation. No authorization for MEXC POST.
