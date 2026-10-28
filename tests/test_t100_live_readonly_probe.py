@@ -50,6 +50,51 @@ class ProbeTests(unittest.IsolatedAsyncioTestCase):
             VenueReadHalted, "ACCOUNT_ASSETS_GET_FAILED"):
             await self.probe.raw_account_assets()
 
+    async def test_current_risk_limit_get_only_preserves_account_rows(self):
+        payload = {"SIREN_USDT": [{
+            "symbol": "SIREN_USDT", "positionType": 2,
+            "level": 1, "mmr": 0.02, "maxVol": 10000,
+        }]}
+        self.client.responses = [payload]
+        self.assertEqual(
+            await self.probe.raw_account_risk_limits("SIREN_USDT"), payload,
+        )
+        self.assertEqual(self.client.calls, [(
+            "/api/v1/private/account/risk_limit", {"symbol": "SIREN_USDT"}
+        )])
+
+    async def test_malformed_or_mismatched_risk_limits_fail_closed(self):
+        for payload in (
+            None, [], {}, {"X_USDT": []},
+            {"X_USDT": [{"symbol": "Y_USDT", "positionType": 2, "level": 1}]},
+            {"X_USDT": [{"symbol": "X_USDT", "positionType": True, "level": 1}]},
+            {"X_USDT": [
+                {"symbol": "X_USDT", "positionType": 2, "level": 1},
+                {"symbol": "X_USDT", "positionType": 2, "level": 2},
+            ]},
+        ):
+            with self.subTest(payload=payload):
+                self.client.responses = [payload]
+                with self.assertRaises(VenueReadHalted):
+                    await self.probe.raw_account_risk_limits("X_USDT")
+
+    async def test_risk_limit_get_failure_never_posts_or_leaks(self):
+        self.client.fail = True
+        with self.assertRaisesRegex(
+            VenueReadHalted, "RISK_LIMIT_GET_FAILED",
+        ):
+            await self.probe.raw_account_risk_limits("SIREN_USDT")
+        self.assertEqual(self.client.calls, [(
+            "/api/v1/private/account/risk_limit", {"symbol": "SIREN_USDT"}
+        )])
+
+    async def test_invalid_risk_limit_symbol_never_queries_venue(self):
+        with self.assertRaisesRegex(
+            VenueReadHalted, "INVALID_RISK_LIMIT_SYMBOL_FILTER",
+        ):
+            await self.probe.raw_account_risk_limits("BAD/SYMBOL")
+        self.assertEqual(self.client.calls, [])
+
     async def test_flat_positions_is_list_not_inferred_from_null(self):
         self.client.responses = [[]]
         self.assertEqual(await self.probe.raw_open_positions(), [])
