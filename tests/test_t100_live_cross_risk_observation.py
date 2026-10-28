@@ -75,7 +75,7 @@ class CrossRiskObservationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.observed_positions, 1)
         self.assertEqual(reader.calls, 2)
         self.assertTrue(result.stable_critical_inventory)
-        self.assertTrue(result.account_economics_reconciled)
+        self.assertTrue(result.position_margin_economic_witness_observed)
         self.assertTrue(result.current_risk_tiers_observed)
         self.assertTrue(result.fair_prices_observed)
         self.assertEqual(len(result.evidence_fingerprint_sha256), 64)
