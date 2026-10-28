@@ -205,3 +205,57 @@ This decision is **not authorization to transmit exchange orders**.
   reconciliation** with ledger CAS, unknown/missing outcomes left blocked,
   then protected-entry checkpoint persistence for 0–4 simultaneous
   positions and a fully controlled close/stop lifecycle.
+
+## Implementation checkpoint: MEXC cross-margin model (2026-10-28)
+
+MEXC primary documentation checked:
+- [Liquidation FAQ](https://www.mexc.com/support/article/faq-on-liquidation-for-futures-trading-8123281969561)
+  (2026-02-11): FAIR price triggers liquidation; cross-margin equity
+  excludes isolated margin, isolated unrealized PNL and order margins;
+  liquidation threshold includes maintenance margin **plus liquidation fee**;
+  liquidation can cancel orders and proceed through partial risk-tier steps.
+- [Private GET risk limits](https://www.mexc.co/api-docs/futures/account-and-trading-endpoints/get-risk-limits)
+  (`/api/v1/private/account/risk_limit`): current side-specific risk tier,
+  maintenance margin rate, initial margin rate, maximum position contracts,
+  leverage restrictions. The CURRENT tier is not proof of the WORST tier
+  under a future 20% price move.
+- [Public contract metadata / WS](https://www.mexc.co/api-docs/futures/websocket-api/contract-data):
+  liquidation fee rate, contractSize, support for cross/isolated mode,
+  risk increments, contract availability and updated specs.
+
+### New pure risk calculator
+`app/t100_live_cross_margin_stress.py` computes a 0–4 slot
+ALL-SHORT USDT cross-margin model with explicit wallet, current FAIR mark,
+entry quantity/price, configured leverage, isolated and order margin,
+future fee/cashflow reserves, liquidation fees, and an independently verified
+**worst stressed-tier maintenance upper bound** for each symbol.
+
+The model makes a *conditional* 20% simultaneous adverse FAIR-price
+assessment and an initial-margin feasibility check. It does **NOT** silently
+limit V40 gross targets to 100% equity; tests explicitly compare the
+four-high-slot 250% gross / 5x modeled case with the infeasible 1x case.
+
+The **fictional test inputs** are intentionally not MEXC risk-tier
+certificates or observed account economic data. Scenario model survival
+is not a live liquidation certificate, cannot prove stop fills, and never
+authorizes an order.
+
+### Explicit blockers to venue-specific certification
+1. Collect/read-only verify the live account's cross-margin currency scope,
+   wallet balance (excluding unrealized PNL), observed fair marks, open
+   positions, committed order margin, isolates and fee/funding reserves;
+   prove completeness and common observation window.
+2. Resolve contract mode/position-side eligibility, **leverage and cap**
+   per exact symbol. Confirm all stressed risk-tier upper bounds and
+   liquidation fees, not a global 5% maintenance assumption.
+3. Independently reconcile model calculation against MEXC's observed
+   margin ratio and liquidation prices at multiple exposures, accounting
+   for venue-specific discounts/tiers and dynamic mark prices.
+4. Replay the full historical four-slot portfolio along real **fair-price
+   paths**, including gaps, simultaneous funding, partial liquidation,
+   unfilled protective stops, maintenance changes and ADL risks.
+5. Do not replace the frozen research shock budget; use this model as a
+   *separate safety overlay*. Quantify any difference in admission/size
+   as live execution nonparity.
+6. Live execution and Render services remain unchanged; migration 031 is
+   unapplied and LIVE_ADAPTER_STATUS remains NOT_IMPLEMENTED.
