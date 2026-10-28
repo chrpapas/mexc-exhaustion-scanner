@@ -77,9 +77,12 @@ def _result(
         "RISK_DIAGNOSTIC_GET_FAILED",
     }
     safe_status = status if status in possible else "RISK_DIAGNOSTIC_GET_FAILED"
-    n = positions if type(positions) is int and 0 <= positions <= 4 else None
+    # A blocked witness may use zero as its DEFAULT count. Do not represent
+    # that as an actual flat-account observation.
+    complete = safe_status == "CURRENT_CROSS_RISK_OBSERVED_NONAUTHORIZING"
+    n = positions if complete and type(positions) is int and 1 <= positions <= 4 else None
     stage = getattr(witness, "failure_stage", "NONE")
-    stage = stage if stage in SAFE_FAILURE_STAGES else "NONE"
+    stage = stage if type(stage) is str and stage in SAFE_FAILURE_STAGES else "NONE"
     code = getattr(witness, "failure_code", "NONE")
     safe_codes = SAFE_COLLECTOR_FAILURE_CODES | SAFE_FRAME_FAILURE_CODES | {
         "NONE", "UNCLASSIFIED_READ_OR_EVIDENCE_FAILURE",
