@@ -93,11 +93,14 @@ class MexcReadOnlyCrossRiskCollector:
         return envelope["data"]
 
     async def read(self) -> CrossRiskRead:
+        stage = "CLOCK"
         try:
             started = self.clock_ms()
             if type(started) is not int:
                 raise CrossRiskCollectionHalted("COLLECTOR_CLOCK_INVALID")
+            stage = "PRIVATE_POSITIONS"
             before_positions = await self.private.raw_open_positions()
+            stage = "PRIVATE_STOPS"
             before_stops = await self.private.raw_open_stops()
             if (
                 not 1 <= len(before_positions) <= 4
@@ -113,24 +116,31 @@ class MexcReadOnlyCrossRiskCollector:
             ):
                 raise CrossRiskCollectionHalted("COLLECTOR_POSITION_SYMBOLS_INVALID")
 
+            stage = "SYMBOL_CROSSCHECK"
             redundant = await crosscheck_symbol_scoped_inventory(
                 self.private, before_positions, before_stops, max_symbols=4,
             )
+            stage = "ASSETS"
             assets = await self.private.raw_account_assets()
+            stage = "MARGIN_WITNESS"
             margin = assess_position_margin_witness(before_positions, assets)
+            stage = "ORDER_COUNTS"
             counts = await self.private.raw_open_order_counts()
 
             risks: dict[str, list[dict[str, Any]]] = {}
             contracts: dict[str, dict[str, Any]] = {}
             marks: dict[str, dict[str, Any]] = {}
             for symbol in sorted(symbols):
+                stage = "PRIVATE_RISK"
                 private = await self.private.raw_account_risk_limits(symbol)
                 if set(private) != {symbol}:
                     raise CrossRiskCollectionHalted("COLLECTOR_PRIVATE_RISK_SCOPE_DRIFT")
                 risks[symbol] = private[symbol]
+                stage = "PUBLIC_CONTRACT"
                 contracts[symbol] = await self._public_data(
                     CONTRACT_COUNTRY, symbol=symbol, params={"symbol": symbol},
                 )
+                stage = "PUBLIC_FAIR"
                 fair = await self._public_data(
                     FAIR_PRICE_PREFIX + symbol, symbol=symbol, params=None,
                 )
@@ -147,8 +157,11 @@ class MexcReadOnlyCrossRiskCollector:
                     "observed_at_ms": ts,
                 }
 
+            stage = "POST_POSITIONS"
             after_positions = await self.private.raw_open_positions()
+            stage = "POST_STOPS"
             after_stops = await self.private.raw_open_stops()
+            stage = "FINAL_CLOCK"
             finished = self.clock_ms()
             if (
                 type(finished) is not int
@@ -160,12 +173,14 @@ class MexcReadOnlyCrossRiskCollector:
                 )
             ):
                 raise CrossRiskCollectionHalted("COLLECTOR_READ_WINDOW_STALE")
+            stage = "CONSISTENCY"
             consistent = (
                 _canonical(before_positions, CRITICAL_POSITION_FIELDS)
                 == _canonical(after_positions, CRITICAL_POSITION_FIELDS)
                 and _canonical(before_stops, CRITICAL_STOP_FIELDS)
                 == _canonical(after_stops, CRITICAL_STOP_FIELDS)
             )
+            stage = "CERTIFICATE"
             certificate = assess_current_inventory_completeness(
                 positions=before_positions, stops=before_stops,
                 open_order_counts=counts,
@@ -192,5 +207,8 @@ class MexcReadOnlyCrossRiskCollector:
         except CrossRiskCollectionHalted:
             raise
         except Exception:
-            # Don't expose exchange response bodies, account IDs or API keys.
-            raise CrossRiskCollectionHalted("COLLECTOR_READ_FAILED") from None
+            # Only fixed internal phase identifiers are exported: no URL,
+            # symbol, account identifiers, balances or raw exception strings.
+            raise CrossRiskCollectionHalted(
+                "COLLECTOR_READ_FAILED_AT_" + stage
+            ) from None
