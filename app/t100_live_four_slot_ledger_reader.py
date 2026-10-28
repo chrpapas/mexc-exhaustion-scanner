@@ -94,8 +94,8 @@ class PostgresFourSlotLedgerReader:
                     return LedgerSnapshot(*tables, readonly_repeatable_read=True)
         except FourSlotLedgerReadHalted:
             raise
-        except Exception as exc:
+        except Exception:
             # Do not leak SQL parameters, host, database, or account identifiers.
             raise FourSlotLedgerReadHalted(
                 "FOUR_SLOT_LEDGER_READ_FAILED"
-            ) from exc
+            ) from None
