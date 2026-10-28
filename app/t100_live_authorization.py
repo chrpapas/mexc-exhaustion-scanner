@@ -12,6 +12,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from decimal import Decimal
 
+from app import t100_live_guards
 from app.t100_live_guards import T100ExecutionControls
 
 
@@ -185,3 +186,19 @@ def require_live_mutation_permit(
     ):
         raise LiveAuthorizationHalted("LIVE_MUTATION_PERMIT_INVALID")
     return permit
+
+
+def require_certified_transport_permit(
+    permit: LiveMutationPermit,
+) -> LiveMutationPermit:
+    """Guard the final transport boundary, independent of caller evidence.
+
+    An offline test can simulate a certified adapter by patching the module
+    constant, but a production adapter remains blocked while the repository's
+    status is NOT_IMPLEMENTED. This does not certify the adapter or itself
+    establish live permissions, leader fencing, or current account readiness.
+    """
+    checked = require_live_mutation_permit(permit)
+    if t100_live_guards.LIVE_ADAPTER_STATUS != "CERTIFIED":
+        raise LiveAuthorizationHalted("LIVE_ADAPTER_NOT_CERTIFIED")
+    return checked
