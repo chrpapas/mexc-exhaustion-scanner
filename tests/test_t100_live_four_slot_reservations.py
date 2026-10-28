@@ -290,6 +290,22 @@ class FourSlotReservationTests(unittest.IsolatedAsyncioTestCase):
             await self.store.reserve(**values)
         self.assertEqual(self.pg.locks, 0)
 
+    async def test_admitted_symbol_cannot_be_swapped_before_reservation(self):
+        values = self.params(2, "NEW_USDT")
+        values["symbol"] = "DIFFERENT_USDT"
+        with self.assertRaisesRegex(
+            FourSlotReservationHalted, "ADMISSION_EVIDENCE_BLOCKED"
+        ):
+            await self.store.reserve(**values)
+        self.assertEqual(self.pg.locks, 0)
+
+    async def test_future_dated_snapshot_blocks(self):
+        self.pg.age_seconds = -1.
+        with self.assertRaisesRegex(
+            FourSlotReservationHalted, "SNAPSHOT_TOO_OLD"
+        ):
+            await self.store.reserve(**self.params(2, "NEW_USDT"))
+
     async def test_unowned_position_is_not_reservable(self):
         await self.reset(1)
         values = self.params(2, "NEW_USDT")
