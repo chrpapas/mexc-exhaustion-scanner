@@ -253,6 +253,7 @@ class RoleSetupTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(
                 good["status"], "RESTRICTED_T100_RUNTIME_ROLE_VERIFIED"
             )
+            self.assertIs(good["effective_privileges_verified"], True)
             self.assertEqual(good["production_tables_inspected"], 1)
             self.assertFalse(good["live_authorization"])
             bad = await independent_runtime_audit(
@@ -262,6 +263,7 @@ class RoleSetupTests(unittest.IsolatedAsyncioTestCase):
                 bad["status"],
                 "RESTRICTED_T100_RUNTIME_ROLE_VERIFICATION_FAILED",
             )
+            self.assertIs(bad["effective_privileges_verified"], False)
             self.assertEqual(bad["production_tables_with_privileges"], 1)
             bad_create = await independent_runtime_audit(
                 FakeRuntime(create_priv=True)
