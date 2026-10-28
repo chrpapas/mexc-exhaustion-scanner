@@ -44,17 +44,29 @@ async def run_dynamic_readiness_bundle(
     if type(durable_nonflat_recovery_verified) is not bool:
         result["status"] = "DYNAMIC_READINESS_INPUT_INVALID"
         return result
+    # A caller-supplied boolean is NOT a durable recovery certificate.
+    # Until a read-only orchestration verifies the actual DB revision chain,
+    # entry ACK/fills, venue origin orders, positions, protective stops and
+    # certified complete inventory, never let true promote a NON-FLAT
+    # account into a "dynamic readiness verified" classification.
+    if durable_nonflat_recovery_verified is True:
+        result.update({
+            "status": "DYNAMIC_RECOVERY_BOOL_OVERRIDE_REJECTED",
+            "dynamic_readiness_verified": False,
+            "dynamic_blockers": ["durable_nonflat_recovery_evidence_missing"],
+            "durable_nonflat_recovery_evidence_verified": False,
+        })
+        return result
 
     schema = await assess_live_schema_and_privileges(pool)
     state = await assess_unresolved_live_state(pool)
     inventory = await run_current_inventory_completeness_probe(
         ReadOnlyMexcProbe(client)
     )
+    # Explicitly false: no independent durable/exchange recovery was
+    # performed by this bundle. Existing T100-unowned positions must block.
     account = assess_account_reconciliation(
-        inventory,
-        durable_nonflat_recovery_verified=(
-            durable_nonflat_recovery_verified
-        ),
+        inventory, durable_nonflat_recovery_verified=False
     )
 
     result.update({
@@ -62,6 +74,7 @@ async def run_dynamic_readiness_bundle(
         "durable_state": state,
         "current_inventory": inventory,
         "account_reconciliation": account,
+        "durable_nonflat_recovery_evidence_verified": False,
         "durable_schema_deployed_verified": (
             schema.get("durable_schema_deployed_verified") is True
         ),
