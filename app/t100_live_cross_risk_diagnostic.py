@@ -32,6 +32,15 @@ class CrossRiskDiagnosticHalted(RuntimeError):
 
 def require_readonly_controls(env: Mapping[str, str]) -> None:
     """No HTTP/credential reading until all three explicit controls pass."""
+    # Require an affirmative operator invocation, not permissive defaults.
+    if (
+        env.get("T100_EXECUTION_MODE", "").strip().lower() != "paper"
+        or env.get("T100_LIVE_ORDER_API_ENABLED", "").strip().lower()
+        not in {"false", "0", "off", "no"}
+        or env.get("T100_LIVE_KILL_SWITCH", "").strip().lower()
+        not in {"true", "1", "on", "yes"}
+    ):
+        raise CrossRiskDiagnosticHalted("RISK_DIAGNOSTIC_PAPER_KILL_REQUIRED")
     try:
         c = T100ExecutionControls.from_env(env)
     except (TypeError, ValueError):
