@@ -144,6 +144,33 @@ class CrossRiskObservationTests(unittest.IsolatedAsyncioTestCase):
         r = await observe(Reader(second=second))
         self.assertEqual(r.status, "CROSS_RISK_READ_OR_EVIDENCE_UNVERIFIED")
 
+    async def test_failure_stage_identifies_second_frame_without_raw_details(self):
+        second = frame(SECOND_TS)
+        second.positions[0]["openType"] = 1
+        result = await observe(Reader(second=second))
+        self.assertEqual(result.status, "CROSS_RISK_READ_OR_EVIDENCE_UNVERIFIED")
+        self.assertEqual(result.failure_stage, "VALIDATE_SECOND")
+        self.assertEqual(result.failure_code, "POSITION_NOT_VERIFIED_CROSS_SHORT")
+        self.assertFalse(result.entry_allowed)
+        self.assertFalse(result.live_authorization)
+
+    async def test_zero_available_or_withdrawable_balance_is_valid_observation(self):
+        first = frame()
+        second = frame(SECOND_TS)
+        for x in (first, second):
+            x.assets[0]["cashBalance"] = "0"
+            x.assets[0]["availableBalance"] = "0"
+        result = await observe(Reader(first=first, second=second))
+        self.assertEqual(result.status, "CURRENT_CROSS_RISK_OBSERVED_NONAUTHORIZING")
+        self.assertFalse(result.venue_liquidation_certified)
+
+    async def test_negative_cash_balance_blocks_with_fixed_code(self):
+        second = frame(SECOND_TS)
+        second.assets[0]["cashBalance"] = "-1"
+        r = await observe(Reader(second=second))
+        self.assertEqual(r.failure_stage, "VALIDATE_SECOND")
+        self.assertEqual(r.failure_code, "BAD_DECIMAL")
+
     async def test_isolated_position_blocks(self):
         second = frame(SECOND_TS)
         second.positions[0]["openType"] = 1
