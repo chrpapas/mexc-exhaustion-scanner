@@ -145,6 +145,9 @@ async def verify_migrated_structure(conn: Any) -> dict[str, Any]:
 async def inspect_or_apply(conn: Any, *, apply: bool, blobs: tuple[bytes, ...]) -> dict[str, Any]:
     # A single transaction guarantees all-or-nothing DDL on PostgreSQL.
     async with conn.transaction(readonly=not apply):
+        # Pin unqualified CREATE TABLE/INDEX names to the audited public
+        # namespace, irrespective of the operator connection's search_path.
+        await conn.execute("SET LOCAL search_path = public")
         await conn.execute("SET LOCAL lock_timeout = '5s'")
         await conn.execute("SET LOCAL statement_timeout = '30s'")
         await _assert_target(conn)
