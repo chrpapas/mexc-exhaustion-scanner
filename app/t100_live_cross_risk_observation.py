@@ -95,6 +95,14 @@ def _static_hash(read: CrossRiskRead) -> str:
         "stops": project(read.stops, CRITICAL_STOP_FIELDS),
         "private_risk": _canonical(read.private_risk_by_symbol),
         "contract": _canonical(read.public_contract_by_symbol),
+        # Exclude rapidly changing unrealized PNL/equity from the bookend,
+        # but block cash transfers, bonus/debt and frozen order-margin drift.
+        "asset_cash": sorted(_canonical({
+            key: row[key] for key in (
+                "currency", "cashBalance", "frozenBalance", "bonus",
+                "debtAmount", "contributeMarginAmount",
+            ) if key in row
+        }) for row in read.assets),
     }
     return hashlib.sha256(_canonical(src).encode()).hexdigest()
 
