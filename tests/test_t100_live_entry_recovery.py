@@ -127,7 +127,7 @@ class EntryRecoveryTests(unittest.IsolatedAsyncioTestCase):
             ),
         )
 
-    async def run(self, **kw):
+    async def _recover_entry(self, **kw):
         args = dict(
             external_oid="t100v1eabc",
             positions=[position()],
@@ -141,7 +141,7 @@ class EntryRecoveryTests(unittest.IsolatedAsyncioTestCase):
         return await self.pipeline.reconcile_and_persist(**args)
 
     async def test_verified_protected_entry_persists_fill_and_checkpoint(self):
-        r = await self.run()
+        r = await self._recover_entry()
         self.assertEqual(r.checkpoint.position_id, "10")
         self.assertEqual(r.checkpoint.exchange_order_id, "100")
         self.assertEqual(r.checkpoint.stop_order_id, "99")
@@ -155,7 +155,7 @@ class EntryRecoveryTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaisesRegex(
             EntryRecoveryHalted, "NOT_DURABLY_ACKED"
         ):
-            await self.run()
+            await self._recover_entry()
         self.assertEqual(self.exchange.order_reads, 0)
 
     async def test_missing_order_is_never_retry_permission(self):
@@ -163,7 +163,7 @@ class EntryRecoveryTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaisesRegex(
             EntryRecoveryHalted, "NO_RESUBMIT"
         ):
-            await self.run()
+            await self._recover_entry()
         self.assertEqual(len(self.fill_store.calls), 0)
         self.assertEqual(len(self.writer.calls), 0)
 
@@ -175,7 +175,7 @@ class EntryRecoveryTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaisesRegex(
             EntryRecoveryHalted, "FILL_RECONCILIATION_BLOCKED"
         ):
-            await self.run()
+            await self._recover_entry()
 
     async def test_unprotected_position_blocks_before_persistence(self):
         bad = stop()
@@ -183,14 +183,14 @@ class EntryRecoveryTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaisesRegex(
             EntryRecoveryHalted, "NATIVE_PROTECTION_UNVERIFIED"
         ):
-            await self.run(stops=[bad])
+            await self._recover_entry(stops=[bad])
         self.assertEqual(len(self.fill_store.calls), 0)
 
     async def test_post_entry_extra_inventory_blocks_pilot(self):
         with self.assertRaisesRegex(
             EntryRecoveryHalted, "NOT_SINGLE_PROTECTED_POSITION"
         ):
-            await self.run(positions=[position(), position()])
+            await self._recover_entry(positions=[position(), position()])
         self.assertEqual(len(self.fill_store.calls), 0)
 
     async def test_checkpoint_failure_is_restart_safe_no_resubmit(self):
@@ -198,12 +198,12 @@ class EntryRecoveryTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaisesRegex(
             EntryRecoveryHalted, "CHECKPOINT_PERSISTENCE_FAILED"
         ):
-            await self.run()
+            await self._recover_entry()
         self.assertEqual(len(self.fill_store.calls), 1)
         self.assertEqual(self.exchange.order_reads, 1)
 
         self.writer.fail = False
-        r = await self.run()
+        r = await self._recover_entry()
         self.assertEqual(r.fill_persistence_status, "ALREADY_VERIFIED")
         self.assertEqual(len(self.writer.calls), 1)
         self.assertEqual(self.exchange.order_reads, 2)
@@ -212,7 +212,7 @@ class EntryRecoveryTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaisesRegex(
             EntryRecoveryHalted, "PRE_ENTRY_ACCOUNT_NOT_RECONCILED"
         ):
-            await self.run(pre_entry_account_reconciled=False)
+            await self._recover_entry(pre_entry_account_reconciled=False)
         self.assertEqual(self.exchange.order_reads, 0)
 
 
