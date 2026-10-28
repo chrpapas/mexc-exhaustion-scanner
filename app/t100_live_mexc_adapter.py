@@ -1,7 +1,9 @@
 """Concrete MEXC futures POST/GET adapter. POST sends real orders; nothing runs on import."""
 from __future__ import annotations
-from typing import Any
-from app.mexc_trade import MexcTradeClient
+from typing import Any, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from app.mexc_trade import MexcTradeClient
 from app.t100_live_authorization import (
     LiveMutationPermit,
     require_certified_transport_permit,
