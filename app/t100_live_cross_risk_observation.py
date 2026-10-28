@@ -27,6 +27,30 @@ from app.t100_live_risk_tier_witness import assess_risk_tier_witness
 
 MAX_POSITIONS = 4
 
+# Fixed codes only. Never copy raw exchange errors or exception messages to
+# operator-facing output. Unknown errors receive a generic fixed code.
+SAFE_FRAME_FAILURE_CODES = frozenset({
+    "BAD_FRAME_TYPE", "STALE_OR_INCOMPLETE_FRAME",
+    "MALFORMED_RISK_COLLECTION", "MARGIN_ECONOMIC_WITNESS_MISMATCH",
+    "USDT_ASSET_NOT_UNIQUE", "ASSET_COLLATERAL_SCHEMA_INCOMPLETE",
+    "BOOL_NOT_DECIMAL", "BAD_DECIMAL",
+    "POSITION_NOT_VERIFIED_CROSS_SHORT", "DUPLICATE_POSITION_IDENTITY",
+    "MALFORMED_STOP_ROW", "PROTECTION_IDENTITY_INVALID",
+    "DUPLICATE_STOP_IDENTITY", "RISK_MARK_SYMBOL_SET_MISMATCH",
+    "FAIR_MARK_UNDATED", "RISK_TIER_CURRENT_ONLY_UNVERIFIED",
+})
+SAFE_COLLECTOR_FAILURE_CODES = frozenset({
+    "COLLECTOR_CLOCK_INVALID", "COLLECTOR_NONFLAT_ONE_TO_FOUR_REQUIRED",
+    "COLLECTOR_POSITION_SYMBOLS_INVALID", "COLLECTOR_PRIVATE_RISK_SCOPE_DRIFT",
+    "PUBLIC_RISK_GET_FAILED", "PUBLIC_RISK_RESPONSE_UNVERIFIED",
+    "COLLECTOR_FAIR_TIMESTAMP_OR_PRICE_INVALID",
+    "COLLECTOR_READ_WINDOW_STALE", "COLLECTOR_INVENTORY_INCOMPLETE",
+    "COLLECTOR_READ_FAILED",
+})
+SAFE_FAILURE_STAGES = frozenset({
+    "NONE", "READ_FIRST", "VALIDATE_FIRST", "READ_SECOND", "VALIDATE_SECOND",
+})
+
 
 @dataclass(frozen=True)
 class CrossRiskRead:
@@ -60,6 +84,8 @@ class CrossRiskObservation:
     venue_liquidation_certified: bool = False
     entry_allowed: bool = False
     live_authorization: bool = False
+    failure_stage: str = "NONE"
+    failure_code: str = "NONE"
 
 
 def _positive(raw: Any) -> Decimal:
@@ -215,8 +241,22 @@ async def observe_cross_risk_window(
     max_fair_drift_bps: Decimal = Decimal("100"),
 ) -> CrossRiskObservation:
     """No exchange POST; healthy result is evidence only, not position adoption."""
-    def blocked(reason: str) -> CrossRiskObservation:
-        return CrossRiskObservation(status=reason)
+    def blocked(
+        reason: str, stage: str = "NONE", code: str = "NONE",
+    ) -> CrossRiskObservation:
+        return CrossRiskObservation(
+            status=reason, failure_stage=stage, failure_code=code,
+        )
+
+    def safe_error(error: Exception, *, read: bool) -> str:
+        # Only static, audited constants from the collector and frame parser.
+        allowed = (
+            SAFE_COLLECTOR_FAILURE_CODES if read
+            else SAFE_FRAME_FAILURE_CODES
+        )
+        raw = str(error)
+        return raw if raw in allowed else "UNCLASSIFIED_READ_OR_EVIDENCE_FAILURE"
+
     if (
         type(max_age_ms) is not int or not 0 < max_age_ms <= 5000
         or type(max_separation_ms) is not int or not 0 < max_separation_ms <= 5000
@@ -226,12 +266,41 @@ async def observe_cross_risk_window(
         drift_limit = _positive(max_fair_drift_bps)
         if drift_limit > Decimal("200"):
             return blocked("CROSS_RISK_WINDOW_DRIFT_LIMIT_INVALID")
-        first = await reader.read()
-        syms1, marks1, sig1 = _frame(first, now_ms=now_ms(), max_age_ms=max_age_ms)
-        second = await reader.read()
-        syms2, marks2, sig2 = _frame(second, now_ms=now_ms(), max_age_ms=max_age_ms)
     except Exception:
-        return blocked("CROSS_RISK_READ_OR_EVIDENCE_UNVERIFIED")
+        return blocked("CROSS_RISK_WINDOW_DRIFT_LIMIT_INVALID")
+
+    try:
+        first = await reader.read()
+    except Exception as exc:
+        return blocked(
+            "CROSS_RISK_READ_OR_EVIDENCE_UNVERIFIED",
+            "READ_FIRST", safe_error(exc, read=True),
+        )
+    try:
+        syms1, marks1, sig1 = _frame(
+            first, now_ms=now_ms(), max_age_ms=max_age_ms,
+        )
+    except Exception as exc:
+        return blocked(
+            "CROSS_RISK_READ_OR_EVIDENCE_UNVERIFIED",
+            "VALIDATE_FIRST", safe_error(exc, read=False),
+        )
+    try:
+        second = await reader.read()
+    except Exception as exc:
+        return blocked(
+            "CROSS_RISK_READ_OR_EVIDENCE_UNVERIFIED",
+            "READ_SECOND", safe_error(exc, read=True),
+        )
+    try:
+        syms2, marks2, sig2 = _frame(
+            second, now_ms=now_ms(), max_age_ms=max_age_ms,
+        )
+    except Exception as exc:
+        return blocked(
+            "CROSS_RISK_READ_OR_EVIDENCE_UNVERIFIED",
+            "VALIDATE_SECOND", safe_error(exc, read=False),
+        )
     elapsed = second.observed_at_ms - first.observed_at_ms
     if elapsed <= 0 or elapsed > max_separation_ms:
         return blocked("CROSS_RISK_READ_WINDOW_NOT_CONSECUTIVE")
