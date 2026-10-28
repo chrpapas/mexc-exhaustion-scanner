@@ -284,6 +284,47 @@ class ShadowRuntimeTests(unittest.IsolatedAsyncioTestCase):
             for msg in captured.output
         ))
 
+    async def test_run_emits_privacy_safe_cycle_heartbeat(self):
+        runtime = self.make_runtime()
+        original = runtime.cycle
+
+        async def single_cycle():
+            report = await original()
+            runtime.stop_event.set()
+            return report
+
+        runtime.cycle = single_cycle
+        with self.assertLogs(
+            "app.t100_live_shadow_runtime", level="INFO"
+        ) as captured:
+            await runtime.run()
+        heartbeat = [line for line in captured.output
+                     if "T100 shadow cycle run_id=" in line]
+        self.assertEqual(len(heartbeat), 1)
+        self.assertIn("cycle_index=1", heartbeat[0])
+        self.assertIn("kill_tripped=False", heartbeat[0])
+        self.assertIn("live_authorization=false", heartbeat[0])
+        self.assertNotIn("MEXC_API_SECRET", heartbeat[0])
+
+    async def test_unexpected_exception_does_not_log_secret_detail(self):
+        runtime = self.make_runtime()
+
+        async def failing_cycle():
+            runtime.stop_event.set()
+            raise RuntimeError("DO_NOT_LOG_HTTP_PRIVATE_BODY")
+
+        runtime.cycle = failing_cycle
+        with self.assertLogs(
+            "app.t100_live_shadow_runtime", level="WARNING"
+        ) as captured:
+            await runtime.run()
+        messages = "\\n".join(captured.output)
+        self.assertIn("T100 shadow cycle exception run_id=", messages)
+        self.assertIn("failure_type=RuntimeError", messages)
+        self.assertNotIn("DO_NOT_LOG_HTTP_PRIVATE_BODY", messages)
+        self.assertTrue(runtime.kill.tripped)
+        self.assertEqual(runtime.kill.first_reason, "READ_FAILURE")
+
     async def test_refuses_live_mode(self):
         with patch.dict(
             os.environ, {"T100_EXECUTION_MODE": "live"}, clear=False
