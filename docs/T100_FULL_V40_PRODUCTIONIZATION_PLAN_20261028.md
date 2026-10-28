@@ -295,3 +295,41 @@ authorizes an order.
   public contract metadata, MEXC fair mark, full account collateral and
   maintenance-margin witness. Only after that evidence and historical
   path stress could the full V40 release gate be considered.
+
+## Implementation checkpoint: double-read cross-risk observation (2026-10-28)
+
+- Added `app/t100_live_cross_risk_observation.py`. It consumes **two
+  separately injected GET-only frames**, each containing current positions,
+  current stops, account assets, private current risk tiers, public contract
+  metadata and timestamped fair prices for the SAME 1–4 symbols.
+- Each frame checks complete-collection assertions (caller-supplied, not
+  independently certified here), position/stop linkage and uniqueness,
+  all-short/cross mode, matching private/public risk tier evidence,
+  current symbol set, positive recent fair prices, and the existing
+  position/USDT-asset margin+unrealized economic consistency witness.
+- The read window must be consecutive and fresh; critical position/stop,
+  public-contract, private-risk and cash/frozen collateral metadata must
+  be stable across the window. Fair price may move within a bounded
+  threshold, but an unstable fair mark or a stale market quote blocks.
+  Full exchange atomicity and ABA-change absence are **not proven**.
+- MEXC [Get All Account Assets](https://www.mexc.co/api-docs/futures/account-and-trading-endpoints/get-all-account-assets)
+  describes `cashBalance` as withdrawable balance and `equity` as
+  total equity. We must NOT silently treat `cashBalance` as the complete
+  cross-margin wallet backing the V40 liquidation model.
+  The reported economic witness only compares observed position margin
+  and unrealized PNL with the returned asset data.
+- The module reports ONLY redacted counts/booleans/a SHA256 fingerprint.
+  No position IDs, account cash, symbols or order details are emitted.
+  A successful observation is **CURRENT_CROSS_RISK_OBSERVED_NONAUTHORIZING**.
+  `account_wide_completeness_certified`,
+  `future_stressed_tiers_certified`,
+  `venue_liquidation_certified`, `entry_allowed`
+  and `live_authorization` are always FALSE.
+- This is currently a **pure observation contract plus fake-reader tests**,
+  not yet a deployed read-only private/public MEXC collector.
+  Actual MEXC schema/timestamp validation, synchronized portfolio/asset
+  reconciliation, ownership fencing, and cross-margin wallet construction
+  remain future integration gates.
+- The current unrelated MEXC position is never adopted by this module.
+  No new migration, MEXC POST, leverage setting, Render deployment or
+  production enablement occurred.
