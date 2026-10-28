@@ -1,3 +1,43 @@
+## 2026-10-28 — Render public contract-detail reliability investigation
+
+Local Mac: `3/3` successful public contract-detail GET requests, 1,184
+rows each, 640/367/382 ms. **Actual running Render shadow container
+Shell:** `3/3` public GET requests against the same endpoint, 1,184
+rows each, 522/448/423 ms; all returned shape-valid payloads.
+The Render worker also uses <0.01 CPU (15-minute averages) and about
+60–100 MB memory of a 512 MB limit during the failure day. There is no
+evidence that lack of CPU/RAM is the cause; this does not rule out
+intermittent egress/API timeouts.
+
+**Existing Render shadow stays latched** from the 2026-10-28 01:12 UTC
+`READ_FAILURE` after `contract_specs` `ReadTimeout` (~20 sec).
+Additional metadata ReadTimeout warnings appeared at 01:36 and 02:06 UTC,
+and REST↔private WS↔REST continuity failed with `VenueReadHalted` at
+09:35 UTC. Local private continuity was stable (1 position and 1 stop,
+critical inventory equality true), but WS payload semantics and account-wide
+atomicity are unverified. Read-only observations never certify the native
+stop's protectiveness or live entry.
+
+**Code staged, not deployed:** `app.t100_live_preflight` retries the
+PUBLIC contract-details GET **once** only for known transient transport
+exception class names (not HTTP 429/auth/schema failures), logs the number
+of attempts, first exception class and elapsed time; second failure remains
+fatal to existing READ_FAILURE kill latch. `app.t100_live_shadow_runtime`
+logs every recovered metadata retry as a WARNING, so it cannot quietly
+count as a clean zero-error 24h observation. No retries were added to
+PRIVATE position, stop, trade or funding requests, and no order API path
+was touched. Offline regression tests passed.
+
+**Unresolved:** The earlier continuity `VenueReadHalted` cannot yet be
+localized in the deployed shadow without the staged safe
+`failure_stage` classifier or a separate Render-shell read-only test.
+A healthy 3-call public sample does not demonstrate long-run reliability.
+Keep shadow latched, auto-deploy off and all real trading disabled.
+After diagnostics and code review, require an explicit operator-controlled
+new read-only deployment, with a fresh uninterrupted soak and independent
+protection/atomicity checks; do not silently clear or ignore the prior latch.
+
+
 # T100 live readiness: evidence and release gates
 
 **Status: BLOCKED FOR LIVE TRADING — read-only Render shadow deployed; no real orders.**
