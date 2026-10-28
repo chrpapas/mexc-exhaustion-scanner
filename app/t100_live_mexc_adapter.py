@@ -4,7 +4,7 @@ from typing import Any
 from app.mexc_trade import MexcTradeClient
 from app.t100_live_authorization import (
     LiveMutationPermit,
-    require_live_mutation_permit,
+    require_certified_transport_permit,
 )
 from app.t100_live_execution import EntryIntent
 
@@ -45,7 +45,7 @@ class LiveMexcAdapter:
         *,
         permit: LiveMutationPermit,
     ) -> str:
-        permit = require_live_mutation_permit(permit)
+        permit = require_certified_transport_permit(permit)
         if intent.notional_usdt > permit.max_position_notional_usdt:
             raise RuntimeError("MEXC_ENTRY_EXCEEDS_PERMIT")
         result = await self.client._private_post(
@@ -83,7 +83,7 @@ class LiveMexcAdapter:
         SUBMITTING before invoking it and reconcile UNKNOWN outcomes by GET.
         """
         from decimal import Decimal
-        require_live_mutation_permit(permit)
+        require_certified_transport_permit(permit)
         current = Decimal(previous_stop_price)
         requested = Decimal(new_stop_price)
         if (
