@@ -108,6 +108,7 @@ def _require_inputs(
         or plan.entry_allowed is not False or plan.live_authorization is not False
         or plan.v40_admission is None
         or plan.v40_admission.action != "ADMIT"
+        or plan.candidate_symbol != symbol
         or plan.occupied_slots != witness.occupied_slots
         or type(witness.occupied_slots) is not int
         or not 0 <= witness.occupied_slots < 4
