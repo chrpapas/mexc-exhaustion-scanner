@@ -78,3 +78,25 @@ This decision is **not authorization to transmit exchange orders**.
 - Existing scanner/paper trader and read-only Render shadow remain separate.
 - Deployments remain manual until reviewed; LIVE_ADAPTER_STATUS stays
   NOT_IMPLEMENTED until the actual full coordinator is independently certified.
+
+## Implementation checkpoint: four-slot model gate (2026-10-28)
+
+- `app/t100_live_four_slot_planner.py` now runs frozen, single-candle V40
+  admission over a **read-only** representation of 0–4 account positions.
+- A non-flat account must supply a structured `DurableRecoveryReport`, not
+  a boolean, position count or guessed ownership. The model checks report
+  cardinality and identity uniqueness and refuses unowned positions,
+  unmatched native-stop counts, unverified inventory, duplicate symbols,
+  unrelated inflight orders, and the fifth slot.
+- This is **model planning only**, never a leader-fenced execution permit.
+  It has no DB/REST calls, no atomic reservations and no MEXC POST.
+- The runtime still lacks a binding of the **same verified snapshot window**
+  to checkpoint/order/fill provenance. Passing counts alone is not a live
+  proof of exact identity or absence of intervening fills. Live integration
+  must refresh and re-reconcile under a fenced transaction and fail closed
+  on drift.
+- The next engineering implementation is a multi-position **read-only
+  provenance/snapshot coordinator** with deterministic restart/fault
+  injection, followed by durable, atomic four-slot reservations and
+  single-attempt exchange submission. Existing one-slot pilot paths are
+  not used as live release interfaces.
