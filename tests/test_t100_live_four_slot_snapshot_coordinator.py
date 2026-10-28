@@ -6,6 +6,8 @@ import unittest
 from dataclasses import replace
 from decimal import Decimal as D
 
+from app.t100_live_four_slot_planner import plan_four_slot_v40
+from tests.test_t100_live_four_slot_planner import OPEN_TS, prior
 from app.t100_live_four_slot_snapshot_coordinator import (
     FourSlotSnapshotCoordinator, LedgerSnapshot,
 )
@@ -144,6 +146,22 @@ class FourSlotSnapshotTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(r.live_authorization)
         self.assertTrue(r.ledger_hash)
         self.assertTrue(r.critical_inventory_hash)
+
+    async def test_three_slot_snapshot_feeds_frozen_v40_admission_without_authorization(self):
+        witness = await self.coordinator.inspect()
+        self.assertEqual(witness.status, "NONFLAT_PROVENANCE_MATCHED_NONAUTHORIZING")
+        modeled = plan_four_slot_v40(
+            inventory=witness.inventory,
+            durable_recovery=witness.recovery,
+            symbol="NEW_USDT", prior_bars=prior(),
+            admission_open_ts=OPEN_TS, stage1_atr7_pct=6.,
+            equity_usdt=10_000., marked_existing_usdt=0.,
+        )
+        self.assertEqual(modeled.action, "ADMIT")
+        self.assertEqual(modeled.occupied_slots, 3)
+        self.assertEqual(modeled.desired_notional_usdt, 6250.)
+        self.assertFalse(modeled.entry_allowed)
+        self.assertFalse(modeled.live_authorization)
 
     async def test_four_managed_slots_are_recoverable_model_only(self):
         self.reset(4)
