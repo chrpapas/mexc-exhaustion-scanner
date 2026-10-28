@@ -21,7 +21,7 @@ from typing import Protocol
 
 from app.t100_live_authorization import (
     LiveMutationPermit,
-    require_live_mutation_permit,
+    require_certified_transport_permit,
 )
 from app.t100_live_stop_journal import StopAmendment
 from app.t100_live_stop_amendment_coordinator import (
@@ -70,7 +70,7 @@ class StopMutationExecutor:
         *,
         permit: LiveMutationPermit,
     ) -> StopMutationAttempt:
-        require_live_mutation_permit(permit)
+        require_certified_transport_permit(permit)
         if not isinstance(amendment, StopAmendment):
             raise StopMutationExecutionHalted(
                 "STOP_AMENDMENT_INVALID"
