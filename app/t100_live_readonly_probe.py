@@ -34,6 +34,60 @@ class ReadOnlyMexcProbe:
             raise VenueReadHalted("ACCOUNT_ASSETS_RESPONSE_UNVERIFIED")
         return raw
 
+    async def raw_account_risk_limits(
+        self, symbol: str | None = None,
+    ) -> dict[str, list[dict[str, Any]]]:
+        """Private GET-only CURRENT risk tiers; not future stressed-tier proof.
+
+        MEXC documents data as symbol -> list[side-specific tier rows].
+        This method validates collection shape and explicit symbol/side
+        consistency, but DOES NOT certify future risk levels, liquidation
+        fees, account equity, or permission to submit orders.
+        """
+        if (
+            symbol is not None
+            and (
+                not isinstance(symbol, str)
+                or re.fullmatch(r"[A-Z0-9]+_USDT", symbol) is None
+            )
+        ):
+            raise VenueReadHalted("INVALID_RISK_LIMIT_SYMBOL_FILTER")
+        try:
+            raw = await self._client._private_get(
+                "/api/v1/private/account/risk_limit",
+                None if symbol is None else {"symbol": symbol},
+            )
+        except Exception:
+            raise VenueReadHalted("RISK_LIMIT_GET_FAILED") from None
+        if not isinstance(raw, dict) or not raw:
+            raise VenueReadHalted("RISK_LIMIT_RESPONSE_UNVERIFIED")
+        if symbol is not None and set(raw) != {symbol}:
+            raise VenueReadHalted("RISK_LIMIT_SYMBOL_MISMATCH")
+        for key, rows in raw.items():
+            if (
+                not isinstance(key, str)
+                or re.fullmatch(r"[A-Z0-9]+_USDT", key) is None
+                or not isinstance(rows, list)
+                or not rows
+            ):
+                raise VenueReadHalted("RISK_LIMIT_RESPONSE_UNVERIFIED")
+            sides = set()
+            for row in rows:
+                if (
+                    not isinstance(row, dict)
+                    or row.get("symbol") != key
+                    or type(row.get("positionType")) is not int
+                    or row["positionType"] not in (1, 2)
+                    or type(row.get("level")) is not int
+                    or row["level"] <= 0
+                ):
+                    raise VenueReadHalted("RISK_LIMIT_ROW_UNVERIFIED")
+                side = row["positionType"]
+                if side in sides:
+                    raise VenueReadHalted("RISK_LIMIT_DUPLICATE_POSITION_SIDE")
+                sides.add(side)
+        return raw
+
     async def raw_open_positions(
         self, symbol: str | None = None,
     ) -> list[dict[str, Any]]:
