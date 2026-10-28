@@ -302,6 +302,8 @@ class ShadowRuntimeTests(unittest.IsolatedAsyncioTestCase):
                      if "T100 shadow cycle run_id=" in line]
         self.assertEqual(len(heartbeat), 1)
         self.assertIn("cycle_index=1", heartbeat[0])
+        self.assertIn("position_observed=False", heartbeat[0])
+        self.assertIn("tpsl_observed=False", heartbeat[0])
         self.assertIn("kill_tripped=False", heartbeat[0])
         self.assertIn("live_authorization=false", heartbeat[0])
         self.assertNotIn("MEXC_API_SECRET", heartbeat[0])
