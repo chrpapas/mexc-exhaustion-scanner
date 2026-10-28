@@ -171,6 +171,17 @@ class CrossRiskObservationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(r.failure_stage, "VALIDATE_SECOND")
         self.assertEqual(r.failure_code, "BAD_DECIMAL")
 
+    async def test_unsupported_current_tier_schedule_reports_specific_safe_code(self):
+        second = frame(SECOND_TS)
+        second.public_contract_by_symbol["TEST_USDT"]["riskLimitMode"] = "INCREASE"
+        r = await observe(Reader(second=second))
+        self.assertEqual(r.status, "CROSS_RISK_READ_OR_EVIDENCE_UNVERIFIED")
+        self.assertEqual(r.failure_stage, "VALIDATE_SECOND")
+        self.assertEqual(
+            r.failure_code, "RISK_TIER_STATIC_VOLUME_SCHEDULE_UNAVAILABLE"
+        )
+        self.assertFalse(r.live_authorization)
+
     async def test_isolated_position_blocks(self):
         second = frame(SECOND_TS)
         second.positions[0]["openType"] = 1
