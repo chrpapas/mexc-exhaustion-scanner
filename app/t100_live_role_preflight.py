@@ -36,7 +36,7 @@ async def inspect_role_setup_preconditions(conn: Any) -> dict[str, Any]:
         "live_sequence_owner_verified": False,
         "runtime_role_absent": False,
         "live_authorization": False,
-        "mexс_orders_sent": False,
+        "mexc_orders_sent": False,
         "expected_live_tables": len(LIVE_TABLES),
         "expected_live_sequences": len(LIVE_SEQUENCES),
         "runtime_role_name": TARGET_ROLE,
