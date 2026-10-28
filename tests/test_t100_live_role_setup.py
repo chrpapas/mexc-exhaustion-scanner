@@ -36,12 +36,13 @@ class FakeTx:
 class FakeOwner:
     def __init__(self, *, preflight_status="DIRECT_ROLE_CREATION_PREFLIGHT_PASSED",
                  wrong_database=False, lock=True, role_exists=False,
-                 invalid_attributes=False):
+                 invalid_attributes=False, fail_create=False):
         self.preflight_status = preflight_status
         self.wrong_database = wrong_database
         self.lock = lock
         self.role_exists = role_exists
         self.invalid_attributes = invalid_attributes
+        self.fail_create = fail_create
         self.statements = []
         self.transactions = []
 
@@ -50,6 +51,8 @@ class FakeOwner:
 
     async def execute(self, stmt, *args):
         self.statements.append(stmt)
+        if self.fail_create and stmt.startswith("CREATE ROLE"):
+            raise RuntimeError("Database error contains secret " + stmt)
 
     async def fetchval(self, sql, *args):
         if "current_database()" in sql:
@@ -205,6 +208,22 @@ class RoleSetupTests(unittest.IsolatedAsyncioTestCase):
             self.assertFalse(any(
                 "CREATE ROLE" in stmt for stmt in conn.statements
             ))
+
+    async def test_password_sql_error_is_redacted_and_rolls_back(self):
+        conn = FakeOwner(fail_create=True)
+        secret = "EXACT_RUNTIME_SECRET_" + "Q" * 35
+        with patch(
+            "app.t100_live_role_setup._read_preflight",
+            new_callable=AsyncMock,
+            return_value={"status": "DIRECT_ROLE_CREATION_PREFLIGHT_PASSED"},
+        ):
+            with self.assertRaises(RuntimeRoleSetupBlocked) as caught:
+                await provision_role(
+                    conn, password=secret, grants="GRANT ...",
+                )
+        self.assertIn("ROLE_TRANSACTION_FAILED:RuntimeError", str(caught.exception))
+        self.assertNotIn(secret, str(caught.exception))
+        self.assertEqual(conn.transactions[-1], ("ROLLBACK", False))
 
     async def test_role_attribute_failure_rolls_back(self):
         conn = FakeOwner(invalid_attributes=True)
