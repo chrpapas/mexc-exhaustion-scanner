@@ -501,12 +501,15 @@ class T100LiveShadowRuntime:
                     # A retry remains visible separately as a warning.
                     LOGGER.info(
                         "T100 shadow cycle run_id=%s cycle_index=%s "
-                        "status=%s critical_consistent=%s "
+                        "status=%s position_observed=%s tpsl_observed=%s "
+                        "critical_consistent=%s "
                         "continuity_status=%s kill_tripped=%s kill_reason=%s "
                         "entry_allowed=false live_authorization=false",
                         self._run_id,
                         self._cycle_index,
                         report.status,
+                        report.positions > 0,
+                        report.current_tpsl > 0,
                         report.critical_inventory_consistent,
                         report.continuity_status,
                         report.kill_tripped,
