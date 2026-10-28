@@ -173,3 +173,35 @@ This decision is **not authorization to transmit exchange orders**.
    stop amendments/closures, completed-position audit, margin and capacity
    checks, full chronological strategy parity, long-running shadow
    readiness, and explicit operator authorization.
+
+## Implementation checkpoint: atomic four-slot order-attempt journal (2026-10-28)
+
+- `app/t100_live_four_slot_attempt_journal.py` implements the **DB-only**
+  precursor to an exchange submission. Under the same fixed two-key account
+  advisory transaction lock used by the V40 reservation store, it checks
+  the exact fencing lease and reservation identity, the unchanged ledger
+  digest and protected checkpoint identities, a two-second observation age,
+  unresolved old intents/amendments and distinct occupied/reserved symbols.
+- Entry intent volume, contract size, volume step, reference price and
+  tick-quantized 75% short stop must be numerically coherent; actual order
+  notional may only **reduce**, never exceed, the reserved V40 modeled
+  notional. This alone does not independently verify current contract specs,
+  real margin, liquidation risk or order-book liquidity.
+- `PREPARED` intent insert, intent `SUBMITTING` CAS, and reservation
+  `RESERVED -> SUBMITTING` CAS occur in **one PostgreSQL transaction**.
+  If the DB operation fails, both are rolled back. Once committed,
+  `SUBMITTING` must be treated as possibly posted, even though this
+  isolated module has no MEXC POST transport. Ambiguous outcomes can
+  atomically latch both rows `UNKNOWN`; no automatic retry exists.
+- This attempt journal is **not wired to Render or MEXC**, does not issue
+  mutation permits, and cannot mark `ACK`, `PROTECTED` or `RELEASED`.
+  The new table remains UNAPPLIED. A certified transport coordinator
+  must separately establish a fresh leader, account, order-book, and
+  contract/risk snapshot immediately before a single POST.
+- Offline tests use simulated PostgreSQL transaction rollback and
+  contention; **real PostgreSQL isolation and crash behavior are not
+  yet certified**, nor is an independent exchange order lookup.
+- Next: implement **GET-only externalOid order outcome and fills
+  reconciliation** with ledger CAS, unknown/missing outcomes left blocked,
+  then protected-entry checkpoint persistence for 0–4 simultaneous
+  positions and a fully controlled close/stop lifecycle.
