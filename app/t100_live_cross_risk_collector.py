@@ -154,7 +154,8 @@ class MexcReadOnlyCrossRiskCollector:
                 type(finished) is not int
                 or not 0 < finished - started <= self.max_frame_ms
                 or any(
-                    abs(finished - mark["observed_at_ms"]) > self.max_frame_ms
+                    mark["observed_at_ms"] > finished + 100
+                    or finished - mark["observed_at_ms"] > self.max_frame_ms
                     for mark in marks.values()
                 )
             ):
