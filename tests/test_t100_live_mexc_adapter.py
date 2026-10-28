@@ -1,5 +1,6 @@
 """Offline current MEXC live-adapter contract tests. No HTTP is sent."""
 import unittest
+from unittest.mock import patch
 from decimal import Decimal as D
 
 from app.t100_live_authorization import (
@@ -83,6 +84,11 @@ def intent():
 
 class LiveMexcAdapterContractTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
+        self._certified_mock = patch(
+            "app.t100_live_guards.LIVE_ADAPTER_STATUS", "CERTIFIED"
+        )
+        self._certified_mock.start()
+        self.addCleanup(self._certified_mock.stop)
         self.client = FakeClient()
         self.adapter = LiveMexcAdapter(self.client)
 
@@ -115,6 +121,17 @@ class LiveMexcAdapterContractTests(unittest.IsolatedAsyncioTestCase):
                 with self.assertRaises(ValueError):
                     await self.adapter.order_deal_details(bad)
                 self.assertEqual(self.client.get_calls, [])
+
+    async def test_uncertified_adapter_never_posts_even_with_permit(self):
+        with patch("app.t100_live_guards.LIVE_ADAPTER_STATUS", "NOT_IMPLEMENTED"):
+            with self.assertRaisesRegex(LiveAuthorizationHalted, "LIVE_ADAPTER_NOT_CERTIFIED"):
+                await self.adapter.submit_short_with_stop(intent(), permit=permit())
+            with self.assertRaisesRegex(LiveAuthorizationHalted, "LIVE_ADAPTER_NOT_CERTIFIED"):
+                await self.adapter.submit_native_short_stop_tightening(
+                    stop_order_id=99, previous_stop_price="175",
+                    new_stop_price="90", permit=permit(),
+                )
+        self.assertEqual(self.client.posts, [])
 
     async def test_mutation_without_valid_permit_never_posts(self):
         with self.assertRaises(LiveAuthorizationHalted):
