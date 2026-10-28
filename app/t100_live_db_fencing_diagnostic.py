@@ -75,6 +75,7 @@ async def exercise_test_fencing(
         PostgresLeaderLeaseStore(second),
         lease_name=lease_name, ttl_seconds=15,
     )
+    acquired_our_test_lease = False
     evidence: dict[str, Any] = {
         "status": "FENCING_DIAGNOSTIC_INCOMPLETE",
         "role_name": TARGET_ROLE,
@@ -94,6 +95,7 @@ async def exercise_test_fencing(
 
         # Conn A acquires, conn B must be denied while the TTL is current.
         a = await owner_a.acquire("diagnostic-process-a")
+        acquired_our_test_lease = True
         await owner_a.require_current(a)
         await owner_a.renew(a)
         try:
@@ -154,13 +156,14 @@ async def exercise_test_fencing(
         # The role cannot DELETE the row; an expired row is harmless and
         # preserves monotonic token history.
         try:
-            await first.execute(
+            if acquired_our_test_lease:
+                await first.execute(
                 """UPDATE public.t100_live_executor_leases
                    SET lease_expires_at=now()-interval '1 second',
                        updated_at=now()
                    WHERE lease_name=$1""",
                 lease_name,
-            )
+                )
         except Exception:
             # A forced disconnection lets natural TTL expire in 15 sec.
             # The caller reports a failed/uncertain test.
