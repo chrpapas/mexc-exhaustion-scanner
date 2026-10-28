@@ -51,7 +51,7 @@ class CrossRiskObservation:
     status: str
     observed_positions: int = 0
     stable_critical_inventory: bool = False
-    account_economics_reconciled: bool = False
+    position_margin_economic_witness_observed: bool = False
     current_risk_tiers_observed: bool = False
     fair_prices_observed: bool = False
     evidence_fingerprint_sha256: str | None = None
@@ -250,7 +250,7 @@ async def observe_cross_risk_window(
         status="CURRENT_CROSS_RISK_OBSERVED_NONAUTHORIZING",
         observed_positions=len(syms2),
         stable_critical_inventory=True,
-        account_economics_reconciled=True,
+        position_margin_economic_witness_observed=True,
         current_risk_tiers_observed=True,
         fair_prices_observed=True,
         evidence_fingerprint_sha256=sig2,
