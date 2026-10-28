@@ -1,5 +1,6 @@
 """Offline exactly-once-attempt stop mutation tests."""
 import unittest
+from unittest.mock import patch
 from dataclasses import replace
 from decimal import Decimal as D
 
@@ -108,6 +109,11 @@ def proposal():
 
 class StopMutationExecutorTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
+        self._adapter_patch = patch(
+            "app.t100_live_guards.LIVE_ADAPTER_STATUS", "CERTIFIED"
+        )
+        self._adapter_patch.start()
+        self.addCleanup(self._adapter_patch.stop)
         self.journal = Journal()
         self.lifecycle = StopAmendmentLifecycleCoordinator(self.journal)
         self.transport = Transport()
@@ -116,6 +122,13 @@ class StopMutationExecutorTests(unittest.IsolatedAsyncioTestCase):
             transport=self.transport,
         )
         self.amendment, _ = await self.lifecycle.prepare(proposal())
+
+    async def test_uncertified_adapter_blocks_before_journal_or_post(self):
+        with patch("app.t100_live_guards.LIVE_ADAPTER_STATUS", "NOT_IMPLEMENTED"):
+            with self.assertRaisesRegex(Exception, "LIVE_ADAPTER_NOT_CERTIFIED"):
+                await self.executor.submit_once(self.amendment, permit=permit())
+        self.assertEqual(self.journal.states[self.amendment.external_id], "PREPARED")
+        self.assertEqual(self.transport.posts, 0)
 
     async def test_prepared_moves_to_submitting_before_one_post(self):
         result = await self.executor.submit_once(
