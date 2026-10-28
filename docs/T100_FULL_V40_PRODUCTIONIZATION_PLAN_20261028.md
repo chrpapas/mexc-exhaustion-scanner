@@ -127,3 +127,49 @@ This decision is **not authorization to transmit exchange orders**.
   duplicate identities, missing order, stop-price and volume drift, DB change,
   unknown intent state, unrelated orders, incomplete and unstable inventory,
   and source outages.
+
+## Implementation checkpoint: four-slot reservation journal (2026-10-28)
+
+- Added **CREATE-ONLY, UNAPPLIED** `migrations/031_t100_live_v40_four_slot_reservations.sql`,
+  separate from older VOL30-H4 entry-campaign parents/children. This file is
+  **NOT** added to the pinned migration 027–030 CLI; production PostgreSQL has
+  NOT been changed and there is no runtime writer for this new table yet.
+- Added `app/t100_live_four_slot_reservations.py`:
+  a cooperating PostgreSQL writer acquires the **account-wide advisory
+  transaction lock first**, checks an unexpired matching fenced leader row,
+  validates the expected database, limits witness age, rereads all four
+  critical ledger collections, compares their digest, verifies every owned
+  checkpoint identity, checks existing reservations + unresolved old ledger
+  mutations, and performs exactly one `RESERVED` insert.
+- The database partial unique index prevents duplicate active-symbol rows;
+  `signal_id` is a primary key. The four-slot count is **cooperatively
+  serialized via the global transaction lock**; PostgreSQL does not enforce
+  the global count with a standalone CHECK. Any future insert/transition
+  writer must follow the same lock and state machine.
+- A RESERVATION is deliberately not an order intent, stop protection,
+  execution permission, or exchange fill. This module has **no MEXC POST**,
+  never grants live authorization, does not advance `SUBMITTING`, and does
+  not release reservations. Unresolved states block global new entries.
+- The account snapshot witness includes independent inventory and durable
+  recovery evidence, but the supplied observation timestamp is still an
+  input and its proximity to reservation time cannot establish exchange
+  atomicity, absence of ABA changes, or safe multi-step execution.
+- Local/CI concurrency simulations exercise contention for the fourth slot,
+  six concurrent requests for four slots, duplicate symbols/signals, stale
+  fencing, clock skew, ledger drift, unknown outcomes, legacy-parent state
+  and DB error redaction. These simulations **do not replace real PostgreSQL
+  rollback/lock and MEXC account-fence integration testing**.
+
+### Next release blockers
+1. Operator-approved migration plan, restricted write-role/GRANT audit,
+   independently repeated database backup and tested rollback. Do not apply
+   migration 031 merely because this code is green.
+2. Live, independent, token-fenced exchange snapshot immediately before
+   any POST. Bookended GETs are not an atomic venue lock.
+3. Durable transition `RESERVED -> SUBMITTING` with an independently
+   rechecked leader and account-wide risk state, exactly-once-attempt
+   externalOid order POST, UNKNOWN outcome reconciliation and no retry.
+4. 0–4 protected-entry checkpoint ownership after fill, crash-safe
+   stop amendments/closures, completed-position audit, margin and capacity
+   checks, full chronological strategy parity, long-running shadow
+   readiness, and explicit operator authorization.
