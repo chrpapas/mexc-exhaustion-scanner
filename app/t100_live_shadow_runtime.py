@@ -19,6 +19,7 @@ import logging
 import os
 import signal
 import time
+import uuid
 from typing import Any, Awaitable, Callable
 
 from app.t100_live_continuity_probe import run_continuity_probe
@@ -137,6 +138,9 @@ class T100LiveShadowRuntime:
         self._last_state: tuple[int, int, str] | None = None
         self._last_health_at: float | None = None
         self._kill_notified = False
+        # Process identity is only a diagnostic label, never an authorization.
+        self._run_id = uuid.uuid4().hex[:12]
+        self._cycle_index = 0
 
     async def close(self) -> None:
         await self.notifier.close()
@@ -490,11 +494,35 @@ class T100LiveShadowRuntime:
             while not self.stop_event.is_set():
                 started = self._clock()
                 try:
-                    await self.cycle()
+                    report = await self.cycle()
+                    self._cycle_index += 1
+                    # Operator-shareable cycle heartbeat: no symbols, IDs,
+                    # balances, volumes, prices, URLs, secrets or raw payloads.
+                    # A retry remains visible separately as a warning.
+                    LOGGER.info(
+                        "T100 shadow cycle run_id=%s cycle_index=%s "
+                        "status=%s critical_consistent=%s "
+                        "continuity_status=%s kill_tripped=%s kill_reason=%s "
+                        "entry_allowed=false live_authorization=false",
+                        self._run_id,
+                        self._cycle_index,
+                        report.status,
+                        report.critical_inventory_consistent,
+                        report.continuity_status,
+                        report.kill_tripped,
+                        report.kill_reason or "none",
+                    )
                 except asyncio.CancelledError:
                     raise
                 except Exception as exc:
-                    LOGGER.exception("T100 live-shadow cycle failed")
+                    # Never log exception messages/tracebacks here: an HTTP
+                    # exception can embed URLs, headers or exchange payloads.
+                    LOGGER.warning(
+                        "T100 shadow cycle exception run_id=%s "
+                        "failure_type=%s",
+                        self._run_id,
+                        type(exc).__name__,
+                    )
                     self._trip("READ_FAILURE")
                     await self._notify_kill_once()
                     await self.notifier.send(
