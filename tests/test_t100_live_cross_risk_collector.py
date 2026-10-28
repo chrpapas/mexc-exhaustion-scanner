@@ -226,6 +226,34 @@ class CollectorTests(unittest.IsolatedAsyncioTestCase):
         ):
             await self.collector.read()
 
+    async def test_fair_mark_future_relative_to_finished_window_blocks(self):
+        # 1000800 is within start+2500 but occurs AFTER frame finish 1000500.
+        self.public_client.fair_ms = 1_000_800
+        with self.assertRaisesRegex(
+            CrossRiskCollectionHalted, "COLLECTOR_READ_WINDOW_STALE",
+        ):
+            await self.collector.read()
+
+    async def test_position_changed_between_account_wide_reads_blocks(self):
+        class DriftingPrivate(FakePrivate):
+            async def _private_get(inner, path, params=None):
+                if (
+                    path == "/api/v1/private/position/open_positions"
+                    and params is None and inner.positions_reads == 2
+                ):
+                    inner.observed.positions[0]["holdVol"] = "51"
+                return await super()._private_get(path, params)
+
+        probe = ReadOnlyMexcProbe(DriftingPrivate(self.first))
+        collector = MexcReadOnlyCrossRiskCollector(
+            private=probe, public=self.public_client,
+            clock_ms=FakeClock(1_000_000, 1_000_500),
+        )
+        with self.assertRaisesRegex(
+            CrossRiskCollectionHalted, "COLLECTOR_INVENTORY_INCOMPLETE",
+        ):
+            await collector.read()
+
     async def test_public_or_private_timeout_redacts_data(self):
         self.private_client.fail = True
         with self.assertRaises(CrossRiskCollectionHalted) as caught:
