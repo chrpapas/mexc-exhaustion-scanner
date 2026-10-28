@@ -277,6 +277,17 @@ class T100LiveShadowRuntime:
             preflight.get("read_failure_type") is not None
             or "SUCCEEDED" not in credential_status
         )
+        # A recovered public-metadata timeout must remain observable,
+        # never silently converted into a clean reliability-soak sample.
+        if preflight.get("public_contract_specs_retries_used") == 1:
+            LOGGER.warning(
+                "T100 shadow contract_specs transport retried "
+                "attempts=%s status=%s elapsed_ms=%s failure_type=%s",
+                int(preflight.get("public_contract_specs_attempt_count") or 0),
+                str(preflight.get("public_contract_specs_status") or "UNKNOWN")[:32],
+                int(preflight.get("public_contract_specs_elapsed_ms") or 0),
+                str(preflight.get("public_contract_specs_failure_type") or "UNKNOWN")[:64],
+            )
         critical_consistent = (
             preflight.get("critical_inventory_double_read_consistent") is True
         )
