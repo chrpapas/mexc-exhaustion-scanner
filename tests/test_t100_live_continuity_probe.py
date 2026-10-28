@@ -136,6 +136,36 @@ class ContinuityProbeTests(unittest.IsolatedAsyncioTestCase):
             result["status"], "REFUSED_NON_PAPER_EXECUTION_MODE")
         self.assertEqual(client.calls, [])
 
+    async def test_failed_signed_position_get_reports_only_safe_stage(self):
+        class FailedPositions(FakeClient):
+            async def _private_get(self, path, params=None):
+                if "open_positions" in path:
+                    raise TimeoutError("DO_NOT_LEAK_PRIVATE_ERROR_CONTENT")
+                return await super()._private_get(path, params)
+        async def fake_ws(**kwargs):
+            return ws_report()
+        result = await run_continuity_probe(
+            duration_seconds=1,
+            client=FailedPositions(),
+            ws_observer=fake_ws,
+        )
+        self.assertEqual(result["status"], "HALTED_REST_WS_REST_CONTINUITY")
+        self.assertEqual(result["failure_type"], "VenueReadHalted")
+        self.assertEqual(result["failure_stage"], "POSITIONS_GET_FAILED")
+        self.assertNotIn("DO_NOT_LEAK", str(result))
+        self.assertFalse(result["live_authorization"])
+
+    async def test_unlisted_exception_does_not_leak(self):
+        class CustomErrorClient(FakeClient):
+            async def _private_get(self, path, params=None):
+                raise RuntimeError("DO_NOT_LEAK_A_TOKEN")
+        result = await run_continuity_probe(
+            duration_seconds=1,
+            client=CustomErrorClient(),
+        )
+        self.assertEqual(result["failure_stage"], "POSITIONS_GET_FAILED")
+        self.assertNotIn("DO_NOT_LEAK", str(result))
+
     async def test_missing_credentials_blocks(self):
         with patch.dict(os.environ, {
             "T100_EXECUTION_MODE": "paper",
