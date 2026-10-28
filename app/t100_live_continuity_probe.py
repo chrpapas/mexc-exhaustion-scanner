@@ -27,6 +27,19 @@ from app.t100_live_readonly_probe import ReadOnlyMexcProbe
 
 CONTINUITY_VERSION = "2026-10-24-rest-ws-rest-continuity-v1"
 
+# Safe, closed allowlist of constant codes emitted by ReadOnlyMexcProbe.
+# Never log raw exception payloads, URL paths, symbols or response data.
+ALLOWED_READ_FAILURE_STAGES = frozenset({
+    "ACCOUNT_ASSETS_GET_FAILED",
+    "ACCOUNT_ASSETS_RESPONSE_UNVERIFIED",
+    "POSITIONS_GET_FAILED",
+    "POSITIONS_RESPONSE_UNVERIFIED",
+    "OPEN_STOPS_GET_FAILED",
+    "OPEN_STOPS_RESPONSE_UNVERIFIED",
+    "INVALID_POSITION_SYMBOL_FILTER",
+    "INVALID_STOP_SYMBOL_FILTER",
+})
+
 
 def _canonical(rows: list[dict[str, Any]], fields: tuple[str, ...]) -> tuple[str, ...]:
     return tuple(sorted(
@@ -196,9 +209,17 @@ async def run_continuity_probe(
         )
         return result
     except Exception as exc:
+        # VenueReadHalted carries a fixed code, never an HTTP response body.
+        # Only a strict allowlist may reach operator-shareable status.
+        from app.t100_live_readonly_probe import VenueReadHalted
+        stage = str(exc) if isinstance(exc, VenueReadHalted) else ""
         result.update({
             "status": "HALTED_REST_WS_REST_CONTINUITY",
             "failure_type": type(exc).__name__,
+            "failure_stage": (
+                stage if stage in ALLOWED_READ_FAILURE_STAGES
+                else "UNKNOWN"
+            ),
         })
         return result
     finally:
