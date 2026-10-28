@@ -144,7 +144,7 @@ class RoleSetupTests(unittest.IsolatedAsyncioTestCase):
             _password_literal("weak")
         self.assertEqual(
             _password_literal("ab'cd" * 8),
-            "'ab''cd" * 7 + "ab''cd'",
+            "'" + "ab''cd" * 8 + "'",
         )
 
     async def test_creation_is_transactional_and_has_no_live_switch(self):
