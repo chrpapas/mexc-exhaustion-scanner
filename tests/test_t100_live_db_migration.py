@@ -125,6 +125,7 @@ class MigrationSafetyTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(conn.transaction_readonly)
         self.assertTrue(conn.tx_committed)
         self.assertEqual(conn.migration_statements, 0)
+        self.assertIn("SET LOCAL search_path = public", conn.executed)
         self.assertFalse(report["live_authorization"])
 
     async def test_atomic_apply_only_on_clean_namespace(self):
@@ -135,6 +136,7 @@ class MigrationSafetyTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(report["status"], "T100_LIVE_TABLES_APPLIED_ATOMICALLY")
         self.assertEqual(report["tables_verified"], 12)
         self.assertEqual(conn.migration_statements, 4)
+        self.assertIn("SET LOCAL search_path = public", conn.executed)
         self.assertFalse(conn.transaction_readonly)
         self.assertTrue(conn.tx_committed)
         self.assertFalse(report["runtime_role_privileges_verified"])
