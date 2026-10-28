@@ -259,3 +259,39 @@ authorizes an order.
    as live execution nonparity.
 6. Live execution and Render services remain unchanged; migration 031 is
    unapplied and LIVE_ADAPTER_STATUS remains NOT_IMPLEMENTED.
+
+## Implementation checkpoint: current MEXC risk-tier witness (2026-10-28)
+
+- Added `app/t100_live_risk_tier_witness.py` and offline drift tests.
+  The pure witness compares the exact short side in the private GET
+  `/api/v1/private/account/risk_limit` with a public GET
+  `/api/v1/contract/detail/country` contract record for the SAME symbol.
+- Source: [MEXC current risk limits](https://www.mexc.co/api-docs/futures/account-and-trading-endpoints/get-risk-limits)
+  documents that `maxVol` may be converted to contracts using the CURRENT
+  fair price when the limit is value-based. Therefore private `maxVol`
+  is NOT taken to be a future-shock volume/capacity guarantee.
+- Source: [MEXC contract metadata](https://www.mexc.co/api-docs/futures/market-endpoints/get-contract-info)
+  documents `positionOpenType`, `riskLimitType`, `riskLimitMode`,
+  `riskLimitCustom` level bands, `apiAllowed`,
+  `countryConfigContractMaxLeverage`, and `liquidationFeeRate`.
+- For this first version, only fully parsed, monotonically ordered public
+  `CUSTOM`/`BY_VOLUME` static contract-quantity tiers are diagnosed.
+  Missing/custom value-based (`BY_VALUE`) and incremental (`INCREASE`)
+  schemes remain BLOCKED, not inferred.
+- Checks exact short side, cross mode, account leverage, published symbol
+  availability, quote/settle currency, contract size, restricted
+  leverage, current risk MMR not below current public-tier MMR,
+  distinct tier caps and ordered nondecreasing MMR/IMR.
+- Conservatively reports the largest current published MMR (also
+  including private current MMRS). It **NEVER** asserts
+  `stressed_tier_upper_bound_verified`, `entry_allowed` or
+  `live_authorization` because a current public schedule does not certify
+  future emergency parameter changes, liquidation behavior, or the
+  live account's actual clock-synchronized position/fair-price state.
+- Existing `ReadOnlyMexcProbe.raw_account_risk_limits` is GET-only;
+  this pure validation is not yet wired to it in any Render worker.
+  No credentials, order mutation, leverage change, migration or deployment.
+- Next is a privacy-safe read-only co-observation of risk-limit and
+  public contract metadata, MEXC fair mark, full account collateral and
+  maintenance-margin witness. Only after that evidence and historical
+  path stress could the full V40 release gate be considered.
