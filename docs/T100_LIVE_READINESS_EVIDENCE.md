@@ -1,3 +1,64 @@
+## 2026-10-28 — current MEXC account inventory independently verified, non-atomic
+
+The operator ran the independent signed/private GET-only
+`app.t100_live_current_inventory_cli` from the trusted Mac and supplied
+the redacted report:
+
+- `status=CURRENT_ACCOUNT_INVENTORY_COMPLETENESS_VERIFIED_NONATOMIC`
+- account-wide positions `1 -> 1`; current TP/SL `1 -> 1`;
+  `critical_inventory_equal_across_witness_window=true`
+- `symbol_scoped_redundancy_verified=true`,
+  `position_margin_witness_verified=true`
+- `current_tpsl_count_matches=true` with
+  `sumCount=1`, `stopOrderCount=1`, and
+  `limitOrderCount=planOrderCount=trackOrderCount=0`
+- `account_wide_completeness_verified=true`,
+  `exchange_atomicity_verified=false`,
+  `durable_nonflat_recovery_verified=false`,
+  `native_stop_protectiveness_independently_verified=false`
+- no MEXC orders, live authorization remains false.
+
+**Interpretation:** current account-wide *read completeness* was verified
+within an externally time-bounded window. It is neither an atomic
+exchange snapshot nor evidence that the already-open account position is
+T100-owned. The existing native stop direction/price/volume still
+requires independent human verification.
+
+The connected Render MCP database-query endpoint failed because the
+PostgreSQL external endpoint requires TLS and enforces external
+connection restrictions. Do not weaken database allowlists or rotate
+production credentials for this purpose.
+
+**Development-branch-only evidence tool:**
+`app.t100_live_nonflat_ledger_audit`, under an existing, independent
+restricted runtime PostgreSQL user, performs `SELECT` queries in a
+`repeatable_read`, `readonly` transaction. Reports only counts of
+non-closed T100 checkpoints, relevant revision-chain counts, matching
+ACK origins, unresolved intents/amendments/interventions and active
+real-executor leases, never identities, symbols or economics. A fresh
+schema with no active T100 checkpoints returns
+`NO_ACTIVE_T100_DURABLE_CHECKPOINTS` and explicitly prevents adopting
+any unrelated MEXC position. Even coherent candidates are reported
+`T100_CHECKPOINT_CANDIDATES_REQUIRE_EXCHANGE_RECONCILIATION` and never
+`recovery_verified=true` without a separate true exchange+revision
+recovery protocol. Orphan ACKs, unresolved states, unknown executor
+lease and malformed results fail closed. All five offline CI workflows
+passed on `7dcc8224b55e459ef78d6d4b72855984ecf28a5a`.
+
+Manual local command (the existing shadow soak must **not** restart):
+
+```bash
+cd ~/trader-backtest/mexc-exhaustion-scanner-live-readiness-git
+git pull --ff-only origin feature/t100-live-readiness-gates-20261023
+source .venv-t100/bin/activate
+T100_EXECUTION_MODE=paper python -m app.t100_live_nonflat_ledger_audit
+```
+
+Enter existing restricted role password and existing Render external DB
+URL in hidden prompts. This is *not* migration, adoption, paper-trade
+mutation or any MEXC request. Do not share any credentials.
+
+
 ## 2026-10-28 — independent nonflat recovery shortcut closed; current-inventory check
 
 A targeted review found that `app.t100_live_readiness_bundle` accepted a
