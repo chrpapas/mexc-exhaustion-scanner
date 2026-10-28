@@ -247,7 +247,8 @@ class ShadowRuntimeTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_continuity_halt_logs_only_safe_failure_class(self):
         cont = continuity("HALTED_REST_WS_REST_CONTINUITY")
-        cont["failure_type"] = "TimeoutError"
+        cont["failure_type"] = "VenueReadHalted"
+        cont["failure_stage"] = "OPEN_STOPS_GET_FAILED"
         runtime = self.make_runtime(cont=cont)
         with self.assertLogs(
             "app.t100_live_shadow_runtime", level="WARNING"
@@ -256,7 +257,8 @@ class ShadowRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(report.kill_reason, "READ_FAILURE")
         self.assertTrue(any(
             "continuity read failed" in msg
-            and "failure_type=TimeoutError" in msg
+            and "failure_type=VenueReadHalted" in msg
+            and "failure_stage=OPEN_STOPS_GET_FAILED" in msg
             for msg in captured.output
         ))
 
