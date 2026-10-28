@@ -412,3 +412,33 @@ authorizes an order.
   python3 -m app.t100_live_cross_risk_diagnostic
   ```
 - No service deployment or MEXC mutation accompanied this addition.
+
+## Implementation checkpoint: redacted read/validation failure diagnosis (2026-10-28)
+
+- First real operator-run diagnostic returned
+  `CROSS_RISK_READ_OR_EVIDENCE_UNVERIFIED`. The original tool collapsed
+  read-transport and frame-validation errors into one broad status.
+  `observed_positions=0` was a default, NOT verified account flatness.
+- Updated `app/t100_live_cross_risk_observation.py` to retain the previous
+  fail-closed status while exposing FIXED allowlisted `failure_stage`
+  (`READ_FIRST`, `VALIDATE_FIRST`, `READ_SECOND`,
+  `VALIDATE_SECOND`) and `failure_code`.
+  `app/t100_live_cross_risk_collector.py` classifies previously unknown
+  transport/schema failures by a hard-coded GET phase, never by exchange
+  payload or URL.
+- The CLI `app/t100_live_cross_risk_diagnostic.py` emits these fixed
+  redacted codes only and reports `observed_positions=null` on failure,
+  instead of asserting that no positions exist. Unallowlisted exception
+  messages are discarded rather than printed.
+- Current MEXC risk-tier witness statuses (cross vs isolated, unsupported
+  `BY_VALUE`/`INCREASE` tiers, unavailable public metadata, leverage
+  mismatch, etc.) are mapped only through a static safe-status allowlist.
+- `cashBalance=0` and `availableBalance=0` are valid observations
+  in the non-authorizing READ witness; positive equity remains required.
+  This is **not** a collateral adequacy check and never bypasses the
+  V40 live risk gate.
+- Existing unrelated account position remains completely unowned by the
+  trader. The user must rerun the same GET-only CLI after pulling this
+  commit and provide only `status`, `failure_stage`, `failure_code`
+  and Boolean output. Never paste credentials or raw account details.
+  No Render deployment, migrations or exchange mutations.
