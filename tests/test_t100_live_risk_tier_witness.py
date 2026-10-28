@@ -193,10 +193,9 @@ class RiskTierWitnessTests(unittest.TestCase):
     def test_no_implicit_leverage_expansion(self):
         pub = public()
         pub["riskLimitCustom"][0]["maxLeverage"] = 4
+        pub["riskLimitCustom"][1]["maxLeverage"] = 4
         self.assertEqual(
             run(pub=pub).status,
-            "RISK_TIER_LEVEL_MONOTONICITY_INVALID"
-            if False else
             "RISK_TIER_POSITION_LEVERAGE_EXCEEDS_TIER",
         )
 
