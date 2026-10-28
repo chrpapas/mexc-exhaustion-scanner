@@ -73,6 +73,23 @@ async def provision_role(
         raise RuntimeRoleSetupBlocked(
             "ROLE_PREFLIGHT_BLOCKED:" + str(preflight.get("status"))
         )
+    try:
+        return await _provision_role_transaction(
+            conn, password_literal=literal, grants=grants,
+        )
+    except RuntimeRoleSetupBlocked:
+        raise
+    except Exception as exc:
+        # A failed CREATE ROLE can cause a driver error that embeds the SQL
+        # statement (which contains the password). Never propagate it.
+        raise RuntimeRoleSetupBlocked(
+            "ROLE_TRANSACTION_FAILED:" + type(exc).__name__
+        ) from None
+
+
+async def _provision_role_transaction(
+    conn: Any, *, password_literal: str, grants: str,
+) -> dict[str, Any]:
     async with conn.transaction():
         await conn.execute("SET LOCAL search_path = public")
         await conn.execute("SET LOCAL lock_timeout = '5s'")
@@ -96,7 +113,7 @@ async def provision_role(
             "CREATE ROLE " + TARGET_ROLE
             + " WITH LOGIN NOINHERIT NOSUPERUSER NOCREATEDB"
             + " NOCREATEROLE NOREPLICATION NOBYPASSRLS"
-            + " CONNECTION LIMIT 4 PASSWORD " + literal
+            + " CONNECTION LIMIT 4 PASSWORD " + password_literal
         )
         await conn.execute(grants)
         role = await conn.fetchrow(
@@ -274,7 +291,14 @@ async def _main(*, apply: bool) -> None:
         }, sort_keys=True, indent=2))
         return
     try:
-        verified = await independent_runtime_audit(runtime)
+        try:
+            verified = await independent_runtime_audit(runtime)
+        except Exception as exc:
+            verified = {
+                "status": "RESTRICTED_T100_RUNTIME_ROLE_AUDIT_FAILED",
+                "audit_failure_type": type(exc).__name__,
+                "live_authorization": False,
+            }
         print(json.dumps({
             **created,
             **verified,
