@@ -112,6 +112,22 @@ class DiagnosticTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(report["status"], "CROSS_RISK_READ_OR_EVIDENCE_UNVERIFIED")
         self.assertNotIn("DO_NOT_LEAK", str(report))
 
+    async def test_failure_reports_fixed_read_stage_and_unknown_position_count(self):
+        base = frame()
+        fake = FakePrivate(base)
+        fake.fail = True
+        report = await run_diagnostic(
+            private=ReadOnlyMexcProbe(fake),
+            public=FakePublic(base),
+            clock_ms=lambda: 1_000_000,
+        )
+        self.assertEqual(report["status"], "CROSS_RISK_READ_OR_EVIDENCE_UNVERIFIED")
+        self.assertEqual(report["failure_stage"], "READ_FIRST")
+        self.assertEqual(report["failure_code"], "COLLECTOR_READ_FAILED_AT_PRIVATE_POSITIONS")
+        self.assertIsNone(report["observed_positions"])
+        self.assertNotIn("DO_NOT_LEAK_PRIVATE_KEY", str(report))
+        self.assertFalse(report["entry_allowed"])
+
     async def test_timeout_does_not_raise_or_enable_entry(self):
         class Slow:
             async def raw_open_positions(self):
