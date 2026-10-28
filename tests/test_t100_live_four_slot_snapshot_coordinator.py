@@ -162,8 +162,8 @@ class FourSlotSnapshotTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_flat_account_with_unreconciled_ack_history_blocks(self):
         self.reset(0)
-        self.ledger.first.intents = [intent()]
-        self.ledger.last.intents = [intent()]
+        self.ledger.first.intents.append(intent())
+        self.ledger.last.intents.append(intent())
         r = await self.coordinator.inspect()
         self.assertEqual(r.status, "FLAT_HISTORY_REQUIRES_CLOSED_LEDGER_AUDIT")
 
@@ -282,8 +282,8 @@ class FourSlotSnapshotTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(r.status, "DURABLE_EXCHANGE_PROVENANCE_MISMATCH")
 
     async def test_checkpoint_without_expected_revision_blocks(self):
-        self.ledger.first.revisions = []
-        self.ledger.last.revisions = []
+        self.ledger.first.revisions.clear()
+        self.ledger.last.revisions.clear()
         r = await self.coordinator.inspect()
         self.assertEqual(r.status, "DURABLE_EXCHANGE_PROVENANCE_MISMATCH")
 
