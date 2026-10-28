@@ -21,7 +21,10 @@ import time
 from typing import Any, Callable, Mapping
 
 from app.t100_live_cross_risk_collector import MexcReadOnlyCrossRiskCollector
-from app.t100_live_cross_risk_observation import observe_cross_risk_window
+from app.t100_live_cross_risk_observation import (
+    SAFE_COLLECTOR_FAILURE_CODES, SAFE_FRAME_FAILURE_CODES,
+    SAFE_FAILURE_STAGES, observe_cross_risk_window,
+)
 from app.t100_live_guards import T100ExecutionControls
 from app.t100_live_readonly_probe import ReadOnlyMexcProbe
 
@@ -75,8 +78,17 @@ def _result(
     }
     safe_status = status if status in possible else "RISK_DIAGNOSTIC_GET_FAILED"
     n = positions if type(positions) is int and 0 <= positions <= 4 else None
+    stage = getattr(witness, "failure_stage", "NONE")
+    stage = stage if stage in SAFE_FAILURE_STAGES else "NONE"
+    code = getattr(witness, "failure_code", "NONE")
+    safe_codes = SAFE_COLLECTOR_FAILURE_CODES | SAFE_FRAME_FAILURE_CODES | {
+        "NONE", "UNCLASSIFIED_READ_OR_EVIDENCE_FAILURE",
+    }
+    code = code if isinstance(code, str) and code in safe_codes else "NONE"
     return {
         "status": safe_status,
+        "failure_stage": stage,
+        "failure_code": code,
         "observed_positions": n,
         "read_only": True,
         "private_get_only": True,
