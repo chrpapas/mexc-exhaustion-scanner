@@ -388,9 +388,11 @@ class T100LiveShadowRuntime:
             "STABLE_REST_WITH_UNEXPECTED_PRIVATE_WS_CHANNELS",
         }:
             LOGGER.warning(
-                "T100 shadow continuity read failed status=%s failure_type=%s",
+                "T100 shadow continuity read failed "
+                "status=%s failure_type=%s failure_stage=%s",
                 continuity_status,
                 str(continuity.get("failure_type") or "none")[:64],
+                str(continuity.get("failure_stage") or "UNKNOWN")[:64],
             )
             self._trip("READ_FAILURE")
 
