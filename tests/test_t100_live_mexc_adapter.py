@@ -169,7 +169,9 @@ class LiveMexcAdapterContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(body["externalOid"], "t100v1eabc")
         self.assertEqual(body["leverage"], 1)
         self.assertEqual(body["stopLossPrice"], "175")
-        self.assertEqual(body["lossTrend"], 2)
+        # Current adapter explicitly uses MEXC type 1 (latest-price trigger).
+        # This checks transport shape only, not live stop efficacy or V40 parity.
+        self.assertEqual(body["lossTrend"], 1)
 
     async def test_entry_requires_order_id_in_unwrapped_data(self):
         for bad in (None, {}, {"ts": 1}, "123"):
