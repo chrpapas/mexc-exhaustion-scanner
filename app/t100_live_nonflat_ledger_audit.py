@@ -139,12 +139,19 @@ async def inspect_nonflat_ledger(conn: Any) -> dict[str, Any]:
             report.update(counts)
 
             active = counts["active_checkpoints"]
-            if any((
+            if counts["active_executor_leases"] != 0:
+                report["status"] = "UNEXPECTED_ACTIVE_LIVE_EXECUTOR_LEASE"
+            elif any((
                 counts["unresolved_order_intents"],
                 counts["unresolved_stop_amendments"],
                 counts["review_or_closing_checkpoints"],
             )):
                 report["status"] = "LEDGER_UNRESOLVED_STATE_BLOCKED"
+            elif counts["ack_order_intents"] > active:
+                # An ACK can never be an implicit adoption certificate.
+                # It may be a historical mismatch or an open intent whose
+                # checkpoint never committed; both require review.
+                report["status"] = "LEDGER_UNMATCHED_ACK_INTENT_BLOCKED"
             elif active == 0:
                 report["status"] = "NO_ACTIVE_T100_DURABLE_CHECKPOINTS"
             elif (
