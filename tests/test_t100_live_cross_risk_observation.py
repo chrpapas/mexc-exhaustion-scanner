@@ -4,6 +4,7 @@ from __future__ import annotations
 import copy
 import unittest
 from decimal import Decimal as D
+from dataclasses import replace
 
 from app.t100_live_cross_risk_observation import (
     CrossRiskRead, observe_cross_risk_window,
@@ -151,7 +152,7 @@ class CrossRiskObservationTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_risk_missing_for_exact_position_symbol_blocks(self):
         second = frame(SECOND_TS)
-        second.private_risk_by_symbol = {}
+        second = replace(second, private_risk_by_symbol={})
         r = await observe(Reader(second=second))
         self.assertEqual(r.status, "CROSS_RISK_READ_OR_EVIDENCE_UNVERIFIED")
 
@@ -169,7 +170,7 @@ class CrossRiskObservationTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_missing_complete_collection_flags_blocks(self):
         second = frame(SECOND_TS)
-        second.positions_complete = False
+        second = replace(second, positions_complete=False)
         r = await observe(Reader(second=second))
         self.assertEqual(r.status, "CROSS_RISK_READ_OR_EVIDENCE_UNVERIFIED")
 
