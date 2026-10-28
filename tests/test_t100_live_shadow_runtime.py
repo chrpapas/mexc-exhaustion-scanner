@@ -214,6 +214,28 @@ class ShadowRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(first, 1)
         self.assertEqual(second, 1)
 
+    async def test_recovered_public_contract_retry_warns_without_live_permit(self):
+        pf = preflight()
+        pf.update({
+            "public_contract_specs_attempt_count": 2,
+            "public_contract_specs_retries_used": 1,
+            "public_contract_specs_status": "SUCCESS_AFTER_RETRY",
+            "public_contract_specs_elapsed_ms": 20350,
+            "public_contract_specs_failure_type": "ReadTimeout",
+        })
+        runtime = self.make_runtime(pf=pf)
+        with self.assertLogs(
+            "app.t100_live_shadow_runtime", level="WARNING"
+        ) as captured:
+            report = await runtime.cycle()
+        self.assertFalse(report.kill_tripped)
+        self.assertFalse(report.live_authorization)
+        self.assertTrue(any(
+            "contract_specs transport retried" in msg
+            and "failure_type=ReadTimeout" in msg
+            for msg in captured.output
+        ))
+
     async def test_read_failure_latches(self):
         runtime = self.make_runtime(
             pf=preflight(read_failure_type="TimeoutError"))
