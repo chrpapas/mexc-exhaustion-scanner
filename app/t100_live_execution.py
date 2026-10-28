@@ -16,7 +16,7 @@ from typing import Any, Protocol
 from app.t100_live_active_tpsl import effective_protective_quantity
 from app.t100_live_authorization import (
     LiveMutationPermit,
-    require_live_mutation_permit,
+    require_certified_transport_permit,
 )
 
 
@@ -152,7 +152,7 @@ class LiveOrderGateway:
         snapshots, reconcile the account and enforce strategy parity and kill
         switches. Do not invoke this method without that coordinator.
         """
-        permit = require_live_mutation_permit(permit)
+        permit = require_certified_transport_permit(permit)
         if intent.notional_usdt > permit.max_position_notional_usdt:
             raise ExecutionHalted("PERMIT_ORDER_CAP")
         if (
