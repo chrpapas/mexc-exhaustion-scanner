@@ -1,3 +1,54 @@
+## 2026-10-28 — independent nonflat recovery shortcut closed; current-inventory check
+
+A targeted review found that `app.t100_live_readiness_bundle` accepted a
+caller-supplied `durable_nonflat_recovery_verified=True` boolean and
+could classify an otherwise consistent non-flat inventory as
+`DYNAMIC_READINESS_VERIFIED_NON_AUTHORIZING`, even though no actual
+checkpoint-revision/entry-ACK/exchange-origin proof ran in this bundle.
+
+**Fail-closed fix staged on development branch only**:
+- A bare `True` override now produces
+  `DYNAMIC_RECOVERY_BOOL_OVERRIDE_REJECTED` and
+  `durable_nonflat_recovery_evidence_missing`. The normal dynamic
+  bundle always forwards `durable_nonflat_recovery_verified=False` to
+  account reconciliation until an independent integrated ledger/revision/
+  origin-order/stop reconstruction gate is implemented. A fully healthy
+  FLAT account may still yield non-authorizing dynamic readiness.
+- Regression tests explicitly prove that a stable position+stop cannot
+  bypass actual durable recovery by supplying a bare bool, including
+  invalid truthy `1` and `"true"`.
+- New `app.t100_live_current_inventory_cli` performs a **standalone,
+  bounded, signed GET-only** bookended current-account completeness check
+  (account-wide position/stop, symbol-scope redundancy, USDT margin
+  witness, in-flight order counts). Operator-shareable output contains
+  **only** counts, booleans, constant statuses, no symbols, IDs, balances,
+  volumes, prices or raw MEXC payloads. It explicitly leaves
+  `exchange_atomicity_verified=false`,
+  `durable_nonflat_recovery_verified=false`,
+  `native_stop_protectiveness_independently_verified=false`, and
+  `live_authorization=false` even if account-wide completeness passes.
+  Offline tests cover clean flat, one nonflat position/stop, count
+  discrepancy, timeout, redaction. No DB access and no MEXC POST.
+
+Trusted Mac usage with **existing read-only MEXC credentials already
+configured**, and **without any Render redeploy**:
+
+```bash
+cd ~/trader-backtest/mexc-exhaustion-scanner-live-readiness-git
+git pull --ff-only origin feature/t100-live-readiness-gates-20261023
+source .venv-t100/bin/activate
+T100_EXECUTION_MODE=paper python -m app.t100_live_current_inventory_cli
+```
+
+This GET-only diagnostic is independent of (and not a substitute for) the
+continuing one-process Render shadow observation. The current open position
+is **not** certified T100-owned, even if the completeness probe passes.
+A genuine non-flat startup recovery must reconcile the pinned exchange
+origin order, the complete checkpoint/revision chain and managed position
+and native stop under certified inventory completeness. No live orders
+until those independent gates and explicit pilot authorization.
+
+
 ## 2026-10-28 — Render public contract-detail reliability investigation
 
 Local Mac: `3/3` successful public contract-detail GET requests, 1,184
