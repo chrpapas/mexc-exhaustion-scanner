@@ -158,11 +158,11 @@ async def exercise_test_fencing(
         try:
             if acquired_our_test_lease:
                 await first.execute(
-                """UPDATE public.t100_live_executor_leases
-                   SET lease_expires_at=now()-interval '1 second',
-                       updated_at=now()
-                   WHERE lease_name=$1""",
-                lease_name,
+                    """UPDATE public.t100_live_executor_leases
+                       SET lease_expires_at=now()-interval '1 second',
+                           updated_at=now()
+                       WHERE lease_name=$1""",
+                    lease_name,
                 )
         except Exception:
             # A forced disconnection lets natural TTL expire in 15 sec.
