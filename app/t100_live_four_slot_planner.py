@@ -30,6 +30,7 @@ class FourSlotPlan:
     modeled_notional_usdt: float = 0.0
     desired_notional_usdt: float = 0.0
     v40_admission: V40Admission | None = None
+    candidate_symbol: str | None = None
     # These two flags are intentionally never made true by a planning result.
     entry_allowed: bool = False
     live_authorization: bool = False
@@ -181,4 +182,5 @@ def plan_four_slot_v40(
         modeled_notional_usdt=modeled.modeled_notional_usdt,
         desired_notional_usdt=modeled.desired_notional_usdt,
         v40_admission=modeled,
+        candidate_symbol=symbol,
     )
