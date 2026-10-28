@@ -1,6 +1,7 @@
 # 2026-10-28 T100 live PostgreSQL runtime-role commissioning
 
-**State: Schema created; trading disabled; restricted runtime role NOT YET created.**
+**State: Schema and dedicated runtime role independently verified by the
+operator's Mac report; real leader fencing test pending; trading disabled.**
 
 ## Evidence from operator / Mac
 
@@ -12,6 +13,55 @@
 - Runner used a single Postgres DDL transaction (027, 028, 029, 030).
 - **Live authorization is false.** The current shadow remains latched after
   MEXC `contract_specs` ReadTimeout; this is unrelated to the DB DDL.
+
+## Operator completed role provisioning (28 October)
+
+The operator's redacted report confirmed:
+- `status=RESTRICTED_T100_RUNTIME_ROLE_VERIFIED`
+- `db_inspection_status=LIVE_DATABASE_READ_ONLY_PRECHECK_PASSED`
+- `new_login_created=true`, `grants_applied=true`, all 12 live tables
+  and four sequences checked via dedicated role
+- `production_tables_inspected=25`,
+  `production_tables_with_privileges=0`
+- `new_role_attributes_verified=true`,
+  `runtime_create_privileges_absent=true`
+- `unresolved_mutations_absent=true`,
+  `default_render_database_login_unchanged=true`
+
+The report's `effective_privileges_verified=false` was an *output merge
+bug*: the role-creation stage initialized it false, while the independent
+audit emitted its pass status but did not overwrite that field. The updated
+`app.t100_live_role_setup.independent_runtime_audit` now reports
+`effective_privileges_verified` consistently with its final verdict.
+**Do not recreate the role.** A standalone independent audit is re-run
+as a prerequisite of the actual fencing diagnostic.
+
+## Next: test only a dedicated random lease on real PostgreSQL
+
+Use the trusted Mac:
+
+```bash
+cd ~/trader-backtest/mexc-exhaustion-scanner-live-readiness-git
+git pull --ff-only origin feature/t100-live-readiness-gates-20261023
+source .venv-t100/bin/activate
+T100_EXECUTION_MODE=paper python -m app.t100_live_db_fencing_diagnostic
+```
+
+The test requires manual typed confirmation, the **new restricted runtime
+password** from the password manager, and the existing Render External
+PostgreSQL URL at separate hidden prompts. It overrides the URL's credentials
+and opens two connections as `t100_live_executor_runtime`, checks the role,
+uses a fresh `t100-fencing-diagnostic-<uuid>` lease and 15-second TTL, and
+tests denied second holder, renewal, natural TTL expiry, stale token rejection,
+same-holder expired reacquisition and release/recovery. It leaves **only
+an expired diagnostic test lease row** (not the live executor lease).
+
+Expected `RESTRICTED_POSTGRES_FENCING_DIAGNOSTIC_PASSED` with safety flags,
+but it does **not** certify real live executor restart, ongoing leader health,
+full strategy parity, MEXC connectivity, or order submission.
+
+No reason to restart the protected shadow service during DB commissioning.
+Its `READ_FAILURE` kill latch remains a separate unresolved launch blocker.
 
 ## Why the next step is a separate role
 
