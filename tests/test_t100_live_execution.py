@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import unittest
+from unittest.mock import patch
 from decimal import Decimal
 from app.t100_live_authorization import (
     LivePilotReadinessEvidence,
@@ -85,6 +86,11 @@ class MemoryMexc:
 
 class LiveTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
+        self._adapter_patch = patch(
+            "app.t100_live_guards.LIVE_ADAPTER_STATUS", "CERTIFIED"
+        )
+        self._adapter_patch.start()
+        self.addCleanup(self._adapter_patch.stop)
         self.intent = intent()
         self.ledger = MemoryLedger()
         self.mexc = MemoryMexc()
@@ -99,6 +105,13 @@ class LiveTests(unittest.IsolatedAsyncioTestCase):
             book_age_ms=100, signal_age_seconds=20)
         data.update(overrides)
         return await self.gateway.send_one(self.intent, **data)
+
+    async def test_uncertified_adapter_blocks_before_ledger_and_post(self):
+        with patch("app.t100_live_guards.LIVE_ADAPTER_STATUS", "NOT_IMPLEMENTED"):
+            with self.assertRaisesRegex(Exception, "LIVE_ADAPTER_NOT_CERTIFIED"):
+                await self.send()
+        self.assertEqual(self.ledger.values, {})
+        self.assertEqual(self.mexc.posts, 0)
 
     async def test_permit_caps_block_before_order(self):
         with self.assertRaisesRegex(ExecutionHalted, "PERMIT_ORDER_CAP"):
