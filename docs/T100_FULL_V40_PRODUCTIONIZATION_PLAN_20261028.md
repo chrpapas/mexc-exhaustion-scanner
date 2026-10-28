@@ -374,3 +374,41 @@ authorizes an order.
   is an opt-in, redacted **read-only** operator diagnostic with
   independently checked venue session/time, account ownership isolation,
   and complete collateral reconciliation. No authorization for MEXC POST.
+
+## Implementation checkpoint: operator opt-in GET-only cross-risk diagnostic (2026-10-28)
+
+- Added `app/t100_live_cross_risk_diagnostic.py` as a **manual-only,
+  redacted CLI**. It does not launch a worker, write PostgreSQL, deploy
+  Render, change leverage, send orders or call ANY POST method.
+- Explicit guards require
+  `T100_EXECUTION_MODE=paper`,
+  `T100_LIVE_ORDER_API_ENABLED=false`, and
+  `T100_LIVE_KILL_SWITCH=true` **before reading credentials or opening
+  a network connection**. A separate read-only scoped API key is strongly
+  preferred; never share or log MEXC keys.
+- The command wraps the existing authenticated MEXC private-GET
+  transport (from `MEXC_API_KEY`, `MEXC_API_SECRET` already configured
+  locally) and HTTP public-GET transport from the same client. It then
+  performs two bounded, read-only `CrossRiskRead` frames.
+- The CLI returns only allowlisted machine-readable status flags and
+  position count (0–4). It does NOT output raw payloads, MEXC symbols,
+  position IDs, account/collateral amounts, prices, timestamps, query
+  URLs, private GET failure details, or credentials.
+- Success means only
+  `CURRENT_CROSS_RISK_OBSERVED_NONAUTHORIZING`, not ownership,
+  atomicity, validated cross-wallet collateral, future risk-tier
+  certification, protected live stops, or permission to trade.
+  Some real positions may correctly FAIL due to isolated margin,
+  dynamic risk tiers, differing venue stop schemas, incomplete
+  economic reconciliation or the deliberately strict GET-time budget.
+- The CLI has not been executed against real MEXC credentials by CI.
+  GitHub actions exercise injected fake readers and guard paths only.
+  An operator may run the following locally, then share only the
+  redacted JSON output:
+  ```bash
+  T100_EXECUTION_MODE=paper \
+  T100_LIVE_ORDER_API_ENABLED=false \
+  T100_LIVE_KILL_SWITCH=true \
+  python3 -m app.t100_live_cross_risk_diagnostic
+  ```
+- No service deployment or MEXC mutation accompanied this addition.
