@@ -18,6 +18,7 @@ from app.t100_live_incremental_tier_candidate import (
     reconstruct_incremental_research_candidate,
 )
 from app.t100_live_readonly_probe import ReadOnlyMexcProbe
+from app.t100_live_risk_schedule_shape import classify_risk_schedule_shapes
 
 CONTRACT_COUNTRY = "/api/v1/contract/detail/country"
 
@@ -28,6 +29,12 @@ class IncrementalTierProbeReport:
     observed_positions: int | None = None
     candidate_mode: str = "INCREASE"
     candidate_type: str = "BY_VOLUME"
+    # Unlike candidate_mode/type above, these fields reflect the observed
+    # public venue responses, never constants or inferred from last run.
+    observed_risk_schedule_mode: str = "NOT_CHECKED"
+    observed_risk_schedule_type: str = "NOT_CHECKED"
+    observed_risk_schedule_fields: str = "NOT_CHECKED"
+    public_metadata_two_get_consistent: bool = False
     public_candidate_reconstructed: bool = False
     private_current_risk_rows_observed: bool = False
     private_current_mmr_exact_match_count: int = 0
@@ -96,10 +103,11 @@ def _inventory(rows: Any) -> tuple[tuple[str, ...], tuple[str, ...]]:
 async def inspect_incremental_tier_candidate(
     private: ReadOnlyMexcProbe, public: Any,
 ) -> IncrementalTierProbeReport:
-    """No retry, <= 2 account positions + 4 private tier + 4 public GETs."""
+    """No retry; <=2 positions +4 private tiers +8 public contract GETs."""
     def blocked(
         status: str, *, failure: str = "NOT_CHECKED",
         public_eligibility: IncrementalEligibilityShape | None = None,
+        public_shape: Any = None, stable_positions: int | None = None,
     ) -> IncrementalTierProbeReport:
         if failure not in _SAFE_CANDIDATE_FAILURES:
             failure = "NOT_CHECKED"
@@ -111,8 +119,17 @@ async def inspect_incremental_tier_candidate(
             type(public_eligibility) is IncrementalEligibilityShape
             else None
         )
+        shape = public_shape if (
+            stable_positions is not None and
+            failure == "INCR_MODE_OR_TYPE_UNSUPPORTED"
+        ) else None
         return IncrementalTierProbeReport(
             status=status, candidate_failure=failure,
+            observed_positions=stable_positions if shape is not None else None,
+            observed_risk_schedule_mode=shape.mode if shape else "NOT_CHECKED",
+            observed_risk_schedule_type=shape.limit_type if shape else "NOT_CHECKED",
+            observed_risk_schedule_fields=shape.schedule_fields if shape else "NOT_CHECKED",
+            public_metadata_two_get_consistent=shape is not None,
             contract_state=result.state if result else "NOT_CHECKED",
             contract_api_order_access=result.api_order_access if result else "NOT_CHECKED",
             contract_cross_margin_support=result.cross_margin_support if result else "NOT_CHECKED",
@@ -163,6 +180,52 @@ async def inspect_incremental_tier_candidate(
             return blocked("INCR_PROBE_PUBLIC_CONTRACT_SCHEMA_UNVERIFIED")
         pub_by_symbol[symbol] = envelope["data"]
 
+    # Re-read only the PUBLIC risk contract metadata to distinguish a
+    # stable unsupported mode/type from a transient/changed venue response.
+    # This is NOT exchange snapshot atomicity and never certifies future tiers.
+    for symbol in symbols:
+        try:
+            response = await public.get(
+                CONTRACT_COUNTRY, params={"symbol": symbol},
+            )
+            response.raise_for_status()
+            envelope = response.json()
+        except Exception:
+            return blocked("INCR_PROBE_PUBLIC_RECHECK_GET_FAILED")
+        if (
+            type(envelope) is not dict
+            or envelope.get("success") is not True
+            or type(envelope.get("code")) is not int
+            or envelope["code"] != 0
+            or type(envelope.get("data")) is not dict
+            or envelope["data"].get("symbol") != symbol
+        ):
+            return blocked("INCR_PROBE_PUBLIC_RECHECK_SCHEMA_UNVERIFIED")
+        # Compare only execution/risk-tier-relevant STATIC metadata; other
+        # changing ticker/price fields do not prove tier schedule drift.
+        static_keys = (
+            "riskLimitMode", "riskLimitType", "apiAllowed", "state",
+            "positionOpenType", "futureType", "quoteCoin", "settleCoin",
+            "riskLongShortSwitch", "riskLevelLimit", "riskBaseVol",
+            "riskIncrVol", "riskBaseVolShort", "riskIncrVolShort",
+            "riskIncrMmr", "riskIncrImr", "maintenanceMarginRate",
+            "initialMarginRate", "contractSize", "liquidationFeeRate",
+            "riskLimitCustom",
+        )
+        try:
+            original = json.dumps(
+                {k: pub_by_symbol[symbol].get(k) for k in static_keys},
+                sort_keys=True, separators=(",", ":"), allow_nan=False,
+            )
+            repeated = json.dumps(
+                {k: envelope["data"].get(k) for k in static_keys},
+                sort_keys=True, separators=(",", ":"), allow_nan=False,
+            )
+        except (TypeError, ValueError):
+            return blocked("INCR_PROBE_PUBLIC_RECHECK_SCHEMA_UNVERIFIED")
+        if original != repeated:
+            return blocked("INCR_PROBE_PUBLIC_CONTRACT_METADATA_DRIFT")
+
     try:
         after = await private.raw_open_positions()
         after_symbols, last_key = _inventory(after)
@@ -171,6 +234,9 @@ async def inspect_incremental_tier_candidate(
     if symbols != after_symbols or first_key != last_key:
         return blocked("INCR_PROBE_CRITICAL_INVENTORY_DRIFT")
 
+    # Shape is derived from the two consistent public responses, but a
+    # single endpoint read pair is NOT atomic with private account data.
+    public_shape = classify_risk_schedule_shapes(pub_by_symbol)
     exact = above = below = short_specific = denied = 0
     max_levels = 0
     for position in after:
@@ -187,6 +253,10 @@ async def inspect_incremental_tier_candidate(
                 public_eligibility=classify_incremental_eligibility(
                     pub_by_symbol[symbol]
                 ) if candidate.status == "INCR_CONTRACT_NOT_ELIGIBLE" else None,
+                public_shape=public_shape if (
+                    candidate.status == "INCR_MODE_OR_TYPE_UNSUPPORTED"
+                ) else None,
+                stable_positions=len(after),
             )
         if not candidate.public_contract_eligible:
             # API order permission is a HARD execution blocker, never a
@@ -210,6 +280,10 @@ async def inspect_incremental_tier_candidate(
     )
     return IncrementalTierProbeReport(
         status=status, observed_positions=len(after),
+        observed_risk_schedule_mode=public_shape.mode,
+        observed_risk_schedule_type=public_shape.limit_type,
+        observed_risk_schedule_fields=public_shape.schedule_fields,
+        public_metadata_two_get_consistent=True,
         public_candidate_reconstructed=True,
         private_current_risk_rows_observed=True,
         private_current_mmr_exact_match_count=exact,
