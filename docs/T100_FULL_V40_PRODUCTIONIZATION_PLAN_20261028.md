@@ -914,3 +914,53 @@ authorizes an order.
   and explicit CLI execution denial with no authorization.
 - No REST POST, orders, stop change, leverage change, account mutation,
   Render deployment, DB migration or promotion.
+
+## Implementation checkpoint: actual public schedule mode/type versus hardcoded candidate label (2026-10-29)
+
+- The operator reran the nonauthorizing incremental probe after a prior
+  `INCREASE + BY_VOLUME` public-contract observation and
+  `apiAllowed=false` observation. New output:
+  `candidate_failure=INCR_MODE_OR_TYPE_UNSUPPORTED`,
+  `private_current_mmr_*_count=0`, `public_candidate_reconstructed=false`.
+  The output `candidate_mode=INCREASE`, `candidate_type=BY_VOLUME`
+  was **hardcoded model intent**, NOT an actual current venue observation.
+  These hardcoded fields misled interpretation. The empty MMR counts indicate
+  no comparison ran, NOT three mismatches or a passed/failed MMR model.
+- Potential explanations include MEXC changing contract metadata,
+  a different open position/contract under the same account,
+  missing/unknown mode/type in the country-contract endpoint, or a
+  transient inconsistent metadata read. None is established by that JSON.
+- The independent existing `t100_live_risk_schedule_probe_cli`
+  can inspect current public mode/type. The incremental probe has also
+  been hardened to distinguish model labels from actual venue fields.
+- Added **actual observed** `observed_risk_schedule_mode`,
+  `observed_risk_schedule_type`, `observed_risk_schedule_fields`
+  plus `public_metadata_two_get_consistent`.
+  The incremental probe now does **two public contract GETs per position**,
+  with a strict static-key comparison of risk mode, type, API permission,
+  state, margin support, relevant tiers and rate fields. It still uses a
+  final account-wide positions GET and blocks on critical inventory drift.
+  Maximum bounded GETs: 2 private position reads, 4 private risk reads,
+  8 public contract reads; at most 14 GETs, 0 POST.
+- On inconsistent/rejected public envelope, second GET or changed
+  risk-relevant metadata, return a redacted fixed failure code and do
+  NOT assert public mode/type equality or a private/current candidate
+  match. On consistent public metadata and stable private bookends, show
+  actual allowlisted public mode/type (CUSTOM, INCREASE, BY_VOLUME,
+  BY_VALUE, MIXED or UNKNOWN); do not print unrecognized strings,
+  contract symbols, account data, quantities, risk rates or credentials.
+- The original `candidate_mode` and `candidate_type` remain
+  backwards-compatible labels for the target formula only. They never
+  justify interpreting a venue response. The reported
+  `public_metadata_two_get_consistent=true` is NOT an atomic
+  cross-endpoint account snapshot or safety certificate.
+- Existing strict contract API order eligibility (including
+  `apiAllowed=false`), nonauthorizing risk research model,
+  full T100 entry authorization, native stops, account collateral,
+  liquidation/future-tier safety gates remain unchanged. Earlier
+  `apiAllowed=false` is a historical observation, not evidence it
+  still has that value in the latest response.
+- New offline regression tests verify mode change, BY_VALUE, unknown
+  modes, metadata/API-permission drift, and redacted failed second GET.
+- No Render deploy, DB migration, MEXC order, private POST, leverage
+  adjustment, or stop modification.
