@@ -132,17 +132,43 @@ class CrossRiskObservationTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(r.account_wide_completeness_certified)
         self.assertFalse(r.entry_allowed)
 
-    async def test_missing_native_stop_blocks(self):
+    async def test_stable_stopless_manual_position_can_be_observed(self):
+        first = frame()
+        second = frame(SECOND_TS)
+        first.stops.clear()
+        second.stops.clear()
+        r = await observe(Reader(first=first, second=second))
+        self.assertEqual(r.status, "CURRENT_CROSS_RISK_OBSERVED_NONAUTHORIZING")
+        self.assertEqual(r.observed_positions, 1)
+        self.assertEqual(r.observed_current_stops, 0)
+        self.assertFalse(r.native_stop_protection_verified)
+        self.assertFalse(r.account_wide_completeness_certified)
+        self.assertFalse(r.entry_allowed)
+        self.assertFalse(r.live_authorization)
+
+    async def test_stop_disappearing_mid_observation_is_drift(self):
         second = frame(SECOND_TS)
         second.stops.clear()
         r = await observe(Reader(second=second))
-        self.assertEqual(r.status, "CROSS_RISK_READ_OR_EVIDENCE_UNVERIFIED")
+        self.assertEqual(r.status, "CROSS_RISK_CRITICAL_STATE_DRIFT")
+        self.assertFalse(r.entry_allowed)
 
-    async def test_wrong_stop_position_id_blocks(self):
+    async def test_stop_identity_change_mid_observation_is_drift(self):
         second = frame(SECOND_TS)
         second.stops[0]["positionId"] = "999"
         r = await observe(Reader(second=second))
-        self.assertEqual(r.status, "CROSS_RISK_READ_OR_EVIDENCE_UNVERIFIED")
+        self.assertEqual(r.status, "CROSS_RISK_CRITICAL_STATE_DRIFT")
+
+    async def test_stable_unlinked_stop_is_never_misrepresented_as_protection(self):
+        first = frame()
+        second = frame(SECOND_TS)
+        first.stops[0]["positionId"] = "999"
+        second.stops[0]["positionId"] = "999"
+        r = await observe(Reader(first=first, second=second))
+        self.assertEqual(r.status, "CURRENT_CROSS_RISK_OBSERVED_NONAUTHORIZING")
+        self.assertEqual(r.observed_current_stops, 1)
+        self.assertFalse(r.native_stop_protection_verified)
+        self.assertFalse(r.entry_allowed)
 
     async def test_failure_stage_identifies_second_frame_without_raw_details(self):
         second = frame(SECOND_TS)
