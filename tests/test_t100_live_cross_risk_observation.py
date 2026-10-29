@@ -206,7 +206,37 @@ class CrossRiskObservationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             r.failure_code, "RISK_TIER_STATIC_VOLUME_SCHEDULE_UNAVAILABLE"
         )
+        self.assertEqual(r.risk_schedule_mode, "INCREASE")
+        self.assertEqual(r.risk_schedule_type, "BY_VOLUME")
+        self.assertEqual(
+            r.risk_schedule_fields, "INCREMENTAL_FIELDS_MISSING_OR_MALFORMED",
+        )
         self.assertFalse(r.live_authorization)
+
+    async def test_value_risk_limit_is_redacted_not_promoted_to_volume_tiers(self):
+        second = frame(SECOND_TS)
+        second.public_contract_by_symbol["TEST_USDT"]["riskLimitType"] = "BY_VALUE"
+        result = await observe(Reader(second=second))
+        self.assertEqual(result.failure_stage, "VALIDATE_SECOND")
+        self.assertEqual(
+            result.failure_code, "RISK_TIER_STATIC_VOLUME_SCHEDULE_UNAVAILABLE",
+        )
+        self.assertEqual(result.risk_schedule_mode, "CUSTOM")
+        self.assertEqual(result.risk_schedule_type, "BY_VALUE")
+        self.assertEqual(result.risk_schedule_fields, "CUSTOM_FIELDS_PRESENT")
+        self.assertFalse(result.current_risk_tiers_observed)
+        self.assertFalse(result.future_stressed_tiers_certified)
+        self.assertFalse(result.entry_allowed)
+        self.assertFalse(result.live_authorization)
+
+    async def test_incorrect_margin_does_not_reveal_risk_schedule(self):
+        second = frame(SECOND_TS)
+        second.assets[0]["positionMargin"] = "999"
+        second.public_contract_by_symbol["TEST_USDT"]["riskLimitMode"] = "INCREASE"
+        result = await observe(Reader(second=second))
+        self.assertEqual(result.failure_code, "MARGIN_ECONOMIC_WITNESS_MISMATCH")
+        self.assertEqual(result.risk_schedule_mode, "NOT_CHECKED")
+        self.assertEqual(result.risk_schedule_type, "NOT_CHECKED")
 
     async def test_isolated_position_blocks(self):
         second = frame(SECOND_TS)
