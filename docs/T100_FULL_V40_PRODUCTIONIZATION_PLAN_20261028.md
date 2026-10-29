@@ -521,3 +521,40 @@ authorizes an order.
   a different tier scheme, risk observation may still fail at the next
   relevant evidence gate, with a fixed redacted reason. That is a
   *separate* model limitation, not an SL/TP requirement.
+
+## Implementation checkpoint: coherent post-position economic witness (2026-10-29)
+
+- Operator's first real read-only risk frame advanced past the manual
+  zero-stop count, then returned
+  `failure_stage=VALIDATE_FIRST`,
+  `failure_code=MARGIN_ECONOMIC_WITNESS_MISMATCH`.
+  This means the returned account asset figures did not reconcile with the
+  positions returned in that **first frame**. It does not establish whether
+  the cause is MTM timing, exchange accounting semantics or a true mismatch.
+- Found a deterministic code-level issue: the collector reconciled
+  BEFORE positions against BEFORE assets and then returned AFTER positions
+  against the stale BEFORE assets. The critical-field inventory hash
+  intentionally excluded `unRealizedPnl`; natural fair-price movement
+  could thus change the returned position PnL without changing the
+  asset-side PnL. The frame validator then rightfully rejected it.
+- The GET-only collector now separately reads AFTER assets after AFTER
+  positions/stops and requires **both PRE position/assets and POST
+  position/assets** to pass the existing exact economic witness. The
+  returned `CrossRiskRead` carries AFTER positions and AFTER assets
+  together; a PnL update without a matching account-asset update still
+  blocks. No new tolerance, time relaxation or assumed wallet semantics.
+- Added strictly allowlisted `COLLECTOR_PRE_*` and
+  `COLLECTOR_POST_*` reason codes for numerical position-margin mismatch,
+  unrealized-PnL mismatch, other-asset exposure, or invalid economic
+  schema. Values, symbols, URLs and account identifiers remain absent
+  from the CLI output.
+- Tests independently demonstrate: natural PnL updates across the frame
+  with matching new assets pass the collector; stale/failing assets,
+  unmatched unrealized, changed position margin, and pre-pair mismatch
+  fail closed with fixed codes and no POST.
+- Exchange endpoints are still non-atomic, and even two coherent pairs
+  cannot verify a venue liquidation engine. A real-account rerun is
+  required to determine whether this resolved the observed failure.
+  T100 ownership/native-stop recovery, available collateral, future
+  risk tiers, and live authorization remain unverified and disabled.
+- No MEXC orders, leverage changes, Render deployments or DB migrations.
