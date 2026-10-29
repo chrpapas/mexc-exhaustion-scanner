@@ -12,11 +12,11 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from typing import Any
 
 COUNTRY_CONTRACT_ENDPOINT = "/api/v1/contract/detail/country"
-_SYMBOL = re.compile(r"[A-Z0-9]+_USDT")
+_SYMBOL = re.compile(r"[A-Z0-9]+_[A-Z0-9]+")
 _STATIC_FIELDS = (
     "symbol", "state", "apiAllowed", "positionOpenType", "futureType",
     "quoteCoin", "settleCoin", "riskLimitMode", "riskLimitType",
@@ -38,6 +38,7 @@ class CountryApiCensus:
     api_allowed_incremental_by_volume: int | None = None
     api_allowed_incremental_one_tier: int | None = None
     api_allowed_incremental_multi_tier: int | None = None
+    api_allowed_incremental_levels_unknown: int | None = None
     api_allowed_custom_by_volume: int | None = None
     api_allowed_custom_multi_tier: int | None = None
     api_allowed_unsupported_or_unknown_mode: int | None = None
@@ -120,7 +121,8 @@ def summarize_country_api_contracts(envelope1: Any, envelope2: Any) -> CountryAp
         return blocked("COUNTRY_API_CENSUS_SCHEMA_UNVERIFIED")
 
     active = allowed = denied = unknown = 0
-    incr = incr_one = incr_multi = custom = custom_multi = other = 0
+    incr = incr_one = incr_multi = incr_unknown = 0
+    custom = custom_multi = other = 0
     for row in second:
         # This is a public-only candidate filter, not current user-account
         # ability to place or exit an API trade. Country endpoint can differ
@@ -154,7 +156,7 @@ def summarize_country_api_contracts(envelope1: Any, envelope2: Any) -> CountryAp
             elif type(levels) is int and levels >= 2:
                 incr_multi += 1
             else:
-                other += 1
+                incr_unknown += 1
         elif mode == "CUSTOM" and typ == "BY_VOLUME":
             custom += 1
             tiers = row.get("riskLimitCustom")
@@ -173,6 +175,7 @@ def summarize_country_api_contracts(envelope1: Any, envelope2: Any) -> CountryAp
         api_allowed_incremental_by_volume=incr,
         api_allowed_incremental_one_tier=incr_one,
         api_allowed_incremental_multi_tier=incr_multi,
+        api_allowed_incremental_levels_unknown=incr_unknown,
         api_allowed_custom_by_volume=custom,
         api_allowed_custom_multi_tier=custom_multi,
         api_allowed_unsupported_or_unknown_mode=other,
