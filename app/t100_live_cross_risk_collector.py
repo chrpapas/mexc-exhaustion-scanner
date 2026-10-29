@@ -167,6 +167,15 @@ class MexcReadOnlyCrossRiskCollector:
             after_positions = await self.private.raw_open_positions()
             stage = "POST_STOPS"
             after_stops = await self.private.raw_open_stops()
+            # Never pair POST positions (fresh unrealized PNL) with
+            # PRE assets (older aggregate unrealized PNL). Both the PRE
+            # and POST pairs must independently satisfy economic parity.
+            stage = "POST_ASSETS"
+            after_assets = await self.private.raw_account_assets()
+            stage = "POST_MARGIN_WITNESS"
+            post_margin = assess_position_margin_witness(
+                after_positions, after_assets,
+            )
             stage = "FINAL_CLOCK"
             finished = self.clock_ms()
             if (
@@ -194,10 +203,11 @@ class MexcReadOnlyCrossRiskCollector:
                 position_margin_witness=margin,
                 symbol_scoped_crosscheck=redundant,
             )
-            if (
-                certificate.get("account_wide_completeness_verified") is not True
-                or margin.get("position_inventory_economic_witness_observed") is not True
-            ):
+            if margin.get("position_inventory_economic_witness_observed") is not True:
+                raise CrossRiskCollectionHalted("COLLECTOR_PRE_MARGIN_WITNESS_UNVERIFIED")
+            if post_margin.get("position_inventory_economic_witness_observed") is not True:
+                raise CrossRiskCollectionHalted("COLLECTOR_POST_MARGIN_WITNESS_UNVERIFIED")
+            if certificate.get("account_wide_completeness_verified") is not True:
                 raise CrossRiskCollectionHalted("COLLECTOR_INVENTORY_INCOMPLETE")
             if len(after_stops) > 100:
                 raise CrossRiskCollectionHalted("COLLECTOR_STOP_ROWS_TOO_MANY")
@@ -205,7 +215,8 @@ class MexcReadOnlyCrossRiskCollector:
             # This flag is limited to the scope and semantics of that GET.
             return CrossRiskRead(
                 observed_at_ms=finished,
-                positions=after_positions, stops=after_stops, assets=assets,
+                positions=after_positions, stops=after_stops,
+                assets=after_assets,
                 private_risk_by_symbol=risks,
                 public_contract_by_symbol=contracts,
                 fair_by_symbol=marks,
