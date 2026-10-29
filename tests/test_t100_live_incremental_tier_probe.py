@@ -74,6 +74,49 @@ class ProbeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(r.candidate_failure, "INCR_SHORT_SIDE_FIELDS_MISSING")
         self.assertFalse(r.live_authorization)
 
+    async def test_api_trading_disabled_is_visible_as_public_reason_only(self):
+        x = data()
+        x.public_contract_by_symbol["TEST_USDT"]["apiAllowed"] = False
+        r = await inspect_incremental_tier_candidate(
+            ReadOnlyMexcProbe(FakePrivate(x)), FakePublic(x),
+        )
+        self.assertEqual(r.status, "INCR_PROBE_CANDIDATE_UNVERIFIED")
+        self.assertEqual(r.candidate_failure, "INCR_CONTRACT_NOT_ELIGIBLE")
+        self.assertEqual(r.contract_api_order_access, "DENIED")
+        self.assertEqual(r.contract_state, "ENABLED")
+        self.assertEqual(r.contract_cross_margin_support, "CROSS_SUPPORTED")
+        self.assertEqual(r.contract_duration, "PERPETUAL")
+        self.assertEqual(r.contract_quote_currency, "USDT")
+        self.assertEqual(r.contract_settlement_currency, "USDT")
+        self.assertTrue(r.position_bookends_consistent)
+        self.assertFalse(r.public_candidate_reconstructed)
+        self.assertFalse(r.future_stressed_tiers_certified)
+        self.assertFalse(r.live_authorization)
+        self.assertFalse(r.entry_allowed)
+        self.assertNotIn("TEST_USDT", str(r))
+
+    async def test_cross_margin_not_supported_reports_specific_reason(self):
+        x = data()
+        x.public_contract_by_symbol["TEST_USDT"]["positionOpenType"] = 1
+        r = await inspect_incremental_tier_candidate(
+            ReadOnlyMexcProbe(FakePrivate(x)), FakePublic(x),
+        )
+        self.assertEqual(r.candidate_failure, "INCR_CONTRACT_NOT_ELIGIBLE")
+        self.assertEqual(r.contract_cross_margin_support, "ISOLATED_ONLY")
+        self.assertEqual(r.contract_api_order_access, "ALLOWED")
+        self.assertFalse(r.live_authorization)
+
+    async def test_unknown_metadata_uses_unknown_not_normal_or_safe(self):
+        x = data()
+        x.public_contract_by_symbol["TEST_USDT"].pop("apiAllowed")
+        r = await inspect_incremental_tier_candidate(
+            ReadOnlyMexcProbe(FakePrivate(x)), FakePublic(x),
+        )
+        self.assertEqual(r.candidate_failure, "INCR_CONTRACT_NOT_ELIGIBLE")
+        self.assertEqual(r.contract_api_order_access, "UNKNOWN")
+        self.assertFalse(r.entry_allowed)
+        self.assertFalse(r.live_authorization)
+
     async def test_private_http_error_redacted_no_public_get(self):
         x = data()
         class FailingPrivate(FakePrivate):
