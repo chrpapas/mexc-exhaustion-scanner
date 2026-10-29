@@ -70,9 +70,28 @@ def _pnl_sum(rows: list[dict[str, Any]]) -> Decimal:
 def _one_window(positions_before: Any, assets: Any, positions_after: Any) -> dict[str, bool]:
     if _positions_critical(positions_before) != _positions_critical(positions_after):
         return {"position_inventory_drift": True}
-    pnl_moved = _pnl_sum(positions_before) != _pnl_sum(positions_after)
+    # Compare by immutable position identity, not only SUM (offsetting
+    # PnL moves in different contracts must not masquerade as stability).
+    pnl_before = {
+        str(p.get("positionId")): _strict_decimal(p.get("unRealizedPnl"))
+        for p in positions_before
+    }
+    pnl_after = {
+        str(p.get("positionId")): _strict_decimal(p.get("unRealizedPnl"))
+        for p in positions_after
+    }
+    if len(pnl_before) != len(positions_before) or len(pnl_after) != len(positions_after):
+        raise ValueError("DUPLICATE_POSITION_IDENTITY")
+    pnl_moved = pnl_before != pnl_after
     before = assess_position_margin_witness(positions_before, assets)
     after = assess_position_margin_witness(positions_after, assets)
+    allowed_statuses = {
+        "POSITION_INVENTORY_ECONOMIC_WITNESS_MATCH",
+        "POSITION_MARGIN_WITNESS_MATCH_UNREALIZED_NOT_RECONCILED",
+        "POSITION_INVENTORY_ECONOMIC_WITNESS_MISMATCH",
+    }
+    if before.get("status") not in allowed_statuses or after.get("status") not in allowed_statuses:
+        raise ValueError("POSITION_ASSETS_SCHEMA_UNVERIFIED")
     if before.get("usdt_asset_row_unique") is not True or (
         before.get("all_observed_positions_usdt_settled") is not True
     ):
