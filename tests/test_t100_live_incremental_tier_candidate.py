@@ -3,7 +3,9 @@ import copy
 import unittest
 from decimal import Decimal as D
 
-from app.t100_live_incremental_tier_candidate import reconstruct_incremental_candidate
+from app.t100_live_incremental_tier_candidate import (
+    classify_incremental_eligibility, reconstruct_incremental_candidate,
+)
 from tests.test_t100_live_risk_tier_witness import public, private
 
 
@@ -127,6 +129,43 @@ class IncrementalCandidateTests(unittest.TestCase):
             r = reconstruct_incremental_candidate(row, position_contracts=50)
             self.assertNotEqual(r.status, "INCR_CANDIDATE_RECONSTRUCTED_NONAUTHORIZING")
             self.assertFalse(r.live_authorization)
+
+    def test_each_contract_rejection_is_classified_without_bypassing_gate(self):
+        cases = (
+            ("apiAllowed", False, "api_order_access", "DENIED"),
+            ("apiAllowed", None, "api_order_access", "UNKNOWN"),
+            ("state", 4, "state", "NOT_ENABLED"),
+            ("state", None, "state", "UNKNOWN"),
+            ("positionOpenType", 1, "cross_margin_support", "ISOLATED_ONLY"),
+            ("positionOpenType", None, "cross_margin_support", "UNKNOWN"),
+            ("futureType", 2, "contract_duration", "NOT_PERPETUAL"),
+            ("futureType", None, "contract_duration", "UNKNOWN"),
+            ("quoteCoin", "BTC", "quote_currency", "OTHER"),
+            ("settleCoin", "BTC", "settlement_currency", "OTHER"),
+            ("settleCoin", None, "settlement_currency", "UNKNOWN"),
+        )
+        for field, value, attribute, expected in cases:
+            with self.subTest(field=field, value=value):
+                row = incr()
+                row[field] = value
+                shape = classify_incremental_eligibility(row)
+                self.assertEqual(getattr(shape, attribute), expected)
+                self.assertFalse(shape.contract_eligible)
+                self.assertFalse(shape.entry_allowed)
+                self.assertFalse(shape.live_authorization)
+                result = reconstruct_incremental_candidate(row, position_contracts=50)
+                self.assertEqual(result.status, "INCR_CONTRACT_NOT_ELIGIBLE")
+
+    def test_eligible_contract_still_never_authorizes_orders(self):
+        row = incr()
+        shape = classify_incremental_eligibility(row)
+        self.assertTrue(shape.contract_eligible)
+        self.assertEqual(shape.state, "ENABLED")
+        self.assertEqual(shape.api_order_access, "ALLOWED")
+        self.assertEqual(shape.cross_margin_support, "CROSS_SUPPORTED")
+        self.assertEqual(shape.contract_duration, "PERPETUAL")
+        self.assertFalse(shape.live_authorization)
+        self.assertFalse(shape.entry_allowed)
 
     def test_contract_ineligible_never_modeled(self):
         row = incr()
