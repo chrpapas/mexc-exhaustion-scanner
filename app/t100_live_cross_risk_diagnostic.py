@@ -21,6 +21,9 @@ import time
 from typing import Any, Callable, Mapping
 
 from app.t100_live_cross_risk_collector import MexcReadOnlyCrossRiskCollector
+from app.t100_live_cross_risk_inventory_shape import (
+    InventoryShapeObservation, observe_inventory_shape,
+)
 from app.t100_live_cross_risk_observation import (
     SAFE_COLLECTOR_FAILURE_CODES, SAFE_FRAME_FAILURE_CODES,
     SAFE_FAILURE_STAGES, observe_cross_risk_window,
@@ -59,6 +62,7 @@ def require_readonly_controls(env: Mapping[str, str]) -> None:
 def _result(
     *, status: str, positions: int | None = None,
     witness: Any = None,
+    inventory_shape: InventoryShapeObservation | None = None,
 ) -> dict[str, Any]:
     """Allowlist-only output; never serialize a venue payload."""
     possible = {
@@ -77,10 +81,33 @@ def _result(
         "RISK_DIAGNOSTIC_GET_FAILED",
     }
     safe_status = status if status in possible else "RISK_DIAGNOSTIC_GET_FAILED"
-    # A blocked witness may use zero as its DEFAULT count. Do not represent
-    # that as an actual flat-account observation.
+    # A blocked risk witness may use zero as its DEFAULT count. Only a
+    # separate stable two-read inventory observation may report a flat
+    # account or raw counts on a blocked risk assessment.
     complete = safe_status == "CURRENT_CROSS_RISK_OBSERVED_NONAUTHORIZING"
     n = positions if complete and type(positions) is int and 1 <= positions <= 4 else None
+    shape = inventory_shape if isinstance(inventory_shape, InventoryShapeObservation) else None
+    shape_stable = shape is not None and shape.stable_across_reads is True
+    if not complete and shape_stable and type(shape.observed_positions) is int:
+        n = shape.observed_positions
+    stops = shape.observed_current_stops if shape_stable else None
+    stop_reported = shape.reported_stop_orders if shape_stable else None
+    order_total = shape.reported_total_open_orders if shape_stable else None
+    shape_status = shape.status if shape is not None else "NOT_CHECKED"
+    allowed_shape_statuses = {
+        "INVENTORY_SHAPE_PROBE_INVALID",
+        "INVENTORY_SHAPE_ACCOUNT_STATE_DRIFT",
+        "INVENTORY_SHAPE_STOP_COUNT_DISAGREES_WITH_EXCHANGE",
+        "INVENTORY_SHAPE_FLAT_AND_ORDER_FREE_OBSERVED_NONATOMIC",
+        "INVENTORY_SHAPE_FLAT_WITH_OPEN_ORDERS",
+        "INVENTORY_SHAPE_STOPS_WITHOUT_POSITION",
+        "INVENTORY_SHAPE_MORE_THAN_FOUR_POSITIONS",
+        "INVENTORY_SHAPE_NONFLAT_STOP_ROW_COUNT_DIFFERS",
+        "INVENTORY_SHAPE_NONFLAT_COUNTS_MATCH_NONAUTHORIZING",
+        "INVENTORY_SHAPE_READ_UNVERIFIED",
+        "NOT_CHECKED",
+    }
+    shape_status = shape_status if shape_status in allowed_shape_statuses else "NOT_CHECKED"
     stage = getattr(witness, "failure_stage", "NONE")
     stage = stage if type(stage) is str and stage in SAFE_FAILURE_STAGES else "NONE"
     code = getattr(witness, "failure_code", "NONE")
@@ -93,6 +120,11 @@ def _result(
         "failure_stage": stage,
         "failure_code": code,
         "observed_positions": n,
+        "observed_current_stops": stops,
+        "reported_stop_orders": stop_reported,
+        "reported_total_open_orders": order_total,
+        "inventory_shape_status": shape_status,
+        "inventory_shape_stable": shape_stable,
         "read_only": True,
         "private_get_only": True,
         "mexc_orders_sent": False,
@@ -141,10 +173,25 @@ async def run_diagnostic(
             ),
             timeout=timeout_seconds,
         )
+        shape = None
+        if (
+            report.status == "CROSS_RISK_READ_OR_EVIDENCE_UNVERIFIED"
+            and report.failure_stage in {"READ_FIRST", "READ_SECOND"}
+            and report.failure_code == "COLLECTOR_NONFLAT_ONE_TO_FOUR_REQUIRED"
+        ):
+            # The nonflat-only risk witness cannot assess 0 positions, >4
+            # positions, or a different number of TP/SL rows. A separate
+            # bounded GET-only diagnostic distinguishes those cases without
+            # weakening the V40 risk/ownership gates.
+            shape = await asyncio.wait_for(
+                observe_inventory_shape(private),
+                timeout=min(timeout_seconds, 15.0),
+            )
         return _result(
             status=report.status,
             positions=report.observed_positions,
             witness=report,
+            inventory_shape=shape,
         )
     except asyncio.TimeoutError:
         return _result(status="RISK_DIAGNOSTIC_GET_TIMED_OUT")
