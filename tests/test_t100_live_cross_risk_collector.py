@@ -178,6 +178,79 @@ class CollectorTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(result.venue_liquidation_certified)
         self.assertFalse(result.live_authorization)
 
+    async def test_post_position_pnl_uses_fresh_post_asset_snapshot(self):
+        # MEXC unrealized PNL changes naturally while collecting metadata.
+        # A current position must not be paired with STALE aggregate assets.
+        class UpdatingPositionAndAsset(FakePrivate):
+            async def _private_get(inner, path, params=None):
+                if (
+                    path == "/api/v1/private/position/open_positions"
+                    and params is None and inner.positions_reads == 2
+                ):
+                    inner.observed.positions[0]["unRealizedPnl"] = "3.5"
+                    inner.observed.assets[0]["unrealized"] = "3.5"
+                return await super()._private_get(path, params)
+
+        client = UpdatingPositionAndAsset(frame())
+        collector = MexcReadOnlyCrossRiskCollector(
+            private=ReadOnlyMexcProbe(client),
+            public=FakePublic(frame()),
+            clock_ms=FakeClock(1_000_000, 1_000_500),
+        )
+        result = await collector.read()
+        self.assertEqual(result.positions[0]["unRealizedPnl"], "3.5")
+        self.assertEqual(result.assets[0]["unrealized"], "3.5")
+        self.assertEqual(
+            sum(path.endswith("/account/assets") for _, path, _ in client.calls),
+            2,
+        )
+        self.assertTrue(all(method == "GET" for method, _, _ in client.calls))
+
+    async def test_post_position_pnl_without_matching_asset_update_blocks(self):
+        class UpdatingPositionOnly(FakePrivate):
+            async def _private_get(inner, path, params=None):
+                if (
+                    path == "/api/v1/private/position/open_positions"
+                    and params is None and inner.positions_reads == 2
+                ):
+                    inner.observed.positions[0]["unRealizedPnl"] = "3.5"
+                return await super()._private_get(path, params)
+
+        client = UpdatingPositionOnly(frame())
+        collector = MexcReadOnlyCrossRiskCollector(
+            private=ReadOnlyMexcProbe(client),
+            public=FakePublic(frame()),
+            clock_ms=FakeClock(1_000_000, 1_000_500),
+        )
+        with self.assertRaisesRegex(
+            CrossRiskCollectionHalted, "COLLECTOR_POST_MARGIN_WITNESS_UNVERIFIED",
+        ):
+            await collector.read()
+
+    async def test_post_asset_read_transport_failure_blocks_without_account_leak(self):
+        class FailingSecondAssetRead(FakePrivate):
+            def __init__(inner, data):
+                super().__init__(data)
+                inner.asset_reads = 0
+
+            async def _private_get(inner, path, params=None):
+                if path == "/api/v1/private/account/assets":
+                    inner.asset_reads += 1
+                    if inner.asset_reads == 2:
+                        raise ValueError("DO_NOT_LEAK_PRIVATE_ACCOUNT_ASSETS")
+                return await super()._private_get(path, params)
+
+        collector = MexcReadOnlyCrossRiskCollector(
+            private=ReadOnlyMexcProbe(FailingSecondAssetRead(frame())),
+            public=FakePublic(frame()),
+            clock_ms=FakeClock(1_000_000, 1_000_500),
+        )
+        with self.assertRaisesRegex(
+            CrossRiskCollectionHalted, "COLLECTOR_READ_FAILED_AT_POST_ASSETS",
+        ) as caught:
+            await collector.read()
+        self.assertNotIn("DO_NOT_LEAK", str(caught.exception))
+
     async def test_unrelated_position_not_automatically_owned(self):
         collected = await self.collector.read()
         self.assertEqual(collected.positions[0]["positionId"], "12")
