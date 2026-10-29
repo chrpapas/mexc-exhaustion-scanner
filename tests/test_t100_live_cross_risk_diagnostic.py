@@ -128,6 +128,49 @@ class DiagnosticTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("DO_NOT_LEAK_PRIVATE_KEY", str(report))
         self.assertFalse(report["entry_allowed"])
 
+    async def test_flat_account_is_classified_without_faking_risk_certification(self):
+        base = frame()
+        base.positions.clear()
+        base.stops.clear()
+        private = FakePrivate(base)
+        public = FakePublic(base)
+        report = await run_diagnostic(
+            private=ReadOnlyMexcProbe(private), public=public,
+            clock_ms=lambda: 1_000_000,
+        )
+        self.assertEqual(
+            report["failure_code"], "COLLECTOR_NONFLAT_ONE_TO_FOUR_REQUIRED"
+        )
+        self.assertEqual(report["failure_stage"], "READ_FIRST")
+        self.assertEqual(
+            report["inventory_shape_status"],
+            "INVENTORY_SHAPE_FLAT_AND_ORDER_FREE_OBSERVED_NONATOMIC",
+        )
+        self.assertEqual(report["observed_positions"], 0)
+        self.assertEqual(report["observed_current_stops"], 0)
+        self.assertEqual(report["reported_total_open_orders"], 0)
+        self.assertTrue(report["inventory_shape_stable"])
+        self.assertFalse(report["account_wide_completeness_certified"])
+        self.assertFalse(report["venue_liquidation_certified"])
+        self.assertFalse(report["live_authorization"])
+        self.assertEqual(public.calls, [])
+
+    async def test_mismatched_stop_count_is_diagnosed_without_trading(self):
+        base = frame()
+        base.stops.clear()
+        private = FakePrivate(base)
+        report = await run_diagnostic(
+            private=ReadOnlyMexcProbe(private), public=FakePublic(base),
+            clock_ms=lambda: 1_000_000,
+        )
+        self.assertEqual(
+            report["inventory_shape_status"],
+            "INVENTORY_SHAPE_NONFLAT_STOP_ROW_COUNT_DIFFERS",
+        )
+        self.assertEqual(report["observed_positions"], 1)
+        self.assertEqual(report["observed_current_stops"], 0)
+        self.assertFalse(report["entry_allowed"])
+
     async def test_timeout_does_not_raise_or_enable_entry(self):
         class Slow:
             async def raw_open_positions(self):
