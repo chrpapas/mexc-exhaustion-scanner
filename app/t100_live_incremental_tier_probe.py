@@ -119,10 +119,7 @@ async def inspect_incremental_tier_candidate(
             type(public_eligibility) is IncrementalEligibilityShape
             else None
         )
-        shape = public_shape if (
-            stable_positions is not None and
-            failure == "INCR_MODE_OR_TYPE_UNSUPPORTED"
-        ) else None
+        shape = public_shape if stable_positions is not None else None
         return IncrementalTierProbeReport(
             status=status, candidate_failure=failure,
             observed_positions=stable_positions if shape is not None else None,
@@ -136,7 +133,7 @@ async def inspect_incremental_tier_candidate(
             contract_duration=result.contract_duration if result else "NOT_CHECKED",
             contract_quote_currency=result.quote_currency if result else "NOT_CHECKED",
             contract_settlement_currency=result.settlement_currency if result else "NOT_CHECKED",
-            position_bookends_consistent=result is not None,
+            position_bookends_consistent=result is not None or shape is not None,
         )
 
     if not isinstance(private, ReadOnlyMexcProbe) or public is None:
@@ -253,9 +250,7 @@ async def inspect_incremental_tier_candidate(
                 public_eligibility=classify_incremental_eligibility(
                     pub_by_symbol[symbol]
                 ) if candidate.status == "INCR_CONTRACT_NOT_ELIGIBLE" else None,
-                public_shape=public_shape if (
-                    candidate.status == "INCR_MODE_OR_TYPE_UNSUPPORTED"
-                ) else None,
+                public_shape=public_shape,
                 stable_positions=len(after),
             )
         if not candidate.public_contract_eligible:
