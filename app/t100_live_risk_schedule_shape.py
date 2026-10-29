@@ -82,9 +82,6 @@ def classify_risk_schedule_shapes(
                 return "INCREMENTAL_FIELDS_MISSING_OR_MALFORMED"
             if (
                 (levels > 1 and increment <= 0)
-                or (levels == 1 and any(v > 0 for v in (
-                    increment, incr_mmr, incr_imr,
-                )))
                 or mmr >= 1 or imr >= 1 or mmr > imr
             ):
                 return "INCREMENTAL_FIELDS_INCOHERENT"
