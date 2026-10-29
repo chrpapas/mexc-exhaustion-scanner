@@ -19,6 +19,7 @@ from app.t100_live_incremental_tier_candidate import (
 )
 from app.t100_live_readonly_probe import ReadOnlyMexcProbe
 from app.t100_live_risk_schedule_shape import classify_risk_schedule_shapes
+from app.t100_live_risk_schedule_shape import classify_risk_schedule_shapes
 
 CONTRACT_COUNTRY = "/api/v1/contract/detail/country"
 
@@ -45,6 +46,9 @@ class IncrementalTierProbeReport:
     api_trading_allowed_for_all: bool = False
     candidate_max_level_count: int | None = None
     candidate_failure: str = "NOT_CHECKED"
+    observed_risk_schedule_mode: str = "NOT_CHECKED"
+    observed_risk_schedule_type: str = "NOT_CHECKED"
+    observed_risk_schedule_fields: str = "NOT_CHECKED"
     contract_state: str = "NOT_CHECKED"
     contract_api_order_access: str = "NOT_CHECKED"
     contract_cross_margin_support: str = "NOT_CHECKED"
@@ -120,8 +124,17 @@ async def inspect_incremental_tier_candidate(
             else None
         )
         shape = public_shape if stable_positions is not None else None
+        shape = (
+            classify_risk_schedule_shapes(observed_schedule)
+            if failure == "INCR_MODE_OR_TYPE_UNSUPPORTED"
+            and isinstance(observed_schedule, dict)
+            else None
+        )
         return IncrementalTierProbeReport(
             status=status, candidate_failure=failure,
+            observed_risk_schedule_mode=shape.mode if shape else "NOT_CHECKED",
+            observed_risk_schedule_type=shape.limit_type if shape else "NOT_CHECKED",
+            observed_risk_schedule_fields=shape.schedule_fields if shape else "NOT_CHECKED",
             observed_positions=stable_positions if shape is not None else None,
             observed_risk_schedule_mode=shape.mode if shape else "NOT_CHECKED",
             observed_risk_schedule_type=shape.limit_type if shape else "NOT_CHECKED",
@@ -247,6 +260,8 @@ async def inspect_incremental_tier_candidate(
             return blocked(
                 "INCR_PROBE_CANDIDATE_UNVERIFIED",
                 failure=candidate.status,
+                observed_schedule={symbol: pub_by_symbol[symbol]}
+                    if candidate.status == "INCR_MODE_OR_TYPE_UNSUPPORTED" else None,
                 public_eligibility=classify_incremental_eligibility(
                     pub_by_symbol[symbol]
                 ) if candidate.status == "INCR_CONTRACT_NOT_ELIGIBLE" else None,
