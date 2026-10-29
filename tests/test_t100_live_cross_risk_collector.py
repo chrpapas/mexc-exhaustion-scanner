@@ -184,19 +184,25 @@ class CollectorTests(unittest.IsolatedAsyncioTestCase):
         # This collector never consumes a durable T100 checkpoint.
         self.assertFalse(hasattr(collected, "t100_owned_position"))
 
-    async def test_missing_native_stop_blocks(self):
+    async def test_manual_position_without_sl_tp_is_observable(self):
         self.private_client.observed.stops.clear()
-        with self.assertRaisesRegex(
-            CrossRiskCollectionHalted, "NONFLAT_ONE_TO_FOUR",
-        ):
-            await self.collector.read()
+        read = await self.collector.read()
+        self.assertEqual(len(read.positions), 1)
+        self.assertEqual(len(read.stops), 0)
+        self.assertTrue(read.positions_complete)
+        self.assertTrue(read.stops_complete)
+        # Observing an unprotected manual position is never ownership.
+        self.assertFalse(hasattr(read, "t100_owned_position"))
+        self.assertTrue(all(c[0] == "GET" for c in self.private_client.calls))
 
-    async def test_incorrect_stops_count_blocks(self):
+    async def test_unrelated_current_stop_is_not_claimed_to_protect_position(self):
         self.private_client.observed.stops[0]["symbol"] = "WRONG_USDT"
-        with self.assertRaisesRegex(
-            CrossRiskCollectionHalted, "POSITION_SYMBOLS_INVALID",
-        ):
-            await self.collector.read()
+        read = await self.collector.read()
+        self.assertEqual(len(read.positions), 1)
+        self.assertEqual(len(read.stops), 1)
+        self.assertNotEqual(
+            read.positions[0]["symbol"], read.stops[0]["symbol"]
+        )
 
     async def test_malformed_public_contract_symbol_blocks(self):
         self.public_client.change_symbol = True
