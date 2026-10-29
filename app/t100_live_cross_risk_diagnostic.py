@@ -90,7 +90,11 @@ def _result(
     shape_stable = shape is not None and shape.stable_across_reads is True
     if not complete and shape_stable and type(shape.observed_positions) is int:
         n = shape.observed_positions
-    stops = shape.observed_current_stops if shape_stable else None
+    stops = (
+        witness.observed_current_stops
+        if complete and type(getattr(witness, "observed_current_stops", None)) is int
+        else shape.observed_current_stops if shape_stable else None
+    )
     stop_reported = shape.reported_stop_orders if shape_stable else None
     order_total = shape.reported_total_open_orders if shape_stable else None
     shape_status = shape.status if shape is not None else "NOT_CHECKED"
@@ -125,6 +129,7 @@ def _result(
         "reported_total_open_orders": order_total,
         "inventory_shape_status": shape_status,
         "inventory_shape_stable": shape_stable,
+        "native_stop_protection_verified": False,
         "read_only": True,
         "private_get_only": True,
         "mexc_orders_sent": False,
