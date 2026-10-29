@@ -558,3 +558,43 @@ authorizes an order.
   T100 ownership/native-stop recovery, available collateral, future
   risk tiers, and live authorization remain unverified and disabled.
 - No MEXC orders, leverage changes, Render deployments or DB migrations.
+
+## Implementation checkpoint: first private positions GET access diagnostics (2026-10-29)
+
+- After manually restoring local MEXC API credentials, operator's read-only
+  collector stopped at `READ_FIRST` with
+  `COLLECTOR_READ_FAILED_AT_PRIVATE_POSITIONS`. This is an authenticated
+  GET/read issue, NOT evidence of missing holdings, margin failure, or
+  T100 trading readiness. Prior account evidence is not current proof.
+- Added `app/t100_live_private_positions_access.py` and
+  `app/t100_live_private_positions_access_cli.py`: a separate,
+  explicit paper-mode + engaged-kill-switch **single-request signed GET**
+  to `/api/v1/private/position/open_positions`. It reuses exactly the
+  existing signing logic but inspects exchange error-code classifications
+  without raising or serializing raw response messages. No HTTP POST,
+  retry, portfolio action or Render deployment.
+- It distinguishes allowlisted MEXC futures access errors: key expired
+  (402), IP not in whitelist (406), endpoint permission denied (511),
+  signed request timestamp/invalid request (513), signature rejected
+  (602), account read required (701), trade-info read required (703),
+  rate-limited (510), and others. Malformed/unknown responses, HTTP
+  rejection, connectivity and timeout have safe generic statuses.
+  HTTP status is reported only for a small fixed allowlist.
+- MEXC's documented `open_positions` endpoint requires
+  **View Order Details** permission. Source:
+  https://www.mexc.co/api-docs/futures/account-and-trading-endpoints/get-open-positions
+  Futures error codes: https://www.mexc.io/api-docs/futures/error-code
+- Run locally with the already exported credentials (do not paste them):
+  ```bash
+  T100_EXECUTION_MODE=paper \
+  T100_LIVE_ORDER_API_ENABLED=false \
+  T100_LIVE_KILL_SWITCH=true \
+  python3 -m app.t100_live_private_positions_access_cli
+  ```
+- Only return the redacted status and HTTP status. If the GET succeeds,
+  rerun the original risk diagnostic. If it fails, fix the specific
+  credential scope, IP, timestamp or transport issue locally; never
+  turn on order permissions merely to make a read-only endpoint pass.
+  Any existing stopless manual position remains independent of T100.
+- No trading authorization, collateral certification, database migration,
+  Render deployment, leverage changes or MEXC orders.
