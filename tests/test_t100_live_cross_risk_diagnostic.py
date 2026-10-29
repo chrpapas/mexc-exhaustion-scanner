@@ -191,6 +191,67 @@ class DiagnosticTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(report["live_authorization"])
         self.assertTrue(all(x[0] == "GET" for x in private.calls + public.calls))
 
+    async def test_unavailable_incremental_schedule_is_classified_without_approval(self):
+        base = frame()
+        base.public_contract_by_symbol["TEST_USDT"]["riskLimitMode"] = "INCREASE"
+        report = await run_diagnostic(
+            private=ReadOnlyMexcProbe(FakePrivate(base)),
+            public=FakePublic(base, fair_ms=1_000_400),
+            clock_ms=SequenceClock([
+                1_000_000, 1_000_500, 1_000_700,
+            ]),
+        )
+        self.assertEqual(
+            report["failure_code"], "RISK_TIER_STATIC_VOLUME_SCHEDULE_UNAVAILABLE"
+        )
+        self.assertEqual(report["failure_stage"], "VALIDATE_FIRST")
+        self.assertEqual(report["risk_schedule_mode"], "INCREASE")
+        self.assertEqual(report["risk_schedule_type"], "BY_VOLUME")
+        self.assertEqual(
+            report["risk_schedule_fields"], "INCREMENTAL_FIELDS_MISSING_OR_MALFORMED"
+        )
+        self.assertFalse(report["risk_schedule_two_frame_certified"])
+        self.assertFalse(report["current_risk_tiers_observed"])
+        self.assertFalse(report["future_stressed_tiers_certified"])
+        self.assertFalse(report["entry_allowed"])
+        self.assertFalse(report["live_authorization"])
+        self.assertNotIn("TEST_USDT", str(report))
+
+    async def test_value_based_schedule_is_not_silently_converted_to_volume(self):
+        base = frame()
+        base.public_contract_by_symbol["TEST_USDT"]["riskLimitType"] = "BY_VALUE"
+        report = await run_diagnostic(
+            private=ReadOnlyMexcProbe(FakePrivate(base)),
+            public=FakePublic(base, fair_ms=1_000_400),
+            clock_ms=SequenceClock([
+                1_000_000, 1_000_500, 1_000_700,
+            ]),
+        )
+        self.assertEqual(report["risk_schedule_mode"], "CUSTOM")
+        self.assertEqual(report["risk_schedule_type"], "BY_VALUE")
+        self.assertEqual(report["risk_schedule_fields"], "CUSTOM_FIELDS_PRESENT")
+        self.assertFalse(report["risk_schedule_two_frame_certified"])
+        self.assertFalse(report["live_authorization"])
+
+    def test_unknown_untrusted_schedule_values_never_echoed(self):
+        from types import SimpleNamespace
+        witness = SimpleNamespace(
+            failure_stage="VALIDATE_FIRST",
+            failure_code="RISK_TIER_STATIC_VOLUME_SCHEDULE_UNAVAILABLE",
+            risk_schedule_mode="SECRET_URL",
+            risk_schedule_type="SECRET_API_KEY",
+            risk_schedule_fields="SECRET_ACCOUNT_VALUE",
+        )
+        report = _result(
+            status="CROSS_RISK_READ_OR_EVIDENCE_UNVERIFIED",
+            witness=witness,
+        )
+        self.assertEqual(report["risk_schedule_mode"], "NOT_CHECKED")
+        self.assertEqual(report["risk_schedule_type"], "NOT_CHECKED")
+        self.assertEqual(report["risk_schedule_fields"], "NOT_CHECKED")
+        self.assertNotIn("SECRET", str(report))
+        self.assertFalse(report["entry_allowed"])
+
     async def test_timeout_does_not_raise_or_enable_entry(self):
         class Slow:
             async def raw_open_positions(self):
