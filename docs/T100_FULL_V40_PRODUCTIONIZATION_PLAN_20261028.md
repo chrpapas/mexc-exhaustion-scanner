@@ -480,3 +480,44 @@ authorizes an order.
   The code continues to require paper mode, order API disabled, and
   an engaged kill switch. Local rerun emits redacted inventory status
   for follow-up.
+
+## Implementation checkpoint: account observation independent of manual SL/TP (2026-10-29)
+
+- Operator confirmed they personally removed their manual position's SL/TP.
+  The read-only inventory snapshot independently matched exactly one
+  open position, zero current TP/SL orders, zero other open orders.
+  This did **not** constitute a T100 order or exchange-native protection.
+- The cross-risk collector no longer assumes that the number of current
+  TP/SL rows equals the number of open positions. A single manually held
+  short with zero stops remains eligible for **account observation**
+  (and independent margin/contract/risk-tier checks), provided actual
+  inventory count completeness, symbol crosschecks, current account margin
+  arithmetic, timing, short/cross mode, and MEXC per-symbol metadata
+  evidence pass.
+- The cross-risk two-frame witness now accepts zero or multiple current
+  stop rows, compares their critical fields independently for bookend
+  drift, and returns `observed_current_stops` plus
+  `native_stop_protection_verified=False`. It does NOT infer stop
+  protectiveness from order counts or the mere presence of a TP/SL row.
+- The manual diagnostic likewise exposes the actual observed stop count
+  on successful risk observation (instead of returning null), with
+  explicit `native_stop_protection_verified=False` and
+  `entry_allowed=False`, `live_authorization=False`.
+- **No change** to T100-owned position recovery or order authorization:
+  `FourSlotSnapshotCoordinator.inspect()` still checks matched position,
+  checkpoint, ACK order and exact native stop, and fail-closes on an
+  owned position with zero stops (`POSITION_STOP_COUNT_MISMATCH`).
+  Added independent regression covering stable absence of ALL owned stops
+  in both exchange reads and the inventory count witness. Do not use the
+  account-risk observer as a replacement for durable protected recovery.
+- One manual unprotected position may occupy real portfolio margin and
+  risk. It is **not** safe to permit new T100 entries, and the exchange
+  account must remain isolated or the unrelated position must be
+  independently accounted for. This diagnostic does not alter user
+  positions, post orders, apply migrations, or deploy to Render.
+- The collector's current modeled scenario supports 1–4 cross-margin
+  USDT-settled SHORT positions and strict `CUSTOM/BY_VOLUME` static tiers.
+  If the operator's manual trade is isolated or the exchange publishes
+  a different tier scheme, risk observation may still fail at the next
+  relevant evidence gate, with a fixed redacted reason. That is a
+  *separate* model limitation, not an SL/TP requirement.
