@@ -964,3 +964,69 @@ authorizes an order.
   modes, metadata/API-permission drift, and redacted failed second GET.
 - No Render deploy, DB migration, MEXC order, private POST, leverage
   adjustment, or stop modification.
+
+## Implementation checkpoint: one-tier MMR exact-match, API denied; country-wide public API eligibility census (2026-10-29)
+
+- Latest MEXC read-only incremental candidate result:
+  `status=INCR_PROBE_API_TRADING_DENIED_RISK_RESEARCH_ONLY`;
+  `observed_risk_schedule_mode=INCREASE`,
+  `observed_risk_schedule_type=BY_VOLUME`,
+  `observed_risk_schedule_fields=INCREMENTAL_FIELDS_PRESENT_UNMODELED`;
+  `candidate_max_level_count=1`;
+  `private_current_mmr_exact_match_count=1` for 1 current observed
+  cross-short; 2 PUBLIC metadata GETs consistent; critical account
+  position bookends consistent; `api_trading_denied_contract_count=1`.
+  It supports a single-tier current candidate MMR, not ANY multi-tier
+  transitions or stressed price/liquidation model. Current API trading
+  on this observed manual contract is expressly denied.
+- MEXC docs distinguish public `state=0` (enabled) from `apiAllowed`
+  (Whether API trading is allowed), and `riskLevelLimit` counts tiers.
+  Private risk-limit `level` is the current min(leverage risk level,
+  position risk level). Documents:
+  https://www.mexc.fm/api-docs/futures/market-endpoints/get-contract-info
+  https://www.mexc.co/api-docs/futures/account-and-trading-endpoints/get-risk-limits
+- **Do not repeat MMR probes on this one-tier, API-denied manual contract
+  to claim strategy readiness.** Keeping manual position and T100
+  execution separate remains essential. Stopless manual position has
+  no verified native stop or API-exit permission.
+- Added separate opt-in **public-only country contract census**:
+  `app/t100_live_api_eligibility_census.py` and
+  `app/t100_live_api_eligibility_census_cli.py`.
+  It calls `/api/v1/contract/detail/country` without a symbol exactly
+  twice, as a documented optional request filter (no credentials,
+  signed private API, or POST). It checks matching order-independent
+  static public metadata for all returned 2..5000 distinct contracts,
+  refuses singleton/partial/invalid/drifted responses, and emits only
+  aggregate counts. Country filter may differ from account region/keys,
+  so public counts are NOT proof of account-specific order eligibility.
+- Counts returned only if two observations match: current enabled
+  USDT-settled perpetual contracts supporting cross margin, with
+  `apiAllowed` true / false / missing or unknown, eligible public
+  `INCREASE+BY_VOLUME` one/multi/unknown tier counts,
+  `CUSTOM+BY_VOLUME` counts and multi-tier count, and unsupported
+  modes. Non-USDT listings don't break the census but are not counted
+  as T100 eligible.
+- This identifies whether any **current public contract candidates**
+  with >1 tier exist for further independent tier research. It does
+  NOT identify symbols in the JSON, certify liquidity, require placing
+  an order, validate historical apiAllowed state, or update any
+  scanner/production admission path.
+- Historical strategy results remain NOT certified: a current public
+  census cannot replace point-in-time API permission, symbol listing,
+  historical liquidity, cap execution, latency, native stop behavior,
+  account-level cross-margin collateral or market-stressed liquidation.
+  `entry_allowed=false` and `live_authorization=false` always.
+- Run without loading secrets:
+  ```bash
+  T100_EXECUTION_MODE=paper \
+  T100_LIVE_ORDER_API_ENABLED=false \
+  T100_LIVE_KILL_SWITCH=true \
+  python3 -m app.t100_live_api_eligibility_census_cli
+  ```
+- Offline tests cover 2 consistency GETs, aggregates, tier depths,
+  explicit denial, unknown permission, invalid/malformed/partial or
+  duplicate payloads, drift, secret redaction and strict paper/kill
+  controls. No external network in CI; the operator must run the
+  country endpoint on Mac to learn real public counts.
+- No code to enable live trading, MEXC orders, stop/position edits,
+  Render deploy, DB migration, portfolio promotion or API-key changes.
