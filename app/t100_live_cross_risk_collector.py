@@ -102,17 +102,23 @@ class MexcReadOnlyCrossRiskCollector:
             before_positions = await self.private.raw_open_positions()
             stage = "PRIVATE_STOPS"
             before_stops = await self.private.raw_open_stops()
-            if (
-                not 1 <= len(before_positions) <= 4
-                or len(before_stops) != len(before_positions)
-            ):
+            if not 1 <= len(before_positions) <= 4:
                 raise CrossRiskCollectionHalted("COLLECTOR_NONFLAT_ONE_TO_FOUR_REQUIRED")
+            # The account-wide TP/SL collection is independent of the
+            # positions collection. A manual position with no native stop
+            # MUST remain observable for account-risk diagnostics.
+            # T100-owned positions retain a separate strict native-stop
+            # recovery/authorization check; this collector cannot authorize.
+            if len(before_stops) > 100:
+                raise CrossRiskCollectionHalted("COLLECTOR_STOP_ROWS_TOO_MANY")
             symbols = {p.get("symbol") for p in before_positions}
+            stop_symbols = {row.get("symbol") for row in before_stops}
             if (
                 None in symbols or len(symbols) != len(before_positions)
                 or any(type(s) is not str or re.fullmatch(r"[A-Z0-9]+_USDT", s) is None
                        for s in symbols)
-                or any(row.get("symbol") not in symbols for row in before_stops)
+                or any(type(s) is not str or re.fullmatch(r"[A-Z0-9]+_USDT", s) is None
+                       for s in stop_symbols)
             ):
                 raise CrossRiskCollectionHalted("COLLECTOR_POSITION_SYMBOLS_INVALID")
 
@@ -193,6 +199,8 @@ class MexcReadOnlyCrossRiskCollector:
                 or margin.get("position_inventory_economic_witness_observed") is not True
             ):
                 raise CrossRiskCollectionHalted("COLLECTOR_INVENTORY_INCOMPLETE")
+            if len(after_stops) > 100:
+                raise CrossRiskCollectionHalted("COLLECTOR_STOP_ROWS_TOO_MANY")
             # The documented all-account-assets GET has no continuation pages.
             # This flag is limited to the scope and semantics of that GET.
             return CrossRiskRead(
