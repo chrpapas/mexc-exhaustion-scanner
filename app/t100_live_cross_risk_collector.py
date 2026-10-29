@@ -56,6 +56,31 @@ def _positive(raw: Any) -> bool:
     return n.is_finite() and n > 0
 
 
+def _economic_failure_code(report: Any, phase: str) -> str:
+    """Return only a fixed category, never PNL/margin/asset values.
+
+    A structurally invalid economic witness cannot be called a numerical
+    margin mismatch; preserve UNKNOWN instead of guessing the cause.
+    """
+    if phase not in {"PRE", "POST"} or not isinstance(report, dict):
+        return "COLLECTOR_MARGIN_WITNESS_UNCLASSIFIED"
+    if report.get("status") not in {
+        "POSITION_INVENTORY_ECONOMIC_WITNESS_MISMATCH",
+        "POSITION_MARGIN_WITNESS_MATCH_UNREALIZED_NOT_RECONCILED",
+    }:
+        return "COLLECTOR_" + phase + "_MARGIN_SCHEMA_UNVERIFIED"
+    if report.get("usdt_position_margin_reconciled") is False:
+        return "COLLECTOR_" + phase + "_POSITION_MARGIN_MISMATCH"
+    if report.get("usdt_unrealized_reconciled") is False:
+        return "COLLECTOR_" + phase + "_UNREALIZED_PNL_MISMATCH"
+    if (
+        report.get("returned_non_usdt_position_margin_zero") is False
+        or report.get("returned_non_usdt_unrealized_zero") is False
+    ):
+        return "COLLECTOR_" + phase + "_OTHER_ASSET_EXPOSURE_UNVERIFIED"
+    return "COLLECTOR_" + phase + "_MARGIN_WITNESS_UNVERIFIED"
+
+
 class MexcReadOnlyCrossRiskCollector:
     def __init__(
         self, *, private: ReadOnlyMexcProbe, public: PublicHttpGet,
@@ -204,9 +229,13 @@ class MexcReadOnlyCrossRiskCollector:
                 symbol_scoped_crosscheck=redundant,
             )
             if margin.get("position_inventory_economic_witness_observed") is not True:
-                raise CrossRiskCollectionHalted("COLLECTOR_PRE_MARGIN_WITNESS_UNVERIFIED")
+                raise CrossRiskCollectionHalted(
+                    _economic_failure_code(margin, "PRE")
+                )
             if post_margin.get("position_inventory_economic_witness_observed") is not True:
-                raise CrossRiskCollectionHalted("COLLECTOR_POST_MARGIN_WITNESS_UNVERIFIED")
+                raise CrossRiskCollectionHalted(
+                    _economic_failure_code(post_margin, "POST")
+                )
             if certificate.get("account_wide_completeness_verified") is not True:
                 raise CrossRiskCollectionHalted("COLLECTOR_INVENTORY_INCOMPLETE")
             if len(after_stops) > 100:
