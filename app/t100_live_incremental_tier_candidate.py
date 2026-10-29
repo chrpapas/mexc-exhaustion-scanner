@@ -48,6 +48,73 @@ def _d(raw: Any, *, positive: bool = False) -> Decimal:
     return value
 
 
+@dataclass(frozen=True)
+class IncrementalEligibilityShape:
+    """Descriptive PUBLIC contract eligibility, not authorization to trade."""
+    state: str = "UNKNOWN"
+    api_order_access: str = "UNKNOWN"
+    cross_margin_support: str = "UNKNOWN"
+    contract_duration: str = "UNKNOWN"
+    quote_currency: str = "UNKNOWN"
+    settlement_currency: str = "UNKNOWN"
+    contract_eligible: bool = False
+    entry_allowed: bool = False
+    live_authorization: bool = False
+
+
+def classify_incremental_eligibility(public_contract: Any) -> IncrementalEligibilityShape:
+    """No account data or numeric values; return ONLY allowlisted categories."""
+    if type(public_contract) is not dict:
+        return IncrementalEligibilityShape()
+
+    state = public_contract.get("state")
+    open_type = public_contract.get("positionOpenType")
+    future_type = public_contract.get("futureType")
+    api_allowed = public_contract.get("apiAllowed")
+    quote = public_contract.get("quoteCoin")
+    settle = public_contract.get("settleCoin")
+
+    state_status = (
+        "ENABLED" if type(state) is int and state == 0 else
+        "NOT_ENABLED" if type(state) is int and state in (1, 2, 3, 4) else
+        "UNKNOWN"
+    )
+    api_status = (
+        "ALLOWED" if api_allowed is True else
+        "DENIED" if api_allowed is False else "UNKNOWN"
+    )
+    margin_support = (
+        "CROSS_SUPPORTED" if type(open_type) is int and open_type in (2, 3) else
+        "ISOLATED_ONLY" if type(open_type) is int and open_type == 1 else
+        "UNKNOWN"
+    )
+    duration = (
+        "PERPETUAL" if type(future_type) is int and future_type == 1 else
+        "NOT_PERPETUAL" if type(future_type) is int and future_type == 2 else
+        "UNKNOWN"
+    )
+    quote_status = "USDT" if quote == "USDT" else (
+        "OTHER" if type(quote) is str else "UNKNOWN"
+    )
+    settle_status = "USDT" if settle == "USDT" else (
+        "OTHER" if type(settle) is str else "UNKNOWN"
+    )
+    eligible = all((
+        state_status == "ENABLED",
+        api_status == "ALLOWED",
+        margin_support == "CROSS_SUPPORTED",
+        duration == "PERPETUAL",
+        quote_status == "USDT",
+        settle_status == "USDT",
+    ))
+    return IncrementalEligibilityShape(
+        state=state_status, api_order_access=api_status,
+        cross_margin_support=margin_support, contract_duration=duration,
+        quote_currency=quote_status, settlement_currency=settle_status,
+        contract_eligible=eligible,
+    )
+
+
 def reconstruct_incremental_candidate(
     public_contract: Any, *, position_contracts: Any,
     private_short_risk: Any = None,
@@ -67,14 +134,9 @@ def reconstruct_incremental_candidate(
         or public_contract.get("riskLimitType") != "BY_VOLUME"
     ):
         return block("INCR_MODE_OR_TYPE_UNSUPPORTED")
-    if (
-        public_contract.get("state") != 0
-        or public_contract.get("positionOpenType") not in (2, 3)
-        or public_contract.get("apiAllowed") is not True
-        or public_contract.get("futureType") != 1
-        or public_contract.get("quoteCoin") != "USDT"
-        or public_contract.get("settleCoin") != "USDT"
-    ):
+    # Keep the strict contract eligibility gate unchanged. The separate
+    # shape classifier explains *which* public contract dimension failed.
+    if not classify_incremental_eligibility(public_contract).contract_eligible:
         return block("INCR_CONTRACT_NOT_ELIGIBLE")
     levels = public_contract.get("riskLevelLimit")
     if type(levels) is not int or not 1 <= levels <= 100:
