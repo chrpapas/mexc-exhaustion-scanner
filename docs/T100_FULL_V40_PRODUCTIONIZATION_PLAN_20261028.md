@@ -697,3 +697,50 @@ authorizes an order.
   position drift, malformed PnL response, transport failure, cap on GET
   volume, and mandatory paper/kill preflight.
 - No live orders, no leverage change, no database migration, no Render deploy.
+
+## Implementation checkpoint: PnL-independent public risk schedule probe (2026-10-29)
+
+- The operator's bounded read-only PnL triplet sampler returned
+  `PNL_SYNC_STABLE_SAMPLES_RECONCILED_NONATOMIC`: three stable windows,
+  three reconciled USDT position/asset unrealized PnL comparisons,
+  zero position-margin mismatches, zero observed non-USDT exposure windows,
+  and no critical position drift. This is encouraging but does not
+  retrospectively invalidate the earlier first-frame
+  `COLLECTOR_POST_UNREALIZED_PNL_MISMATCH`. It does not establish that
+  all non-atomic REST snapshots will reconcile in future.
+- Earlier risk witness also reported
+  `RISK_TIER_STATIC_VOLUME_SCHEDULE_UNAVAILABLE`: the strict risk model
+  only accepts public `CUSTOM + BY_VOLUME` fully static tiers. The risk
+  mode/type classifier included in that witness cannot emit evidence when
+  an independent PnL timing fault blocks validation first.
+- Added `app/t100_live_risk_schedule_probe.py` and manual
+  `app/t100_live_risk_schedule_probe_cli.py`. The standalone inspect
+  does NOT call any account assets endpoint, allowing us to distinguish
+  venue risk-mode support without loosening PnL parity. It performs
+  exactly one account-wide private positions GET, at most four public
+  country-contract-info GETs, and one account-wide positions bookend GET.
+  It requires 1-4 distinct valid USDT contract symbols and checks stable
+  critical position bookends. The public responses must confirm the
+  requested symbol and success envelope.
+- Only redacted public shape categories are emitted:
+  `risk_schedule_mode` (`CUSTOM`, `INCREASE`, `UNKNOWN`, `MIXED`),
+  `risk_schedule_type` (`BY_VOLUME`, `BY_VALUE`, `UNKNOWN`,
+  `MIXED`), and `risk_schedule_fields` indicating present, absent,
+  inconsistent or mixed metadata. No raw position identifiers, symbols,
+  quantities, price, leverage, balance, or exchange message.
+- The inspection is a metadata snapshot, not two independently matched
+  public-contract frames, account-wide inventory completeness certification,
+  verified private risk levels, future-tier protection, atomicity, collateral,
+  risk reserve, liquidation model or a T100 execution permit.
+  `entry_allowed=false` and `live_authorization=false` always.
+- Paper execution + false live API + engaged kill switch are required
+  BEFORE constructing any MEXC network client. No retries, POST calls,
+  order placement, leverage modification, stop modification, Render deploy
+  or DB mutations.
+- Offline regressions cover CUSTOM/BY_VOLUME, INCREASE/BY_VALUE,
+  malformed public data, critical positions changing during read,
+  GET failures, empty positions, strict runtime guards and no leak.
+- Next: run this once on the Mac with active *matching* read credentials,
+  inspect the published risk-limit mode/type, then create a separate
+  independently tested model for the *documented* scheme before relaxing
+  no execution gates.
