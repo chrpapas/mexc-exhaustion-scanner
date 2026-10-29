@@ -119,10 +119,36 @@ def reconstruct_incremental_candidate(
     public_contract: Any, *, position_contracts: Any,
     private_short_risk: Any = None,
 ) -> IncrementalTierCandidate:
-    """Pure candidate; compare reported private MMR without promoting it.
+    """Strict *execution-eligible* research entrypoint; API denial blocks.
 
-    Private level is NOT inferred solely from position volume: MEXC says
-    it can be min(leverage-risk-level, position-risk-level).
+    Do NOT weaken this function just to inspect existing manual positions.
+    Use the separately named nonauthorizing research function below.
+    """
+    if type(public_contract) is not dict:
+        return IncrementalTierCandidate(status="INCR_PUBLIC_SCHEMA_UNVERIFIED")
+    if (
+        public_contract.get("riskLimitMode") != "INCREASE"
+        or public_contract.get("riskLimitType") != "BY_VOLUME"
+    ):
+        return IncrementalTierCandidate(status="INCR_MODE_OR_TYPE_UNSUPPORTED")
+    if not classify_incremental_eligibility(public_contract).contract_eligible:
+        return IncrementalTierCandidate(status="INCR_CONTRACT_NOT_ELIGIBLE")
+    return reconstruct_incremental_research_candidate(
+        public_contract, position_contracts=position_contracts,
+        private_short_risk=private_short_risk,
+    )
+
+
+def reconstruct_incremental_research_candidate(
+    public_contract: Any, *, position_contracts: Any,
+    private_short_risk: Any = None,
+) -> IncrementalTierCandidate:
+    """OFFLINE and NONAUTHORIZING; analyze API-denied manual contracts.
+
+    Never fake apiAllowed=True, and never use this function in any order,
+    admission, sizing or live-risk authorization path. A denied contract may
+    have valid published tiers even though API order execution is prohibited.
+    Requires an explicitly boolean API flag; missing/unknown stays blocked.
     """
     def block(status: str) -> IncrementalTierCandidate:
         return IncrementalTierCandidate(status=status)
@@ -134,9 +160,15 @@ def reconstruct_incremental_candidate(
         or public_contract.get("riskLimitType") != "BY_VOLUME"
     ):
         return block("INCR_MODE_OR_TYPE_UNSUPPORTED")
-    # Keep the strict contract eligibility gate unchanged. The separate
-    # shape classifier explains *which* public contract dimension failed.
-    if not classify_incremental_eligibility(public_contract).contract_eligible:
+    eligibility = classify_incremental_eligibility(public_contract)
+    if (
+        eligibility.state != "ENABLED"
+        or eligibility.cross_margin_support != "CROSS_SUPPORTED"
+        or eligibility.contract_duration != "PERPETUAL"
+        or eligibility.quote_currency != "USDT"
+        or eligibility.settlement_currency != "USDT"
+        or eligibility.api_order_access not in {"ALLOWED", "DENIED"}
+    ):
         return block("INCR_CONTRACT_NOT_ELIGIBLE")
     levels = public_contract.get("riskLevelLimit")
     if type(levels) is not int or not 1 <= levels <= 100:
@@ -224,6 +256,6 @@ def reconstruct_incremental_candidate(
         tiers=tuple(tiers), selected_position_tier=modeled,
         private_current_comparison=comparison,
         short_specific_limits_used=side_switch == 1,
-        public_contract_eligible=True,
+        public_contract_eligible=eligibility.contract_eligible,
         private_cross_short_verified=private_ok,
     )
