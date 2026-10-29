@@ -442,3 +442,41 @@ authorizes an order.
   commit and provide only `status`, `failure_stage`, `failure_code`
   and Boolean output. Never paste credentials or raw account details.
   No Render deployment, migrations or exchange mutations.
+
+## Implementation checkpoint: flat/nonflat inventory-shape diagnostic (2026-10-29)
+
+- An operator's real read-only risk run returned
+  `failure_stage=READ_FIRST`,
+  `failure_code=COLLECTOR_NONFLAT_ONE_TO_FOUR_REQUIRED`.
+  The initial collector rejects any input NOT in 1–4 positions with
+  exactly the same number of current TP/SL rows. This status alone cannot
+  establish flatness, stop protectiveness, or liquidation safety.
+- Added `app/t100_live_cross_risk_inventory_shape.py`: a **separate
+  GET-only two-read shape observer** that rereads account-wide positions,
+  current stops and account-wide open-order counts twice and compares
+  safety-critical inventory fields and count identity. It reports only
+  redacted counts and fixed diagnostic statuses:
+  flat-and-order-free observed nonatomically, flat-with-open-orders,
+  stops-without-position, more-than-four-positions, current TP/SL row
+  count different from number of positions, order-count mismatch, or
+  drift/transport failure.
+- The manual `cross_risk_diagnostic` now invokes that observer **only**
+  after `COLLECTOR_NONFLAT_ONE_TO_FOUR_REQUIRED`, and returns
+  `inventory_shape_status`, `inventory_shape_stable`,
+  `observed_current_stops`, `reported_stop_orders`, and
+  `reported_total_open_orders`. It may report zero positions only
+  when the independent double-GET is stable; otherwise count stays null.
+- This does NOT loosen the risk model to assume zero margin requirements
+  in a flat account. A genuinely flat account has no position to assess
+  for liquidation; the planned hypothetical V40 1–4 slot candidate
+  portfolio must be evaluated independently with verified actual contract
+  tiers, cross-wallet economics, and stress prices.
+- A TP/SL row count different from the position count does not prove
+  missing protection: MEXC may allow multiple protective orders per
+  position. Native stop semantics, linkage and volume coverage need
+  separate evaluation. Existing manual/unowned MEXC positions remain
+  untouched and never become T100-owned by this diagnostic.
+- No Render deployment, DB migration, leverage change, or MEXC mutation.
+  The code continues to require paper mode, order API disabled, and
+  an engaged kill switch. Local rerun emits redacted inventory status
+  for follow-up.
