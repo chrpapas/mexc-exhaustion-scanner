@@ -119,10 +119,37 @@ def _result(
         "NONE", "UNCLASSIFIED_READ_OR_EVIDENCE_FAILURE",
     }
     code = code if isinstance(code, str) and code in safe_codes else "NONE"
+    # Allowlisted public contract schema only. Not two-frame-certified
+    # evidence, not private risk limits and never permission to trade.
+    def safe_shape_field(attr: str, values: set[str]) -> str:
+        raw = getattr(witness, attr, "NOT_CHECKED")
+        return raw if type(raw) is str and raw in values else "NOT_CHECKED"
+
+    risk_mode = safe_shape_field(
+        "risk_schedule_mode", {"CUSTOM", "INCREASE", "MIXED", "UNKNOWN", "NOT_CHECKED"},
+    )
+    risk_type = safe_shape_field(
+        "risk_schedule_type", {"BY_VOLUME", "BY_VALUE", "MIXED", "UNKNOWN", "NOT_CHECKED"},
+    )
+    risk_fields = safe_shape_field("risk_schedule_fields", {
+        "CUSTOM_FIELDS_PRESENT", "CUSTOM_FIELDS_MISSING_OR_MALFORMED",
+        "INCREMENTAL_FIELDS_PRESENT_UNMODELED",
+        "INCREMENTAL_FIELDS_MISSING_OR_MALFORMED",
+        "INCREMENTAL_FIELDS_INCOHERENT", "UNVERIFIED", "MIXED",
+        "NOT_CHECKED",
+    })
+    if code != "RISK_TIER_STATIC_VOLUME_SCHEDULE_UNAVAILABLE":
+        risk_mode, risk_type, risk_fields = (
+            "NOT_CHECKED", "NOT_CHECKED", "NOT_CHECKED",
+        )
     return {
         "status": safe_status,
         "failure_stage": stage,
         "failure_code": code,
+        "risk_schedule_mode": risk_mode,
+        "risk_schedule_type": risk_type,
+        "risk_schedule_fields": risk_fields,
+        "risk_schedule_two_frame_certified": False,
         "observed_positions": n,
         "observed_current_stops": stops,
         "reported_stop_orders": stop_reported,
