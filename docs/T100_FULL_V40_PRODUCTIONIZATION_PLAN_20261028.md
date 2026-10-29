@@ -814,3 +814,54 @@ authorizes an order.
   failure and mandatory paper/kill guards.
 - No MEXC POST, stop/order change, Render deploy, DB migration or live
   authorization.
+
+## Implementation checkpoint: public contract eligibility reason isolation (2026-10-29)
+
+- After the first account snapshot classified the live manual contract
+  `INCREASE + BY_VOLUME`, the standalone GET-only incremental tier
+  candidate comparison halted with
+  `candidate_failure=INCR_CONTRACT_NOT_ELIGIBLE`.
+  This failure is **pre-MMR-comparison**. It does not prove that the
+  contract is delisted, nor that the proposed incremental formula is
+  correct. The public contract may be currently active but
+  `apiAllowed=false`, isolated-only, nonperpetual, non-USDT, or
+  missing a required field.
+- Official MEXC country-contract GET documents separate
+  `state` (0 enabled, 1 delivery, 2 delivered, 3 offline, 4 paused),
+  `apiAllowed` (**API trading allowed**, a separate boolean),
+  `positionOpenType` (1 isolated, 2 cross, 3 both),
+  `futureType` (1 perpetual), `quoteCoin`, `settleCoin`:
+  https://www.mexc.fm/api-docs/futures/market-endpoints/get-contract-info
+  A private GET of an existing position does not imply permission to
+  open an API position in its contract.
+- Added `classify_incremental_eligibility` in
+  `app/t100_live_incremental_tier_candidate.py`. This is a pure
+  classifier returning only fixed public metadata categories:
+  `contract_state`: ENABLED / NOT_ENABLED / UNKNOWN;
+  `contract_api_order_access`: ALLOWED / DENIED / UNKNOWN;
+  `contract_cross_margin_support`: CROSS_SUPPORTED / ISOLATED_ONLY / UNKNOWN;
+  `contract_duration`: PERPETUAL / NOT_PERPETUAL / UNKNOWN;
+  `contract_quote_currency` and `contract_settlement_currency`:
+  USDT / OTHER / UNKNOWN.
+- The existing numeric candidate eligibility gate is **not loosened**;
+  it now delegates to the exact same allowlisted checks with strict
+  integer and boolean types. The opt-in standalone
+  `app.t100_live_incremental_tier_probe_cli` returns fixed
+  categorical eligibility fields **only** for the particular
+  `INCR_CONTRACT_NOT_ELIGIBLE` failure and only after stable
+  position bookends. No additional MEXC GETs, API mutations or
+  credentials are added, and the output does not include symbol,
+  account ID, position size, prices, margins or raw exchange messages.
+- If `contract_api_order_access=DENIED`, **do not** enable the T100
+  trader on the contract even if the manual position is live. Manual
+  position ownership/stop protection remains independent and unverified.
+- The candidate current-private-MMR comparison remains unavailable
+  until supported field semantics pass; a candidate match alone
+  never certifies future stressed tiers or venue liquidation risk.
+  Nothing is wired into V40 admission, current recovery, Render,
+  position ownership or any order path.
+- Tests cover each public eligibility dimension, missing/unknown
+  fields, actual CLI results for apiAllowed false, isolated-only
+  and missing apiAllowed, and no risk/trade approval in all cases.
+- All live-order API, order placement, leverage/stop changes, Render
+  deployment and migrations remain disabled.
