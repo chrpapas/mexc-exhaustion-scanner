@@ -744,3 +744,73 @@ authorizes an order.
   inspect the published risk-limit mode/type, then create a separate
   independently tested model for the *documented* scheme before relaxing
   no execution gates.
+
+## Implementation checkpoint: INCREASE/BY_VOLUME candidate reconstruction against private current MMR (2026-10-29)
+
+- The operator's independent GET-only public-contract shape probe reports:
+  `status=RISK_SHAPE_PUBLIC_METADATA_OBSERVED_NONAUTHORIZING`;
+  `observed_positions=1`; critical position bookends consistent;
+  `risk_schedule_mode=INCREASE`, `risk_schedule_type=BY_VOLUME`,
+  `risk_schedule_fields=INCREMENTAL_FIELDS_PRESENT_UNMODELED`.
+  No current private tier, future liquidation schedule, account collateral,
+  T100 ownership, native stops or live authorization was certified.
+- Current MEXC official contract-info documentation defines
+  `riskBaseVol`, `riskIncrVol`, `riskIncrMmr`, `riskIncrImr`,
+  `riskLevelLimit`, `maintenanceMarginRate`,
+  `initialMarginRate`, `riskLongShortSwitch` and `BY_VOLUME`:
+  https://www.mexc.fm/api-docs/futures/market-endpoints/get-contract-info
+  MEXC private GET risk-limit docs describe CURRENT `level` as
+  min(leverage risk level, position risk level) and separately return
+  `maxVol`, `mmr`, `imr`, `currentMmr`, `openType`, and leverage:
+  https://www.mexc.co/api-docs/futures/account-and-trading-endpoints/get-risk-limits
+- Added isolated *candidate* pure policy in
+  `app/t100_live_incremental_tier_candidate.py`, strictly limited to
+  `INCREASE + BY_VOLUME`. Using Decimal, the model hypothesizes
+  `cap(level)=baseVol+(level-1)*incrVol` and
+  `mmr(level)=maintenanceMarginRate+(level-1)*riskIncrMmr`,
+  likewise IMR. Tier thresholds and upper bound are explicitly
+  RESEARCH CANDIDATES inferred from fields named "per tier" and are not
+  an exchange-verified implementation or future liquidation certificate.
+- The candidate checks positive contract size, valid USDT perpetual,
+  available/cross-eligible contract, all numeric fields finite, bounded
+  level count, monotonically increasing contract quantity caps, valid
+  MMR/IMR ordering and 0<=fee<1. When `riskLongShortSwitch=1`,
+  short-specific base/increment must be present; **never** silently use
+  generic or long-side limits. Missing/invalid metadata blocks.
+- The CURRENT private short side may differ from volume-derived tier:
+  published docs say `level` is affected by leverage-risk level too.
+  The model compares **private current level's** `mmr` and optional
+  `currentMmr` to the candidate for that exact level and returns
+  `EXACT_MATCH`, `ABOVE_CANDIDATE`, or `BELOW_CANDIDATE` as
+  *descriptive comparison only*. No equality to volume-inferred level is
+  imposed and no matching private row certifies the full future schedule.
+- Added opt-in `app/t100_live_incremental_tier_probe_cli.py` using
+  `app/t100_live_incremental_tier_probe.py`, doing 2 account-wide
+  position GETs, at most 4 private risk-limit GETs and 4 public
+  country-contract GETs (max 10 GETs total), with no retries or order
+  mutations. PnL/asset reads are independent and not bypassed in the
+  unchanged actual entry/liquidation safety gates.
+  It validates critical position bookends before reporting redacted,
+  aggregate current private-versus-candidate MMR comparison counts.
+- The standalone comparison always reports:
+  `public_private_snapshot_atomic=false`,
+  `future_stressed_tiers_certified=false`,
+  `cross_wallet_collateral_certified=false`,
+  `venue_liquidation_certified=false`,
+  `account_wide_completeness_certified=false`,
+  `native_stop_protection_verified=false`,
+  `t100_position_ownership_certified=false`,
+  `entry_allowed=false`, `live_authorization=false`.
+  It does not emit symbols, position IDs, quantities, prices, account
+  balances, raw tier rates, raw messages, keys or secrets.
+- This code is not wired into the actual T100 four-slot planner,
+  admission policy, cross-risk witness, Render runtime, or order path.
+  Matching a currently observed tier is only one of several required
+  independent confirmations for stress/liquidation modeling.
+- Offline tests include tier boundaries, single-level zero increments,
+  missing short-side fields, invalid/rate-incoherent tiers, private
+  same/greater/less MMR, unknown/ineligible contract, private isolated
+  mode, correct GET counts, bookend drift, response redaction, transport
+  failure and mandatory paper/kill guards.
+- No MEXC POST, stop/order change, Render deploy, DB migration or live
+  authorization.
