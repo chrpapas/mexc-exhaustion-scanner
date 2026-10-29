@@ -71,6 +71,7 @@ def main() -> None:
     if report["status"] not in {
         "INCR_PROBE_CURRENT_PRIVATE_BELOW_CANDIDATE_NONAUTHORIZING",
         "INCR_PROBE_PUBLIC_CANDIDATE_PRIVATE_COMPARED_NONAUTHORIZING",
+        "INCR_PROBE_API_TRADING_DENIED_RISK_RESEARCH_ONLY",
     }:
         raise SystemExit(2)
 
