@@ -94,6 +94,8 @@ class CrossRiskReader(Protocol):
 class CrossRiskObservation:
     status: str
     observed_positions: int = 0
+    observed_current_stops: int = 0
+    native_stop_protection_verified: bool = False
     stable_critical_inventory: bool = False
     position_margin_economic_witness_observed: bool = False
     current_risk_tiers_observed: bool = False
@@ -184,7 +186,7 @@ def _frame(
         not isinstance(read.positions, list)
         or not 1 <= len(read.positions) <= MAX_POSITIONS
         or not isinstance(read.stops, list)
-        or len(read.stops) != len(read.positions)
+        or len(read.stops) > 100
         or not isinstance(read.assets, list)
         or not isinstance(read.private_risk_by_symbol, dict)
         or not isinstance(read.public_contract_by_symbol, dict)
@@ -212,7 +214,6 @@ def _frame(
 
     symbols = []
     pos_ids = []
-    stop_ids = []
     marks: dict[str, Decimal] = {}
     for pos in read.positions:
         symbol = pos.get("symbol")
@@ -230,23 +231,12 @@ def _frame(
         pos_ids.append(pid)
     if len(set(symbols)) != len(symbols) or len(set(pos_ids)) != len(pos_ids):
         raise ValueError("DUPLICATE_POSITION_IDENTITY")
-    if any(type(x) is not dict for x in read.stops):
-        raise ValueError("MALFORMED_STOP_ROW")
-    for row in read.stops:
-        sid = str(row.get("id") or "")
-        pid = str(row.get("positionId") or "")
-        if (
-            not sid or not pid or pid not in pos_ids
-            or row.get("symbol") not in (None, symbols[pos_ids.index(pid)])
-            or _positive(row.get("stopLossPrice")) <= 0
-        ):
-            raise ValueError("PROTECTION_IDENTITY_INVALID")
-        stop_ids.append(sid)
-    if len(set(stop_ids)) != len(stop_ids) or len(set(
-        str(x.get("positionId")) for x in read.stops
-    )) != len(read.positions):
-        raise ValueError("DUPLICATE_STOP_IDENTITY")
-
+    # Account observation does NOT claim that any current TP/SL row is
+    # protective, linked to an owned T100 position, fully sized, or live.
+    # Rows are counted and stability-checked independently. In particular,
+    # an entirely stop-free manually managed position can be observed.
+    # The four-slot durable recovery gate still requires independent native
+    # stop identity, state, price and protective-volume verification.
     if (
         set(read.private_risk_by_symbol) != set(symbols)
         or set(read.public_contract_by_symbol) != set(symbols)
@@ -359,6 +349,8 @@ async def observe_cross_risk_window(
     return CrossRiskObservation(
         status="CURRENT_CROSS_RISK_OBSERVED_NONAUTHORIZING",
         observed_positions=len(syms2),
+        observed_current_stops=len(second.stops),
+        native_stop_protection_verified=False,
         stable_critical_inventory=True,
         position_margin_economic_witness_observed=True,
         current_risk_tiers_observed=True,
