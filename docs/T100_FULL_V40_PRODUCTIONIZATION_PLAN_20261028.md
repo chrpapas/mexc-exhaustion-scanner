@@ -865,3 +865,52 @@ authorizes an order.
   and missing apiAllowed, and no risk/trade approval in all cases.
 - All live-order API, order placement, leverage/stop changes, Render
   deployment and migrations remain disabled.
+
+## Implementation checkpoint: API-denied contract, independent tier research only (2026-10-29)
+
+- The operator's active-account GET-only MEXC country contract probe
+  returned `candidate_failure=INCR_CONTRACT_NOT_ELIGIBLE` with
+  `contract_api_order_access=DENIED`, despite
+  `contract_state=ENABLED`, `contract_cross_margin_support=CROSS_SUPPORTED`,
+  `contract_duration=PERPETUAL`, and USDT quote/settlement.
+  This is a **public per-contract API trading restriction**. It is
+  NOT a failed API credential scope, and it is NOT proof that the market
+  or an existing manual position is inactive.
+- Official contract metadata documents `apiAllowed` as "Whether API
+  trading is allowed"; `state=0` means the contract is enabled.
+  https://www.mexc.fm/api-docs/futures/market-endpoints/get-contract-info
+  The public contract's `apiAllowed=false` must ALWAYS block T100 API
+  entry for that exact contract (and its status may change later).
+  Current `app/t100_live_symbol_eligibility.py` independently verifies
+  `api_allowed is True`; keep that guard. The observed manual position
+  remains outside T100 ownership and native-stop authorization.
+- The previous single `reconstruct_incremental_candidate` function
+  also required `apiAllowed=true` before ANY tier arithmetic, so the
+  unrelated numerical research was blocked. Separated that concern:
+  `reconstruct_incremental_candidate` keeps its strict execution-eligible
+  public contract requirement; a distinctly named
+  `reconstruct_incremental_research_candidate` can examine an otherwise
+  healthy public INCREASE/BY_VOLUME contract with **explicit
+  `apiAllowed=false`**. It never lies to the calculation by rewriting
+  `apiAllowed`, and it rejects missing/unknown `apiAllowed` along
+  with non-enabled, non-cross, non-perpetual, non-USDT contracts.
+- The standalone bounded GET-only
+  `app.t100_live_incremental_tier_probe_cli` uses the research-only
+  reconstruction; on matching critical position bookends it compares
+  the published candidate against CURRENT signed private short-tier MMR.
+  The CLI emits `contract_api_order_access=DENIED`,
+  `api_trading_denied_contract_count`, and an explicit
+  `INCR_PROBE_API_TRADING_DENIED_RISK_RESEARCH_ONLY` status if the
+  candidate succeeds for an API-denied symbol. No private rates,
+  symbols, balances, position ID, quantities, raw responses or credentials.
+- This research result is NEVER wired into a mutation path or live-risk
+  gate; even exact MMR match has zero standing for API execution,
+  account-wide completeness, stressed tier safety, liquidation modeling
+  or native-stop protection. All `entry_allowed=false` and
+  `live_authorization=false` fields remain hardcoded.
+- Additional offline tests assert the original strict API denial gate,
+  research-only reconstruction on explicit denial, rejection of unknown
+  permission or other ineligibility fields, correct private MMR comparison,
+  and explicit CLI execution denial with no authorization.
+- No REST POST, orders, stop change, leverage change, account mutation,
+  Render deployment, DB migration or promotion.
