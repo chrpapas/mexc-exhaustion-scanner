@@ -1,0 +1,273 @@
+"""Offline MEXC INCREASE tier candidate probe: no HTTP, no orders."""
+import unittest
+
+from app.t100_live_incremental_tier_probe import inspect_incremental_tier_candidate
+from app.t100_live_incremental_tier_probe_cli import run
+from app.t100_live_readonly_probe import ReadOnlyMexcProbe
+from tests.test_t100_live_cross_risk_collector import FakePrivate, FakePublic
+from tests.test_t100_live_cross_risk_observation import frame
+
+
+def data():
+    x = frame()
+    x.public_contract_by_symbol["TEST_USDT"].update({
+        "riskLimitMode": "INCREASE",
+        "riskLimitType": "BY_VOLUME",
+        "riskLongShortSwitch": 0,
+        "riskBaseVol": 100, "riskIncrVol": 100,
+        "riskLevelLimit": 3, "maintenanceMarginRate": 0.01,
+        "initialMarginRate": 0.02,
+        "riskIncrMmr": 0.01, "riskIncrImr": 0.01,
+    })
+    return x
+
+
+class ProbeTests(unittest.IsolatedAsyncioTestCase):
+    async def test_private_current_exact_match_non_authorizing(self):
+        x = data()
+        private = FakePrivate(x)
+        public = FakePublic(x)
+        r = await inspect_incremental_tier_candidate(ReadOnlyMexcProbe(private), public)
+        self.assertEqual(r.status, "INCR_PROBE_PUBLIC_CANDIDATE_PRIVATE_COMPARED_NONAUTHORIZING")
+        self.assertEqual(r.private_current_mmr_exact_match_count, 1)
+        self.assertEqual(r.private_current_mmr_above_candidate_count, 0)
+        self.assertEqual(r.private_current_mmr_below_candidate_count, 0)
+        self.assertEqual(r.candidate_max_level_count, 3)
+        self.assertTrue(r.position_bookends_consistent)
+        self.assertTrue(r.public_candidate_reconstructed)
+        self.assertFalse(r.future_stressed_tiers_certified)
+        self.assertFalse(r.cross_wallet_collateral_certified)
+        self.assertFalse(r.venue_liquidation_certified)
+        self.assertFalse(r.live_authorization)
+        self.assertEqual(len(private.calls), 3)
+        self.assertEqual(len(public.calls), 2)
+        self.assertTrue(r.public_metadata_two_get_consistent)
+        self.assertEqual(r.observed_risk_schedule_mode, "INCREASE")
+        self.assertEqual(r.observed_risk_schedule_type, "BY_VOLUME")
+        self.assertTrue(all(call[0] == "GET" for call in private.calls + public.calls))
+        self.assertNotIn("TEST_USDT", str(r))
+        self.assertNotIn("2000", str(r))
+
+    async def test_private_mmr_below_candidate_is_explicit_disagreement(self):
+        x = data()
+        x.private_risk_by_symbol["TEST_USDT"][0]["mmr"] = 0.001
+        x.private_risk_by_symbol["TEST_USDT"][0]["currentMmr"] = 0.001
+        r = await inspect_incremental_tier_candidate(
+            ReadOnlyMexcProbe(FakePrivate(x)), FakePublic(x),
+        )
+        self.assertEqual(r.status, "INCR_PROBE_CURRENT_PRIVATE_BELOW_CANDIDATE_NONAUTHORIZING")
+        self.assertEqual(r.private_current_mmr_below_candidate_count, 1)
+        self.assertFalse(r.entry_allowed)
+
+    async def test_not_incremental_never_promoted(self):
+        x = frame()
+        r = await inspect_incremental_tier_candidate(
+            ReadOnlyMexcProbe(FakePrivate(x)), FakePublic(x),
+        )
+        self.assertEqual(r.status, "INCR_PROBE_CANDIDATE_UNVERIFIED")
+        self.assertEqual(r.candidate_failure, "INCR_MODE_OR_TYPE_UNSUPPORTED")
+        self.assertEqual(r.candidate_mode, "INCREASE")
+        self.assertEqual(r.candidate_type, "BY_VOLUME")
+        self.assertEqual(r.observed_risk_schedule_mode, "CUSTOM")
+        self.assertEqual(r.observed_risk_schedule_type, "BY_VOLUME")
+        self.assertEqual(r.observed_risk_schedule_fields, "CUSTOM_FIELDS_PRESENT")
+        self.assertTrue(r.public_metadata_two_get_consistent)
+        self.assertTrue(r.position_bookends_consistent)
+        self.assertEqual(r.observed_positions, 1)
+        self.assertFalse(r.private_current_risk_rows_observed)
+        self.assertFalse(r.live_authorization)
+
+    async def test_unsupported_value_mode_reports_actual_fields_not_expected(self):
+        x = data()
+        x.public_contract_by_symbol["TEST_USDT"]["riskLimitType"] = "BY_VALUE"
+        r = await inspect_incremental_tier_candidate(
+            ReadOnlyMexcProbe(FakePrivate(x)), FakePublic(x),
+        )
+        self.assertEqual(r.candidate_failure, "INCR_MODE_OR_TYPE_UNSUPPORTED")
+        self.assertEqual(r.observed_risk_schedule_mode, "INCREASE")
+        self.assertEqual(r.observed_risk_schedule_type, "BY_VALUE")
+        self.assertTrue(r.position_bookends_consistent)
+        self.assertTrue(r.public_metadata_two_get_consistent)
+        self.assertFalse(r.entry_allowed)
+        self.assertFalse(r.live_authorization)
+
+    async def test_unknown_venue_mode_redacted_and_unsupported(self):
+        x = data()
+        x.public_contract_by_symbol["TEST_USDT"]["riskLimitMode"] = "SECRET_NEW_MODE"
+        r = await inspect_incremental_tier_candidate(
+            ReadOnlyMexcProbe(FakePrivate(x)), FakePublic(x),
+        )
+        self.assertEqual(r.candidate_failure, "INCR_MODE_OR_TYPE_UNSUPPORTED")
+        self.assertEqual(r.observed_risk_schedule_mode, "UNKNOWN")
+        self.assertEqual(r.observed_risk_schedule_type, "BY_VOLUME")
+        self.assertTrue(r.public_metadata_two_get_consistent)
+        self.assertNotIn("SECRET_NEW_MODE", str(r))
+        self.assertFalse(r.entry_allowed)
+
+    async def test_public_mode_changes_between_gets_without_any_certification(self):
+        x = data()
+        class ChangingPublic(FakePublic):
+            async def get(self, path, *, params=None):
+                if len(self.calls) == 1:
+                    self.observed.public_contract_by_symbol["TEST_USDT"]["riskLimitMode"] = "CUSTOM"
+                return await super().get(path, params=params)
+        r = await inspect_incremental_tier_candidate(
+            ReadOnlyMexcProbe(FakePrivate(x)), ChangingPublic(x),
+        )
+        self.assertEqual(r.status, "INCR_PROBE_PUBLIC_CONTRACT_METADATA_DRIFT")
+        self.assertEqual(r.observed_risk_schedule_mode, "NOT_CHECKED")
+        self.assertEqual(r.observed_risk_schedule_type, "NOT_CHECKED")
+        self.assertFalse(r.public_metadata_two_get_consistent)
+        self.assertFalse(r.position_bookends_consistent)
+        self.assertFalse(r.entry_allowed)
+        self.assertFalse(r.live_authorization)
+
+    async def test_api_order_access_changes_between_public_reads_blocks(self):
+        x = data()
+        class ChangingAccess(FakePublic):
+            async def get(self, path, *, params=None):
+                if len(self.calls) == 1:
+                    self.observed.public_contract_by_symbol["TEST_USDT"]["apiAllowed"] = False
+                return await super().get(path, params=params)
+        r = await inspect_incremental_tier_candidate(
+            ReadOnlyMexcProbe(FakePrivate(x)), ChangingAccess(x),
+        )
+        self.assertEqual(r.status, "INCR_PROBE_PUBLIC_CONTRACT_METADATA_DRIFT")
+        self.assertFalse(r.api_trading_allowed_for_all)
+        self.assertFalse(r.entry_allowed)
+
+    async def test_public_second_get_failure_is_redacted(self):
+        x = data()
+        class FailSecond(FakePublic):
+            async def get(self, path, *, params=None):
+                if self.calls:
+                    raise RuntimeError("SECRET_HTTP_RESPONSE")
+                return await super().get(path, params=params)
+        r = await inspect_incremental_tier_candidate(
+            ReadOnlyMexcProbe(FakePrivate(x)), FailSecond(x),
+        )
+        self.assertEqual(r.status, "INCR_PROBE_PUBLIC_RECHECK_GET_FAILED")
+        self.assertNotIn("SECRET_HTTP_RESPONSE", str(r))
+        self.assertFalse(r.live_authorization)
+
+    async def test_missing_short_specific_fields_fail_closed(self):
+        x = data()
+        x.public_contract_by_symbol["TEST_USDT"]["riskLongShortSwitch"] = 1
+        r = await inspect_incremental_tier_candidate(
+            ReadOnlyMexcProbe(FakePrivate(x)), FakePublic(x),
+        )
+        self.assertEqual(r.candidate_failure, "INCR_SHORT_SIDE_FIELDS_MISSING")
+        self.assertFalse(r.live_authorization)
+
+    async def test_api_trading_disabled_is_visible_as_public_reason_only(self):
+        x = data()
+        x.public_contract_by_symbol["TEST_USDT"]["apiAllowed"] = False
+        r = await inspect_incremental_tier_candidate(
+            ReadOnlyMexcProbe(FakePrivate(x)), FakePublic(x),
+        )
+        self.assertEqual(r.status, "INCR_PROBE_API_TRADING_DENIED_RISK_RESEARCH_ONLY")
+        self.assertEqual(r.candidate_failure, "NOT_CHECKED")
+        self.assertEqual(r.contract_api_order_access, "DENIED")
+        self.assertEqual(r.api_trading_denied_contract_count, 1)
+        self.assertFalse(r.api_trading_allowed_for_all)
+        self.assertTrue(r.position_bookends_consistent)
+        self.assertTrue(r.public_candidate_reconstructed)
+        self.assertTrue(r.private_current_risk_rows_observed)
+        self.assertEqual(r.private_current_mmr_exact_match_count, 1)
+        self.assertFalse(r.future_stressed_tiers_certified)
+        self.assertFalse(r.venue_liquidation_certified)
+        self.assertFalse(r.live_authorization)
+        self.assertFalse(r.entry_allowed)
+        self.assertNotIn("TEST_USDT", str(r))
+
+    async def test_cross_margin_not_supported_reports_specific_reason(self):
+        x = data()
+        x.public_contract_by_symbol["TEST_USDT"]["positionOpenType"] = 1
+        r = await inspect_incremental_tier_candidate(
+            ReadOnlyMexcProbe(FakePrivate(x)), FakePublic(x),
+        )
+        self.assertEqual(r.candidate_failure, "INCR_CONTRACT_NOT_ELIGIBLE")
+        self.assertEqual(r.contract_cross_margin_support, "ISOLATED_ONLY")
+        self.assertFalse(r.public_candidate_reconstructed)
+        self.assertEqual(r.contract_api_order_access, "ALLOWED")
+        self.assertFalse(r.live_authorization)
+
+    async def test_unknown_metadata_uses_unknown_not_normal_or_safe(self):
+        x = data()
+        x.public_contract_by_symbol["TEST_USDT"].pop("apiAllowed")
+        r = await inspect_incremental_tier_candidate(
+            ReadOnlyMexcProbe(FakePrivate(x)), FakePublic(x),
+        )
+        self.assertEqual(r.candidate_failure, "INCR_CONTRACT_NOT_ELIGIBLE")
+        self.assertEqual(r.contract_api_order_access, "UNKNOWN")
+        self.assertFalse(r.public_candidate_reconstructed)
+        self.assertFalse(r.entry_allowed)
+        self.assertFalse(r.live_authorization)
+
+    async def test_private_http_error_redacted_no_public_get(self):
+        x = data()
+        class FailingPrivate(FakePrivate):
+            async def _private_get(self, path, params=None):
+                if path == "/api/v1/private/account/risk_limit":
+                    raise ValueError("PRIVATE_API_SECRET")
+                return await super()._private_get(path, params)
+        public = FakePublic(x)
+        r = await inspect_incremental_tier_candidate(
+            ReadOnlyMexcProbe(FailingPrivate(x)), public,
+        )
+        self.assertEqual(r.status, "INCR_PROBE_PRIVATE_RISK_GET_FAILED")
+        self.assertEqual(public.calls, [])
+        self.assertNotIn("PRIVATE_API_SECRET", str(r))
+
+    async def test_public_symbol_mismatch_blocks(self):
+        x = data()
+        public = FakePublic(x)
+        public.change_symbol = True
+        r = await inspect_incremental_tier_candidate(
+            ReadOnlyMexcProbe(FakePrivate(x)), public,
+        )
+        self.assertEqual(r.status, "INCR_PROBE_PUBLIC_CONTRACT_SCHEMA_UNVERIFIED")
+
+    async def test_bookend_inventory_drift_blocks(self):
+        x = data()
+        class ChangedPrivate(FakePrivate):
+            async def _private_get(self, path, params=None):
+                if path == "/api/v1/private/position/open_positions" and (
+                    params is None and self.positions_reads == 1
+                ):
+                    self.observed.positions[0]["holdVol"] = "53"
+                return await super()._private_get(path, params)
+        r = await inspect_incremental_tier_candidate(
+            ReadOnlyMexcProbe(ChangedPrivate(x)), FakePublic(x),
+        )
+        self.assertEqual(r.status, "INCR_PROBE_CRITICAL_INVENTORY_DRIFT")
+        self.assertFalse(r.public_candidate_reconstructed)
+
+    async def test_paper_kill_blocks_before_credentials_and_network(self):
+        reports = [
+            await run(environ={}),
+            await run(environ={
+                "T100_EXECUTION_MODE": "paper",
+                "T100_LIVE_ORDER_API_ENABLED": "false",
+                "T100_LIVE_KILL_SWITCH": "true",
+            }),
+            await run(environ={
+                "T100_EXECUTION_MODE": "live",
+                "T100_LIVE_ORDER_API_ENABLED": "true",
+                "T100_LIVE_KILL_SWITCH": "false",
+                "MEXC_API_KEY": "SECRET_KEY",
+                "MEXC_API_SECRET": "SECRET_VALUE",
+            }),
+        ]
+        self.assertEqual(
+            [r["status"] for r in reports],
+            ["INCR_PROBE_PAPER_KILL_REQUIRED",
+             "INCR_PROBE_CREDENTIALS_MISSING",
+             "INCR_PROBE_PAPER_KILL_REQUIRED"],
+        )
+        self.assertTrue(all(r["entry_allowed"] is False for r in reports))
+        self.assertNotIn("SECRET_KEY", str(reports))
+
+
+if __name__ == "__main__":
+    unittest.main()
