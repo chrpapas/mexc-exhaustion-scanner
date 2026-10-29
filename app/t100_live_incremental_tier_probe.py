@@ -13,7 +13,10 @@ from dataclasses import dataclass
 from typing import Any
 
 from app.t100_live_consistency import CRITICAL_POSITION_FIELDS
-from app.t100_live_incremental_tier_candidate import reconstruct_incremental_candidate
+from app.t100_live_incremental_tier_candidate import (
+    IncrementalEligibilityShape, classify_incremental_eligibility,
+    reconstruct_incremental_candidate,
+)
 from app.t100_live_readonly_probe import ReadOnlyMexcProbe
 
 CONTRACT_COUNTRY = "/api/v1/contract/detail/country"
@@ -33,6 +36,12 @@ class IncrementalTierProbeReport:
     short_specific_limits_used_count: int = 0
     candidate_max_level_count: int | None = None
     candidate_failure: str = "NOT_CHECKED"
+    contract_state: str = "NOT_CHECKED"
+    contract_api_order_access: str = "NOT_CHECKED"
+    contract_cross_margin_support: str = "NOT_CHECKED"
+    contract_duration: str = "NOT_CHECKED"
+    contract_quote_currency: str = "NOT_CHECKED"
+    contract_settlement_currency: str = "NOT_CHECKED"
     position_bookends_consistent: bool = False
     public_private_snapshot_atomic: bool = False
     future_stressed_tiers_certified: bool = False
@@ -86,10 +95,30 @@ async def inspect_incremental_tier_candidate(
     private: ReadOnlyMexcProbe, public: Any,
 ) -> IncrementalTierProbeReport:
     """No retry, <= 2 account positions + 4 private tier + 4 public GETs."""
-    def blocked(status: str, *, failure: str = "NOT_CHECKED") -> IncrementalTierProbeReport:
+    def blocked(
+        status: str, *, failure: str = "NOT_CHECKED",
+        public_eligibility: IncrementalEligibilityShape | None = None,
+    ) -> IncrementalTierProbeReport:
         if failure not in _SAFE_CANDIDATE_FAILURES:
             failure = "NOT_CHECKED"
-        return IncrementalTierProbeReport(status=status, candidate_failure=failure)
+        # Only expose the fixed PUBLIC metadata categories when the exact
+        # contract-eligibility gate rejected a stable position bookend.
+        result = (
+            public_eligibility if
+            failure == "INCR_CONTRACT_NOT_ELIGIBLE" and
+            type(public_eligibility) is IncrementalEligibilityShape
+            else None
+        )
+        return IncrementalTierProbeReport(
+            status=status, candidate_failure=failure,
+            contract_state=result.state if result else "NOT_CHECKED",
+            contract_api_order_access=result.api_order_access if result else "NOT_CHECKED",
+            contract_cross_margin_support=result.cross_margin_support if result else "NOT_CHECKED",
+            contract_duration=result.contract_duration if result else "NOT_CHECKED",
+            contract_quote_currency=result.quote_currency if result else "NOT_CHECKED",
+            contract_settlement_currency=result.settlement_currency if result else "NOT_CHECKED",
+            position_bookends_consistent=result is not None,
+        )
 
     if not isinstance(private, ReadOnlyMexcProbe) or public is None:
         return blocked("INCR_PROBE_CONFIGURATION_INVALID")
@@ -153,6 +182,9 @@ async def inspect_incremental_tier_candidate(
             return blocked(
                 "INCR_PROBE_CANDIDATE_UNVERIFIED",
                 failure=candidate.status,
+                public_eligibility=classify_incremental_eligibility(
+                    pub_by_symbol[symbol]
+                ) if candidate.status == "INCR_CONTRACT_NOT_ELIGIBLE" else None,
             )
         max_levels = max(max_levels, len(candidate.tiers))
         short_specific += int(candidate.short_specific_limits_used)
