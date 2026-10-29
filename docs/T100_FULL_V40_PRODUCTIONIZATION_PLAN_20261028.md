@@ -645,3 +645,55 @@ authorizes an order.
 - Tests added for INCREASE/BY_VOLUME, CUSTOM/BY_VALUE, mixed/unknown
   contract metadata, lack of static schedule, and output injection.
   No DB migration, Render deployment, MEXC POST, order, or leverage changes.
+
+## Implementation checkpoint: moving versus persistent unrealized PnL mismatch (2026-10-29)
+
+- With the verified active MEXC key, the operator's GET-only cross-risk
+  collector most recently returned
+  `failure_stage=READ_FIRST`,
+  `failure_code=COLLECTOR_POST_UNREALIZED_PNL_MISMATCH`.
+  The positions, stops, assets, private risk and public contract reads ran,
+  but the POST positions' `unRealizedPnl` did not exactly reconcile with
+  POST account-assets `unrealized`. The PRE account witness had passed.
+- This discrepancy could be asynchronous mark-to-market updates between
+  independent REST endpoints. Alternatively, MEXC could report these fields
+  on a different account/margin scope or valuation basis. The code MUST
+  not assume either explanation. MEXC docs describe position `unRealizedPnl`
+  and account `unrealized` but do NOT provide a single atomic REST snapshot:
+  https://www.mexc.co/api-docs/futures/account-and-trading-endpoints/get-open-positions
+  https://mexcdevelop.github.io/apidocs/contract_v1_en/
+  MEXC also documents single-asset versus multi-asset cross-margin modes:
+  https://www.mexc.co/support/article/how-to-trade-futures-on-mexc-web-305423980641926144
+- Added `app/t100_live_pnl_sync_observation.py`, a separate limited diagnostic.
+  It executes up to 3 sequential bounded GET triplets:
+  **account-wide positions → all account assets → account-wide positions**,
+  with a strict 2500ms per-triplet budget and no retries. It validates the
+  safety-critical position fields and compares per-position PnL by immutable
+  position identity, then uses the existing exact economic witness against
+  the same intervening account-assets data. It reports only count summaries
+  and static statuses, never amounts, symbols, prices or credentials.
+- Distinct statuses:
+  `PNL_SYNC_MOVING_MARK_TO_MARKET_OBSERVED` when position PnL changed
+  during a triplet and stable disagreement was not observed;
+  `PNL_SYNC_STABLE_UNREALIZED_DISAGREEMENT` when the position PnL was
+  unchanged across a triplet but the intervening asset unrealized still
+  differed; `PNL_SYNC_POSITION_MARGIN_DISAGREEMENT` for account-position
+  margin mismatch; and fail-closed transport/schema/inventory-drift cases.
+  Individual sample matches remain explicitly **NONATOMIC**.
+- `app/t100_live_pnl_sync_cli.py` requires paper execution, disabled
+  order API and engaged kill switch BEFORE importing the network client.
+  It takes credentials only from local environment; it does not persist
+  credentials or emit sensitive data. At most nine private GET requests
+  are made when the operator opts in to a run.
+- Crucially, the strict V40 cross-risk economic reconciliation is
+  **unchanged**. This diagnostic only identifies why exact parity might
+  fail and does not raise tolerances, bypass account-wide completeness,
+  promote static tiers, or certify stress liquidation / account collateral.
+  T100 four-slot native stop and durable ownership gates also remain
+  fail-closed. If stable disagreement persists, inspect source account
+  mode, field semantics, and mark valuation with MEXC before any redesign.
+- Offline regression includes stable matched triplets, moving-PnL
+  triplets, stable mismatches, position-margin mismatches, critical
+  position drift, malformed PnL response, transport failure, cap on GET
+  volume, and mandatory paper/kill preflight.
+- No live orders, no leverage change, no database migration, no Render deploy.
