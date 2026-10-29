@@ -15,7 +15,7 @@ from typing import Any
 from app.t100_live_consistency import CRITICAL_POSITION_FIELDS
 from app.t100_live_incremental_tier_candidate import (
     IncrementalEligibilityShape, classify_incremental_eligibility,
-    reconstruct_incremental_candidate,
+    reconstruct_incremental_research_candidate,
 )
 from app.t100_live_readonly_probe import ReadOnlyMexcProbe
 
@@ -34,6 +34,8 @@ class IncrementalTierProbeReport:
     private_current_mmr_above_candidate_count: int = 0
     private_current_mmr_below_candidate_count: int = 0
     short_specific_limits_used_count: int = 0
+    api_trading_denied_contract_count: int = 0
+    api_trading_allowed_for_all: bool = False
     candidate_max_level_count: int | None = None
     candidate_failure: str = "NOT_CHECKED"
     contract_state: str = "NOT_CHECKED"
@@ -169,11 +171,11 @@ async def inspect_incremental_tier_candidate(
     if symbols != after_symbols or first_key != last_key:
         return blocked("INCR_PROBE_CRITICAL_INVENTORY_DRIFT")
 
-    exact = above = below = short_specific = 0
+    exact = above = below = short_specific = denied = 0
     max_levels = 0
     for position in after:
         symbol = position["symbol"]
-        candidate = reconstruct_incremental_candidate(
+        candidate = reconstruct_incremental_research_candidate(
             pub_by_symbol[symbol],
             position_contracts=position.get("holdVol"),
             private_short_risk=private_by_symbol[symbol],
@@ -186,6 +188,12 @@ async def inspect_incremental_tier_candidate(
                     pub_by_symbol[symbol]
                 ) if candidate.status == "INCR_CONTRACT_NOT_ELIGIBLE" else None,
             )
+        if not candidate.public_contract_eligible:
+            # API order permission is a HARD execution blocker, never a
+            # reason to fake public metadata or skip a risk calculation.
+            if classify_incremental_eligibility(pub_by_symbol[symbol]).api_order_access != "DENIED":
+                return blocked("INCR_PROBE_API_ACCESS_UNVERIFIED")
+            denied += 1
         max_levels = max(max_levels, len(candidate.tiers))
         short_specific += int(candidate.short_specific_limits_used)
         comparison = candidate.private_current_comparison
@@ -194,6 +202,8 @@ async def inspect_incremental_tier_candidate(
         below += int(comparison == "PRIVATE_CURRENT_MMR_BELOW_CANDIDATE")
 
     status = (
+        "INCR_PROBE_API_TRADING_DENIED_RISK_RESEARCH_ONLY"
+        if denied else
         "INCR_PROBE_CURRENT_PRIVATE_BELOW_CANDIDATE_NONAUTHORIZING"
         if below else
         "INCR_PROBE_PUBLIC_CANDIDATE_PRIVATE_COMPARED_NONAUTHORIZING"
@@ -206,6 +216,11 @@ async def inspect_incremental_tier_candidate(
         private_current_mmr_above_candidate_count=above,
         private_current_mmr_below_candidate_count=below,
         short_specific_limits_used_count=short_specific,
+        api_trading_denied_contract_count=denied,
+        api_trading_allowed_for_all=denied == 0,
+        contract_api_order_access="DENIED" if denied == len(after) else (
+            "MIXED" if denied else "ALLOWED"
+        ),
         candidate_max_level_count=max_levels,
         position_bookends_consistent=True,
     )
