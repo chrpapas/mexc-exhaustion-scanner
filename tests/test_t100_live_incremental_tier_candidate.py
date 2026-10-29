@@ -5,6 +5,7 @@ from decimal import Decimal as D
 
 from app.t100_live_incremental_tier_candidate import (
     classify_incremental_eligibility, reconstruct_incremental_candidate,
+    reconstruct_incremental_research_candidate,
 )
 from tests.test_t100_live_risk_tier_witness import public, private
 
@@ -166,6 +167,52 @@ class IncrementalCandidateTests(unittest.TestCase):
         self.assertEqual(shape.contract_duration, "PERPETUAL")
         self.assertFalse(shape.live_authorization)
         self.assertFalse(shape.entry_allowed)
+
+    def test_read_only_research_can_analyze_explicit_api_denial(self):
+        row = incr()
+        row["apiAllowed"] = False
+        private_row = copy.deepcopy(private()["TEST_USDT"][0])
+        outcome = reconstruct_incremental_research_candidate(
+            row, position_contracts=50, private_short_risk=private_row,
+        )
+        self.assertEqual(
+            outcome.status, "INCR_CANDIDATE_RECONSTRUCTED_NONAUTHORIZING",
+        )
+        self.assertEqual(outcome.selected_position_tier, 1)
+        self.assertEqual(
+            outcome.private_current_comparison, "PRIVATE_CURRENT_MMR_EXACT_MATCH",
+        )
+        self.assertTrue(outcome.private_cross_short_verified)
+        self.assertFalse(outcome.public_contract_eligible)
+        self.assertFalse(outcome.future_stressed_tiers_certified)
+        self.assertFalse(outcome.venue_liquidation_certified)
+        self.assertFalse(outcome.entry_allowed)
+        self.assertFalse(outcome.live_authorization)
+        # Original strict path rejects exactly the same public metadata.
+        strict = reconstruct_incremental_candidate(
+            row, position_contracts=50, private_short_risk=private_row,
+        )
+        self.assertEqual(strict.status, "INCR_CONTRACT_NOT_ELIGIBLE")
+
+    def test_research_refuses_unknown_or_other_eligibility(self):
+        for key, value in (
+            ("apiAllowed", None),
+            ("apiAllowed", 1),
+            ("state", 4),
+            ("positionOpenType", 1),
+            ("futureType", 2),
+            ("settleCoin", "BTC"),
+        ):
+            with self.subTest(key=key, value=value):
+                row = incr()
+                row[key] = value
+                out = reconstruct_incremental_research_candidate(
+                    row, position_contracts=50,
+                )
+                self.assertEqual(out.status, "INCR_CONTRACT_NOT_ELIGIBLE")
+                self.assertFalse(out.public_contract_eligible)
+                self.assertFalse(out.entry_allowed)
+                self.assertFalse(out.live_authorization)
 
     def test_contract_ineligible_never_modeled(self):
         row = incr()
