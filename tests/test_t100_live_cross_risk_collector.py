@@ -223,7 +223,41 @@ class CollectorTests(unittest.IsolatedAsyncioTestCase):
             clock_ms=FakeClock(1_000_000, 1_000_500),
         )
         with self.assertRaisesRegex(
-            CrossRiskCollectionHalted, "COLLECTOR_POST_MARGIN_WITNESS_UNVERIFIED",
+            CrossRiskCollectionHalted, "COLLECTOR_POST_UNREALIZED_PNL_MISMATCH",
+        ):
+            await collector.read()
+
+    async def test_post_position_margin_mismatch_classified_without_values(self):
+        class ChangedMargin(FakePrivate):
+            async def _private_get(inner, path, params=None):
+                if (
+                    path == "/api/v1/private/position/open_positions"
+                    and params is None and inner.positions_reads == 2
+                ):
+                    inner.observed.positions[0]["im"] = "21"
+                return await super()._private_get(path, params)
+
+        collector = MexcReadOnlyCrossRiskCollector(
+            private=ReadOnlyMexcProbe(ChangedMargin(frame())),
+            public=FakePublic(frame()),
+            clock_ms=FakeClock(1_000_000, 1_000_500),
+        )
+        with self.assertRaisesRegex(
+            CrossRiskCollectionHalted, "COLLECTOR_POST_POSITION_MARGIN_MISMATCH",
+        ) as caught:
+            await collector.read()
+        self.assertNotIn("21", str(caught.exception))
+
+    async def test_pre_pnl_mismatch_blocks_without_post_pair(self):
+        data = frame()
+        data.assets[0]["unrealized"] = "5"
+        collector = MexcReadOnlyCrossRiskCollector(
+            private=ReadOnlyMexcProbe(FakePrivate(data)),
+            public=FakePublic(data),
+            clock_ms=FakeClock(1_000_000, 1_000_500),
+        )
+        with self.assertRaisesRegex(
+            CrossRiskCollectionHalted, "COLLECTOR_PRE_UNREALIZED_PNL_MISMATCH",
         ):
             await collector.read()
 
