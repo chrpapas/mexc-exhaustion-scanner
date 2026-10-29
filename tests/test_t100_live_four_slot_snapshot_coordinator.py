@@ -213,6 +213,24 @@ class FourSlotSnapshotTests(unittest.IsolatedAsyncioTestCase):
         r = await self.coordinator.inspect()
         self.assertEqual(r.status, "VENUE_CRITICAL_INVENTORY_CHANGED")
 
+    async def test_all_owned_stops_absent_blocks_even_if_account_observation_valid(self):
+        # The GET-only cross-risk witness may observe a stopless account,
+        # but recovery of durable T100-owned slots MUST still fail closed.
+        self.venue.first_stops = []
+        self.venue.last_stops = []
+        self.completeness.result["before_current_tpsl"] = 0
+        self.completeness.result["after_current_tpsl"] = 0
+        self.completeness.result["open_order_counts"] = {
+            "sumCount": 0, "limitOrderCount": 0, "stopOrderCount": 0,
+            "planOrderCount": 0, "trackOrderCount": 0,
+        }
+        r = await self.coordinator.inspect()
+        self.assertEqual(r.status, "POSITION_STOP_COUNT_MISMATCH")
+        self.assertIsNone(r.recovery)
+        self.assertFalse(r.entry_allowed)
+        self.assertFalse(r.live_authorization)
+        self.assertEqual(self.venue.order_reads, 0)
+
     async def test_stop_removed_during_read_blocks(self):
         self.venue.last_stops.pop()
         r = await self.coordinator.inspect()
