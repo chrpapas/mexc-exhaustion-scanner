@@ -598,3 +598,50 @@ authorizes an order.
   Any existing stopless manual position remains independent of T100.
 - No trading authorization, collateral certification, database migration,
   Render deployment, leverage changes or MEXC orders.
+
+## Implementation checkpoint: MEXC risk-limit schedule classification (2026-10-29)
+
+- Using an active MEXC API key, the operator's single private positions
+  GET returned `POSITIONS_READ_SUCCEEDED` (HTTP 200). The full read-only
+  cross-risk frame then failed at `VALIDATE_FIRST` with
+  `RISK_TIER_STATIC_VOLUME_SCHEDULE_UNAVAILABLE`.
+- This is a deliberate unsupported-contract-model gate, **not** proof
+  that the exchange rejected the account or that liquidation occurred.
+  `assess_risk_tier_witness` accepts only `CUSTOM + BY_VOLUME`
+  schedules with a fully reviewed `riskLimitCustom` tier sequence.
+  The failure can mean `INCREASE` mode, `BY_VALUE` type, or both;
+  the original error did not distinguish them.
+- MEXC contract-info documentation currently lists:
+  `riskLimitMode` (`CUSTOM`, `INCREASE`),
+  `riskLimitType` (`BY_VOLUME`, `BY_VALUE`),
+  `riskLimitCustom` tiers and the incremental fields
+  `riskBaseVol`, `riskIncrVol`, `riskIncrMmr`, `riskIncrImr`,
+  `riskLevelLimit`, `maintenanceMarginRate`, `initialMarginRate`.
+  Source: https://www.mexc.fm/api-docs/futures/market-endpoints/get-contract-info
+  Current private `maxVol` may be converted from position value using
+  current fair price; do not extrapolate it as a static contract cap.
+  Source: https://www.mexc.co/api-docs/futures/account-and-trading-endpoints/get-risk-limits
+- Added `app/t100_live_risk_schedule_shape.py`, a **pure, read-only
+  descriptive classifier** of the public contract metadata already
+  fetched in the first frame. It neither performs extra network requests
+  nor uses public metadata to simulate future maintenance margin.
+- On precisely `RISK_TIER_STATIC_VOLUME_SCHEDULE_UNAVAILABLE`, the
+  `CrossRiskObservation` and manual CLI now expose fixed allowlisted
+  `risk_schedule_mode`, `risk_schedule_type` and
+  `risk_schedule_fields`. All symbols, quantities, prices, raw rates,
+  account details, and raw exception data remain withheld. Because the
+  first frame failed validation, the CLI always returns
+  `risk_schedule_two_frame_certified=false`.
+- The incremental field-presence check deliberately treats MEXC's
+  documented single-tier INCREASE examples with nonzero increment fields
+  as valid *metadata presence* without interpreting those as usable
+  future tiers. Missing, malformed, or conflicting incremental fields
+  are distinct diagnostics, not invitations to estimate.
+- Existing risk-tier witness, four-slot native-stop recovery, auth gates,
+  account ownership and live trading remain unchanged and fail closed.
+  Never model INCREASE or BY_VALUE schedules using CUSTOM/BY_VOLUME
+  assumptions; any future model must be independently reviewed and
+  compared against current private tiers and stressed fair prices.
+- Tests added for INCREASE/BY_VOLUME, CUSTOM/BY_VALUE, mixed/unknown
+  contract metadata, lack of static schedule, and output injection.
+  No DB migration, Render deployment, MEXC POST, order, or leverage changes.
