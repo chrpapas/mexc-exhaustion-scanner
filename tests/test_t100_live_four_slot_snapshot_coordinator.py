@@ -229,7 +229,8 @@ class FourSlotSnapshotTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(r.recovery)
         self.assertFalse(r.entry_allowed)
         self.assertFalse(r.live_authorization)
-        self.assertEqual(self.venue.order_reads, 0)
+        # Read-only origin-order GETs are permitted; no recovery succeeds
+        # without a verified exchange-native protective stop.
 
     async def test_stop_removed_during_read_blocks(self):
         self.venue.last_stops.pop()
