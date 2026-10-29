@@ -155,21 +155,41 @@ class DiagnosticTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(report["live_authorization"])
         self.assertEqual(public.calls, [])
 
-    async def test_mismatched_stop_count_is_diagnosed_without_trading(self):
+    async def test_stopless_manual_position_risk_observed_without_authorization(self):
         base = frame()
         base.stops.clear()
         private = FakePrivate(base)
+        public = FakePublic(base, fair_ms=1_000_400)
+
+        class MovingPublic:
+            async def get(inner, path, *, params=None):
+                if len(public.calls) >= 2:
+                    public.fair_ms = 1_001_400
+                return await public.get(path, params=params)
+
         report = await run_diagnostic(
-            private=ReadOnlyMexcProbe(private), public=FakePublic(base),
-            clock_ms=lambda: 1_000_000,
+            private=ReadOnlyMexcProbe(private),
+            public=MovingPublic(),
+            clock_ms=SequenceClock([
+                1_000_000, 1_000_500, 1_000_700,
+                1_001_000, 1_001_500, 1_001_700,
+            ]),
         )
         self.assertEqual(
-            report["inventory_shape_status"],
-            "INVENTORY_SHAPE_NONFLAT_STOP_ROW_COUNT_DIFFERS",
+            report["status"], "CURRENT_CROSS_RISK_OBSERVED_NONAUTHORIZING"
         )
         self.assertEqual(report["observed_positions"], 1)
         self.assertEqual(report["observed_current_stops"], 0)
+        self.assertTrue(report["critical_inventory_stable"])
+        self.assertTrue(report["position_margin_economic_witness_observed"])
+        self.assertEqual(report["inventory_shape_status"], "NOT_CHECKED")
+        self.assertFalse(report["native_stop_protection_verified"])
+        self.assertFalse(report["t100_position_ownership_certified"])
+        self.assertFalse(report["account_wide_completeness_certified"])
+        self.assertFalse(report["venue_liquidation_certified"])
         self.assertFalse(report["entry_allowed"])
+        self.assertFalse(report["live_authorization"])
+        self.assertTrue(all(x[0] == "GET" for x in private.calls + public.calls))
 
     async def test_timeout_does_not_raise_or_enable_entry(self):
         class Slow:
