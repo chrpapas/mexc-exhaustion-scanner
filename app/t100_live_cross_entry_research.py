@@ -32,6 +32,7 @@ class CrossEntryOfflineReview:
     private_current_cross_observed: bool = False
     candidate_tier_currently_compared: bool = False
     blockers: tuple[str, ...] = ()
+    account_specific_api_order_access_verified: bool = False
     venue_order_acceptance_verified: bool = False
     stop_attached_atomically_verified: bool = False
     native_stop_protectiveness_verified: bool = False
@@ -195,6 +196,7 @@ def assess_cross_entry_offline(
     # Structural hard blockers that current GETs cannot establish.
     blockers.extend((
         "CROSS_MARGIN_ADAPTER_NOT_IMPLEMENTED",
+        "ACCOUNT_SPECIFIC_API_ORDER_ACCESS_UNVERIFIED",
         "ATTACHED_STOP_ATOMICITY_AND_FILL_COVERAGE_UNVERIFIED",
         "STRESSED_TIERS_AND_CROSS_WALLET_COLLATERAL_UNVERIFIED",
         "VENUE_LIQUIDATION_BEFORE_STOP_UNVERIFIED",
