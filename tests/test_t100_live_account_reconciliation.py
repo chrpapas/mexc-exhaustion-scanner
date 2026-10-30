@@ -59,6 +59,8 @@ class AccountReconciliationTests(unittest.TestCase):
         evidence = proof(positions=1, stops=0, limit=1)
         r = assess_account_reconciliation(evidence)
         self.assertEqual(r["status"], "UNRELATED_INFLIGHT_ORDERS_PRESENT")
+        self.assertEqual(r["highest_priority_blocker"],
+                         "NONFLAT_WITHOUT_OBSERVED_CURRENT_TPSL")
         self.assertEqual(r["reconciliation_blockers"], [
             "NONFLAT_WITHOUT_OBSERVED_CURRENT_TPSL",
             "UNRELATED_INFLIGHT_ORDERS_PRESENT",
