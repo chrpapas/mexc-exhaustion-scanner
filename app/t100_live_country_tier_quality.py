@@ -35,6 +35,7 @@ class CountryTierQuality:
     api_allowed_cross_usdt_perpetual: int | None = None
     incremental_volume_shapes_valid: int | None = None
     incremental_volume_shapes_invalid: int | None = None
+    incremental_invalid_reasons: dict[str, int] | None = None
     custom_volume_shapes_valid: int | None = None
     custom_volume_shapes_invalid: int | None = None
     unsupported_or_unknown_shapes: int | None = None
@@ -71,35 +72,55 @@ def _leverage(row: dict[str, Any]) -> None:
         raise ValueError("LEVERAGE_UNVERIFIED")
 
 
-def _incremental(row: dict[str, Any]) -> bool:
+def _incremental_issue(row: dict[str, Any]) -> str:
+    """Return an allowlisted, symbol-free failure category or OK.
+
+    These are schema/structural diagnostics, not a venue-certified model.
+    Never expose raw contract data in this result.
+    """
     try:
         _leverage(row)
-        levels = row.get("riskLevelLimit")
-        side = row.get("riskLongShortSwitch")
-        if type(levels) is not int or not 1 <= levels <= 100 or type(side) is not int or side not in (0, 1):
-            return False
-        base_name = "riskBaseVolShort" if side else "riskBaseVol"
-        step_name = "riskIncrVolShort" if side else "riskIncrVol"
+    except ValueError:
+        return "LEVERAGE_FIELDS_UNVERIFIED"
+    levels, side = row.get("riskLevelLimit"), row.get("riskLongShortSwitch")
+    if (
+        type(levels) is not int or not 1 <= levels <= 100
+        or type(side) is not int or side not in (0, 1)
+    ):
+        return "LEVEL_OR_SIDE_UNVERIFIED"
+    base_name = "riskBaseVolShort" if side else "riskBaseVol"
+    step_name = "riskIncrVolShort" if side else "riskIncrVol"
+    try:
         base = _num(row.get(base_name), positive=True)
         step = _num(row.get(step_name))
+    except ValueError:
+        return "VOLUME_FIELDS_UNVERIFIED"
+    try:
         mmr = _num(row.get("maintenanceMarginRate"), positive=True)
         imr = _num(row.get("initialMarginRate"), positive=True)
         dm = _num(row.get("riskIncrMmr"))
         di = _num(row.get("riskIncrImr"))
+    except ValueError:
+        return "MARGIN_RATE_FIELDS_UNVERIFIED"
+    try:
         _num(row.get("contractSize"), positive=True)
         fee = _num(row.get("liquidationFeeRate"))
-        if (levels > 1 and step <= 0) or not 0 <= fee < 1:
-            return False
-        for index in range(levels):
-            if (
-                base + index * step <= 0
-                or not 0 < mmr + index * dm <= imr + index * di < 1
-            ):
-                return False
-        return True
     except ValueError:
-        return False
+        return "CONTRACT_OR_FEE_FIELDS_UNVERIFIED"
+    if levels > 1 and step <= 0:
+        return "TIER_STEP_INCOHERENT"
+    if fee >= 1:
+        return "LIQUIDATION_FEE_INCOHERENT"
+    for index in range(levels):
+        if base + index * step <= 0:
+            return "VOLUME_THRESHOLD_INCOHERENT"
+        if not 0 < mmr + index * dm <= imr + index * di < 1:
+            return "MARGIN_RATE_SCHEDULE_INCOHERENT"
+    return "OK"
 
+
+def _incremental(row: dict[str, Any]) -> bool:
+    return _incremental_issue(row) == "OK"
 
 def _custom(row: dict[str, Any]) -> bool:
     try:
@@ -152,6 +173,7 @@ def assess_country_tier_quality(first_envelope: Any, second_envelope: Any) -> Co
         return blocked("COUNTRY_TIER_QUALITY_PUBLIC_SCHEMA_UNVERIFIED")
 
     incr_ok = incr_bad = custom_ok = custom_bad = unsupported = eligible = 0
+    invalid_reasons: dict[str, int] = {}
     for row in second:
         if not (
             type(row.get("state")) is int and row["state"] == 0
@@ -167,10 +189,12 @@ def assess_country_tier_quality(first_envelope: Any, second_envelope: Any) -> Co
         eligible += 1
         mode, limit_type = row.get("riskLimitMode"), row.get("riskLimitType")
         if mode == "INCREASE" and limit_type == "BY_VOLUME":
-            if _incremental(row):
+            reason = _incremental_issue(row)
+            if reason == "OK":
                 incr_ok += 1
             else:
                 incr_bad += 1
+                invalid_reasons[reason] = invalid_reasons.get(reason, 0) + 1
         elif mode == "CUSTOM" and limit_type == "BY_VOLUME":
             if _custom(row):
                 custom_ok += 1
@@ -184,6 +208,7 @@ def assess_country_tier_quality(first_envelope: Any, second_envelope: Any) -> Co
         api_allowed_cross_usdt_perpetual=eligible,
         incremental_volume_shapes_valid=incr_ok,
         incremental_volume_shapes_invalid=incr_bad,
+        incremental_invalid_reasons=dict(sorted(invalid_reasons.items())),
         custom_volume_shapes_valid=custom_ok,
         custom_volume_shapes_invalid=custom_bad,
         unsupported_or_unknown_shapes=unsupported,
