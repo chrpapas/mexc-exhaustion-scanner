@@ -6,6 +6,7 @@ calls, never knows account credentials and does not import an order adapter.
 from __future__ import annotations
 
 import copy
+import json
 from decimal import Decimal as D
 import unittest
 
@@ -19,6 +20,11 @@ from tests.test_t100_live_four_slot_snapshot_coordinator import (
     Ledger, fixture,
 )
 from tests.test_t100_live_four_slot_attempt_outcome import ProtectedOutcomeTests
+
+
+def _wire(value):
+    """Simulate decoded signed-GET JSON, never Python Decimal in wire data."""
+    return json.loads(json.dumps(value, default=str))
 
 
 class MockMexcGetOnly:
@@ -40,21 +46,21 @@ class MockMexcGetOnly:
             raise TimeoutError("secret details not emitted")
         symbol = (params or {}).get("symbol")
         if path == "/api/v1/private/position/open_positions":
-            return [copy.deepcopy(p) for p in self.positions
+            return [_wire(p) for p in self.positions
                     if symbol is None or p["symbol"] == symbol]
         if path == "/api/v1/private/stoporder/open_orders":
             if symbol == self.fail_filtered_stop_symbol:
                 return []
-            return [copy.deepcopy(s) for s in self.stops
+            return [_wire(s) for s in self.stops
                     if symbol is None or s["symbol"] == symbol]
         if path == "/api/v1/private/account/assets":
             if self.assets_override is not None:
-                return copy.deepcopy(self.assets_override)
-            return [{
+                return _wire(self.assets_override)
+            return _wire([{
                 "currency": "USDT",
                 "positionMargin": sum(D(str(p.get("im", 0))) for p in self.positions),
                 "unrealized": sum(D(str(p.get("unRealizedPnl", 0))) for p in self.positions),
-            }]
+            }])
         if path == "/api/v1/private/order/open_order_total_count":
             n = len(self.stops) if self.stop_count_override is None else self.stop_count_override
             return {
@@ -64,7 +70,7 @@ class MockMexcGetOnly:
             }
         for (sym, oid), order in self.orders.items():
             if path == f"/api/v1/private/order/external/{sym}/{oid}":
-                return copy.deepcopy(order)
+                return _wire(order)
         if path.startswith("/api/v1/private/order/external/"):
             return None
         raise AssertionError("unexpected exchange endpoint")
