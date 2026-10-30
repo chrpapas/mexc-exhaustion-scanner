@@ -179,7 +179,8 @@ class ProtectedCommitTests(unittest.IsolatedAsyncioTestCase):
         return await self.store.persist(
             batch=self.batch,
             pre_attempt_witness=self.prior.before,
-            lease=lease(), observed_at=datetime.now(timezone.utc),
+            lease=lease(),
+            observed_at=self.pg.reserved[0]["snapshot_observed_at"],
         )
 
     def snapshot(self):
