@@ -81,7 +81,7 @@ def _digest(rows: Any, fields: tuple[str, ...],
             or (symbol is not None and s != symbol)
         ):
             raise ValueError("SYMBOL_UNVERIFIED")
-        if "id" in fields:
+        if fields == _STOP_FIELDS:
             key = row.get("id")
             if type(key) not in (int, str) or not str(key).isdigit() or int(key) <= 0:
                 raise ValueError("STOP_ID_UNVERIFIED")
@@ -89,6 +89,10 @@ def _digest(rows: Any, fields: tuple[str, ...],
                 raise ValueError("STOP_ID_DUPLICATED")
             seen.add(str(key))
         canonical.append({field: row.get(field) for field in fields})
+    # The exchange can reorder list rows without changing the observed state.
+    canonical.sort(key=lambda row: json.dumps(
+        row, sort_keys=True, separators=(",", ":"), default=str,
+    ))
     blob = json.dumps(canonical, sort_keys=True, allow_nan=False,
                       separators=(",", ":"), default=str)
     return hashlib.sha256(blob.encode("utf-8")).hexdigest()
