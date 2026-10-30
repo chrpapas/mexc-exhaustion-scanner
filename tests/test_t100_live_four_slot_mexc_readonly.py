@@ -97,15 +97,15 @@ class ReadOnlyFourSlotGetTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(
             result.status, "NONFLAT_PROVENANCE_MATCHED_NONAUTHORIZING",
-            msg=str({
+            msg=str((lambda report: {
                 "response": result.status,
-                "get_count": len(client.calls),
-                "probe_status": (
-                    await FourSlotMexcCompleteness(
-                        ReadOnlyMexcProbe(client)
-                    ).inspect()
-                ).get("status"),
-            }),
+                "probe_status": report.get("status"),
+                "stops_observed": report.get("before_current_tpsl"),
+                "stops_reported": report.get("open_order_counts", {}).get("stopOrderCount"),
+                "stop_count_matches": report.get("current_inventory_completeness", {}).get("current_tpsl_count_matches"),
+            })(await FourSlotMexcCompleteness(
+                ReadOnlyMexcProbe(client)
+            ).inspect())),
         )
         self.assertEqual(result.occupied_slots, 3)
         self.assertTrue(result.inventory["account_wide_completeness_verified"])
