@@ -20,6 +20,15 @@ from app.t100_live_cross_risk_diagnostic import (
 )
 
 
+def _safe_failure_status(exc: Exception) -> str:
+    """Classify exceptions without returning URLs, tokens, payloads or symbols."""
+    if isinstance(exc, (ArithmeticError, ValueError, TypeError, KeyError)):
+        return "COUNTRY_TIER_QUALITY_DATA_PROCESSING_FAILED"
+    if isinstance(exc, (ConnectionError, OSError)):
+        return "COUNTRY_TIER_QUALITY_LOCAL_TRANSPORT_FAILED"
+    return "COUNTRY_TIER_QUALITY_UNEXPECTED_RUNTIME_FAILED"
+
+
 async def run(*, environ: Mapping[str, str] | None = None) -> dict[str, Any]:
     env = os.environ if environ is None else environ
     try:
@@ -29,7 +38,12 @@ async def run(*, environ: Mapping[str, str] | None = None) -> dict[str, Any]:
             status="COUNTRY_TIER_QUALITY_PAPER_KILL_REQUIRED",
         ))
 
-    import httpx
+    try:
+        import httpx
+    except ImportError:
+        return asdict(CountryTierQuality(
+            status="COUNTRY_TIER_QUALITY_HTTPX_MISSING",
+        ))
     try:
         async with httpx.AsyncClient(
             base_url="https://api.mexc.com",
@@ -43,15 +57,15 @@ async def run(*, environ: Mapping[str, str] | None = None) -> dict[str, Any]:
             return asdict(outcome)
     except asyncio.TimeoutError:
         return asdict(CountryTierQuality(status="COUNTRY_TIER_QUALITY_TIMED_OUT"))
-    except Exception:
-        return asdict(CountryTierQuality(status="COUNTRY_TIER_QUALITY_READ_FAILED"))
+    except Exception as exc:
+        return asdict(CountryTierQuality(status=_safe_failure_status(exc)))
 
 
 def main() -> None:
     try:
         report = asyncio.run(run())
-    except Exception:
-        report = asdict(CountryTierQuality(status="COUNTRY_TIER_QUALITY_READ_FAILED"))
+    except Exception as exc:
+        report = asdict(CountryTierQuality(status=_safe_failure_status(exc)))
     print(json.dumps(report, indent=2, sort_keys=True))
     print("PUBLIC TWO GETS MAX. NO KEYS, NO ORDERS, NO AUTHORIZATION.")
     if report["status"] != "COUNTRY_TIER_QUALITY_CURRENT_PUBLIC_SHAPES_NONAUTHORIZING":
