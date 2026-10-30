@@ -69,7 +69,7 @@ async def inspect_public_tier_scenario(
     if (type(symbol) is not str or _SYMBOL.fullmatch(symbol) is None
         or symbol in {"BTC_USDT", "ETH_USDT"}):
         return blocked("PUBLIC_V40_SYMBOL_UNVERIFIED")
-    if type(public) is None or not callable(getattr(public, "get", None)):
+    if public is None or not callable(getattr(public, "get", None)):
         return blocked("PUBLIC_V40_CLIENT_UNVERIFIED")
     rows = []
     for _ in range(2):
