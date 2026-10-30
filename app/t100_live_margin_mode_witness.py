@@ -32,7 +32,7 @@ class MarginModeWitness:
     independent_mode_reads_agree: bool = False
     risk_limit_two_get_consistent: bool = False
     leverage_two_get_consistent: bool = False
-    private_cross_mode_corrobated: bool = False
+    private_cross_mode_corroborated: bool = False
     candidate_contract_sizing_verified: bool = False
     account_wide_collateral_certified: bool = False
     position_ownership_verified: bool = False
@@ -139,5 +139,5 @@ async def inspect_margin_mode(
     return blocked(
         "MARGIN_MODE_CURRENT_CROSS_CORROBORATED_NONAUTHORIZING",
         independent_mode_reads_agree=True,
-        private_cross_mode_corrobated=True, **common,
+        private_cross_mode_corroborated=True, **common,
     )
