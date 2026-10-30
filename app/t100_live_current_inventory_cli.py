@@ -100,6 +100,14 @@ def shareable_current_inventory_report(report: Any) -> dict[str, Any]:
             account.get("observed_nonflat_without_current_tpsl") is True
         ),
         "reconciliation_blockers": diagnostic_blockers,
+        "highest_priority_blocker": (
+            account.get("highest_priority_blocker")
+            if account.get("highest_priority_blocker") in allowed_blockers
+            else "NONE" if (
+                account.get("highest_priority_blocker") == "NONE"
+                and account.get("account_reconciled") is True
+            ) else "NOT_VERIFIED"
+        ),
         "observed_unrelated_limit_orders": (
             account["observed_unrelated_limit_orders"]
             if type(account.get("observed_unrelated_limit_orders")) is int
