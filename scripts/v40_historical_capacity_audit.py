@@ -39,6 +39,11 @@ ALLOWED_COSTS = (100, 200)
 ALLOWED_MODES = ("REFERENCE", "HYBRID", "KNOWN_ONLY")
 MAX_ARCHIVE_MEMBER_BYTES = 30_000_000
 MAX_ENTRIES = 146
+# Pinned source parity archive from docs/V40_HISTORICAL_EXPORT_PARITY_20261023.md.
+# The hash protects against quietly switching to an incomparable replay ZIP.
+PINNED_FROZEN_ARCHIVE_SHA256 = (
+    "2918f4589e8d564ca55b6f24aa2e9a868b5d214653ad7d92acaf1729fd1e4cb5"
+)
 
 
 def _stamp(value: str) -> int:
@@ -150,7 +155,15 @@ def read_evidence(path: Path | None) -> dict[tuple[str, int], dict[str, Any]]:
 def audit(archive: Path, *, capital: int = 10000, cost_bps: int = 100,
           mode: str = "HYBRID", evidence_jsonl: Path | None = None,
           output_details: Path | None = None,
-          template_output: Path | None = None) -> dict[str, Any]:
+          template_output: Path | None = None,
+          require_pinned_archive: bool = True) -> dict[str, Any]:
+    sha = hashlib.sha256()
+    with archive.open("rb") as source:
+        for chunk in iter(lambda: source.read(1048576), b""):
+            sha.update(chunk)
+    pinned = sha.hexdigest() == PINNED_FROZEN_ARCHIVE_SHA256
+    if require_pinned_archive and not pinned:
+        raise ValueError("V40_HISTORICAL_ARCHIVE_HASH_NOT_PINNED")
     entries = load_entry_ledger(
         archive, capital=capital, cost_bps=cost_bps, mode=mode,
     )
@@ -194,10 +207,6 @@ def audit(archive: Path, *, capital: int = 10000, cost_bps: int = 100,
                     "contract_observed_at": None,
                     "contract": None,
                 }, sort_keys=True) + "\n")
-    sha = hashlib.sha256()
-    with archive.open("rb") as source:
-        for chunk in iter(lambda: source.read(1048576), b""):
-            sha.update(chunk)
     return {
         "status": (
             "V40_HISTORICAL_CAPACITY_PUBLIC_BATCH_OBSERVED_NONAUTHORIZING"
@@ -210,6 +219,7 @@ def audit(archive: Path, *, capital: int = 10000, cost_bps: int = 100,
             else "V40_HISTORICAL_CAPACITY_EVIDENCE_INCOMPLETE"
         ),
         "archive_sha256": sha.hexdigest(),
+        "matches_pinned_20261023_reference_archive": pinned,
         "capital": capital, "cost_bps": cost_bps, "mode": mode,
         "entries_checked": len(entries),
         "outcome_counts": dict(sorted(statuses.items())),
@@ -238,6 +248,7 @@ def main() -> None:
             evidence_jsonl=options.evidence_jsonl,
             output_details=options.output_details,
             template_output=options.template_output,
+            require_pinned_archive=True,
         )
     except Exception as exc:
         # Operator output must not contain user path or raw archived values.
