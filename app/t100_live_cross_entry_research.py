@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
+import re
 from typing import Any, Mapping
 
 from app.t100_live_execution import EntryIntent
@@ -81,7 +82,8 @@ def _hypothetical_payload(
     if (
         type(intent.signal_id) is not int or intent.signal_id <= 0
         or type(intent.symbol) is not str
-        or not intent.symbol.endswith("_USDT")
+        or re.fullmatch(r"[A-Z0-9]+_USDT", intent.symbol) is None
+        or intent.symbol in {"BTC_USDT", "ETH_USDT"}
         or type(intent.external_oid) is not str
         or not intent.external_oid.startswith("t100v1e")
         or not 8 <= len(intent.external_oid) <= 64
