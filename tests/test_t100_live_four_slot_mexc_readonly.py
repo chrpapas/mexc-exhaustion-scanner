@@ -95,7 +95,18 @@ class ReadOnlyFourSlotGetTests(unittest.IsolatedAsyncioTestCase):
         result = await inspect_existing_four_slots_get_only(
             ledger=Ledger(snap), client=client,
         )
-        self.assertEqual(result.status, "NONFLAT_PROVENANCE_MATCHED_NONAUTHORIZING")
+        self.assertEqual(
+            result.status, "NONFLAT_PROVENANCE_MATCHED_NONAUTHORIZING",
+            msg=str({
+                "response": result.status,
+                "get_count": len(client.calls),
+                "probe_status": (
+                    await FourSlotMexcCompleteness(
+                        ReadOnlyMexcProbe(client)
+                    ).inspect()
+                ).get("status"),
+            }),
+        )
         self.assertEqual(result.occupied_slots, 3)
         self.assertTrue(result.inventory["account_wide_completeness_verified"])
         self.assertEqual(len(result.recovery.recovered), 3)
