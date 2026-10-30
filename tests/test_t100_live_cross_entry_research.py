@@ -78,7 +78,7 @@ class CrossEntryResearchTests(unittest.TestCase):
         self.assertEqual(payload["type"], 5)
         self.assertEqual(payload["openType"], 2)
         self.assertEqual(payload["positionMode"], 1)
-        self.assertEqual(payload["stopLossPrice"], "175")
+        self.assertEqual(D(payload["stopLossPrice"]), D("175"))
         self.assertEqual(payload["lossTrend"], 1)
         self.assertEqual(payload["vol"], "5")
         self.assertTrue(payload["externalOid"].startswith("t100v1e"))
