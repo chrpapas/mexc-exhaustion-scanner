@@ -180,6 +180,20 @@ class CountryTierQualityTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("LEAK_SECRET", str(out))
         self.assertEqual(len(failed.calls), 2)
 
+    async def test_cli_rejects_unarmed_environment(self):
+        from app.t100_live_country_tier_quality_cli import run
+        for env in ({}, {
+            "T100_EXECUTION_MODE": "live",
+            "T100_LIVE_ORDER_API_ENABLED": "false",
+            "T100_LIVE_KILL_SWITCH": "true",
+        }):
+            outcome = await run(environ=env)
+            self.assertEqual(
+                outcome["status"], "COUNTRY_TIER_QUALITY_PAPER_KILL_REQUIRED",
+            )
+            self.assertFalse(outcome["entry_allowed"])
+            self.assertFalse(outcome["mexc_orders_sent"])
+
 
 if __name__ == "__main__":
     unittest.main()
