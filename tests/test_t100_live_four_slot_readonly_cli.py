@@ -52,6 +52,60 @@ class FourSlotOperatorCliTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(result["owned_four_slot_positions_observed"])
         self.assertFalse(result["entry_allowed"])
 
+    async def test_extra_current_tpsl_yields_redacted_matching_counts(self):
+        import json
+        snap, orders, positions, stops = prepare_rows(1)
+        extra = {
+            **stops[0], "id": "another-private-stop",
+            "stopLossPrice": "0", "takeProfitPrice": "80",
+        }
+        client = MockMexcGetOnly(orders, positions, [*stops, extra])
+        output = await run_readonly_four_slot_audit(
+            ledger=Ledger(snap), client=client, env=PAPER_KILLED,
+        )
+        self.assertEqual(output["status"], "POSITION_STOP_COUNT_MISMATCH")
+        d = output["stop_count_diagnostic"]
+        self.assertEqual(d["position_count"], 1)
+        self.assertEqual(d["current_tpsl_row_count"], 2)
+        self.assertEqual(d["positions_with_multiple_current_tpsl_rows"], 1)
+        self.assertEqual(d["current_tpsl_rows_without_positive_stop_loss"], 1)
+        self.assertFalse(d["native_stop_coverage_certified"])
+        self.assertFalse(output["live_authorization"])
+        self.assertFalse(output["entry_allowed"])
+        summary = json.dumps(output)
+        for item in ("another-private-stop", "SIREN_USDT", "80"):
+            self.assertNotIn(item, summary)
+
+    async def test_open_position_without_current_tpsl_reports_gap_not_authorization(self):
+        snap, orders, positions, stops = prepare_rows(1)
+        output = await run_readonly_four_slot_audit(
+            ledger=Ledger(snap),
+            client=MockMexcGetOnly(orders, positions, []),
+            env=PAPER_KILLED,
+        )
+        self.assertEqual(output["status"], "POSITION_STOP_COUNT_MISMATCH")
+        d = output["stop_count_diagnostic"]
+        self.assertEqual(d["position_count"], 1)
+        self.assertEqual(d["current_tpsl_row_count"], 0)
+        self.assertEqual(d["positions_without_any_current_tpsl"], 1)
+        self.assertEqual(d["positions_without_positive_stop_loss_row"], 1)
+        self.assertFalse(output["live_authorization"])
+
+    async def test_current_tpsl_without_open_position_is_unmatched(self):
+        snap, _, _, _ = prepare_rows(0)
+        _, _, _, stops = prepare_rows(1)
+        output = await run_readonly_four_slot_audit(
+            ledger=Ledger(snap),
+            client=MockMexcGetOnly([], [], stops),
+            env=PAPER_KILLED,
+        )
+        self.assertEqual(output["status"], "POSITION_STOP_COUNT_MISMATCH")
+        d = output["stop_count_diagnostic"]
+        self.assertEqual(d["position_count"], 0)
+        self.assertEqual(d["current_tpsl_row_count"], 1)
+        self.assertEqual(d["current_tpsl_rows_with_unmatched_position"], 1)
+        self.assertFalse(output["entry_allowed"])
+
     async def test_disabled_kill_refuses_before_any_database_or_get(self):
         snap, orders, positions, stops = prepare_rows(1)
         client = MockMexcGetOnly(orders, positions, stops)
