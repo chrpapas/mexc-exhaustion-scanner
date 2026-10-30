@@ -31,7 +31,9 @@ class V40PublicCapacityParity:
     v40_research_modeled_notional_usdt: D | None = None
     quoted_public_capacity_usdt: D | None = None
     modeled_lots_notional_usdt: D | None = None
-    modeled_notional_shortfall_usdt: D | None = None
+    floor_quantization_remainder_usdt: D | None = None
+    published_single_order_capacity_usdt: D | None = None
+    published_capacity_shortfall_usdt: D | None = None
     published_position_tier_fits: bool = False
     published_single_order_fits: bool = False
     published_full_modeled_notional_fits: bool = False
@@ -87,11 +89,18 @@ def assess_v40_public_capacity_parity(
             return blocked("V40_CAPACITY_PARITY_QUANTITY_ROUNDED_UP")
     except ValueError:
         return blocked("V40_CAPACITY_PARITY_NUMERIC_EVIDENCE_INCOMPLETE")
+    single_order_cap = (
+        notional / qty * _positive(public_capacity.public_max_single_order_lots)
+    )
     result = dict(
         v40_research_modeled_notional_usdt=modeled,
         quoted_public_capacity_usdt=public_cap,
         modeled_lots_notional_usdt=notional,
-        modeled_notional_shortfall_usdt=modeled - notional,
+        floor_quantization_remainder_usdt=modeled - notional,
+        published_single_order_capacity_usdt=single_order_cap,
+        published_capacity_shortfall_usdt=max(
+            D(0), modeled - min(public_cap, single_order_cap),
+        ),
         published_position_tier_fits=public_capacity.fits_public_position_tier,
         published_single_order_fits=public_capacity.fits_public_single_order_limit,
     )
@@ -99,20 +108,20 @@ def assess_v40_public_capacity_parity(
     if (
         public_capacity.status
         == "V40_CAPACITY_PUBLISHED_POSITION_TIER_EXCEEDED_NONAUTHORIZING"
-        or not public_capacity.fits_public_position_tier
     ):
         return blocked("V40_CAPACITY_PARITY_PUBLISHED_POSITION_CAP_REJECT",
                        **result)
     if (
         public_capacity.status
         == "V40_CAPACITY_PUBLISHED_SINGLE_ORDER_LIMIT_EXCEEDED_NONAUTHORIZING"
-        or not public_capacity.fits_public_single_order_limit
     ):
         return blocked("V40_CAPACITY_PARITY_SINGLE_ORDER_CAP_REJECT",
                        **result)
     if (
         public_capacity.status
         != "V40_CAPACITY_PUBLISHED_SINGLE_ORDER_FITS_NONAUTHORIZING"
+        or not public_capacity.fits_public_position_tier
+        or not public_capacity.fits_public_single_order_limit
     ):
         return blocked("V40_CAPACITY_PARITY_PUBLIC_OUTCOME_UNVERIFIED",
                        **result)
