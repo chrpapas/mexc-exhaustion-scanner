@@ -9,9 +9,12 @@ from app.t100_live_current_inventory_cli import (
 
 
 class FakeReadClient:
-    def __init__(self, *, protected=False, mismatch=False, block=False):
+    def __init__(self, *, protected=False, unprotected=False,
+                 limit_order=False, mismatch=False, block=False):
         self.calls = []
         self.protected = protected
+        self.unprotected = unprotected
+        self.limit_order = limit_order
         self.mismatch = mismatch
         self.block = block
 
@@ -21,7 +24,7 @@ class FakeReadClient:
             await asyncio.sleep(60)
         if path.endswith("/position/open_positions"):
             positions = []
-            if self.protected:
+            if self.protected or self.unprotected:
                 positions = [{
                     "positionId": "SENSITIVE_POSITION_ID",
                     "symbol": "SIREN_USDT",
@@ -51,16 +54,16 @@ class FakeReadClient:
         if path.endswith("/account/assets"):
             return [{
                 "currency": "USDT",
-                "positionMargin": 10 if self.protected else 0,
-                "unrealized": 1 if self.protected else 0,
+                "positionMargin": 10 if self.protected or self.unprotected else 0,
+                "unrealized": 1 if self.protected or self.unprotected else 0,
             }]
         if path.endswith("/order/open_order_total_count"):
             stop_count = 1 if self.protected else 0
             if self.mismatch:
                 stop_count += 1
             return {
-                "sumCount": stop_count,
-                "limitOrderCount": 0,
+                "sumCount": stop_count + int(self.limit_order),
+                "limitOrderCount": int(self.limit_order),
                 "stopOrderCount": stop_count,
                 "planOrderCount": 0,
                 "trackOrderCount": 0,
@@ -98,6 +101,33 @@ class CurrentInventoryCliTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("SENSITIVE_POSITION_ID", str(result))
         self.assertNotIn("SENSITIVE_STOP_ID", str(result))
         self.assertNotIn("175", str(result))
+
+    async def test_unprotected_nonflat_and_unrelated_limit_both_report(self):
+        result = await _run(client=FakeReadClient(
+            unprotected=True, limit_order=True,
+        ))
+        self.assertEqual(
+            result["status"], "CURRENT_ACCOUNT_INVENTORY_COMPLETENESS_VERIFIED_NONATOMIC",
+        )
+        self.assertTrue(result["account_wide_completeness_verified"])
+        self.assertTrue(result["position_margin_witness_verified"])
+        self.assertEqual(result["after_positions"], 1)
+        self.assertEqual(result["after_current_tpsl"], 0)
+        self.assertEqual(result["reported_open_order_counts"]["limitOrderCount"], 1)
+        self.assertEqual(result["account_reconciliation_status"],
+                         "UNRELATED_INFLIGHT_ORDERS_PRESENT")
+        self.assertTrue(result["observed_nonflat_without_current_tpsl"])
+        self.assertEqual(result["observed_unrelated_limit_orders"], 1)
+        self.assertEqual(result["reconciliation_blockers"], [
+            "NONFLAT_WITHOUT_OBSERVED_CURRENT_TPSL",
+            "UNRELATED_INFLIGHT_ORDERS_PRESENT",
+            "DURABLE_NONFLAT_RECOVERY_UNVERIFIED",
+        ])
+        self.assertFalse(result["account_reconciled"])
+        self.assertFalse(result["entry_allowed"])
+        self.assertFalse(result["live_authorization"])
+        self.assertNotIn("SIREN_USDT", str(result))
+        self.assertNotIn("SENSITIVE_POSITION_ID", str(result))
 
     async def test_stop_count_mismatch_blocks_account_completeness(self):
         result = await _run(
