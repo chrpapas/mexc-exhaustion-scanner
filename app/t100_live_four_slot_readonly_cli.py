@@ -27,8 +27,11 @@ from app.t100_live_cross_risk_diagnostic import (
 from app.t100_live_four_slot_mexc_readonly import inspect_existing_four_slots_get_only
 
 
-def _report(status: str, *, slots: int | None = None) -> dict[str, Any]:
-    return {
+def _report(
+    status: str, *, slots: int | None = None,
+    mismatch: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    result = {
         "status": status,
         "owned_four_slot_positions_observed": (
             slots if type(slots) is int and 0 <= slots <= 4 else None
@@ -43,6 +46,43 @@ def _report(status: str, *, slots: int | None = None) -> dict[str, Any]:
         "database_writes_sent": False,
         "read_only": True,
     }
+    if status == "POSITION_STOP_COUNT_MISMATCH":
+        # Explicit output allowlist. No raw MEXC rows, IDs, symbols, prices
+        # or sensitive identifiers. Other errors never trigger this field.
+        aggregate = {}
+        if type(mismatch) is dict and mismatch.get("status") in {
+            "POSITION_STOP_TOPOLOGY_UNVERIFIED",
+            "POSITION_STOP_TOPOLOGY_OBSERVED_NONAUTHORIZING",
+        }:
+            aggregate["status"] = mismatch["status"]
+            for key in (
+                "position_count", "current_tpsl_row_count",
+                "positions_without_any_current_tpsl",
+                "positions_without_positive_stop_loss_row",
+                "positions_with_multiple_current_tpsl_rows",
+                "current_tpsl_rows_with_unmatched_position",
+                "current_tpsl_rows_without_position_id",
+                "current_tpsl_rows_without_positive_stop_loss",
+                "current_tpsl_rows_with_positive_stop_loss",
+                "duplicate_current_tpsl_order_ids",
+            ):
+                value = mismatch.get(key)
+                aggregate[key] = (
+                    value if type(value) is int and 0 <= value <= 2000
+                    else None
+                )
+            aggregate["position_ids_ambiguous"] = (
+                mismatch.get("position_ids_ambiguous") is not False
+            )
+        else:
+            aggregate = {"status": "POSITION_STOP_TOPOLOGY_UNVERIFIED"}
+        aggregate.update({
+            "native_stop_coverage_certified": False,
+            "entry_allowed": False,
+            "live_authorization": False,
+        })
+        result["stop_count_diagnostic"] = aggregate
+    return result
 
 
 class _PrivateGetOnly:
@@ -101,7 +141,9 @@ async def run_readonly_four_slot_audit(
             "NONFLAT_PROVENANCE_MATCHED_NONAUTHORIZING",
         } else None
     )
-    return _report(status, slots=owned)
+    return _report(
+        status, slots=owned, mismatch=result.mismatch_diagnostic,
+    )
 
 
 async def _main(env: Mapping[str, str]) -> dict[str, Any]:
