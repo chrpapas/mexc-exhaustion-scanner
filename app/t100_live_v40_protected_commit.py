@@ -323,6 +323,10 @@ class PostgresProtectedV40Commit:
                             or reservation["external_oid"] != intent.external_oid
                             or reservation["holder_id"] != lease.holder_id
                             or reservation["fencing_token"] != lease.fencing_token
+                            or reservation["ledger_sha256"] != pre_attempt_witness.ledger_hash
+                            or reservation["inventory_sha256"] != pre_attempt_witness.critical_inventory_hash
+                            or reservation["snapshot_observed_at"] != observed_at
+                            or _number(reservation["modeled_notional_usdt"]) < intent.notional_usdt
                             or current["state"] != "SUBMITTING"
                             or current.get("exchange_order_id") is not None
                             or current["signal_id"] != intent.signal_id
