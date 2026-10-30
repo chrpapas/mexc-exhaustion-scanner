@@ -175,6 +175,7 @@ class FrozenArchiveBatchTests(unittest.TestCase):
             self.assertEqual(len(entries), 2)
             report = audit(
                 archive, output_details=detail, template_output=template,
+                require_pinned_archive=False,
             )
             self.assertEqual(report["entries_checked"], 2)
             self.assertEqual(
@@ -189,6 +190,13 @@ class FrozenArchiveBatchTests(unittest.TestCase):
             self.assertIn("contract_observed_at", template.read_text())
             self.assertFalse(report["live_authorization"])
 
+    def test_real_archive_requires_pinned_sha_before_any_classification(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            archive = Path(tmp) / "untrusted.zip"
+            self._make_fixture_archive(archive)
+            with self.assertRaisesRegex(ValueError, "HASH_NOT_PINNED"):
+                audit(archive)
+
     def test_unmatched_evidence_rejected_not_applied_to_other_signal(self):
         with tempfile.TemporaryDirectory() as tmp:
             folder = Path(tmp)
@@ -197,7 +205,8 @@ class FrozenArchiveBatchTests(unittest.TestCase):
             self._make_fixture_archive(archive)
             proof.write_text(json.dumps(dict(witness(), time="2025-06-02T12:00:00Z"))+"\n")
             with self.assertRaisesRegex(ValueError, "NONENTRY"):
-                audit(archive, evidence_jsonl=proof)
+                audit(archive, evidence_jsonl=proof,
+                      require_pinned_archive=False)
 
     def test_no_runtime_network_order_or_mexc_auth_import(self):
         import inspect
