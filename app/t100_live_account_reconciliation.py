@@ -32,6 +32,9 @@ def assess_account_reconciliation(
         "observed_nonflat_without_current_tpsl": False,
         "observed_unrelated_limit_orders": None,
         "reconciliation_blockers": [],
+        # A separately prioritized diagnostic, not an alternate admission
+        # status. Existing fail-closed gating and status remain unchanged.
+        "highest_priority_blocker": "NOT_VERIFIED",
         "entry_allowed": False,
         "live_authorization": False,
     }
@@ -111,6 +114,7 @@ def assess_account_reconciliation(
     if positions == 0 and stops > 0:
         blockers.append("TPSL_WITHOUT_OBSERVED_OPEN_POSITION")
     result["reconciliation_blockers"] = blockers
+    result["highest_priority_blocker"] = blockers[0] if blockers else "NONE"
     if unrelated:
         result["status"] = "UNRELATED_INFLIGHT_ORDERS_PRESENT"
         return result
