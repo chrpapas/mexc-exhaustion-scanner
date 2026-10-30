@@ -13,7 +13,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
-from typing import Any, Sequence
+from typing import Any, Sequence, Protocol
+
+from app.t100_live_four_slot_snapshot_coordinator import (
+    _venue_digest, _hash_rows,
+)
 
 from app.t100_live_active_tpsl import effective_protective_quantity
 from app.t100_live_execution import EntryIntent
@@ -91,7 +95,15 @@ def assess_staged_protected_attempts(
         return block("ATTEMPT_PREEXISTING_OWNERSHIP_UNVERIFIED")
     old = () if pre_attempt_witness.recovery is None else pre_attempt_witness.recovery.recovered
     if (
-        len(old) != pre_attempt_witness.occupied_slots
+        (pre_attempt_witness.recovery is not None and
+         pre_attempt_witness.recovery.live_authorization is not False)
+        or (pre_attempt_witness.recovery is not None and
+            pre_attempt_witness.recovery.mode != "SHADOW_ONLY_RECOVERED_NONFLAT")
+        or not isinstance(pre_attempt_witness.ledger_hash, str)
+        or len(pre_attempt_witness.ledger_hash) != 64
+        or not isinstance(pre_attempt_witness.critical_inventory_hash, str)
+        or len(pre_attempt_witness.critical_inventory_hash) != 64
+        or len(old) != pre_attempt_witness.occupied_slots
         or (bool(old) != (pre_attempt_witness.status == "NONFLAT_PROVENANCE_MATCHED_NONAUTHORIZING"))
     ):
         return block("ATTEMPT_PREEXISTING_RECOVERY_UNVERIFIED")
@@ -258,4 +270,76 @@ def assess_staged_protected_attempts(
         all_staged_attempts_fully_filled_and_protected=True,
         native_stop_witness_observed=True,
         **common,
+    )
+
+
+class AttemptVenueReader(Protocol):
+    async def open_positions(self) -> list[dict[str, Any]]: ...
+    async def open_stop_orders(self) -> list[dict[str, Any]]: ...
+    async def order_by_external_oid(
+        self, symbol: str, external_oid: str,
+    ) -> dict[str, Any] | None: ...
+
+
+class AttemptInventoryReader(Protocol):
+    async def inspect(self) -> dict[str, Any]: ...
+
+
+async def observe_staged_protected_attempts(
+    *, stages: Sequence[DurableAttemptStage],
+    intents: Sequence[EntryIntent],
+    pre_attempt_witness: FourSlotSnapshotResult,
+    venue: AttemptVenueReader,
+    completeness: AttemptInventoryReader,
+) -> ProtectedAttemptObservation:
+    """Two GET-only bookends; detect current critical drift and ambiguous fills.
+
+    This is NOT an atomic venue transaction. In particular, ABA changes or
+    between-read events remain possible. The DB ledger remains unmodified.
+    """
+    def blocked(reason: str) -> ProtectedAttemptObservation:
+        return ProtectedAttemptObservation(status=reason)
+
+    if (
+        not isinstance(stages, (tuple, list))
+        or not isinstance(intents, (tuple, list))
+        or not 1 <= len(stages) == len(intents) <= 4
+        or any(type(s) is not DurableAttemptStage for s in stages)
+        or any(type(i) is not EntryIntent for i in intents)
+    ):
+        return blocked("ATTEMPT_STAGE_ARGS_UNVERIFIED")
+    try:
+        reads = []
+        fingerprints = []
+        for _ in range(2):
+            positions = await venue.open_positions()
+            stops = await venue.open_stop_orders()
+            if type(positions) is not list or type(stops) is not list:
+                return blocked("ATTEMPT_GET_ROWS_MALFORMED")
+            orders = []
+            for intent in intents:
+                order = await venue.order_by_external_oid(
+                    intent.symbol, intent.external_oid,
+                )
+                if type(order) is not dict:
+                    return blocked("ATTEMPT_EXACT_ORDER_GET_UNRESOLVED_NO_RETRY")
+                orders.append(order)
+            report = await completeness.inspect()
+            if type(report) is not dict:
+                return blocked("ATTEMPT_COMPLETENESS_READ_INVALID")
+            fingerprints.append((
+                _venue_digest(positions, stops),
+                _hash_rows({"orders": orders, "completeness": [report]}),
+            ))
+            reads.append((positions, stops, orders, report))
+    except Exception:
+        return blocked("ATTEMPT_GET_OR_FINGERPRINT_FAILED")
+    if fingerprints[0] != fingerprints[1]:
+        return blocked("ATTEMPT_BOOKEND_CRITICAL_DRIFT_OR_ORDER_CHANGE")
+    positions, stops, orders, report = reads[-1]
+    return assess_staged_protected_attempts(
+        stages=stages, intents=intents,
+        pre_attempt_witness=pre_attempt_witness,
+        orders=orders, positions=positions, stops=stops,
+        inventory=report,
     )
