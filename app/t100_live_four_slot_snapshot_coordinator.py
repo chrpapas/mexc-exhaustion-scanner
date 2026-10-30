@@ -18,6 +18,9 @@ from typing import Any, Protocol
 from app.t100_live_consistency import (
     CRITICAL_POSITION_FIELDS, CRITICAL_STOP_FIELDS,
 )
+from app.t100_live_four_slot_stop_count_diagnostic import (
+    classify_current_position_stop_mismatch,
+)
 from app.t100_live_durable_recovery import (
     DurableRecoveryHalted, DurableRecoveryReport,
     checkpoint_from_row, recover_nonflat,
@@ -44,6 +47,7 @@ class FourSlotSnapshotResult:
     inventory: dict[str, Any] | None = None
     ledger_hash: str | None = None
     critical_inventory_hash: str | None = None
+    mismatch_diagnostic: dict[str, Any] | None = None
     entry_allowed: bool = False
     live_authorization: bool = False
 
@@ -206,7 +210,15 @@ class FourSlotSnapshotCoordinator:
         if not _valid_counts(report, len(after_positions), len(after_stops)):
             return FourSlotSnapshotResult("INVENTORY_COMPLETENESS_UNVERIFIED")
         if len(after_positions) != len(after_stops):
-            return FourSlotSnapshotResult("POSITION_STOP_COUNT_MISMATCH")
+            # Never reinterpret multiple TP/SL records as adequate protection.
+            # Provide only aggregate topology from the SAME already verified
+            # stable GET window. Do not print account IDs or trade amounts.
+            return FourSlotSnapshotResult(
+                "POSITION_STOP_COUNT_MISMATCH",
+                mismatch_diagnostic=classify_current_position_stop_mismatch(
+                    after_positions, after_stops,
+                ),
+            )
 
         n = len(after_positions)
         if n != len(checkpoints):
