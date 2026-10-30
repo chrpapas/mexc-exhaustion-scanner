@@ -212,6 +212,18 @@ class CountryTierQualityTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("LEAK_SECRET", str(out))
         self.assertEqual(len(failed.calls), 2)
 
+    def test_cli_error_categories_do_not_expose_exception_messages(self):
+        from app.t100_live_country_tier_quality_cli import _safe_failure_status
+        for exc, expected in (
+            (ValueError("SECRET_URL_X"), "COUNTRY_TIER_QUALITY_DATA_PROCESSING_FAILED"),
+            (TypeError("SECRET_URL_X"), "COUNTRY_TIER_QUALITY_DATA_PROCESSING_FAILED"),
+            (OSError("SECRET_URL_X"), "COUNTRY_TIER_QUALITY_LOCAL_TRANSPORT_FAILED"),
+            (RuntimeError("SECRET_URL_X"), "COUNTRY_TIER_QUALITY_UNEXPECTED_RUNTIME_FAILED"),
+        ):
+            outcome = _safe_failure_status(exc)
+            self.assertEqual(outcome, expected)
+            self.assertNotIn("SECRET", outcome)
+
     async def test_cli_rejects_unarmed_environment(self):
         from app.t100_live_country_tier_quality_cli import run
         for env in ({}, {
