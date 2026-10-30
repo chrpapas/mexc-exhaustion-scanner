@@ -116,6 +116,8 @@ class CurrentInventoryCliTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["reported_open_order_counts"]["limitOrderCount"], 1)
         self.assertEqual(result["account_reconciliation_status"],
                          "UNRELATED_INFLIGHT_ORDERS_PRESENT")
+        self.assertEqual(result["highest_priority_blocker"],
+                         "NONFLAT_WITHOUT_OBSERVED_CURRENT_TPSL")
         self.assertTrue(result["observed_nonflat_without_current_tpsl"])
         self.assertEqual(result["observed_unrelated_limit_orders"], 1)
         self.assertEqual(result["reconciliation_blockers"], [
