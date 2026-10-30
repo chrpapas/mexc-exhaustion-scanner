@@ -49,7 +49,8 @@ class MockMexcGetOnly:
             return [_wire(p) for p in self.positions
                     if symbol is None or p["symbol"] == symbol]
         if path == "/api/v1/private/stoporder/open_orders":
-            if symbol == self.fail_filtered_stop_symbol:
+            if (self.fail_filtered_stop_symbol is not None
+                    and symbol == self.fail_filtered_stop_symbol):
                 return []
             return [_wire(s) for s in self.stops
                     if symbol is None or s["symbol"] == symbol]
@@ -95,18 +96,7 @@ class ReadOnlyFourSlotGetTests(unittest.IsolatedAsyncioTestCase):
         result = await inspect_existing_four_slots_get_only(
             ledger=Ledger(snap), client=client,
         )
-        self.assertEqual(
-            result.status, "NONFLAT_PROVENANCE_MATCHED_NONAUTHORIZING",
-            msg=str((lambda report: {
-                "response": result.status,
-                "probe_status": report.get("status"),
-                "stops_observed": report.get("before_current_tpsl"),
-                "stops_reported": report.get("open_order_counts", {}).get("stopOrderCount"),
-                "stop_count_matches": report.get("current_inventory_completeness", {}).get("current_tpsl_count_matches"),
-            })(await FourSlotMexcCompleteness(
-                ReadOnlyMexcProbe(client)
-            ).inspect())),
-        )
+        self.assertEqual(result.status, "NONFLAT_PROVENANCE_MATCHED_NONAUTHORIZING")
         self.assertEqual(result.occupied_slots, 3)
         self.assertTrue(result.inventory["account_wide_completeness_verified"])
         self.assertEqual(len(result.recovery.recovered), 3)
