@@ -324,7 +324,7 @@ class PostgresProtectedV40Commit:
                             or reservation["holder_id"] != lease.holder_id
                             or reservation["fencing_token"] != lease.fencing_token
                             or current["state"] != "SUBMITTING"
-                            or current["exchange_order_id"] is not None
+                            or current.get("exchange_order_id") is not None
                             or current["signal_id"] != intent.signal_id
                             or current["symbol"] != intent.symbol
                             or current["external_oid"] != intent.external_oid
