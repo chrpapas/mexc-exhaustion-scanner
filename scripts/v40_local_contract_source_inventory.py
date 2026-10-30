@@ -88,7 +88,10 @@ def _scan_json(raw: Any) -> tuple[set[str], set[str], set[str], int, bool]:
             for key, value in node.items():
                 if type(key) is not str:
                     continue
-                fields.add(key)
+                # Contract-keyed maps may use a REAL symbol as the key.
+                # Keep it for overlap counting, but never print it.
+                if not SYM.fullmatch(key):
+                    fields.add(key)
                 if key.lower() in _CAPTURE_TOKENS:
                     capture_fields.add(key)
                 if SYM.fullmatch(key):
