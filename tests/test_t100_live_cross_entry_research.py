@@ -97,11 +97,14 @@ class CrossEntryResearchTests(unittest.TestCase):
         self.assertTrue(outcome.private_current_cross_observed)
         self.assertTrue(outcome.candidate_tier_currently_compared)
         self.assertIn("CROSS_MARGIN_ADAPTER_NOT_IMPLEMENTED", outcome.blockers)
+        self.assertIn("ACCOUNT_SPECIFIC_API_ORDER_ACCESS_UNVERIFIED",
+                      outcome.blockers)
         self.assertIn(
             "ATTACHED_STOP_ATOMICITY_AND_FILL_COVERAGE_UNVERIFIED",
             outcome.blockers,
         )
         for flag in (
+            "account_specific_api_order_access_verified",
             "venue_order_acceptance_verified", "stop_attached_atomically_verified",
             "native_stop_protectiveness_verified", "stressed_tiers_verified",
             "full_account_collateral_verified", "cross_margin_adapter_implemented",
