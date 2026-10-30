@@ -194,7 +194,14 @@ class CrossEntryResearchTests(unittest.TestCase):
     def test_no_adapter_or_network_imports_reachable(self):
         import inspect
         import app.t100_live_cross_entry_research as source
+        import app.t100_live_mexc_adapter as existing_adapter
+        import app.t100_live_guards as live_guards
         text = inspect.getsource(source)
+        self.assertNotIn(
+            "t100_live_cross_entry_research",
+            inspect.getsource(existing_adapter),
+        )
+        self.assertEqual(live_guards.LIVE_ADAPTER_STATUS, "NOT_IMPLEMENTED")
         for banned in ("._private_post(", ".submit_short_with_stop(",
                        "MexcTradeClient(", "httpx.", "asyncpg."):
             self.assertNotIn(banned, text)
