@@ -111,6 +111,38 @@ class CountryTierQualityTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(outcome.incremental_volume_shapes_valid, 0)
                 self.assertFalse(outcome.entry_allowed)
 
+    def test_incremental_failure_reasons_are_redacted_and_reconciled(self):
+        cases = [
+            ({"riskBaseVol": 0}, "VOLUME_FIELDS_UNVERIFIED"),
+            ({"riskLongShortSwitch": 1}, "VOLUME_FIELDS_UNVERIFIED"),
+            ({"riskLevelLimit": 2, "riskIncrVol": 0}, "TIER_STEP_INCOHERENT"),
+            ({"riskLevelLimit": 2, "riskIncrVol": 10,
+              "riskIncrMmr": "0.99"}, "MARGIN_RATE_SCHEDULE_INCOHERENT"),
+            ({"maintenanceMarginRate": "NaN"}, "MARGIN_RATE_FIELDS_UNVERIFIED"),
+            ({"riskLevelLimit": True}, "LEVEL_OR_SIDE_UNVERIFIED"),
+            ({"initialMarginRate": "0.001"}, "MARGIN_RATE_SCHEDULE_INCOHERENT"),
+            ({"minLeverage": 50, "maxLeverage": 2}, "LEVERAGE_FIELDS_UNVERIFIED"),
+            ({"liquidationFeeRate": 1}, "LIQUIDATION_FEE_INCOHERENT"),
+            ({"contractSize": 0}, "CONTRACT_OR_FEE_FIELDS_UNVERIFIED"),
+        ]
+        for changes, expected in cases:
+            with self.subTest(expected=expected, changes=changes):
+                data = envelope(incremental(**changes), custom())
+                result = assess_country_tier_quality(data, data)
+                self.assertEqual(result.incremental_volume_shapes_invalid, 1)
+                self.assertEqual(result.incremental_invalid_reasons, {expected: 1})
+                self.assertFalse(result.live_authorization)
+                self.assertNotIn("AAA_USDT", str(result))
+        first = envelope(incremental("AAA_USDT", riskBaseVol=0),
+                         incremental("CCC_USDT", riskBaseVol=0),
+                         custom())
+        result = assess_country_tier_quality(first, first)
+        self.assertEqual(result.incremental_volume_shapes_invalid, 2)
+        self.assertEqual(
+            result.incremental_invalid_reasons, {"VOLUME_FIELDS_UNVERIFIED": 2},
+        )
+        self.assertEqual(sum(result.incremental_invalid_reasons.values()), 2)
+
     def test_short_specific_and_incremented_volume(self):
         r = incremental(
             riskLongShortSwitch=1, riskBaseVolShort=60, riskIncrVolShort=40,
