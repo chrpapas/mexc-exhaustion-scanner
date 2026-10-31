@@ -33,6 +33,7 @@ from app.t100_live_readonly_probe import ReadOnlyMexcProbe
 from app.t100_live_pnl_pair_recheck import (
     PnlPairRecheck, recheck_pnl_pair_readonly,
 )
+from app.t100_live_position_mode_shape import PositionModeShape
 
 
 class CrossRiskDiagnosticHalted(RuntimeError):
@@ -150,10 +151,39 @@ def _result(
             "NOT_CHECKED", "NOT_CHECKED", "NOT_CHECKED",
         )
     pnl = pnl_recheck if type(pnl_recheck) is PnlPairRecheck else None
+    mode = getattr(witness, "position_mode_shape", None)
+    if type(mode) is not PositionModeShape:
+        mode = None
+    mode_valid = (
+        mode is not None
+        and mode.status in {
+            "ACCOUNT_ALL_CROSS_SHORT_OBSERVED_NONAUTHORIZING",
+            "ACCOUNT_MIXED_SIDE_OR_MARGIN_OBSERVED_NONAUTHORIZING",
+        }
+    )
     return {
         "status": safe_status,
         "failure_stage": stage,
         "failure_code": code,
+        "account_position_mode_shape_status": (
+            mode.status if mode is not None else "NOT_CHECKED"
+        ),
+        "account_cross_short_positions": (
+            mode.cross_short_count if mode_valid else None
+        ),
+        "account_cross_long_positions": (
+            mode.cross_long_count if mode_valid else None
+        ),
+        "account_isolated_short_positions": (
+            mode.isolated_short_count if mode_valid else None
+        ),
+        "account_isolated_long_positions": (
+            mode.isolated_long_count if mode_valid else None
+        ),
+        "account_position_mode_rows_observed": (
+            mode.total_positions_observed if mode_valid else None
+        ),
+        "account_position_mode_observation_authorizing": False,
         "pnl_pair_recheck_status": (
             pnl.status if pnl is not None else "NOT_CHECKED"
         ),
