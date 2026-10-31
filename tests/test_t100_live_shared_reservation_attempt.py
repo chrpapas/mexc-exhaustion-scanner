@@ -198,6 +198,64 @@ class SharedReservationAttemptTests(unittest.IsolatedAsyncioTestCase):
             await self.journal.stage(**self.stage_args(r))
         self.assertEqual(self.snapshot(), before)
 
+    async def test_full_offline_shared_reservation_stage_and_protected_db_commit(self):
+        from app.t100_live_shared_protected_finalization import (
+            prepare_shared_protected_entry_offline,
+        )
+        from app.t100_live_v40_protected_commit import (
+            PostgresProtectedV40Commit,
+        )
+        from tests.test_t100_live_v40_protected_commit import CommitPool
+        from tests.test_t100_live_shared_protected_finalization import deal
+
+        before_manual = copy.deepcopy((self.positions, self.stops))
+        reservation = await self.reserve(sid=401)
+        arguments = self.stage_args(reservation)
+        stage = await self.journal.stage(**arguments)
+        # Simulated MEXC GET and deal-detail histories only. There is
+        # intentionally NO client POST and no venue mutation from this test.
+        source = self.source
+        reported_order = copy.deepcopy(source.order)
+        reported_order["externalOid"] = reservation.external_oid
+        candidate = prepare_shared_protected_entry_offline(
+            pre_witness=self.witness,
+            pre_positions=self.positions,
+            pre_stops=self.stops,
+            stage=stage,
+            intent=arguments["intent"],
+            post_positions=copy.deepcopy(source.post_positions),
+            post_stops=copy.deepcopy(source.post_stops),
+            post_order=reported_order,
+            post_inventory=copy.deepcopy(source.post_report),
+            order_deals=[deal()],
+        )
+        for table in (
+            "committed_fill_sets", "committed_fills",
+            "committed_checkpoints", "committed_revisions",
+        ):
+            setattr(self.pg, table, {})
+        self.pg.failure = None
+        committing = PostgresProtectedV40Commit(CommitPool(self.pg))
+        outcome = await committing.persist(
+            batch=candidate, pre_attempt_witness=self.witness,
+            lease=lease(), observed_at=self.observed_at,
+            shared_pre_positions=self.positions,
+            shared_pre_stops=self.stops,
+        )
+        self.assertEqual(outcome.entries_committed, 1)
+        self.assertTrue(outcome.db_atomic_commit_observed)
+        self.assertFalse(outcome.venue_state_currently_verified)
+        self.assertFalse(outcome.live_authorization)
+        self.assertEqual(self.pg.new_intents[0]["state"], "ACK")
+        self.assertEqual(self.pg.reserved[0]["state"], "PROTECTED")
+        self.assertEqual(len(self.pg.committed_checkpoints), 1)
+        self.assertEqual(len(self.pg.committed_revisions), 1)
+        self.assertEqual(len(self.pg.committed_fills), 1)
+        self.assertEqual((self.positions, self.stops), before_manual)
+        with self.assertRaises(Exception):
+            await self.journal.stage(**arguments)
+        self.assertEqual(len(self.pg.new_intents), 1)
+
     async def test_competing_reservations_cap_account_at_four(self):
         first = await self.reserve("NEW_USDT", 410)
         second = await self.reserve("NEXT_USDT", 411)
