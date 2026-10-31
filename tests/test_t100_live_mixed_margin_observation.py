@@ -217,6 +217,64 @@ class MixedAccountObserverTests(unittest.IsolatedAsyncioTestCase):
         for raw in ("SECOND_USDT", "0.071", "9.99"):
             self.assertNotIn(raw, str(result))
 
+    async def test_pnl_torn_reads_still_reach_mixed_account_without_authorizing(self):
+        # Original ALL-SHORT collector fails on a torn PRE asset GET.
+        # Both recheck PNL pairs match. Full standard risk window again
+        # fails on PRE economics. The diagnostic must nevertheless attempt
+        # a separate two-frame mixed-account observation from the independently
+        # established long/short and cross/isolated account shape.
+        class IntermittentAssets(FakePrivate):
+            def __init__(self, data):
+                super().__init__(data)
+                self.asset_reads = 0
+
+            async def _private_get(self, path, params=None):
+                result = await super()._private_get(path, params)
+                if path == "/api/v1/private/account/assets":
+                    self.asset_reads += 1
+                    if self.asset_reads in {1, 5}:
+                        result[0]["unrealized"] = "777777"
+                return result
+
+        data = mixed()
+        private = IntermittentAssets(data)
+        timeline = iter([
+            1_000_000, 1_000_500,
+            1_001_000, 1_001_500,
+            1_002_000, 1_002_500, 1_002_700,
+            1_003_000, 1_003_500, 1_003_700,
+        ])
+        result = await run_diagnostic(
+            private=ReadOnlyMexcProbe(private),
+            public=FakePublic(data, fair_ms=1_000_400),
+            clock_ms=timeline.__next__,
+        )
+        self.assertEqual(result["failure_stage"], "READ_FIRST")
+        self.assertEqual(
+            result["failure_code"], "COLLECTOR_PRE_UNREALIZED_PNL_MISMATCH"
+        )
+        self.assertEqual(
+            result["pnl_pair_recheck_status"],
+            "PNL_RECHECK_TWO_PAIRS_MATCH_NONAUTHORIZING",
+        )
+        self.assertEqual(result["account_cross_short_positions"], 1)
+        self.assertEqual(result["account_isolated_long_positions"], 1)
+        self.assertEqual(result["account_position_mode_rows_observed"], 2)
+        self.assertEqual(
+            result["mixed_account_risk_status"],
+            "MIXED_ACCOUNT_ECONOMIC_BOOKENDS_OBSERVED_NONAUTHORIZING",
+        )
+        self.assertTrue(result["mixed_account_economic_parity_observed"])
+        self.assertTrue(result["mixed_account_critical_inventory_stable"])
+        self.assertFalse(result["cross_wallet_collateral_certified"])
+        self.assertFalse(result["mixed_account_cross_wallet_collateral_certified"])
+        self.assertFalse(result["mixed_account_liquidation_certified"])
+        self.assertFalse(result["entry_allowed"])
+        self.assertFalse(result["live_authorization"])
+        self.assertFalse(result["mexc_orders_sent"])
+        self.assertNotIn("777777", str(result))
+        self.assertTrue(all(method == "GET" for method, *_ in private.calls))
+
     async def test_read_failure_is_privacy_safe(self):
         class Failure:
             async def read(self):
