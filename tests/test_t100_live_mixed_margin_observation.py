@@ -33,9 +33,10 @@ def mixed(ts=1_000_000):
     data.positions.append(second)
     data.assets[0]["positionMargin"] = "50"
     data.assets[0]["unrealized"] = "-3.5"
-    data.private_risk_by_symbol["SECOND_USDT"] = copy.deepcopy(
-        data.private_risk_by_symbol["TEST_USDT"]
-    )
+    second_risk = copy.deepcopy(data.private_risk_by_symbol["TEST_USDT"])
+    for row in second_risk:
+        row["symbol"] = "SECOND_USDT"
+    data.private_risk_by_symbol["SECOND_USDT"] = second_risk
     contract = copy.deepcopy(data.public_contract_by_symbol["TEST_USDT"])
     contract["symbol"] = "SECOND_USDT"
     data.public_contract_by_symbol["SECOND_USDT"] = contract
