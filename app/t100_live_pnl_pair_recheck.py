@@ -17,6 +17,9 @@ from typing import Any
 
 from app.t100_live_position_margin_witness import assess_position_margin_witness
 from app.t100_live_readonly_probe import ReadOnlyMexcProbe
+from app.t100_live_position_mode_shape import (
+    PositionModeShape, classify_account_position_modes,
+)
 
 
 @dataclass(frozen=True)
@@ -28,6 +31,9 @@ class PnlPairRecheck:
     asset_unrealized_moved_across_pairs: bool = False
     first_pair_reconciled: bool = False
     second_pair_reconciled: bool = False
+    # Privacy-safe modes from two independently verified stable GET pairs.
+    # This does NOT certify full account inventory or collateral.
+    position_mode_shape: PositionModeShape | None = None
     risk_certified: bool = False
     entry_allowed: bool = False
     live_authorization: bool = False
@@ -111,6 +117,7 @@ async def recheck_pnl_pair_readonly(
                 witness.get("position_inventory_economic_witness_observed") is True,
                 witness.get("usdt_position_margin_reconciled") is True,
                 witness.get("usdt_unrealized_reconciled") is True,
+                classify_account_position_modes(positions),
             ))
         first, second = pairs
         stable = first[0] == second[0]
@@ -124,6 +131,16 @@ async def recheck_pnl_pair_readonly(
             asset_unrealized_moved_across_pairs=moved_asset,
             first_pair_reconciled=first_ok,
             second_pair_reconciled=second_ok,
+            position_mode_shape=(
+                second[6]
+                if stable and first_ok and second_ok
+                and first[6] == second[6]
+                and second[6].status in {
+                    "ACCOUNT_ALL_CROSS_SHORT_OBSERVED_NONAUTHORIZING",
+                    "ACCOUNT_MIXED_SIDE_OR_MARGIN_OBSERVED_NONAUTHORIZING",
+                }
+                else None
+            ),
         )
         if not stable:
             status = "PNL_RECHECK_POSITION_IDENTITY_OR_MARGIN_DRIFT"
