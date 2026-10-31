@@ -138,7 +138,7 @@ async def observe_mixed_margin_account_window(
         second = await reader.read()
         b = _inspect_frame(second, now=now_ms(), max_age_ms=max_age_ms)
         delta = second.observed_at_ms - first.observed_at_ms
-        if not 0 < delta <= max_separation_ms or a[2:] != b[2:]:
+        if not 0 < delta <= max_separation_ms or a[2] != b[2]:
             return blocked("MIXED_ACCOUNT_READ_WINDOW_OR_COUNTS_DRIFT")
         if a[0] != b[0]:
             return blocked("MIXED_ACCOUNT_CRITICAL_INVENTORY_DRIFT")
