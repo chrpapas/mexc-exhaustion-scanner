@@ -30,6 +30,9 @@ from app.t100_live_four_slot_mexc_readonly import inspect_existing_four_slots_ge
 def _report(
     status: str, *, slots: int | None = None,
     mismatch: dict[str, Any] | None = None,
+    manual_positions: int | None = None,
+    unprotected_manual_positions: int | None = None,
+    account_positions: int | None = None,
 ) -> dict[str, Any]:
     result = {
         "status": status,
@@ -46,6 +49,23 @@ def _report(
         "database_writes_sent": False,
         "read_only": True,
     }
+    if status in {
+        "SHARED_ACCOUNT_MANUAL_ONLY_NONAUTHORIZING",
+        "SHARED_ACCOUNT_MANAGED_PROVENANCE_MATCHED_NONAUTHORIZING",
+    }:
+        # Counts only. Nothing returned here certifies CROSS collateral or
+        # guarantees native stop execution. Manual SL is never required.
+        for key, value in (
+            ("manual_positions_observed", manual_positions),
+            ("manual_positions_without_positive_sl_observed",
+             unprotected_manual_positions),
+            ("account_positions_observed", account_positions),
+        ):
+            result[key] = (
+                value if type(value) is int and 0 <= value <= 4 else None
+            )
+        result["manual_positions_adopted_by_t100"] = False
+        result["cross_account_risk_certified"] = False
     if status == "POSITION_STOP_COUNT_MISMATCH":
         # Explicit output allowlist. No raw MEXC rows, IDs, symbols, prices
         # or sensitive identifiers. Other errors never trigger this field.
@@ -99,6 +119,7 @@ class _PrivateGetOnly:
 
 async def run_readonly_four_slot_audit(
     *, ledger: Any, client: Any, env: Mapping[str, str],
+    shared_manual_observation: bool = False,
 ) -> dict[str, Any]:
     try:
         require_readonly_controls(env)
@@ -108,6 +129,7 @@ async def run_readonly_four_slot_audit(
         result = await asyncio.wait_for(
             inspect_existing_four_slots_get_only(
                 ledger=ledger, client=_PrivateGetOnly(client),
+                shared_manual_observation=shared_manual_observation,
             ),
             timeout=75.0,
         )
@@ -133,20 +155,36 @@ async def run_readonly_four_slot_audit(
         "FLAT_HISTORY_REQUIRES_CLOSED_LEDGER_AUDIT",
         "ORIGIN_ORDER_UNAVAILABLE",
         "DURABLE_EXCHANGE_PROVENANCE_MISMATCH",
+        "SHARED_ACCOUNT_MANUAL_ONLY_NONAUTHORIZING",
+        "SHARED_ACCOUNT_MANAGED_PROVENANCE_MATCHED_NONAUTHORIZING",
+        "SHARED_ACCOUNT_POSITION_PARTITION_UNVERIFIED",
+        "SHARED_ACCOUNT_T100_LEDGER_HISTORY_UNVERIFIED",
+        "SHARED_ACCOUNT_T100_DURABLE_PROVENANCE_UNVERIFIED",
+        "SHARED_MODE_INPUT_INVALID",
     }
     status = result.status if result.status in allowed else "FOUR_SLOT_READONLY_UNKNOWN_STATE"
     owned = (
         result.occupied_slots if status in {
             "FLAT_OBSERVED_NONAUTHORIZING",
             "NONFLAT_PROVENANCE_MATCHED_NONAUTHORIZING",
+            "SHARED_ACCOUNT_MANUAL_ONLY_NONAUTHORIZING",
+            "SHARED_ACCOUNT_MANAGED_PROVENANCE_MATCHED_NONAUTHORIZING",
         } else None
     )
     return _report(
         status, slots=owned, mismatch=result.mismatch_diagnostic,
+        manual_positions=result.manual_positions_observed,
+        unprotected_manual_positions=(
+            result.manual_positions_without_positive_sl_observed
+        ),
+        account_positions=result.account_positions_observed,
     )
 
 
-async def _main(env: Mapping[str, str]) -> dict[str, Any]:
+async def _main(
+    env: Mapping[str, str], *,
+    shared_manual_observation: bool = False,
+) -> dict[str, Any]:
     try:
         require_readonly_controls(env)
     except CrossRiskDiagnosticHalted:
@@ -183,6 +221,7 @@ async def _main(env: Mapping[str, str]) -> dict[str, Any]:
         )
         return await run_readonly_four_slot_audit(
             ledger=PostgresFourSlotLedgerReader(pool), client=mexc, env=env,
+            shared_manual_observation=shared_manual_observation,
         )
     except Exception:
         return _report("FOUR_SLOT_READONLY_CONNECTION_OR_PRECONDITION_FAILED")
@@ -195,9 +234,17 @@ async def _main(env: Mapping[str, str]) -> dict[str, Any]:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.parse_args()
+    parser.add_argument(
+        "--shared-manual-observation", action="store_true",
+        help="GET/SELECT-only account partition with independent manual "
+             "positions; NEVER authorizes cross-margin trading",
+    )
+    args = parser.parse_args()
     try:
-        output = asyncio.run(_main(os.environ))
+        output = asyncio.run(_main(
+            os.environ,
+            shared_manual_observation=args.shared_manual_observation,
+        ))
     except Exception:
         output = _report("FOUR_SLOT_READONLY_DIAGNOSTIC_HALTED")
     print(json.dumps(output, sort_keys=True, indent=2))
