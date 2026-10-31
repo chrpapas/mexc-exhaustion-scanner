@@ -69,6 +69,8 @@ class MemoryLedger:
 
 
 class MemoryMexc:
+    open_type = 2  # Mock CROSS-only pilot transport.
+
     def __init__(self):
         self.posts, self.fail, self.order, self.stops, self.positions = 0, False, None, [], []
     async def submit_short_with_stop(self, intent, *, permit):
@@ -105,6 +107,25 @@ class LiveTests(unittest.IsolatedAsyncioTestCase):
             book_age_ms=100, signal_age_seconds=20)
         data.update(overrides)
         return await self.gateway.send_one(self.intent, **data)
+
+    async def test_pilot_cross_margin_transport_is_mandatory(self):
+        self.assertEqual(self.gateway.caps.margin_type, 2)
+        self.assertEqual(self.mexc.open_type, 2)
+        # Legacy isolated payload adapter or missing mode must be blocked
+        # BEFORE creating an intent or making any exchange request.
+        self.mexc.open_type = 1
+        with self.assertRaisesRegex(
+            ExecutionHalted, "CROSS_PILOT_MARGIN_TRANSPORT_UNVERIFIED"
+        ):
+            await self.send()
+        self.assertEqual(self.ledger.history, [])
+        self.assertEqual(self.mexc.posts, 0)
+        del self.mexc.open_type
+        with self.assertRaisesRegex(
+            ExecutionHalted, "CROSS_PILOT_MARGIN_TRANSPORT_UNVERIFIED"
+        ):
+            await self.send()
+        self.assertEqual(self.ledger.values, {})
 
     async def test_underbudget_stop_risk_blocks_before_writing_any_intent(self):
         # Frozen 75% SL implies ~375 USDT gross potential loss from
@@ -285,6 +306,13 @@ class MathTests(unittest.TestCase):
                 EntryIntent.build(signal_id=1,symbol=symbol,reference_price="2",
                     notional_usdt="100",contract_size="1",volume_step="1",
                     min_volume="1",max_volume="1000",price_tick="0.01")
+    def test_pilot_margin_mode_cannot_be_isolated(self):
+        with self.assertRaisesRegex(ValueError, "CROSS"):
+            LiveCaps(
+                Decimal("100"), Decimal("200"), Decimal("50"),
+                margin_type=1,
+            )
+
     def test_leverage_is_one(self):
         with self.assertRaises(ValueError):
             LiveCaps(Decimal("100"), Decimal("200"), Decimal("10"), leverage=2)
