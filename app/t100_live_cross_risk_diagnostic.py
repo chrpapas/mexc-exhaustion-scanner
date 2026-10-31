@@ -208,6 +208,19 @@ def _result(
         "mixed_account_drift_public_contract_terms": bool(
             mixed is not None and mixed.public_contract_terms_changed
         ),
+        "mixed_account_isolated_auto_add_field": (
+            mixed.isolated_auto_add_field_status
+            if mixed is not None
+            and mixed.isolated_auto_add_field_status in {
+                "MEXC_AUTO_ADD_FIELD_TRUE_SEMANTICS_UNVERIFIED",
+                "MEXC_AUTO_ADD_FIELD_FALSE_SEMANTICS_UNVERIFIED",
+                "MEXC_AUTO_ADD_FIELD_MISSING_OR_UNVERIFIED",
+                "MEXC_ISOLATED_POSITION_SCOPE_UNVERIFIED",
+                "NOT_CHECKED",
+            }
+            else "NOT_CHECKED"
+        ),
+        "mixed_account_isolated_cash_drain_bounded": False,
         "mixed_account_cross_wallet_collateral_certified": False,
         "mixed_account_liquidation_certified": False,
         "status": safe_status,
