@@ -14,7 +14,12 @@ from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 from typing import Any, Callable
 
-from app.t100_live_cross_risk_observation import CrossRiskRead, _static_hash
+from app.t100_live_cross_risk_observation import (
+    CrossRiskRead, _static_hash, _canonical,
+)
+from app.t100_live_consistency import (
+    CRITICAL_POSITION_FIELDS, CRITICAL_STOP_FIELDS,
+)
 from app.t100_live_position_margin_witness import assess_position_margin_witness
 from app.t100_live_position_mode_shape import classify_account_position_modes
 
@@ -28,6 +33,12 @@ class MixedAccountObservation:
     economic_parity_observed: bool = False
     stable_critical_inventory: bool = False
     fair_price_window_observed: bool = False
+    # Only static, allowlisted FIELD NAMES. NEVER source values, IDs or symbols.
+    changed_position_fields: tuple[str, ...] = ()
+    changed_stop_fields: tuple[str, ...] = ()
+    changed_asset_fields: tuple[str, ...] = ()
+    private_risk_schedule_changed: bool = False
+    public_contract_terms_changed: bool = False
     isolated_margin_reserved_as_separate_observation: bool = False
     isolated_unrealized_counted_as_cross_collateral: bool = False
     cross_account_collateral_certified: bool = False
@@ -118,12 +129,78 @@ def _inspect_frame(
     )
 
 
+def _critical_change_fields(
+    first: CrossRiskRead, second: CrossRiskRead,
+) -> dict[str, Any]:
+    """Diagnose EXACT hashed categories, never emit raw venue values.
+
+    Do not dismiss any mismatch. Current fields are drawn solely from the
+    same pinned lists used by _static_hash; unknown raw keys are ignored.
+    """
+    def project(
+        rows: list[dict[str, Any]], field: str,
+        *, position: bool,
+    ) -> tuple[str, ...]:
+        if position:
+            return tuple(sorted(_canonical({
+                "positionId": row.get("positionId"),
+                "id": row.get("id"),
+                "symbol": row.get("symbol"),
+                "value": row.get(field),
+            }) for row in rows))
+        return tuple(sorted(_canonical({
+            "id": row.get("id"),
+            "stopPlanOrderId": row.get("stopPlanOrderId"),
+            "positionId": row.get("positionId"),
+            "value": row.get(field),
+        }) for row in rows))
+
+    pos = tuple(
+        key for key in CRITICAL_POSITION_FIELDS
+        if project(first.positions, key, position=True)
+        != project(second.positions, key, position=True)
+    )
+    stops = tuple(
+        key for key in CRITICAL_STOP_FIELDS
+        if project(first.stops, key, position=False)
+        != project(second.stops, key, position=False)
+    )
+    asset_keys = (
+        "currency", "cashBalance", "frozenBalance",
+        "bonus", "debtAmount", "contributeMarginAmount",
+    )
+    assets = tuple(
+        key for key in asset_keys
+        if tuple(sorted(_canonical({
+            "currency": row.get("currency"),
+            "value": row.get(key),
+        }) for row in first.assets))
+        != tuple(sorted(_canonical({
+            "currency": row.get("currency"),
+            "value": row.get(key),
+        }) for row in second.assets))
+    )
+    return {
+        "changed_position_fields": pos,
+        "changed_stop_fields": stops,
+        "changed_asset_fields": assets,
+        "private_risk_schedule_changed": (
+            _canonical(first.private_risk_by_symbol)
+            != _canonical(second.private_risk_by_symbol)
+        ),
+        "public_contract_terms_changed": (
+            _canonical(first.public_contract_by_symbol)
+            != _canonical(second.public_contract_by_symbol)
+        ),
+    }
+
+
 async def observe_mixed_margin_account_window(
     reader: Any, *, now_ms: Callable[[], int],
     max_age_ms: int = 5000, max_separation_ms: int = 5000,
 ) -> MixedAccountObservation:
-    def blocked(status: str) -> MixedAccountObservation:
-        return MixedAccountObservation(status=status)
+    def blocked(status: str, **details: Any) -> MixedAccountObservation:
+        return MixedAccountObservation(status=status, **details)
     if (
         not callable(getattr(reader, "read", None))
         or not callable(now_ms)
@@ -141,7 +218,13 @@ async def observe_mixed_margin_account_window(
         if not 0 < delta <= max_separation_ms or a[2] != b[2]:
             return blocked("MIXED_ACCOUNT_READ_WINDOW_OR_COUNTS_DRIFT")
         if a[0] != b[0]:
-            return blocked("MIXED_ACCOUNT_CRITICAL_INVENTORY_DRIFT")
+            # Maintain fail-closed status; add FIELD NAMES only. These
+            # categories distinguish an economic cash movement from a
+            # leverage/position/stop/contract-risk mutation.
+            return blocked(
+                "MIXED_ACCOUNT_CRITICAL_INVENTORY_DRIFT",
+                **_critical_change_fields(first, second),
+            )
         if set(a[1]) != set(b[1]) or any(
             abs(b[1][sym] / a[1][sym] - Decimal(1)) > Decimal("0.01")
             for sym in a[1]
