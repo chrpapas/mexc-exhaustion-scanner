@@ -49,7 +49,7 @@ def _finite(
         value = Decimal(str(raw))
     except (TypeError, InvalidOperation, ValueError):
         raise ValueError("INVALID_ECONOMIC_VALUE") from None
-    if not value.is_finite() or (value <= 0 if positive else value < 0 if not allow_negative else False):
+    if (not value.is_finite() or (positive and value <= 0) or (not positive and not allow_negative and value < 0)):
         raise ValueError("INVALID_ECONOMIC_VALUE")
     return value
 
