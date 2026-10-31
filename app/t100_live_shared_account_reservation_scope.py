@@ -15,9 +15,61 @@ from typing import Any
 from app.t100_live_four_slot_snapshot_coordinator import (
     FourSlotSnapshotResult, _valid_counts, _venue_digest,
 )
-from app.t100_live_shared_protected_entry_observer import (
-    _map_positions, _map_stops,
-)
+# Independent of the post-entry observer: importing it would create a
+# reservation -> attempt journal -> reservation circular import.
+
+
+def _id(value: Any) -> str:
+    if value is None or type(value) is bool:
+        raise ValueError("SHARED_INVALID_ID")
+    result = str(value)
+    if not result or result in {"0", "None", "null"}:
+        raise ValueError("SHARED_INVALID_ID")
+    return result
+
+
+def _map_positions(rows: Any) -> dict[str, dict[str, Any]]:
+    if type(rows) is not list or any(type(row) is not dict for row in rows):
+        raise ValueError("SHARED_POSITIONS_INVALID")
+    positions: dict[str, dict[str, Any]] = {}
+    symbols: set[str] = set()
+    for row in rows:
+        pid = _id(row.get("positionId") or row.get("id"))
+        symbol = row.get("symbol")
+        if (
+            pid in positions or type(symbol) is not str
+            or re.fullmatch("[A-Z0-9]+_USDT", symbol) is None
+            or symbol in symbols
+            or type(row.get("positionType")) is not int
+            or row["positionType"] not in {1, 2}
+            or type(row.get("openType")) is not int
+            or row["openType"] not in {1, 2}
+        ):
+            raise ValueError("SHARED_POSITION_IDENTITY_INVALID")
+        positions[pid] = row
+        symbols.add(symbol)
+    return positions
+
+
+def _map_stops(
+    rows: Any, positions: dict[str, dict[str, Any]],
+) -> dict[str, list[dict[str, Any]]]:
+    if type(rows) is not list or any(type(row) is not dict for row in rows):
+        raise ValueError("SHARED_STOPS_INVALID")
+    observed: dict[str, list[dict[str, Any]]] = {}
+    stop_ids: set[str] = set()
+    for row in rows:
+        sid = _id(row.get("id") or row.get("stopPlanOrderId"))
+        pid = _id(row.get("positionId"))
+        if (
+            sid in stop_ids or pid not in positions
+            or row.get("symbol") not in (None, positions[pid]["symbol"])
+        ):
+            raise ValueError("SHARED_STOP_IDENTITY_INVALID")
+        stop_ids.add(sid)
+        observed.setdefault(pid, []).append(row)
+    return observed
+
 
 
 class SharedAccountScopeHalted(RuntimeError):
