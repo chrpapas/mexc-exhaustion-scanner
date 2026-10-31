@@ -11,6 +11,11 @@ from app.t100_live_authorization import (
 from app.t100_live_execution import EntryIntent
 
 class LiveMexcAdapter:
+    # Pinned MEXC futures openType=2 (CROSS) for the V40 tiny pilot.
+    # This is only a transport contract; it does not certify shared
+    # collateral, account completeness, native-stop atomicity or allow POST.
+    open_type = 2
+
     def __init__(self, client: MexcTradeClient) -> None:
         self.client = client
 
@@ -59,7 +64,7 @@ class LiveMexcAdapter:
                 "leverage": 1,
                 "side": 3,
                 "type": 5,
-                "openType": 1,
+                "openType": self.open_type,
                 "positionMode": 1,
                 "externalOid": intent.external_oid,
                 "stopLossPrice": str(intent.stop_price),
