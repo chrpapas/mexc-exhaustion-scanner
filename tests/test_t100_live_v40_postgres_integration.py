@@ -240,6 +240,137 @@ class RealPostgresProtectedV40Tests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(recovered.recovered), 4)
         self.assertFalse(recovered.live_authorization)
 
+    async def test_restricted_postgres_plus_get_only_four_slot_recovery_and_missing_stop(self):
+        """Exercise actual read-only DB SELECTs and MEXC GET contracts TOGETHER.
+
+        Creates an explicitly SELECT-only role in the disposable CI
+        PostgreSQL service. There is no exchange client, API credential,
+        live executor, Render deployment, order POST or production grant.
+        """
+        from decimal import Decimal
+        from app.t100_live_role_preflight import TARGET_ROLE
+        from app.t100_live_four_slot_ledger_reader import (
+            PostgresFourSlotLedgerReader,
+        )
+        from app.t100_live_four_slot_readonly_cli import (
+            run_readonly_four_slot_audit,
+        )
+        from tests.test_t100_live_four_slot_mexc_readonly import (
+            MockMexcGetOnly,
+        )
+
+        await self.finalize()
+        async with self.pool.acquire() as db:
+            await db.execute("""
+                DO $ci$
+                BEGIN
+                  IF NOT EXISTS (
+                    SELECT 1 FROM pg_roles
+                    WHERE rolname='t100_live_executor_runtime'
+                  ) THEN
+                    CREATE ROLE t100_live_executor_runtime
+                    LOGIN PASSWORD 't100-ci-only-local-postgres'
+                    NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION;
+                  END IF;
+                END $ci$;
+            """)
+            await db.execute(
+                "GRANT CONNECT ON DATABASE mexc_exhaustion TO t100_live_executor_runtime"
+            )
+            await db.execute(
+                "GRANT USAGE ON SCHEMA public TO t100_live_executor_runtime"
+            )
+            await db.execute("""
+                GRANT SELECT ON
+                    public.t100_live_position_checkpoints,
+                    public.t100_live_position_checkpoint_revisions,
+                    public.t100_live_order_intents,
+                    public.t100_live_stop_amendments
+                TO t100_live_executor_runtime
+            """)
+        reader_pool = await asyncpg.create_pool(
+            host="127.0.0.1", port=5432,
+            user=TARGET_ROLE, password=TEST_PASSWORD,
+            database=EXPECTED_DATABASE, min_size=1, max_size=1,
+            timeout=5,
+            server_settings={"default_transaction_read_only": "on"},
+        )
+        try:
+            async with reader_pool.acquire() as db:
+                self.assertEqual(
+                    await db.fetchval("SELECT current_user"), TARGET_ROLE
+                )
+                self.assertEqual(
+                    await db.fetchval(
+                        "SELECT has_table_privilege(current_user,"
+                        "'public.t100_live_position_checkpoints','INSERT')"
+                    ), False
+                )
+                self.assertEqual(
+                    await db.fetchval(
+                        "SELECT current_setting('default_transaction_read_only')"
+                    ), "on"
+                )
+            _, old_orders, _, _ = fixture(3)
+            positions = [dict(x) for x in self.position_rows]
+            stops = [dict(x) for x in self.stop_rows]
+            for row in positions:
+                row.update({
+                    "im": Decimal("10"), "unRealizedPnl": Decimal("0"),
+                })
+            orders = [*old_orders, self.new_order]
+            env = {
+                "T100_EXECUTION_MODE": "paper",
+                "T100_LIVE_ORDER_API_ENABLED": "false",
+                "T100_LIVE_KILL_SWITCH": "true",
+            }
+            ledger = PostgresFourSlotLedgerReader(reader_pool)
+            client = MockMexcGetOnly(orders, positions, stops)
+            recovered = await run_readonly_four_slot_audit(
+                ledger=ledger, client=client, env=env,
+            )
+            self.assertEqual(
+                recovered["status"],
+                "NONFLAT_PROVENANCE_MATCHED_NONAUTHORIZING",
+            )
+            self.assertEqual(recovered["owned_four_slot_positions_observed"], 4)
+            self.assertFalse(recovered["live_authorization"])
+            self.assertFalse(recovered["entry_allowed"])
+            self.assertFalse(recovered["database_writes_sent"])
+            self.assertFalse(recovered["mexc_orders_sent"])
+            self.assertGreaterEqual(
+                len([x for x in client.calls
+                     if x[0].startswith("/api/v1/private/order/external/")]), 4,
+            )
+            # A stop removed from the GET-only fixture must never be
+            # interpreted as a safe or partly owned account.
+            no_stop_client = MockMexcGetOnly(orders, positions, stops[:-1])
+            failed = await run_readonly_four_slot_audit(
+                ledger=ledger, client=no_stop_client, env=env,
+            )
+            self.assertEqual(failed["status"], "POSITION_STOP_COUNT_MISMATCH")
+            self.assertIsNone(failed["owned_four_slot_positions_observed"])
+            self.assertEqual(
+                failed["stop_count_diagnostic"]
+                ["positions_without_positive_stop_loss_row"], 1,
+            )
+            self.assertFalse(failed["entry_allowed"])
+            # A fifth, independently held position must never be adopted.
+            manual = dict(positions[-1])
+            manual.update({
+                "positionId": "manual-position-5000",
+                "symbol": "UNOWNED_USDT",
+            })
+            extra_client = MockMexcGetOnly(orders, [*positions, manual], stops)
+            foreign = await run_readonly_four_slot_audit(
+                ledger=ledger, client=extra_client, env=env,
+            )
+            self.assertEqual(foreign["status"], "ACCOUNT_EXCEEDS_FOUR_SLOTS")
+            self.assertIsNone(foreign["owned_four_slot_positions_observed"])
+            self.assertFalse(foreign["live_authorization"])
+        finally:
+            await reader_pool.close()
+
     async def test_trigger_failure_rolls_back_ack_fills_checkpoint_and_slot(self):
         async with self.pool.acquire() as db:
             await db.execute("""
