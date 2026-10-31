@@ -6,6 +6,7 @@ Two manual positions can lack native stops; a T100-owned position cannot.
 from __future__ import annotations
 
 import copy
+from dataclasses import replace
 import unittest
 from decimal import Decimal as D
 
@@ -80,10 +81,10 @@ class SharedAccountPartitionTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_owned_native_stop_is_still_required_among_two_manual_positions(self):
         snap, orders, positions, stops = prepare_rows(3)
-        owned = copy.deepcopy(snap)
-        owned.checkpoints = owned.checkpoints[:1]
-        owned.revisions = owned.revisions[:1]
-        owned.intents = owned.intents[:1]
+        owned = replace(
+            snap, checkpoints=snap.checkpoints[:1],
+            revisions=snap.revisions[:1], intents=snap.intents[:1],
+        )
         positions[1]["openType"] = 2
         positions[2]["openType"] = 2
         stops[1]["stopLossPrice"] = "0"
@@ -119,10 +120,10 @@ class SharedAccountPartitionTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_t100_owned_stop_wrong_price_rejects_provenance(self):
         snap, orders, positions, stops = prepare_rows(3)
-        owned = copy.deepcopy(snap)
-        owned.checkpoints = owned.checkpoints[:1]
-        owned.revisions = owned.revisions[:1]
-        owned.intents = owned.intents[:1]
+        owned = replace(
+            snap, checkpoints=snap.checkpoints[:1],
+            revisions=snap.revisions[:1], intents=snap.intents[:1],
+        )
         stops[0]["stopLossPrice"] = D("174")
         result, _ = await audit(
             owned, orders[:1], positions, [stops[0]],
@@ -215,10 +216,10 @@ class SharedAccountPartitionTests(unittest.IsolatedAsyncioTestCase):
         result, _ = await audit(empty_snap, [], positions, [stops[0]])
         rendered = str(result)
         for token in (
-            positions[0]["symbol"], positions[0]["positionId"],
-            positions[1]["symbol"], str(stops[0]["id"]),
+            positions[0]["symbol"], positions[1]["symbol"],
+            "positionId", "stopLossPrice", "externalOid",
         ):
-            self.assertNotIn(str(token), rendered)
+            self.assertNotIn(token, rendered)
 
 
 if __name__ == "__main__":
