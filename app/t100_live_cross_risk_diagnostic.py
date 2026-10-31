@@ -67,6 +67,9 @@ def _result(
     witness: Any = None,
     inventory_shape: InventoryShapeObservation | None = None,
     pnl_recheck: PnlPairRecheck | None = None,
+    original_pnl_failure_code: str = "NONE",
+    full_window_retry_status: str = "NOT_CHECKED",
+    full_window_retry_failure_code: str = "NONE",
 ) -> dict[str, Any]:
     """Allowlist-only output; never serialize a venue payload."""
     possible = {
@@ -153,6 +156,25 @@ def _result(
         "failure_code": code,
         "pnl_pair_recheck_status": (
             pnl.status if pnl is not None else "NOT_CHECKED"
+        ),
+        "initial_pnl_window_failure_code": (
+            original_pnl_failure_code
+            if original_pnl_failure_code in {
+                "COLLECTOR_PRE_UNREALIZED_PNL_MISMATCH",
+                "COLLECTOR_POST_UNREALIZED_PNL_MISMATCH",
+            }
+            else "NONE"
+        ),
+        "pnl_full_window_retry_status": (
+            full_window_retry_status
+            if full_window_retry_status in possible else "NOT_CHECKED"
+        ),
+        "pnl_full_window_retry_failure_code": (
+            full_window_retry_failure_code
+            if full_window_retry_failure_code
+            in SAFE_COLLECTOR_FAILURE_CODES | SAFE_FRAME_FAILURE_CODES
+            | {"NONE", "UNCLASSIFIED_READ_OR_EVIDENCE_FAILURE"}
+            else "NONE"
         ),
         "pnl_pair_recheck_pairs_observed": (
             pnl.pairs_observed if pnl is not None else 0
@@ -247,9 +269,14 @@ async def run_diagnostic(
                 observe_inventory_shape(private),
                 timeout=min(timeout_seconds, 15.0),
             )
-        # Only a PNL discrepancy triggers an extra bounded GET-only pair
-        # observation. Never replace or upgrade the original failed witness.
+        # A transient PNL mismatch is investigated with two strict paired
+        # GETs, then ONE complete new two-frame cross-risk window. Never
+        # invent a tolerance or reuse the original inconsistent snapshot.
+        # A later successfully checked window is fresh, but NONAUTHORIZING.
         pnl_recheck = None
+        original_pnl_code = "NONE"
+        full_retry_status = "NOT_CHECKED"
+        full_retry_code = "NONE"
         if (
             report.status == "CROSS_RISK_READ_OR_EVIDENCE_UNVERIFIED"
             and report.failure_stage in {"READ_FIRST", "READ_SECOND"}
@@ -267,12 +294,40 @@ async def run_diagnostic(
                 pnl_recheck = PnlPairRecheck(
                     status="PNL_RECHECK_READ_OR_SCHEMA_UNVERIFIED",
                 )
+        if (
+            pnl_recheck is not None
+            and pnl_recheck.status == "PNL_RECHECK_TWO_PAIRS_MATCH_NONAUTHORIZING"
+            and pnl_recheck.positions_stable_across_pairs is True
+            and pnl_recheck.position_unrealized_moved_across_pairs is False
+            and pnl_recheck.asset_unrealized_moved_across_pairs is False
+        ):
+            original_pnl_code = report.failure_code
+            try:
+                fresh = await asyncio.wait_for(
+                    observe_cross_risk_window(
+                        reader, now_ms=clock_ms,
+                        max_age_ms=5000, max_separation_ms=5000,
+                    ),
+                    timeout=min(timeout_seconds, 15.0),
+                )
+                full_retry_status = fresh.status
+                full_retry_code = fresh.failure_code
+                # The fresh window is a wholly independent strict witness.
+                # Preserve its own failure state if the next gate blocks.
+                report = fresh
+            except Exception:
+                full_retry_status = "RISK_DIAGNOSTIC_GET_FAILED"
+                full_retry_code = "NONE"
+                # Keep the original failure if the follow-up could not run.
         return _result(
             status=report.status,
             positions=report.observed_positions,
             witness=report,
             inventory_shape=shape,
             pnl_recheck=pnl_recheck,
+            original_pnl_failure_code=original_pnl_code,
+            full_window_retry_status=full_retry_status,
+            full_window_retry_failure_code=full_retry_code,
         )
     except asyncio.TimeoutError:
         return _result(status="RISK_DIAGNOSTIC_GET_TIMED_OUT")
