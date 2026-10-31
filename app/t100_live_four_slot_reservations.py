@@ -26,6 +26,9 @@ from app.t100_live_four_slot_ledger_reader import (
     CHECKPOINTS_SQL, REVISIONS_SQL, INTENTS_SQL, AMENDMENTS_SQL,
 )
 from app.t100_live_leader_fencing import LeaderLease
+from app.t100_live_shared_account_reservation_scope import (
+    SharedAccountScopeHalted, inspect_shared_account_scope,
+)
 
 # Fixed two-key namespace. Lock is transaction-scoped, not process-scoped.
 ACCOUNT_LOCK_SQL = "SELECT pg_advisory_xact_lock(10040, 31)"
@@ -100,6 +103,7 @@ def _sha(value: Any) -> bool:
 def _require_inputs(
     *, plan: FourSlotPlan, witness: FourSlotSnapshotResult,
     observed_at: datetime, lease: LeaderLease, signal_id: int, symbol: str,
+    *, shared_account_symbols: frozenset[str] | None = None,
 ) -> Decimal:
     if not isinstance(plan, FourSlotPlan) or not isinstance(witness, FourSlotSnapshotResult):
         raise FourSlotReservationHalted("FOUR_SLOT_MODEL_WITNESS_REQUIRED")
@@ -109,15 +113,21 @@ def _require_inputs(
         or plan.v40_admission is None
         or plan.v40_admission.action != "ADMIT"
         or plan.candidate_symbol != symbol
-        or plan.occupied_slots != witness.occupied_slots
+        or plan.occupied_slots != (
+            witness.account_positions_observed
+            if shared_account_symbols is not None else witness.occupied_slots
+        )
         or type(witness.occupied_slots) is not int
         or not 0 <= witness.occupied_slots < 4
         or witness.entry_allowed is not False
         or witness.live_authorization is not False
-        or witness.status not in {
+        or witness.status not in ({
+            "SHARED_ACCOUNT_MANUAL_ONLY_NONAUTHORIZING",
+            "SHARED_ACCOUNT_MANAGED_PROVENANCE_MATCHED_NONAUTHORIZING",
+        } if shared_account_symbols is not None else {
             "FLAT_OBSERVED_NONAUTHORIZING",
             "NONFLAT_PROVENANCE_MATCHED_NONAUTHORIZING",
-        }
+        })
         or not isinstance(witness.inventory, dict)
         or witness.inventory.get("account_wide_completeness_verified") is not True
         or witness.inventory.get("critical_inventory_equal_across_witness_window") is not True
@@ -128,6 +138,11 @@ def _require_inputs(
         or symbol in {"BTC_USDT", "ETH_USDT"}
     ):
         raise FourSlotReservationHalted("FOUR_SLOT_ADMISSION_EVIDENCE_BLOCKED")
+    if shared_account_symbols is not None and (
+        symbol in shared_account_symbols
+        or not 0 <= len(shared_account_symbols) < 4
+    ):
+        raise FourSlotReservationHalted("SHARED_ACCOUNT_SLOT_OR_SYMBOL_BLOCKED")
     if witness.occupied_slots and (
         witness.recovery is None
         or len(witness.recovery.recovered) != witness.occupied_slots
@@ -173,10 +188,33 @@ class PostgresFourSlotReservations:
         plan: FourSlotPlan, witness: FourSlotSnapshotResult,
         observed_at: datetime, lease: LeaderLease,
         signal_id: int, symbol: str,
+        shared_pre_positions: list[dict[str, Any]] | None = None,
+        shared_pre_stops: list[dict[str, Any]] | None = None,
     ) -> SlotReservation:
+        shared = (
+            shared_pre_positions is not None or shared_pre_stops is not None
+        )
+        try:
+            scope = (
+                inspect_shared_account_scope(
+                    witness, shared_pre_positions, shared_pre_stops,
+                ) if shared else None
+            )
+        except SharedAccountScopeHalted:
+            raise FourSlotReservationHalted(
+                "FOUR_SLOT_SHARED_ACCOUNT_WITNESS_UNVERIFIED"
+            ) from None
+        if scope is None and witness.status in {
+            "SHARED_ACCOUNT_MANUAL_ONLY_NONAUTHORIZING",
+            "SHARED_ACCOUNT_MANAGED_PROVENANCE_MATCHED_NONAUTHORIZING",
+        }:
+            raise FourSlotReservationHalted(
+                "FOUR_SLOT_SHARED_ACCOUNT_ROWS_REQUIRED"
+            )
         modeled = _require_inputs(
             plan=plan, witness=witness, observed_at=observed_at,
             lease=lease, signal_id=signal_id, symbol=symbol,
+            shared_account_symbols=(scope.all_symbols if scope else None),
         )
         oid = "t100v40r" + hashlib.sha256(
             f"{signal_id}:{symbol}:FROZEN_V40".encode("utf-8")
@@ -237,7 +275,17 @@ class PostgresFourSlotReservations:
                         ):
                             raise FourSlotReservationHalted("FOUR_SLOT_UNRESOLVED_RESERVATION")
                         reserved_symbols.add(rsym)
-                    occupied = set(cp) | reserved_symbols
+                    if scope is not None and (
+                        set(cp) != set(scope.owned_symbols)
+                        or reserved_symbols & set(scope.manual_symbols)
+                    ):
+                        raise FourSlotReservationHalted(
+                            "FOUR_SLOT_SHARED_MANUAL_OR_CHECKPOINT_DRIFT"
+                        )
+                    occupied = (
+                        set(cp) | reserved_symbols
+                        | (set(scope.manual_symbols) if scope else set())
+                    )
                     if (
                         len(occupied) >= 4
                         or symbol in occupied
