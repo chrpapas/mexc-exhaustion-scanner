@@ -68,7 +68,7 @@ def review(**overrides):
 
 
 class CrossEntryResearchTests(unittest.TestCase):
-    def test_cross_payload_differs_from_existing_isolated_transport(self):
+    def test_cross_payload_matches_proposed_cross_pilot_transport(self):
         payload = _hypothetical_payload(
             intent(), contract_size="1", volume_step="1",
             price_tick="0.1", leverage=1,
@@ -82,11 +82,17 @@ class CrossEntryResearchTests(unittest.TestCase):
         self.assertEqual(payload["lossTrend"], 1)
         self.assertEqual(payload["vol"], "5")
         self.assertTrue(payload["externalOid"].startswith("t100v1e"))
-        # The actual, currently guarded transport remains isolated at 1x.
-        with self.assertRaisesRegex(ValueError, "isolated 1x"):
+        # Contract shape is now aligned for CROSS pilot, but adapter stays
+        # globally NOT_IMPLEMENTED and cannot submit production orders.
+        accepted = LiveCaps(
+            max_order_usdt=D("100"), max_portfolio_usdt=D("100"),
+            max_daily_loss_usdt=D("1"), margin_type=2,
+        )
+        self.assertEqual(accepted.margin_type, 2)
+        with self.assertRaisesRegex(ValueError, "CROSS"):
             LiveCaps(
                 max_order_usdt=D("100"), max_portfolio_usdt=D("100"),
-                max_daily_loss_usdt=D("1"), margin_type=2,
+                max_daily_loss_usdt=D("1"), margin_type=1,
             )
 
     def test_all_current_evidence_true_still_never_authorizes(self):
