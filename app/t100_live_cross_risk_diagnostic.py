@@ -30,6 +30,9 @@ from app.t100_live_cross_risk_observation import (
 )
 from app.t100_live_guards import T100ExecutionControls
 from app.t100_live_readonly_probe import ReadOnlyMexcProbe
+from app.t100_live_pnl_pair_recheck import (
+    PnlPairRecheck, recheck_pnl_pair_readonly,
+)
 
 
 class CrossRiskDiagnosticHalted(RuntimeError):
@@ -63,6 +66,7 @@ def _result(
     *, status: str, positions: int | None = None,
     witness: Any = None,
     inventory_shape: InventoryShapeObservation | None = None,
+    pnl_recheck: PnlPairRecheck | None = None,
 ) -> dict[str, Any]:
     """Allowlist-only output; never serialize a venue payload."""
     possible = {
@@ -142,10 +146,34 @@ def _result(
         risk_mode, risk_type, risk_fields = (
             "NOT_CHECKED", "NOT_CHECKED", "NOT_CHECKED",
         )
+    pnl = pnl_recheck if type(pnl_recheck) is PnlPairRecheck else None
     return {
         "status": safe_status,
         "failure_stage": stage,
         "failure_code": code,
+        "pnl_pair_recheck_status": (
+            pnl.status if pnl is not None else "NOT_CHECKED"
+        ),
+        "pnl_pair_recheck_pairs_observed": (
+            pnl.pairs_observed if pnl is not None else 0
+        ),
+        "pnl_pair_recheck_positions_stable": (
+            pnl.positions_stable_across_pairs if pnl is not None else False
+        ),
+        "pnl_pair_recheck_position_pnl_moved": (
+            pnl.position_unrealized_moved_across_pairs
+            if pnl is not None else False
+        ),
+        "pnl_pair_recheck_asset_pnl_moved": (
+            pnl.asset_unrealized_moved_across_pairs
+            if pnl is not None else False
+        ),
+        "pnl_pair_recheck_first_pair_matched": (
+            pnl.first_pair_reconciled if pnl is not None else False
+        ),
+        "pnl_pair_recheck_second_pair_matched": (
+            pnl.second_pair_reconciled if pnl is not None else False
+        ),
         "risk_schedule_mode": risk_mode,
         "risk_schedule_type": risk_type,
         "risk_schedule_fields": risk_fields,
@@ -219,11 +247,32 @@ async def run_diagnostic(
                 observe_inventory_shape(private),
                 timeout=min(timeout_seconds, 15.0),
             )
+        # Only a PNL discrepancy triggers an extra bounded GET-only pair
+        # observation. Never replace or upgrade the original failed witness.
+        pnl_recheck = None
+        if (
+            report.status == "CROSS_RISK_READ_OR_EVIDENCE_UNVERIFIED"
+            and report.failure_stage in {"READ_FIRST", "READ_SECOND"}
+            and report.failure_code in {
+                "COLLECTOR_PRE_UNREALIZED_PNL_MISMATCH",
+                "COLLECTOR_POST_UNREALIZED_PNL_MISMATCH",
+            }
+        ):
+            try:
+                pnl_recheck = await asyncio.wait_for(
+                    recheck_pnl_pair_readonly(private),
+                    timeout=min(timeout_seconds, 8.0),
+                )
+            except Exception:
+                pnl_recheck = PnlPairRecheck(
+                    status="PNL_RECHECK_READ_OR_SCHEMA_UNVERIFIED",
+                )
         return _result(
             status=report.status,
             positions=report.observed_positions,
             witness=report,
             inventory_shape=shape,
+            pnl_recheck=pnl_recheck,
         )
     except asyncio.TimeoutError:
         return _result(status="RISK_DIAGNOSTIC_GET_TIMED_OUT")
