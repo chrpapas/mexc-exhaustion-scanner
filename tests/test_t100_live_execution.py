@@ -120,7 +120,7 @@ class LiveTests(unittest.IsolatedAsyncioTestCase):
             await self.send()
         self.assertEqual(self.ledger.history, [])
         self.assertEqual(self.mexc.posts, 0)
-        del self.mexc.open_type
+        self.mexc.open_type = None
         with self.assertRaisesRegex(
             ExecutionHalted, "CROSS_PILOT_MARGIN_TRANSPORT_UNVERIFIED"
         ):
