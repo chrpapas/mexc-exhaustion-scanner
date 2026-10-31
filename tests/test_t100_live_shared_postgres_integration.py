@@ -321,7 +321,7 @@ class RealPostgresSharedManualV40Tests(unittest.IsolatedAsyncioTestCase):
         async with self.pool.acquire() as db:
             await db.execute("""
                 CREATE FUNCTION public.t100_ci_shared_abort()
-                RETURNS trigger LANGUAGE plpgsql AS $t100_shared_stop$$
+                RETURNS trigger LANGUAGE plpgsql AS $
                 BEGIN
                   IF NEW.state='PROTECTED' THEN
                     RAISE EXCEPTION 'CI-only forced protected rollback';
@@ -492,7 +492,7 @@ class RealPostgresSharedManualV40Tests(unittest.IsolatedAsyncioTestCase):
         async with self.pool.acquire() as db:
             await db.execute("""
                 CREATE FUNCTION public.t100_ci_block_shared_stop_revision()
-                RETURNS trigger LANGUAGE plpgsql AS $
+                RETURNS trigger LANGUAGE plpgsql AS $t100_shared_stop$
                 BEGIN
                   IF NEW.checkpoint_version=2 THEN
                     RAISE EXCEPTION 'CI-only stop checkpoint rollback';
