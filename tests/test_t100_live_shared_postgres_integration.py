@@ -321,13 +321,13 @@ class RealPostgresSharedManualV40Tests(unittest.IsolatedAsyncioTestCase):
         async with self.pool.acquire() as db:
             await db.execute("""
                 CREATE FUNCTION public.t100_ci_shared_abort()
-                RETURNS trigger LANGUAGE plpgsql AS $
+                RETURNS trigger LANGUAGE plpgsql AS $t100_old_rollback$
                 BEGIN
                   IF NEW.state='PROTECTED' THEN
                     RAISE EXCEPTION 'CI-only forced protected rollback';
                   END IF;
                   RETURN NEW;
-                END $$
+                END $t100_old_rollback$
             """)
             await db.execute("""
                 CREATE TRIGGER t100_ci_shared_abort
