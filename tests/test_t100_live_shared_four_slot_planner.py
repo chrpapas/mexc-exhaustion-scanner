@@ -217,6 +217,7 @@ class SharedFourSlotPlannerTests(unittest.IsolatedAsyncioTestCase):
             snap, checkpoints=snap.checkpoints[:1],
             revisions=snap.revisions[:1], intents=snap.intents[:1],
         )
+        positions[0]["openType"] = 2
         positions[1]["openType"] = 2
         positions[2]["openType"] = 1
         positions[2]["positionType"] = 1
