@@ -312,9 +312,15 @@ async def run_diagnostic(
                 )
                 full_retry_status = fresh.status
                 full_retry_code = fresh.failure_code
-                # The fresh window is a wholly independent strict witness.
-                # Preserve its own failure state if the next gate blocks.
-                report = fresh
+                # The fresh window is independently checked under the
+                # original strict gates. A next-stage risk-tier/contract
+                # rejection is useful; a new GET failure is not evidence
+                # that the original PNL discrepancy was resolved.
+                if (
+                    fresh.status == "CURRENT_CROSS_RISK_OBSERVED_NONAUTHORIZING"
+                    or fresh.failure_stage in {"VALIDATE_FIRST", "VALIDATE_SECOND"}
+                ):
+                    report = fresh
             except Exception:
                 full_retry_status = "RISK_DIAGNOSTIC_GET_FAILED"
                 full_retry_code = "NONE"
