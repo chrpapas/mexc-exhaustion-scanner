@@ -33,6 +33,11 @@ class MixedAccountObservation:
     economic_parity_observed: bool = False
     stable_critical_inventory: bool = False
     fair_price_window_observed: bool = False
+    # MEXC documents autoAddIm as "auto-add initial margin supported".
+    # We report the observed field, NOT an independently verified toggle
+    # state or a bound on future transfers from available wallet.
+    isolated_auto_add_field_status: str = "NOT_CHECKED"
+    isolated_auto_add_worst_case_drain_bounded: bool = False
     # Only static, allowlisted FIELD NAMES. NEVER source values, IDs or symbols.
     changed_position_fields: tuple[str, ...] = ()
     changed_stop_fields: tuple[str, ...] = ()
@@ -119,6 +124,21 @@ def _inspect_frame(
         ):
             raise ValueError("MIXED_FAIR_TIMESTAMP_UNVERIFIED")
         marks[pos["symbol"]] = _finite(fair.get("fairPrice"), positive=True)
+    isolated_rows = [
+        row for row in frame.positions if row.get("openType") == 1
+    ]
+    if len(isolated_rows) == 1:
+        auto_add_raw = isolated_rows[0].get("autoAddIm")
+        if type(auto_add_raw) is bool:
+            auto_add_status = (
+                "MEXC_AUTO_ADD_FIELD_TRUE_SEMANTICS_UNVERIFIED"
+                if auto_add_raw else
+                "MEXC_AUTO_ADD_FIELD_FALSE_SEMANTICS_UNVERIFIED"
+            )
+        else:
+            auto_add_status = "MEXC_AUTO_ADD_FIELD_MISSING_OR_UNVERIFIED"
+    else:
+        auto_add_status = "MEXC_ISOLATED_POSITION_SCOPE_UNVERIFIED"
     # The isolated im is part of the account-wide positionMargin witness,
     # but cross-wallet collateral is NOT inferred from it or from cashBalance.
     # A separate, independently verified venue collateral model is required.
@@ -126,6 +146,7 @@ def _inspect_frame(
         _static_hash(frame), marks, len(frame.positions),
         shape.cross_short_count + shape.cross_long_count,
         shape.isolated_short_count + shape.isolated_long_count,
+        auto_add_status,
     )
 
 
@@ -217,6 +238,8 @@ async def observe_mixed_margin_account_window(
         delta = second.observed_at_ms - first.observed_at_ms
         if not 0 < delta <= max_separation_ms or a[2] != b[2]:
             return blocked("MIXED_ACCOUNT_READ_WINDOW_OR_COUNTS_DRIFT")
+        if a[5] != b[5]:
+            return blocked("MIXED_ACCOUNT_AUTO_ADD_FIELD_DRIFT")
         if a[0] != b[0]:
             # Maintain fail-closed status; add FIELD NAMES only. These
             # categories distinguish an economic cash movement from a
@@ -239,6 +262,7 @@ async def observe_mixed_margin_account_window(
             stable_critical_inventory=True,
             fair_price_window_observed=True,
             isolated_margin_reserved_as_separate_observation=b[4] > 0,
+            isolated_auto_add_field_status=b[5],
         )
     except Exception:
         return blocked("MIXED_ACCOUNT_READ_OR_SCHEMA_UNVERIFIED")
