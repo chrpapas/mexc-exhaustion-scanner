@@ -84,6 +84,7 @@ class RealPostgresSharedManualV40Tests(unittest.IsolatedAsyncioTestCase):
                   public.t100_live_order_intents,
                   public.t100_live_order_fill_sets,
                   public.t100_live_order_fills,
+                  public.t100_live_stop_amendments,
                   public.t100_live_executor_leases
                 RESTART IDENTITY CASCADE
             """)
@@ -354,6 +355,197 @@ class RealPostgresSharedManualV40Tests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(before["slot"], "SUBMITTING")
         self.assertEqual(before["fills"], 0)
         self.assertEqual(before["checkpoints"], 0)
+
+    async def _initialized_shared_stop_test(self):
+        from app.t100_live_checkpoint_journal import PostgresCheckpointJournal
+        from app.t100_live_checkpoint_coordinator import (
+            CheckpointPersistenceCoordinator,
+        )
+        from app.t100_live_durable_recovery import checkpoint_from_row
+        from app.t100_live_stop_amendment_coordinator import (
+            StopAmendmentLifecycleCoordinator,
+        )
+        from app.t100_live_stop_journal import PostgresStopJournal
+        from app.t100_live_stop_update_pipeline import (
+            StopUpdatePersistencePipeline,
+        )
+        from app.t100_live_shared_trailing_persistence import (
+            SharedTrailingPersistencePipeline,
+        )
+        from app.t100_live_supervisor import StopProposal
+        from app.t100_live_trailing import next_short_stop
+
+        reservation = await self.reserve()
+        intent, stage = await self.stage(reservation)
+        batch, order = self.prepared(intent, stage)
+        await self.commit_store.persist(
+            batch=batch, pre_attempt_witness=self.pre,
+            lease=lease(), observed_at=self.observed_at,
+            shared_pre_positions=self.manual_positions,
+            shared_pre_stops=self.manual_stops,
+        )
+        await self.allow_readonly_role()
+        positions = copy.deepcopy(self.source.post_positions)
+        old_stops = copy.deepcopy(self.source.post_stops)
+        before = await FourSlotSnapshotCoordinator(
+            ledger=PostgresFourSlotLedgerReader(self.read_pool),
+            venue=Venue([order], positions, old_stops),
+            completeness=Completeness(counts(3, 1)),
+        ).inspect(shared_manual_observation=True)
+        self.assertEqual(
+            before.status,
+            "SHARED_ACCOUNT_MANAGED_PROVENANCE_MATCHED_NONAUTHORIZING",
+        )
+        async with self.read_pool.acquire() as db:
+            cp_row = await db.fetchrow("""
+                SELECT * FROM public.t100_live_position_checkpoints
+                WHERE position_id=$1
+            """, "390")
+        checkpoint = checkpoint_from_row(dict(cp_row))
+        self.assertEqual(checkpoint.checkpoint_version, 1)
+        proposed = next_short_stop(
+            entry=checkpoint.entry_price, low=D("1.72"),
+            current_stop=checkpoint.stop_price,
+            best_profit_pct=checkpoint.best_profit_pct,
+            price_tick=D("0.01"), armed=checkpoint.armed,
+        )
+        self.assertTrue(proposed.changed)
+        self.assertEqual(proposed.stop_price, D("1.73"))
+        journal = PostgresStopJournal(self.pool)
+        amendments = StopAmendmentLifecycleCoordinator(journal)
+        amendment, state = await amendments.prepare(StopProposal(
+            symbol=checkpoint.symbol,
+            position_id=checkpoint.position_id,
+            stop_order_id=checkpoint.stop_order_id,
+            old_stop=checkpoint.stop_price,
+            proposed_stop=proposed.stop_price,
+            best_profit_pct=proposed.best_profit_pct,
+            armed=proposed.active,
+        ))
+        self.assertEqual(state, "PREPARED")
+        await amendments.mark_submitting(amendment)
+        updated_stops = copy.deepcopy(old_stops)
+        updated_stops[0]["stopLossPrice"] = D("1.73")
+        pipeline = SharedTrailingPersistencePipeline(
+            StopUpdatePersistencePipeline(
+                amendments, CheckpointPersistenceCoordinator(
+                    PostgresCheckpointJournal(self.pool),
+                ),
+            ),
+        )
+        inputs = dict(
+            pre_witness=before, checkpoint=checkpoint,
+            amendment=amendment,
+            before_positions=copy.deepcopy(positions),
+            before_stops=old_stops,
+            after_positions_first=copy.deepcopy(positions),
+            after_positions_second=copy.deepcopy(positions),
+            after_stops_first=copy.deepcopy(updated_stops),
+            after_stops_second=copy.deepcopy(updated_stops),
+            after_inventory_first=counts(3, 1),
+            after_inventory_second=counts(3, 1),
+            observed_low=D("1.72"), price_tick=D("0.01"),
+        )
+        return pipeline, inputs, positions, updated_stops, order
+
+    async def test_real_postgres_shared_trailing_checkpoint_and_restart(self):
+        pipeline, inputs, positions, stops, order = (
+            await self._initialized_shared_stop_test()
+        )
+        before_manual = copy.deepcopy((positions[:2], self.manual_stops))
+        result = await pipeline.reconcile_bookended_and_persist(**inputs)
+        self.assertEqual(result.checkpoint.checkpoint_version, 2)
+        self.assertEqual(result.checkpoint.stop_price, D("1.73"))
+        self.assertTrue(result.checkpoint.armed)
+        self.assertFalse(result.live_authorization)
+        self.assertEqual((positions[:2], self.manual_stops), before_manual)
+        async with self.read_pool.acquire() as db:
+            self.assertEqual(await db.fetchval("""
+                SELECT state FROM public.t100_live_stop_amendments
+            """), "VERIFIED")
+            self.assertEqual(await db.fetchval("""
+                SELECT count(*) FROM public.t100_live_position_checkpoint_revisions
+            """), 2)
+            self.assertEqual(await db.fetchval("""
+                SELECT checkpoint_version
+                FROM public.t100_live_position_checkpoints
+            """), 2)
+        fresh = await FourSlotSnapshotCoordinator(
+            ledger=PostgresFourSlotLedgerReader(self.read_pool),
+            venue=Venue([order], positions, stops),
+            completeness=Completeness(counts(3, 1)),
+        ).inspect(shared_manual_observation=True)
+        self.assertEqual(
+            fresh.status,
+            "SHARED_ACCOUNT_MANAGED_PROVENANCE_MATCHED_NONAUTHORIZING",
+        )
+        self.assertEqual(fresh.manual_positions_observed, 2)
+        self.assertEqual(fresh.occupied_slots, 1)
+
+    async def test_real_postgres_shared_trailing_checkpoint_failure_then_recover(self):
+        from app.t100_live_shared_trailing_persistence import (
+            SharedTrailingPipelineHalted,
+        )
+        pipeline, inputs, _, _, _ = (
+            await self._initialized_shared_stop_test()
+        )
+        async with self.pool.acquire() as db:
+            await db.execute("""
+                CREATE FUNCTION public.t100_ci_block_shared_stop_revision()
+                RETURNS trigger LANGUAGE plpgsql AS $
+                BEGIN
+                  IF NEW.checkpoint_version=2 THEN
+                    RAISE EXCEPTION 'CI-only stop checkpoint rollback';
+                  END IF;
+                  RETURN NEW;
+                END $
+            """)
+            await db.execute("""
+                CREATE TRIGGER t100_ci_shared_stop_revision_abort
+                BEFORE INSERT ON public.t100_live_position_checkpoint_revisions
+                FOR EACH ROW EXECUTE FUNCTION
+                  public.t100_ci_block_shared_stop_revision()
+            """)
+        try:
+            with self.assertRaisesRegex(
+                SharedTrailingPipelineHalted,
+                "CHECKPOINT_PERSISTENCE_FAILED",
+            ):
+                await pipeline.reconcile_bookended_and_persist(**inputs)
+            async with self.read_pool.acquire() as db:
+                self.assertEqual(await db.fetchval("""
+                    SELECT checkpoint_version
+                    FROM public.t100_live_position_checkpoints
+                """), 1)
+                self.assertEqual(await db.fetchval("""
+                    SELECT count(*)
+                    FROM public.t100_live_position_checkpoint_revisions
+                """), 1)
+                self.assertEqual(await db.fetchval("""
+                    SELECT state FROM public.t100_live_stop_amendments
+                """), "VERIFIED")
+        finally:
+            async with self.pool.acquire() as db:
+                await db.execute("""
+                    DROP TRIGGER t100_ci_shared_stop_revision_abort
+                    ON public.t100_live_position_checkpoint_revisions
+                """)
+                await db.execute(
+                    "DROP FUNCTION public.t100_ci_block_shared_stop_revision()"
+                )
+        resumed = await pipeline.reconcile_bookended_and_persist(
+            **inputs, restart_reconciliation=True,
+        )
+        self.assertEqual(resumed.checkpoint.checkpoint_version, 2)
+        self.assertFalse(resumed.exchange_mutation_sent_by_coordinator)
+        async with self.read_pool.acquire() as db:
+            self.assertEqual(await db.fetchval("""
+                SELECT count(*)
+                FROM public.t100_live_position_checkpoint_revisions
+            """), 2)
+            self.assertEqual(await db.fetchval("""
+                SELECT count(*) FROM public.t100_live_stop_amendments
+            """), 1)
 
     async def test_account_wide_four_slot_count_and_duplicate_protection(self):
         first, second = await asyncio.gather(
