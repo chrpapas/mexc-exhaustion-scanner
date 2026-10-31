@@ -193,7 +193,7 @@ class SharedTrailingScopeTests(unittest.IsolatedAsyncioTestCase):
         unchanged = copy.deepcopy(self.before_stops)
         self.assertEqual(
             self.observe(after_stops=unchanged).status,
-            "SHARED_TRAILING_EXPECTED_NATIVE_CHANGE_UNVERIFIED",
+            "SHARED_TRAILING_STOP_PROTECTION_INVALID",
         )
 
     async def test_critical_before_snapshot_hash_required(self):
