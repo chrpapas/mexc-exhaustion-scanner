@@ -142,6 +142,59 @@ class PnlRecheckTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("99999", str(report))
         self.assertTrue(all(method == "GET" for method, *_ in private.calls))
 
+    async def test_transient_pnl_mismatch_then_whole_fresh_window_passes(self):
+        # First observation fails on a single torn POST asset GET.
+        # Two new PNL pairs match; BOTH subsequent complete risk frames
+        # must satisfy all ordinary collector and tier checks.
+        class BadOneAssetRead(FakePrivate):
+            def __init__(self, data):
+                super().__init__(data)
+                self.asset_reads = 0
+
+            async def _private_get(self, path, params=None):
+                rows = await super()._private_get(path, params)
+                if path == "/api/v1/private/account/assets":
+                    self.asset_reads += 1
+                    if self.asset_reads == 2:
+                        rows[0]["unrealized"] = "99999"
+                return rows
+
+        private = BadOneAssetRead(frame())
+        ts = iter([
+            1_000_000, 1_000_500,
+            1_001_000, 1_001_500,
+            1_002_000, 1_002_500,
+        ])
+        result = await run_diagnostic(
+            private=ReadOnlyMexcProbe(private),
+            public=FakePublic(private.observed, fair_ms=1_000_400),
+            clock_ms=ts.__next__,
+        )
+        self.assertEqual(
+            result["initial_pnl_window_failure_code"],
+            "COLLECTOR_POST_UNREALIZED_PNL_MISMATCH",
+        )
+        self.assertEqual(
+            result["pnl_pair_recheck_status"],
+            "PNL_RECHECK_TWO_PAIRS_MATCH_NONAUTHORIZING",
+        )
+        self.assertEqual(
+            result["pnl_full_window_retry_status"],
+            "CURRENT_CROSS_RISK_OBSERVED_NONAUTHORIZING",
+        )
+        self.assertEqual(
+            result["status"], "CURRENT_CROSS_RISK_OBSERVED_NONAUTHORIZING",
+        )
+        self.assertTrue(result["critical_inventory_stable"])
+        self.assertTrue(result["position_margin_economic_witness_observed"])
+        self.assertFalse(result["cross_wallet_collateral_certified"])
+        self.assertFalse(result["venue_liquidation_certified"])
+        self.assertFalse(result["entry_allowed"])
+        self.assertFalse(result["live_authorization"])
+        self.assertFalse(result["mexc_orders_sent"])
+        self.assertTrue(all(method == "GET" for method, *_ in private.calls))
+        self.assertNotIn("99999", str(result))
+
     async def test_stable_persistent_mismatch_diagnostic_is_distinguished(self):
         data = frame()
         data.assets[0]["unrealized"] = "13.775"
