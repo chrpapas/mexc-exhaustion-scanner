@@ -32,7 +32,7 @@ class LiveCaps:
     max_slippage_bps: Decimal = Decimal("100")
     max_book_age_ms: int = 1500
     leverage: int = 1
-    margin_type: int = 1
+    margin_type: int = 2
 
     def __post_init__(self) -> None:
         for field in ("max_order_usdt", "max_portfolio_usdt", "max_daily_loss_usdt"):
@@ -43,8 +43,8 @@ class LiveCaps:
             raise ValueError("unsafe slippage setting")
         if self.max_book_age_ms < 0 or self.max_book_age_ms > 2000:
             raise ValueError("book age limit out of bounds")
-        if self.leverage != 1 or self.margin_type != 1:
-            raise ValueError("initial live adapter supports isolated 1x only")
+        if self.leverage != 1 or self.margin_type != 2:
+            raise ValueError("cross-margin tiny pilot requires CROSS 1x only")
 
 
 @dataclass(frozen=True)
@@ -127,6 +127,7 @@ class IntentLedger(Protocol):
 
 
 class ExchangeClient(Protocol):
+    open_type: int  # MEXC: 1=isolated, 2=cross
     async def order_by_external_oid(self, symbol: str, external_oid: str) -> dict[str, Any] | None: ...
     async def submit_short_with_stop(
         self,
@@ -194,6 +195,15 @@ class LiveOrderGateway:
         switches. Do not invoke this method without that coordinator.
         """
         permit = require_certified_transport_permit(permit)
+        # Double-check transport and configured cap agree before creating a
+        # journal intent. A legacy isolated adapter can never silently place
+        # a trade when the approved pilot is CROSS.
+        if (
+            self.caps.margin_type != 2
+            or type(getattr(self.exchange, "open_type", None)) is not int
+            or self.exchange.open_type != 2
+        ):
+            raise ExecutionHalted("CROSS_PILOT_MARGIN_TRANSPORT_UNVERIFIED")
         if intent.notional_usdt > permit.max_position_notional_usdt:
             raise ExecutionHalted("PERMIT_ORDER_CAP")
         if (
