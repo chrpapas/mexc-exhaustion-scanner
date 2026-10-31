@@ -40,14 +40,16 @@ class MixedAccountObservation:
     read_only: bool = True
 
 
-def _finite(raw: Any, *, positive: bool = False) -> Decimal:
+def _finite(
+    raw: Any, *, positive: bool = False, allow_negative: bool = False,
+) -> Decimal:
     if raw is None or isinstance(raw, bool):
         raise ValueError("INVALID_ECONOMIC_VALUE")
     try:
         value = Decimal(str(raw))
     except (TypeError, InvalidOperation, ValueError):
         raise ValueError("INVALID_ECONOMIC_VALUE") from None
-    if not value.is_finite() or (value <= 0 if positive else value < 0):
+    if not value.is_finite() or (value <= 0 if positive else value < 0 if not allow_negative else False):
         raise ValueError("INVALID_ECONOMIC_VALUE")
     return value
 
@@ -96,9 +98,7 @@ def _inspect_frame(
     for pos in frame.positions:
         _finite(pos.get("holdVol"), positive=True)
         _finite(pos.get("im"))
-        _finite(pos.get("unRealizedPnl")) if (
-            _finite(pos.get("unRealizedPnl")) > 0
-        ) else None
+        _finite(pos.get("unRealizedPnl"), allow_negative=True)
         _finite(pos.get("holdAvgPrice"), positive=True)
         fair = frame.fair_by_symbol[pos["symbol"]]
         if (
