@@ -64,12 +64,12 @@ class SharedCrossPilotTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(r.live_authorization)
         self.assertFalse(r.mexc_orders_sent)
 
-    async def test_two_manual_positions_one_tp_only_always_blocks(self):
+    async def test_two_manual_positions_one_tp_only_is_risk_input_not_stop_gate(self):
         client, report = await self.setup_account()
         client.stops[0]["stopLossPrice"] = "0"
         r = self.model(client, report)
         self.assertEqual(
-            r.status, "SHARED_CROSS_MANUAL_POSITION_STOP_NOT_OBSERVED",
+            r.status, "SHARED_CROSS_MANUAL_UNBOUNDED_RISK_REQUIRES_ACCOUNT_STRESS",
         )
         self.assertEqual(r.existing_positions_without_observed_full_volume_stop, 1)
 
@@ -80,11 +80,34 @@ class SharedCrossPilotTests(unittest.IsolatedAsyncioTestCase):
         r = self.model(client, report)
         self.assertEqual(r.status, "SHARED_CROSS_ACCOUNT_INVENTORY_UNVERIFIED")
 
+    async def test_two_manual_positions_with_no_tp_sl_are_accepted_as_manual_exposure_only(self):
+        client, _ = await self.setup_account()
+        client.stops = []
+        # New independently obtained inventory witness; no fake counts.
+        fresh = await run_current_inventory_completeness_probe(
+            ReadOnlyMexcProbe(client),
+        )
+        self.assertTrue(fresh["account_wide_completeness_verified"])
+        r = self.model(client, fresh)
+        self.assertEqual(
+            r.status,
+            "SHARED_CROSS_MANUAL_UNBOUNDED_RISK_REQUIRES_ACCOUNT_STRESS",
+        )
+        self.assertEqual(r.existing_account_positions, 2)
+        self.assertEqual(r.existing_current_tpsl_rows, 0)
+        self.assertEqual(r.existing_positions_without_observed_full_volume_stop, 2)
+        self.assertFalse(r.manual_positions_adopted_by_t100)
+        self.assertFalse(r.cross_margin_liquidation_certified)
+        self.assertFalse(r.realized_loss_capped_at_budget)
+        self.assertFalse(r.entry_allowed)
+        self.assertFalse(r.live_authorization)
+        self.assertFalse(r.mexc_orders_sent)
+
     async def test_tiny_or_partial_stops_do_not_cover_position(self):
         client, report = await self.setup_account()
         client.stops[0]["vol"] = "0.1"
         r = self.model(client, report)
-        self.assertEqual(r.status, "SHARED_CROSS_MANUAL_POSITION_STOP_NOT_OBSERVED")
+        self.assertEqual(r.status, "SHARED_CROSS_MANUAL_UNBOUNDED_RISK_REQUIRES_ACCOUNT_STRESS")
         self.assertEqual(r.existing_positions_without_observed_full_volume_stop, 1)
 
     async def test_cross_only_account_cannot_silently_include_isolated_manual(self):
