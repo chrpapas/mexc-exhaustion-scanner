@@ -24,6 +24,9 @@ from typing import Any, Callable, Protocol
 from app.t100_live_consistency import CRITICAL_POSITION_FIELDS, CRITICAL_STOP_FIELDS
 from app.t100_live_position_margin_witness import assess_position_margin_witness
 from app.t100_live_risk_tier_witness import assess_risk_tier_witness
+from app.t100_live_position_mode_shape import (
+    PositionModeShape, classify_account_position_modes,
+)
 from app.t100_live_risk_schedule_shape import (
     RiskScheduleShape, classify_risk_schedule_shapes,
 )
@@ -126,6 +129,7 @@ class CrossRiskObservation:
     risk_schedule_mode: str = "NOT_CHECKED"
     risk_schedule_type: str = "NOT_CHECKED"
     risk_schedule_fields: str = "NOT_CHECKED"
+    position_mode_shape: PositionModeShape | None = None
 
 
 def _positive(raw: Any) -> Decimal:
@@ -293,6 +297,7 @@ async def observe_cross_risk_window(
     def blocked(
         reason: str, stage: str = "NONE", code: str = "NONE",
         risk_shape: RiskScheduleShape | None = None,
+        mode_shape: PositionModeShape | None = None,
     ) -> CrossRiskObservation:
         shape = risk_shape if type(risk_shape) is RiskScheduleShape else RiskScheduleShape()
         return CrossRiskObservation(
@@ -300,6 +305,9 @@ async def observe_cross_risk_window(
             risk_schedule_mode=shape.mode,
             risk_schedule_type=shape.limit_type,
             risk_schedule_fields=shape.schedule_fields,
+            position_mode_shape=(
+                mode_shape if type(mode_shape) is PositionModeShape else None
+            ),
         )
 
     def risk_shape_if_static_failure(
@@ -354,6 +362,11 @@ async def observe_cross_risk_window(
             "CROSS_RISK_READ_OR_EVIDENCE_UNVERIFIED",
             "VALIDATE_FIRST", code,
             risk_shape_if_static_failure(first, code),
+            mode_shape=(
+                classify_account_position_modes(first.positions)
+                if code == "POSITION_NOT_VERIFIED_CROSS_SHORT"
+                else None
+            ),
         )
     try:
         second = await reader.read()
@@ -372,6 +385,11 @@ async def observe_cross_risk_window(
             "CROSS_RISK_READ_OR_EVIDENCE_UNVERIFIED",
             "VALIDATE_SECOND", code,
             risk_shape_if_static_failure(second, code),
+            mode_shape=(
+                classify_account_position_modes(second.positions)
+                if code == "POSITION_NOT_VERIFIED_CROSS_SHORT"
+                else None
+            ),
         )
     elapsed = second.observed_at_ms - first.observed_at_ms
     if elapsed <= 0 or elapsed > max_separation_ms:
