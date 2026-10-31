@@ -2,7 +2,7 @@
 
 Existing operator positions are never adopted as T100-owned positions. They
 remain in the same USDT cross-margin collateral and affect all-account risk.
-This module is a narrow inventory/stop/nominal-loss precheck ONLY; it cannot
+This module is a narrow inventory/manual-risk/nominal-loss precheck ONLY; it cannot
 certify liquidation, position protection execution, venue margin, order
 atomicity, a $50 maximum realized loss, or permission to place an order.
 
@@ -28,6 +28,7 @@ class SharedCrossPilotObservation:
     existing_current_tpsl_rows: int | None = None
     existing_positions_without_observed_full_volume_stop: int | None = None
     existing_positions_with_unverified_cross_mode: int | None = None
+    # This count is telemetry, NOT a requirement to add manual SL orders.
     modeled_new_trade_stop_loss_usdt: str | None = None
     risk_budget_usdt: str = "50"
     includes_manual_positions_in_collateral_risk: bool = True
@@ -180,15 +181,14 @@ def assess_shared_cross_pilot_precheck(
             observed_protection.add(pid)
 
     missing = len(expected) - len(observed_protection)
-    if missing:
-        return blocked(
-            "SHARED_CROSS_MANUAL_POSITION_STOP_NOT_OBSERVED",
-            missing=missing, unknown_cross=unknown_cross,
-        )
+    # Manual positions are operator-owned and can intentionally have no SL.
+    # Their absence is an ACCOUNT RISK input, NOT a T100 stop violation.
+    # No finite maximal loss can be inferred for unprotected cross shorts.
+    # The T100-owned position stop requirement remains unchanged elsewhere.
     if unknown_cross:
         return blocked(
             "SHARED_CROSS_EXISTING_MARGIN_MODES_NOT_ALL_CROSS",
-            missing=0, unknown_cross=unknown_cross,
+            missing=missing, unknown_cross=unknown_cross,
         )
     try:
         modeled = modeled_short_loss_at_native_stop(
@@ -196,13 +196,20 @@ def assess_shared_cross_pilot_precheck(
             max_adverse_slippage_bps=D("100"),
         )
     except (ExecutionHalted, TypeError, ValueError):
-        return blocked("SHARED_CROSS_PILOT_STOP_BUDGET_UNVERIFIED")
+        return blocked(
+            "SHARED_CROSS_PILOT_STOP_BUDGET_UNVERIFIED",
+            missing=missing, unknown_cross=0,
+        )
     if modeled >= loss_budget_usdt:
         return blocked(
             "SHARED_CROSS_PILOT_STOP_EXCEEDS_BUDGET",
-            missing=0, unknown_cross=0, modeled=modeled,
+            missing=missing, unknown_cross=0, modeled=modeled,
         )
     return blocked(
-        "SHARED_CROSS_MANUAL_POSITIONS_ACCOUNTED_NONAUTHORIZING",
-        missing=0, unknown_cross=0, modeled=modeled,
+        (
+            "SHARED_CROSS_MANUAL_UNBOUNDED_RISK_REQUIRES_ACCOUNT_STRESS"
+            if missing
+            else "SHARED_CROSS_MANUAL_POSITIONS_ACCOUNTED_NONAUTHORIZING"
+        ),
+        missing=missing, unknown_cross=0, modeled=modeled,
     )
