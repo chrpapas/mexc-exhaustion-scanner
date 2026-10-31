@@ -34,6 +34,9 @@ from app.t100_live_pnl_pair_recheck import (
     PnlPairRecheck, recheck_pnl_pair_readonly,
 )
 from app.t100_live_position_mode_shape import PositionModeShape
+from app.t100_live_mixed_margin_observation import (
+    MixedAccountObservation, observe_mixed_margin_account_window,
+)
 
 
 class CrossRiskDiagnosticHalted(RuntimeError):
@@ -71,6 +74,7 @@ def _result(
     original_pnl_failure_code: str = "NONE",
     full_window_retry_status: str = "NOT_CHECKED",
     full_window_retry_failure_code: str = "NONE",
+    mixed_observation: MixedAccountObservation | None = None,
 ) -> dict[str, Any]:
     """Allowlist-only output; never serialize a venue payload."""
     possible = {
@@ -161,7 +165,31 @@ def _result(
             "ACCOUNT_MIXED_SIDE_OR_MARGIN_OBSERVED_NONAUTHORIZING",
         }
     )
+    mixed = (
+        mixed_observation
+        if type(mixed_observation) is MixedAccountObservation else None
+    )
     return {
+        "mixed_account_risk_status": (
+            mixed.status if mixed is not None else "NOT_CHECKED"
+        ),
+        "mixed_account_positions_observed": (
+            mixed.positions_observed if mixed is not None else None
+        ),
+        "mixed_account_cross_positions_observed": (
+            mixed.cross_margin_positions if mixed is not None else None
+        ),
+        "mixed_account_isolated_positions_observed": (
+            mixed.isolated_margin_positions if mixed is not None else None
+        ),
+        "mixed_account_economic_parity_observed": bool(
+            mixed is not None and mixed.economic_parity_observed is True
+        ),
+        "mixed_account_critical_inventory_stable": bool(
+            mixed is not None and mixed.stable_critical_inventory is True
+        ),
+        "mixed_account_cross_wallet_collateral_certified": False,
+        "mixed_account_liquidation_certified": False,
         "status": safe_status,
         "failure_stage": stage,
         "failure_code": code,
@@ -355,6 +383,30 @@ async def run_diagnostic(
                 full_retry_status = "RISK_DIAGNOSTIC_GET_FAILED"
                 full_retry_code = "NONE"
                 # Keep the original failure if the follow-up could not run.
+        # The original all-CROSS-SHORT stress gate cannot model isolated
+        # long manual exposure. Run a separate full-account ECONOMIC/SHAPE
+        # observation; never reinterpret success as cross-collateral safety.
+        mixed = None
+        mode = getattr(report, "position_mode_shape", None)
+        if (
+            report.status == "CROSS_RISK_READ_OR_EVIDENCE_UNVERIFIED"
+            and report.failure_code == "POSITION_NOT_VERIFIED_CROSS_SHORT"
+            and type(mode) is PositionModeShape
+            and mode.status ==
+                "ACCOUNT_MIXED_SIDE_OR_MARGIN_OBSERVED_NONAUTHORIZING"
+        ):
+            try:
+                mixed = await asyncio.wait_for(
+                    observe_mixed_margin_account_window(
+                        reader, now_ms=clock_ms,
+                        max_age_ms=5000, max_separation_ms=5000,
+                    ),
+                    timeout=min(timeout_seconds, 15.0),
+                )
+            except Exception:
+                mixed = MixedAccountObservation(
+                    status="MIXED_ACCOUNT_READ_OR_SCHEMA_UNVERIFIED"
+                )
         return _result(
             status=report.status,
             positions=report.observed_positions,
@@ -364,6 +416,7 @@ async def run_diagnostic(
             original_pnl_failure_code=original_pnl_code,
             full_window_retry_status=full_retry_status,
             full_window_retry_failure_code=full_retry_code,
+            mixed_observation=mixed,
         )
     except asyncio.TimeoutError:
         return _result(status="RISK_DIAGNOSTIC_GET_TIMED_OUT")
