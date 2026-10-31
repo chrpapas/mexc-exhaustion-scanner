@@ -188,6 +188,21 @@ def _result(
         "mixed_account_critical_inventory_stable": bool(
             mixed is not None and mixed.stable_critical_inventory is True
         ),
+        "mixed_account_drift_position_fields": (
+            list(mixed.changed_position_fields) if mixed is not None else []
+        ),
+        "mixed_account_drift_stop_fields": (
+            list(mixed.changed_stop_fields) if mixed is not None else []
+        ),
+        "mixed_account_drift_asset_fields": (
+            list(mixed.changed_asset_fields) if mixed is not None else []
+        ),
+        "mixed_account_drift_private_risk_schedule": bool(
+            mixed is not None and mixed.private_risk_schedule_changed
+        ),
+        "mixed_account_drift_public_contract_terms": bool(
+            mixed is not None and mixed.public_contract_terms_changed
+        ),
         "mixed_account_cross_wallet_collateral_certified": False,
         "mixed_account_liquidation_certified": False,
         "status": safe_status,
