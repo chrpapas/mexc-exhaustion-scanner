@@ -29,7 +29,12 @@ from app.t100_live_four_slot_reservations import (
     RESERVATIONS_SQL, SNAPSHOT_AGE_SQL, UNRESOLVED_STOPS_SQL,
     LEGACY_PARENTS_SQL, LEGACY_CHILDREN_SQL,
 )
-from app.t100_live_four_slot_snapshot_coordinator import FourSlotSnapshotResult
+from app.t100_live_four_slot_snapshot_coordinator import (
+    FourSlotSnapshotResult, _valid_counts, _venue_digest,
+)
+from app.t100_live_shared_protected_entry_observer import (
+    _map_positions, _map_stops,
+)
 from app.t100_live_leader_fencing import LeaderLease
 from app.t100_live_v40_protected_finalization import PreparedProtectedBatch
 
@@ -135,12 +140,116 @@ def _number(raw: Any) -> Decimal:
     return n
 
 
+
+def _shared_scope(
+    witness: FourSlotSnapshotResult,
+    pre_positions: Any,
+    pre_stops: Any,
+    batch: PreparedProtectedBatch,
+) -> frozenset[str]:
+    """Explicit mixed account scope; fails before opening a DB transaction.
+
+    Full-account GETs are *supplied* by a separate observer; their hashes
+    must match the same bookended coordinator witness used by the staged
+    reservation. Never derive manual identity from a ledger-only count.
+    """
+    if (
+        witness.status not in {
+            "SHARED_ACCOUNT_MANUAL_ONLY_NONAUTHORIZING",
+            "SHARED_ACCOUNT_MANAGED_PROVENANCE_MATCHED_NONAUTHORIZING",
+        }
+        or witness.entry_allowed is not False
+        or witness.live_authorization is not False
+        or type(witness.account_positions_observed) is not int
+        or type(witness.manual_positions_observed) is not int
+        or type(witness.occupied_slots) is not int
+        or witness.account_positions_observed
+            != witness.manual_positions_observed + witness.occupied_slots
+        or not 0 <= witness.account_positions_observed <= 3
+        or witness.manual_positions_observed < 0
+        or not isinstance(witness.critical_inventory_hash, str)
+        or len(witness.critical_inventory_hash) != 64
+        or type(pre_positions) is not list
+        or type(pre_stops) is not list
+        or len(pre_positions) != witness.account_positions_observed
+        or not _valid_counts(
+            witness.inventory, len(pre_positions), len(pre_stops),
+        )
+        or witness.account_positions_observed + len(batch.entries) > 4
+        or len(batch.entries) != 1
+    ):
+        raise ProtectedCommitHalted("SHARED_COMMIT_ACCOUNT_WITNESS_INVALID")
+    try:
+        pos = _map_positions(pre_positions)
+        stops = _map_stops(pre_stops, pos)
+        if _venue_digest(pre_positions, pre_stops) != witness.critical_inventory_hash:
+            raise ProtectedCommitHalted("SHARED_COMMIT_CRITICAL_HASH_DRIFT")
+    except (TypeError, ValueError, KeyError):
+        raise ProtectedCommitHalted("SHARED_COMMIT_ACCOUNT_ROWS_UNVERIFIED") from None
+
+    if witness.occupied_slots == 0:
+        if (
+            witness.recovery is not None
+            or witness.status != "SHARED_ACCOUNT_MANUAL_ONLY_NONAUTHORIZING"
+        ):
+            raise ProtectedCommitHalted("SHARED_COMMIT_FLAT_OWNERSHIP_DRIFT")
+        managed_ids: set[str] = set()
+    else:
+        recovery = witness.recovery
+        if (
+            recovery is None
+            or witness.status !=
+                "SHARED_ACCOUNT_MANAGED_PROVENANCE_MATCHED_NONAUTHORIZING"
+            or recovery.mode != "SHADOW_ONLY_RECOVERED_NONFLAT"
+            or recovery.live_authorization is not False
+            or len(recovery.recovered) != witness.occupied_slots
+        ):
+            raise ProtectedCommitHalted("SHARED_COMMIT_MANAGED_RECOVERY_UNVERIFIED")
+        managed_ids = set()
+        for owned in recovery.recovered:
+            rows = stops.get(owned.position_id, [])
+            position = pos.get(owned.position_id)
+            if (
+                owned.position_id in managed_ids
+                or position is None
+                or position.get("symbol") != owned.symbol
+                or position.get("positionType") != 2
+                or position.get("openType") != 2
+                or len(rows) != 1
+                or str(rows[0].get("id") or rows[0].get("stopPlanOrderId"))
+                    != owned.stop_order_id
+            ):
+                raise ProtectedCommitHalted("SHARED_COMMIT_MANAGED_STOP_IDENTITY_DRIFT")
+            managed_ids.add(owned.position_id)
+    manual = frozenset(
+        row["symbol"] for pid, row in pos.items() if pid not in managed_ids
+    )
+    if (
+        len(manual) != witness.manual_positions_observed
+        or manual.intersection({x.intent.symbol for x in batch.entries})
+        or any(x.position_id in pos for x in batch.entries)
+        or any(x.intent.symbol in {row["symbol"] for row in pos.values()}
+               for x in batch.entries)
+    ):
+        raise ProtectedCommitHalted("SHARED_COMMIT_MANUAL_SYMBOL_OR_IDENTITY_CONFLICT")
+    return manual
+
+
 def _require(
     batch: PreparedProtectedBatch,
     witness: FourSlotSnapshotResult,
     leader: LeaderLease,
     observed_at: datetime,
+    *,
+    manual_count: int = 0,
+    shared: bool = False,
 ) -> None:
+    if (
+        type(manual_count) is not int
+        or not 0 <= manual_count <= 4
+        or type(shared) is not bool
+    ):
+        raise ProtectedCommitHalted("SHARED_COMMIT_SCOPE_INVALID")
     if (
         type(batch) is not PreparedProtectedBatch
         or batch.status != "PROTECTED_BATCH_PREPARED_OFFLINE_ONLY"
@@ -150,13 +259,16 @@ def _require(
         or batch.live_authorization is not False
         or batch.mexc_orders_sent is not False
         or type(witness) is not FourSlotSnapshotResult
-        or witness.status not in {
+        or witness.status not in ({
+            "SHARED_ACCOUNT_MANUAL_ONLY_NONAUTHORIZING",
+            "SHARED_ACCOUNT_MANAGED_PROVENANCE_MATCHED_NONAUTHORIZING",
+        } if shared else {
             "FLAT_OBSERVED_NONAUTHORIZING",
             "NONFLAT_PROVENANCE_MATCHED_NONAUTHORIZING",
-        }
+        })
         or type(witness.occupied_slots) is not int
         or not 0 <= witness.occupied_slots <= 3
-        or witness.occupied_slots + len(batch.entries) > 4
+        or witness.occupied_slots + manual_count + len(batch.entries) > 4
         or not isinstance(witness.ledger_hash, str)
         or len(witness.ledger_hash) != 64
         or witness.entry_allowed is not False
@@ -235,8 +347,23 @@ class PostgresProtectedV40Commit:
         pre_attempt_witness: FourSlotSnapshotResult,
         lease: LeaderLease,
         observed_at: datetime,
+        shared_pre_positions: list[dict[str, Any]] | None = None,
+        shared_pre_stops: list[dict[str, Any]] | None = None,
     ) -> ProtectedCommitResult:
-        _require(batch, pre_attempt_witness, lease, observed_at)
+        mixed = (
+            shared_pre_positions is not None or shared_pre_stops is not None
+        )
+        if mixed:
+            manual_symbols = _shared_scope(
+                pre_attempt_witness, shared_pre_positions,
+                shared_pre_stops, batch,
+            )
+        else:
+            manual_symbols = frozenset()
+        _require(
+            batch, pre_attempt_witness, lease, observed_at,
+            manual_count=len(manual_symbols), shared=mixed,
+        )
         expected_oids = {x.intent.external_oid for x in batch.entries}
         expected_old = (
             {} if pre_attempt_witness.recovery is None else {
@@ -246,7 +373,9 @@ class PostgresProtectedV40Commit:
         )
         if len(expected_old) != pre_attempt_witness.occupied_slots:
             raise ProtectedCommitHalted("PREEXISTING_OWNERSHIP_NOT_RECONCILED")
-        if expected_old.keys() & {x.intent.symbol for x in batch.entries}:
+        if (expected_old.keys() | manual_symbols) & {
+            x.intent.symbol for x in batch.entries
+        }:
             raise ProtectedCommitHalted("OWNED_SYMBOL_ALREADY_PRESENT")
 
         try:
@@ -278,6 +407,15 @@ class PostgresProtectedV40Commit:
                     if len(previous) != len(active) or previous != expected_old:
                         raise ProtectedCommitHalted("PREEXISTING_CHECKPOINT_SET_DRIFT")
                     slots = await conn.fetch(RESERVATIONS_SQL)
+                    if (
+                        len(slots) !=
+                        pre_attempt_witness.occupied_slots + len(batch.entries)
+                        or len(slots) + len(manual_symbols) > 4
+                        or any(row["symbol"] in manual_symbols for row in slots)
+                    ):
+                        raise ProtectedCommitHalted(
+                            "SHARED_COMMIT_RESERVATION_ACCOUNT_SLOT_DRIFT"
+                        )
                     known = {(x.intent.signal_id, x.intent.external_oid, x.intent.symbol)
                              for x in batch.entries}
                     staged = set()
