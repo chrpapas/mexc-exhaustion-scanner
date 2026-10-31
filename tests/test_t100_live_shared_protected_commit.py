@@ -183,6 +183,98 @@ class SharedProtectedCommitTests(unittest.IsolatedAsyncioTestCase):
             await self.commit()
         self.assertEqual(self.snapshot(), before)
 
+    async def test_committed_sql_rows_feed_fresh_shared_restart_observer(self):
+        # Not a copied hypothetical checkpoint: construct the read-only
+        # post-restart ledger from exact rows written by the atomic SQL mock.
+        from app.t100_live_four_slot_snapshot_coordinator import (
+            FourSlotSnapshotCoordinator, LedgerSnapshot,
+        )
+        from app.t100_live_shared_restart_recovery import (
+            verify_shared_restart_protected_entry,
+        )
+        from tests.test_t100_live_four_slot_snapshot_coordinator import (
+            Ledger, Venue, Completeness,
+        )
+        from tests.test_t100_live_shared_protected_entry_observer import counts
+
+        result = await self.commit()
+        self.assertEqual(result.entries_committed, 1)
+        checkpoint_columns = (
+            "position_id", "symbol", "external_oid", "exchange_order_id",
+            "contracts", "entry_price", "stop_order_id", "stop_price",
+            "best_profit_pct", "armed", "lifecycle_state",
+            "checkpoint_version", "last_write_reason",
+        )
+        revision_columns = (
+            "position_id", "checkpoint_version", "write_reason",
+            "symbol", "external_oid", "exchange_order_id", "contracts",
+            "entry_price", "stop_order_id", "stop_price",
+            "best_profit_pct", "armed", "lifecycle_state",
+        )
+        cp_rows = [
+            dict(zip(checkpoint_columns, row))
+            for row in self.pg.committed_checkpoints.values()
+        ]
+        revision_rows = [
+            dict(zip(revision_columns, row))
+            for row in self.pg.committed_revisions.values()
+        ]
+        self.assertEqual(len(cp_rows), 1)
+        self.assertEqual(len(revision_rows), 1)
+        ledger = Ledger(LedgerSnapshot(
+            checkpoints=cp_rows,
+            revisions=revision_rows,
+            intents=copy.deepcopy(self.pg.new_intents),
+            stop_amendments=[],
+            readonly_repeatable_read=True,
+        ))
+        original = self.source.order
+        fresh = await FourSlotSnapshotCoordinator(
+            ledger=ledger,
+            venue=Venue(
+                [original],
+                copy.deepcopy(self.source.post_positions),
+                copy.deepcopy(self.source.post_stops),
+            ),
+            completeness=Completeness(counts(3, 1)),
+        ).inspect(shared_manual_observation=True)
+        self.assertEqual(
+            fresh.status,
+            "SHARED_ACCOUNT_MANAGED_PROVENANCE_MATCHED_NONAUTHORIZING",
+        )
+        self.assertEqual(fresh.occupied_slots, 1)
+        self.assertEqual(fresh.manual_positions_observed, 2)
+        replay = verify_shared_restart_protected_entry(
+            pre_witness=self.before,
+            restart_witness=fresh,
+            prepared=self.batch,
+            pre_positions=self.positions,
+            pre_stops=self.stops,
+            restart_positions=self.source.post_positions,
+            restart_stops=self.source.post_stops,
+            origin_order=original,
+        )
+        self.assertEqual(
+            replay.status,
+            "SHARED_RESTART_EXACT_PROTECTED_PROVENANCE_OBSERVED_NONAUTHORIZING",
+        )
+        self.assertTrue(replay.owned_native_stops_recovered)
+        self.assertTrue(replay.new_protected_fill_record_matches_recovery)
+        self.assertEqual(replay.unchanged_manual_positions, 2)
+        self.assertFalse(replay.real_db_commit_independently_verified)
+        self.assertFalse(replay.live_authorization)
+
+    async def test_failed_atomic_commit_leaves_no_durable_owned_checkpoint(self):
+        self.pg.failure = "REVISION"
+        with self.assertRaises(ProtectedCommitHalted):
+            await self.commit()
+        self.assertEqual(self.pg.committed_checkpoints, {})
+        self.assertEqual(self.pg.committed_revisions, {})
+        self.assertEqual(self.pg.committed_fill_sets, {})
+        self.assertEqual(self.pg.committed_fills, {})
+        self.assertEqual(self.pg.new_intents[0]["state"], "SUBMITTING")
+        self.assertEqual(self.pg.reserved[0]["state"], "SUBMITTING")
+
     async def test_manual_tp_only_supported_not_rewritten(self):
         # A manual TP-only record is not adopted or converted into an SL.
         # Re-create a full coordinator witness matching this changed account.
