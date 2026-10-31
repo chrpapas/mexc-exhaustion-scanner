@@ -153,6 +153,10 @@ def _shared_scope(
     must match the same bookended coordinator witness used by the staged
     reservation. Never derive manual identity from a ledger-only count.
     """
+    if type(batch) is not PreparedProtectedBatch or len(batch.entries) != 1:
+        raise ProtectedCommitHalted("SHARED_COMMIT_BATCH_INVALID")
+    if type(witness) is not FourSlotSnapshotResult:
+        raise ProtectedCommitHalted("SHARED_COMMIT_WITNESS_INVALID")
     if (
         witness.status not in {
             "SHARED_ACCOUNT_MANUAL_ONLY_NONAUTHORIZING",
@@ -408,9 +412,7 @@ class PostgresProtectedV40Commit:
                         raise ProtectedCommitHalted("PREEXISTING_CHECKPOINT_SET_DRIFT")
                     slots = await conn.fetch(RESERVATIONS_SQL)
                     if (
-                        len(slots) !=
-                        pre_attempt_witness.occupied_slots + len(batch.entries)
-                        or len(slots) + len(manual_symbols) > 4
+                        len(slots) + len(manual_symbols) > 4
                         or any(row["symbol"] in manual_symbols for row in slots)
                     ):
                         raise ProtectedCommitHalted(
