@@ -103,7 +103,7 @@ def _sha(value: Any) -> bool:
 def _require_inputs(
     *, plan: FourSlotPlan, witness: FourSlotSnapshotResult,
     observed_at: datetime, lease: LeaderLease, signal_id: int, symbol: str,
-    *, shared_account_symbols: frozenset[str] | None = None,
+    shared_account_symbols: frozenset[str] | None = None,
 ) -> Decimal:
     if not isinstance(plan, FourSlotPlan) or not isinstance(witness, FourSlotSnapshotResult):
         raise FourSlotReservationHalted("FOUR_SLOT_MODEL_WITNESS_REQUIRED")
