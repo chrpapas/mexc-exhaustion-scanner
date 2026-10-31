@@ -86,12 +86,17 @@ def _components(
 
 async def inspect_existing_four_slots_get_only(
     *, ledger: LedgerSnapshotReader, client: PrivateGet,
+    shared_manual_observation: bool = False,
 ) -> FourSlotSnapshotResult:
-    """Observe owned positions and stops; manual/unowned exposure blocks."""
+    """Observe all exposure; optional shared mode separates external positions.
+
+    Legacy strict mode stays unchanged. Shared mode is GET-only and never
+    supplies a permit to execute or close any position.
+    """
     venue, completeness = _components(client)
     return await FourSlotSnapshotCoordinator(
         ledger=ledger, venue=venue, completeness=completeness,
-    ).inspect()
+    ).inspect(shared_manual_observation=shared_manual_observation)
 
 
 async def inspect_staged_four_slot_fill_get_only(
