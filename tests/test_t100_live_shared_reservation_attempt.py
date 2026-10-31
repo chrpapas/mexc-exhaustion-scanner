@@ -217,6 +217,7 @@ class SharedReservationAttemptTests(unittest.IsolatedAsyncioTestCase):
         source = self.source
         reported_order = copy.deepcopy(source.order)
         reported_order["externalOid"] = reservation.external_oid
+        reported_order["feeCurrency"] = "USDT"
         candidate = prepare_shared_protected_entry_offline(
             pre_witness=self.witness,
             pre_positions=self.positions,
