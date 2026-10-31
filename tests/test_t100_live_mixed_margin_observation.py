@@ -126,6 +126,37 @@ class MixedAccountObserverTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(obs.status, "MIXED_ACCOUNT_FAIR_PRICE_DRIFT")
         self.assertNotIn("SECOND_USDT", str(obs))
 
+    async def test_isolated_auto_add_boolean_is_observed_not_certified(self):
+        for raw, expected in (
+            (True, "MEXC_AUTO_ADD_FIELD_TRUE_SEMANTICS_UNVERIFIED"),
+            (False, "MEXC_AUTO_ADD_FIELD_FALSE_SEMANTICS_UNVERIFIED"),
+        ):
+            first, second = mixed(), mixed(1_000_450)
+            first.positions[1]["autoAddIm"] = raw
+            second.positions[1]["autoAddIm"] = raw
+            out = await observe_mixed_margin_account_window(
+                Reader(first, second), now_ms=lambda: 1_001_000,
+            )
+            self.assertEqual(
+                out.status,
+                "MIXED_ACCOUNT_ECONOMIC_BOOKENDS_OBSERVED_NONAUTHORIZING",
+            )
+            self.assertEqual(out.isolated_auto_add_field_status, expected)
+            self.assertFalse(out.isolated_auto_add_worst_case_drain_bounded)
+            self.assertFalse(out.cross_account_collateral_certified)
+            self.assertFalse(out.entry_allowed)
+            self.assertFalse(out.live_authorization)
+
+    async def test_isolated_auto_add_field_change_fails_closed(self):
+        first, second = mixed(), mixed(1_000_450)
+        first.positions[1]["autoAddIm"] = True
+        second.positions[1]["autoAddIm"] = False
+        out = await observe_mixed_margin_account_window(
+            Reader(first, second), now_ms=lambda: 1_001_000,
+        )
+        self.assertEqual(out.status, "MIXED_ACCOUNT_AUTO_ADD_FIELD_DRIFT")
+        self.assertFalse(out.entry_allowed)
+
     async def test_same_account_readonly_diagnostic_mixed_fallback(self):
         data = mixed()
         private = FakePrivate(data)
