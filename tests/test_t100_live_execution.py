@@ -8,11 +8,11 @@ from app.t100_live_authorization import (
     LivePilotReadinessEvidence,
     issue_live_mutation_permit,
 )
-from app.t100_live_execution import EntryIntent, LiveCaps, LiveOrderGateway, ExecutionHalted, displayed_vwap
+from app.t100_live_execution import EntryIntent, LiveCaps, LiveOrderGateway, ExecutionHalted, displayed_vwap, modeled_short_loss_at_native_stop
 from app.t100_live_guards import LIVE_CONFIRMATION, T100ExecutionControls
 
 
-def permit(max_position="1000", max_total="2000", max_daily_loss="100"):
+def permit(max_position="1000", max_total="2000", max_daily_loss="500"):
     controls = T100ExecutionControls.from_env({
         "T100_EXECUTION_MODE": "live",
         "T100_LIVE_ORDER_API_ENABLED": "true",
@@ -69,6 +69,8 @@ class MemoryLedger:
 
 
 class MemoryMexc:
+    open_type = 2  # Mock CROSS-only pilot transport.
+
     def __init__(self):
         self.posts, self.fail, self.order, self.stops, self.positions = 0, False, None, [], []
     async def submit_short_with_stop(self, intent, *, permit):
@@ -96,7 +98,7 @@ class LiveTests(unittest.IsolatedAsyncioTestCase):
         self.mexc = MemoryMexc()
         self.gateway = LiveOrderGateway(
             self.ledger, self.mexc,
-            LiveCaps(Decimal("1000"), Decimal("2000"), Decimal("100")))
+            LiveCaps(Decimal("1000"), Decimal("2000"), Decimal("500")))
     async def send(self, **overrides):
         data = dict(
             permit=permit(),
@@ -105,6 +107,91 @@ class LiveTests(unittest.IsolatedAsyncioTestCase):
             book_age_ms=100, signal_age_seconds=20)
         data.update(overrides)
         return await self.gateway.send_one(self.intent, **data)
+
+    async def test_pilot_cross_margin_transport_is_mandatory(self):
+        self.assertEqual(self.gateway.caps.margin_type, 2)
+        self.assertEqual(self.mexc.open_type, 2)
+        # Legacy isolated payload adapter or missing mode must be blocked
+        # BEFORE creating an intent or making any exchange request.
+        self.mexc.open_type = 1
+        with self.assertRaisesRegex(
+            ExecutionHalted, "CROSS_PILOT_MARGIN_TRANSPORT_UNVERIFIED"
+        ):
+            await self.send()
+        self.assertEqual(self.ledger.history, [])
+        self.assertEqual(self.mexc.posts, 0)
+        self.mexc.open_type = None
+        with self.assertRaisesRegex(
+            ExecutionHalted, "CROSS_PILOT_MARGIN_TRANSPORT_UNVERIFIED"
+        ):
+            await self.send()
+        self.assertEqual(self.ledger.values, {})
+
+    async def test_underbudget_stop_risk_blocks_before_writing_any_intent(self):
+        # Frozen 75% SL implies ~375 USDT gross potential loss from
+        # a 500 USDT notional short, before friction or gap-through.
+        with self.assertRaisesRegex(
+            ExecutionHalted, "PROSPECTIVE_STOP_LOSS_EXCEEDS_DAILY_BUDGET"
+        ):
+            await self.send(permit=permit(max_daily_loss="100"))
+        self.assertEqual(self.mexc.posts, 0)
+        self.assertEqual(self.ledger.history, [])
+        self.gateway.caps = LiveCaps(
+            Decimal("1000"), Decimal("2000"), Decimal("100")
+        )
+        with self.assertRaisesRegex(
+            ExecutionHalted, "PROSPECTIVE_STOP_LOSS_EXCEEDS_DAILY_BUDGET"
+        ):
+            await self.send()
+        self.assertEqual(self.mexc.posts, 0)
+        self.assertEqual(self.ledger.values, {})
+
+    async def test_small_one_signal_canary_under_budget_with_mock_transport(self):
+        # This simulates a mock POST in a unit test with a PATCHED adapter.
+        # In production adapter remains NOT_IMPLEMENTED, never authorized.
+        small = EntryIntent.build(
+            signal_id=113, symbol="SIREN_USDT",
+            reference_price="2", notional_usdt="10",
+            contract_size="1", volume_step="1",
+            min_volume="1", max_volume="1000", price_tick="0.001",
+        )
+        modeled = modeled_short_loss_at_native_stop(
+            small, max_adverse_slippage_bps=Decimal("100")
+        )
+        self.assertGreater(modeled, Decimal("7.50"))
+        self.assertLess(modeled, Decimal("10"))
+        result = await self.gateway.send_one(
+            small, permit=permit(max_daily_loss="10"),
+            equity_usdt=Decimal("1200"),
+            portfolio_notional=Decimal(0),
+            today_loss_usdt=Decimal(0),
+            observed_vwap=Decimal("2"),
+            book_age_ms=100, signal_age_seconds=20,
+        )
+        self.assertEqual(result, "98765")
+        self.assertEqual(self.mexc.posts, 1)
+        self.assertIn(small.external_oid, self.ledger.values)
+
+    async def test_prospective_loss_plus_existing_loss_must_fit_cap(self):
+        small = EntryIntent.build(
+            signal_id=114, symbol="SIREN_USDT",
+            reference_price="2", notional_usdt="10",
+            contract_size="1", volume_step="1",
+            min_volume="1", max_volume="1000", price_tick="0.001",
+        )
+        with self.assertRaisesRegex(
+            ExecutionHalted, "PROSPECTIVE_STOP_LOSS_EXCEEDS_DAILY_BUDGET"
+        ):
+            await self.gateway.send_one(
+                small, permit=permit(max_daily_loss="10"),
+                equity_usdt=Decimal("1200"),
+                portfolio_notional=Decimal(0),
+                today_loss_usdt=Decimal("3"),
+                observed_vwap=Decimal("2"),
+                book_age_ms=100, signal_age_seconds=20,
+            )
+        self.assertEqual(self.mexc.posts, 0)
+        self.assertEqual(self.ledger.values, {})
 
     async def test_uncertified_adapter_blocks_before_ledger_and_post(self):
         with patch("app.t100_live_guards.LIVE_ADAPTER_STATUS", "NOT_IMPLEMENTED"):
@@ -179,7 +266,7 @@ class LiveTests(unittest.IsolatedAsyncioTestCase):
         )
     async def test_gates_reject_before_order(self):
         for kw in (dict(book_age_ms=1501), dict(signal_age_seconds=901),
-                   dict(today_loss_usdt=Decimal("100")),
+                   dict(today_loss_usdt=Decimal("500")),
                    dict(observed_vwap=Decimal("1.96")),
                    dict(equity_usdt=Decimal("100"))):
             with self.subTest(kw=kw), self.assertRaises(ExecutionHalted):
@@ -188,6 +275,24 @@ class LiveTests(unittest.IsolatedAsyncioTestCase):
 
 
 class MathTests(unittest.TestCase):
+    def test_frozen_short_stop_loss_includes_round_trip_friction(self):
+        observed = modeled_short_loss_at_native_stop(
+            intent(), max_adverse_slippage_bps=Decimal("100")
+        )
+        self.assertEqual(observed, Decimal("390.125"))
+
+    def test_invalid_or_too_close_stop_fails_closed(self):
+        from dataclasses import replace
+        with self.assertRaises(ExecutionHalted):
+            modeled_short_loss_at_native_stop(
+                replace(intent(), stop_price=Decimal("2.2")),
+                max_adverse_slippage_bps=Decimal("100"),
+            )
+        with self.assertRaises(ExecutionHalted):
+            modeled_short_loss_at_native_stop(
+                intent(), max_adverse_slippage_bps=Decimal("NaN")
+            )
+
     def test_integer_contracts(self):
         self.assertEqual(intent().volume_contracts, Decimal("250"))
     def test_depth_uses_contracts_not_coins(self):
@@ -201,6 +306,13 @@ class MathTests(unittest.TestCase):
                 EntryIntent.build(signal_id=1,symbol=symbol,reference_price="2",
                     notional_usdt="100",contract_size="1",volume_step="1",
                     min_volume="1",max_volume="1000",price_tick="0.01")
+    def test_pilot_margin_mode_cannot_be_isolated(self):
+        with self.assertRaisesRegex(ValueError, "CROSS"):
+            LiveCaps(
+                Decimal("100"), Decimal("200"), Decimal("50"),
+                margin_type=1,
+            )
+
     def test_leverage_is_one(self):
         with self.assertRaises(ValueError):
             LiveCaps(Decimal("100"), Decimal("200"), Decimal("10"), leverage=2)

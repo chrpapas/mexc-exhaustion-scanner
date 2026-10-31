@@ -32,7 +32,7 @@ class LiveCaps:
     max_slippage_bps: Decimal = Decimal("100")
     max_book_age_ms: int = 1500
     leverage: int = 1
-    margin_type: int = 1
+    margin_type: int = 2
 
     def __post_init__(self) -> None:
         for field in ("max_order_usdt", "max_portfolio_usdt", "max_daily_loss_usdt"):
@@ -43,8 +43,8 @@ class LiveCaps:
             raise ValueError("unsafe slippage setting")
         if self.max_book_age_ms < 0 or self.max_book_age_ms > 2000:
             raise ValueError("book age limit out of bounds")
-        if self.leverage != 1 or self.margin_type != 1:
-            raise ValueError("initial live adapter supports isolated 1x only")
+        if self.leverage != 1 or self.margin_type != 2:
+            raise ValueError("cross-margin tiny pilot requires CROSS 1x only")
 
 
 @dataclass(frozen=True)
@@ -127,6 +127,7 @@ class IntentLedger(Protocol):
 
 
 class ExchangeClient(Protocol):
+    open_type: int  # MEXC: 1=isolated, 2=cross
     async def order_by_external_oid(self, symbol: str, external_oid: str) -> dict[str, Any] | None: ...
     async def submit_short_with_stop(
         self,
@@ -136,6 +137,47 @@ class ExchangeClient(Protocol):
     ) -> str: ...
     async def open_positions(self, symbol: str | None = None) -> list[dict[str, Any]]: ...
     async def open_stop_orders(self, symbol: str | None = None) -> list[dict[str, Any]]: ...
+
+
+def modeled_short_loss_at_native_stop(
+    intent: EntryIntent, *,
+    max_adverse_slippage_bps: Decimal,
+    planning_fee_rate_per_side: Decimal = Decimal("0.001"),
+) -> Decimal:
+    """Conservative PLANNING estimate, never a guaranteed maximum loss.
+
+    Frozen V40 short SL is at least 75% above its reference entry.
+    Model entry and stop-exit friction on their corresponding notional
+    amounts. Actual gap-through, liquidation, fees, market illiquidity,
+    exchange incidents and unfilled protection may produce larger losses.
+    This check prevents an obvious underbudget order, NOT a safe live pilot.
+    """
+    if type(intent) is not EntryIntent:
+        raise ExecutionHalted("MODELED_STOP_LOSS_INTENT_INVALID")
+    inputs = (
+        intent.reference_price, intent.stop_price, intent.notional_usdt,
+        max_adverse_slippage_bps, planning_fee_rate_per_side,
+    )
+    if any(
+        type(v) is not Decimal or not v.is_finite()
+        for v in inputs
+    ):
+        raise ExecutionHalted("MODELED_STOP_LOSS_INPUT_INVALID")
+    entry, stop, notional, slip, fee = inputs
+    if (
+        entry <= 0 or stop <= 0 or notional <= 0
+        or stop < entry * Decimal("1.75")
+        or not Decimal("0") <= slip <= Decimal("300")
+        or not Decimal("0.001") <= fee <= Decimal("0.01")
+    ):
+        raise ExecutionHalted("MODELED_STOP_LOSS_INPUT_OR_FROZEN_STOP_INVALID")
+    exit_notional = notional * stop / entry
+    gross_adverse = exit_notional - notional
+    round_trip_friction = (
+        (notional + exit_notional)
+        * (slip / Decimal("10000") + fee)
+    )
+    return gross_adverse + round_trip_friction
 
 
 class LiveOrderGateway:
@@ -153,6 +195,15 @@ class LiveOrderGateway:
         switches. Do not invoke this method without that coordinator.
         """
         permit = require_certified_transport_permit(permit)
+        # Double-check transport and configured cap agree before creating a
+        # journal intent. A legacy isolated adapter can never silently place
+        # a trade when the approved pilot is CROSS.
+        if (
+            self.caps.margin_type != 2
+            or type(getattr(self.exchange, "open_type", None)) is not int
+            or self.exchange.open_type != 2
+        ):
+            raise ExecutionHalted("CROSS_PILOT_MARGIN_TRANSPORT_UNVERIFIED")
         if intent.notional_usdt > permit.max_position_notional_usdt:
             raise ExecutionHalted("PERMIT_ORDER_CAP")
         if (
@@ -171,6 +222,23 @@ class LiveOrderGateway:
             raise ExecutionHalted("PORTFOLIO_CAP")
         if today_loss_usdt >= self.caps.max_daily_loss_usdt:
             raise ExecutionHalted("DAILY_LOSS_CAP")
+        # A 75% frozen SL can consume most of a tiny allocation. The
+        # prospective modeled stop loss MUST fit BOTH daily budgets before
+        # persisting intent or making any exchange request.
+        if (
+            type(today_loss_usdt) is not Decimal
+            or not today_loss_usdt.is_finite()
+            or today_loss_usdt < 0
+        ):
+            raise ExecutionHalted("DAILY_LOSS_WITNESS_INVALID")
+        planned_stop_loss = modeled_short_loss_at_native_stop(
+            intent, max_adverse_slippage_bps=self.caps.max_slippage_bps,
+        )
+        if today_loss_usdt + planned_stop_loss >= min(
+            self.caps.max_daily_loss_usdt,
+            permit.max_daily_loss_usdt,
+        ):
+            raise ExecutionHalted("PROSPECTIVE_STOP_LOSS_EXCEEDS_DAILY_BUDGET")
         if equity_usdt <= 0 or intent.notional_usdt > equity_usdt * Decimal("0.5625"):
             raise ExecutionHalted("MARGIN_OR_EQUITY_CAP")
         if not 0 <= signal_age_seconds <= 900:

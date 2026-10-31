@@ -125,6 +125,11 @@ class MexcReadOnlyCrossRiskCollector:
                 raise CrossRiskCollectionHalted("COLLECTOR_CLOCK_INVALID")
             stage = "PRIVATE_POSITIONS"
             before_positions = await self.private.raw_open_positions()
+            # These independent GETs are NOT atomic. Keep their two
+            # unrealized-PNL observations adjacent instead of inserting
+            # symbol crosschecks and stop queries between them.
+            stage = "ASSETS"
+            assets = await self.private.raw_account_assets()
             stage = "PRIVATE_STOPS"
             before_stops = await self.private.raw_open_stops()
             if not 1 <= len(before_positions) <= 4:
@@ -151,8 +156,6 @@ class MexcReadOnlyCrossRiskCollector:
             redundant = await crosscheck_symbol_scoped_inventory(
                 self.private, before_positions, before_stops, max_symbols=4,
             )
-            stage = "ASSETS"
-            assets = await self.private.raw_account_assets()
             stage = "MARGIN_WITNESS"
             margin = assess_position_margin_witness(before_positions, assets)
             stage = "ORDER_COUNTS"
@@ -190,13 +193,12 @@ class MexcReadOnlyCrossRiskCollector:
 
             stage = "POST_POSITIONS"
             after_positions = await self.private.raw_open_positions()
-            stage = "POST_STOPS"
-            after_stops = await self.private.raw_open_stops()
-            # Never pair POST positions (fresh unrealized PNL) with
-            # PRE assets (older aggregate unrealized PNL). Both the PRE
-            # and POST pairs must independently satisfy economic parity.
+            # Couple account/position economics as closely as the venue GET
+            # interfaces permit, without altering strict parity thresholds.
             stage = "POST_ASSETS"
             after_assets = await self.private.raw_account_assets()
+            stage = "POST_STOPS"
+            after_stops = await self.private.raw_open_stops()
             stage = "POST_MARGIN_WITNESS"
             post_margin = assess_position_margin_witness(
                 after_positions, after_assets,

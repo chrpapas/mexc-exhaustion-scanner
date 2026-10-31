@@ -1,0 +1,60 @@
+name: T100 V40 isolated PostgreSQL transaction integration
+
+on:
+  pull_request:
+    paths:
+      - 'app/t100_live_v40_protected_commit.py'
+      - 'app/t100_live_v40_protected_finalization.py'
+      - 'app/t100_live_four_slot_*.py'
+      - 'app/t100_live_checkpoint_journal.py'
+      - 'app/t100_live_durable_recovery.py'
+      - 'migrations/027_t100_live_order_intents.sql'
+      - 'migrations/028_t100_live_vol30_h4.sql'
+      - 'migrations/029_t100_live_durable_state.sql'
+      - 'migrations/030_t100_live_executor_lease.sql'
+      - 'migrations/031_t100_live_v40_four_slot_reservations.sql'
+      - 'tests/test_t100_live_v40_postgres_integration.py'
+      - '.github/workflows/t100-v40-postgres-isolated.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  real-postgres-ephemeral-no-orders:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: mexc_exhaustion
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: t100-ci-only-local-postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d mexc_exhaustion"
+          --health-interval 3s
+          --health-timeout 3s
+          --health-retries 12
+    env:
+      CI: 'true'
+      PYTHONPATH: .
+      T100_EXECUTION_MODE: paper
+      T100_LIVE_ORDER_API_ENABLED: 'false'
+      T100_LIVE_KILL_SWITCH: 'true'
+      T100_PG_INTEGRATION_CI_ONLY: 'yes'
+      PGHOST: 127.0.0.1
+      PGPORT: '5432'
+      PGDATABASE: mexc_exhaustion
+      PGUSER: postgres
+      PGPASSWORD: t100-ci-only-local-postgres
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install only local PostgreSQL async client
+        run: python -m pip install 'asyncpg>=0.30,<0.32'
+      - name: Verify real PostgreSQL 16 atomic commit and four-slot restart
+        run: python -m unittest -v tests.test_t100_live_v40_postgres_integration
