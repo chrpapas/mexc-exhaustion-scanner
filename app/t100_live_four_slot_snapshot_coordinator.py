@@ -25,6 +25,9 @@ from app.t100_live_durable_recovery import (
     DurableRecoveryHalted, DurableRecoveryReport,
     checkpoint_from_row, recover_nonflat,
 )
+from app.t100_live_shared_account_partition import (
+    SharedPartitionHalted, partition_shared_account,
+)
 
 MAX_SLOTS = 4
 
@@ -48,6 +51,9 @@ class FourSlotSnapshotResult:
     ledger_hash: str | None = None
     critical_inventory_hash: str | None = None
     mismatch_diagnostic: dict[str, Any] | None = None
+    manual_positions_observed: int | None = None
+    manual_positions_without_positive_sl_observed: int | None = None
+    account_positions_observed: int | None = None
     entry_allowed: bool = False
     live_authorization: bool = False
 
@@ -163,8 +169,12 @@ class FourSlotSnapshotCoordinator:
         self.venue = venue
         self.completeness = completeness
 
-    async def inspect(self) -> FourSlotSnapshotResult:
-        """Observe without writing. Every uncertain outcome is BLOCKED."""
+    async def inspect(
+        self, *, shared_manual_observation: bool = False,
+    ) -> FourSlotSnapshotResult:
+        """Observe without writing. Shared mode is NEVER order authorization."""
+        if type(shared_manual_observation) is not bool:
+            return FourSlotSnapshotResult("SHARED_MODE_INPUT_INVALID")
         try:
             first = await self.ledger.read_snapshot()
             first_hash = _ledger_digest(first)
@@ -209,6 +219,65 @@ class FourSlotSnapshotCoordinator:
             return FourSlotSnapshotResult("VENUE_CRITICAL_INVENTORY_CHANGED")
         if not _valid_counts(report, len(after_positions), len(after_stops)):
             return FourSlotSnapshotResult("INVENTORY_COMPLETENESS_UNVERIFIED")
+        if shared_manual_observation:
+            # Full-account counts, critical hashes and read-only ledger
+            # equality are already proven above. Partition by durable
+            # checkpoint ID, NEVER by caller-supplied "manual" labels.
+            # Historical/restart and post-submission gates must separately
+            # accept this topology before any live order is even considered.
+            try:
+                partition = partition_shared_account(
+                    checkpoints=checkpoints,
+                    positions=after_positions, stops=after_stops,
+                )
+            except SharedPartitionHalted:
+                return FourSlotSnapshotResult(
+                    "SHARED_ACCOUNT_POSITION_PARTITION_UNVERIFIED",
+                )
+            if not checkpoints:
+                if first.revisions or first.intents or first.stop_amendments:
+                    return FourSlotSnapshotResult(
+                        "SHARED_ACCOUNT_T100_LEDGER_HISTORY_UNVERIFIED",
+                    )
+                return FourSlotSnapshotResult(
+                    status="SHARED_ACCOUNT_MANUAL_ONLY_NONAUTHORIZING",
+                    manual_positions_observed=partition.manual_positions,
+                    manual_positions_without_positive_sl_observed=(
+                        partition.manual_positions_without_positive_native_sl
+                    ),
+                    account_positions_observed=partition.account_positions,
+                    inventory=report,
+                    ledger_hash=first_hash,
+                    critical_inventory_hash=after_hash,
+                )
+            try:
+                recovery = recover_nonflat(
+                    checkpoint_rows=first.checkpoints,
+                    revision_rows=first.revisions,
+                    intent_rows=first.intents,
+                    stop_amendment_rows=first.stop_amendments,
+                    orders=orders,
+                    positions=partition.managed_positions,
+                    stops=partition.managed_stops,
+                    positions_complete=True, stops_complete=True,
+                )
+            except (DurableRecoveryHalted, TypeError, ValueError):
+                return FourSlotSnapshotResult(
+                    "SHARED_ACCOUNT_T100_DURABLE_PROVENANCE_UNVERIFIED",
+                )
+            return FourSlotSnapshotResult(
+                status="SHARED_ACCOUNT_MANAGED_PROVENANCE_MATCHED_NONAUTHORIZING",
+                occupied_slots=len(checkpoints),
+                manual_positions_observed=partition.manual_positions,
+                manual_positions_without_positive_sl_observed=(
+                    partition.manual_positions_without_positive_native_sl
+                ),
+                account_positions_observed=partition.account_positions,
+                recovery=recovery,
+                inventory=report,
+                ledger_hash=first_hash,
+                critical_inventory_hash=after_hash,
+            )
         if len(after_positions) != len(after_stops):
             # Never reinterpret multiple TP/SL records as adequate protection.
             # Provide only aggregate topology from the SAME already verified
