@@ -165,6 +165,58 @@ class MixedAccountObserverTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("SECOND_USDT", str(result))
         self.assertNotIn("20", str(result))
 
+    async def test_withdrawable_cash_balance_drift_is_field_named_only(self):
+        second = mixed(1_000_450)
+        second.assets[0]["cashBalance"] = "1999.5"
+        result = await observe_mixed_margin_account_window(
+            Reader(mixed(), second), now_ms=lambda: 1_001_000,
+        )
+        self.assertEqual(
+            result.status, "MIXED_ACCOUNT_CRITICAL_INVENTORY_DRIFT",
+        )
+        self.assertEqual(result.changed_asset_fields, ("cashBalance",))
+        self.assertEqual(result.changed_position_fields, ())
+        self.assertEqual(result.changed_stop_fields, ())
+        self.assertFalse(result.private_risk_schedule_changed)
+        self.assertFalse(result.public_contract_terms_changed)
+        self.assertFalse(result.entry_allowed)
+        self.assertNotIn("1999.5", str(result))
+        self.assertNotIn("TEST_USDT", str(result))
+
+    async def test_position_margin_drift_with_accurate_account_assets_is_named(self):
+        second = mixed(1_000_450)
+        second.positions[1]["im"] = "31"
+        second.assets[0]["positionMargin"] = "51"
+        result = await observe_mixed_margin_account_window(
+            Reader(mixed(), second), now_ms=lambda: 1_001_000,
+        )
+        self.assertEqual(
+            result.status, "MIXED_ACCOUNT_CRITICAL_INVENTORY_DRIFT",
+        )
+        self.assertEqual(result.changed_position_fields, ("im",))
+        self.assertEqual(result.changed_asset_fields, ())
+        self.assertFalse(result.live_authorization)
+        self.assertNotIn("31", str(result))
+
+    async def test_risk_metadata_and_stop_change_identified_without_values(self):
+        second = mixed(1_000_450)
+        second.private_risk_by_symbol["TEST_USDT"][0]["mmr"] = "0.071"
+        second.public_contract_by_symbol["SECOND_USDT"]["liquidationFeeRate"] = "0.08"
+        second.stops[0]["stopLossPrice"] = "9.99"
+        result = await observe_mixed_margin_account_window(
+            Reader(mixed(), second), now_ms=lambda: 1_001_000,
+        )
+        self.assertEqual(
+            result.status, "MIXED_ACCOUNT_CRITICAL_INVENTORY_DRIFT",
+        )
+        self.assertEqual(result.changed_stop_fields, ("stopLossPrice",))
+        self.assertTrue(result.private_risk_schedule_changed)
+        self.assertTrue(result.public_contract_terms_changed)
+        self.assertEqual(result.changed_asset_fields, ())
+        self.assertFalse(result.entry_allowed)
+        for raw in ("SECOND_USDT", "0.071", "9.99"):
+            self.assertNotIn(raw, str(result))
+
     async def test_read_failure_is_privacy_safe(self):
         class Failure:
             async def read(self):
