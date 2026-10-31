@@ -238,7 +238,7 @@ async def observe_mixed_margin_account_window(
         delta = second.observed_at_ms - first.observed_at_ms
         if not 0 < delta <= max_separation_ms or a[2] != b[2]:
             return blocked("MIXED_ACCOUNT_READ_WINDOW_OR_COUNTS_DRIFT")
-        if a[5] != b[5]:
+        if a[4] == b[4] and a[5] != b[5]:
             return blocked("MIXED_ACCOUNT_AUTO_ADD_FIELD_DRIFT")
         if a[0] != b[0]:
             # Maintain fail-closed status; add FIELD NAMES only. These
