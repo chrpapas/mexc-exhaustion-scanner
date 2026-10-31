@@ -7,8 +7,9 @@ MEXC create-order payload ONLY for offline review. It does not validate that
 MEXC will honor attached TP/SL, that any fill is protected, or that an
 ISOLATED current account configuration will accept CROSS entry.
 
-Important: the existing T100 production/pilot transport supports isolated
-1x only. This module MUST NOT be imported by a live execution path.
+Important: the proposed T100 pilot transport is now pinned to CROSS 1x,
+but actual live operation remains NOT_IMPLEMENTED and NOT CERTIFIED. This
+research-only module MUST NOT be imported by a live execution path.
 """
 from __future__ import annotations
 
