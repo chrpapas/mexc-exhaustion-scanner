@@ -157,6 +157,11 @@ def _result(
     pnl = pnl_recheck if type(pnl_recheck) is PnlPairRecheck else None
     mode = getattr(witness, "position_mode_shape", None)
     if type(mode) is not PositionModeShape:
+        # This is independently sampled GET-only evidence from two
+        # internally reconciled and stable position/asset pairs, not a
+        # replacement for the full all-account completeness witness.
+        mode = getattr(pnl, "position_mode_shape", None)
+    if type(mode) is not PositionModeShape:
         mode = None
     mode_valid = (
         mode is not None
@@ -404,8 +409,25 @@ async def run_diagnostic(
         mixed = None
         mode = getattr(report, "position_mode_shape", None)
         if (
+            type(mode) is not PositionModeShape
+            and pnl_recheck is not None
+            and pnl_recheck.status == "PNL_RECHECK_TWO_PAIRS_MATCH_NONAUTHORIZING"
+            and pnl_recheck.positions_stable_across_pairs is True
+        ):
+            mode = pnl_recheck.position_mode_shape
+        if (
             report.status == "CROSS_RISK_READ_OR_EVIDENCE_UNVERIFIED"
-            and report.failure_code == "POSITION_NOT_VERIFIED_CROSS_SHORT"
+            and (
+                report.failure_code == "POSITION_NOT_VERIFIED_CROSS_SHORT"
+                or (
+                    original_pnl_code in {
+                        "COLLECTOR_PRE_UNREALIZED_PNL_MISMATCH",
+                        "COLLECTOR_POST_UNREALIZED_PNL_MISMATCH",
+                    }
+                    and full_retry_status !=
+                        "CURRENT_CROSS_RISK_OBSERVED_NONAUTHORIZING"
+                )
+            )
             and type(mode) is PositionModeShape
             and mode.status ==
                 "ACCOUNT_MIXED_SIDE_OR_MARGIN_OBSERVED_NONAUTHORIZING"
