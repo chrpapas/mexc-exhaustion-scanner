@@ -162,8 +162,8 @@ class PnlRecheckTests(unittest.IsolatedAsyncioTestCase):
         private = BadOneAssetRead(frame())
         ts = iter([
             1_000_000, 1_000_500,
-            1_001_000, 1_001_500,
-            1_002_000, 1_002_500,
+            1_001_000, 1_001_500, 1_001_700,
+            1_002_000, 1_002_500, 1_002_700,
         ])
         result = await run_diagnostic(
             private=ReadOnlyMexcProbe(private),
