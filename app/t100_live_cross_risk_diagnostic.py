@@ -75,6 +75,7 @@ def _result(
     full_window_retry_status: str = "NOT_CHECKED",
     full_window_retry_failure_code: str = "NONE",
     mixed_observation: MixedAccountObservation | None = None,
+    diagnostic_failure_origin: str = "NONE",
 ) -> dict[str, Any]:
     """Allowlist-only output; never serialize a venue payload."""
     possible = {
@@ -174,7 +175,20 @@ def _result(
         mixed_observation
         if type(mixed_observation) is MixedAccountObservation else None
     )
+    # Fixed local code only. Do not echo exception type, string, URL or payload.
+    safe_origins = {
+        "NONE", "COLLECTOR_SETUP", "PRIMARY_WINDOW",
+        "INVENTORY_SHAPE", "REPORT_BUILD",
+        "CLIENT_IMPORT", "CLIENT_INIT", "READ_PIPELINE",
+        "CLIENT_CLOSE", "CLI_RUNTIME",
+    }
+    origin = (
+        diagnostic_failure_origin
+        if type(diagnostic_failure_origin) is str
+        and diagnostic_failure_origin in safe_origins else "NONE"
+    )
     return {
+        "diagnostic_failure_origin": origin,
         "mixed_account_risk_status": (
             mixed.status if mixed is not None else "NOT_CHECKED"
         ),
@@ -374,11 +388,13 @@ async def run_diagnostic(
     """Dependency-injected diagnostics can be tested without HTTP or secrets."""
     if not (type(timeout_seconds) in (int, float) and 0 < timeout_seconds <= 60):
         return _result(status="RISK_DIAGNOSTIC_GET_FAILED")
+    origin = "COLLECTOR_SETUP"
     try:
         reader = MexcReadOnlyCrossRiskCollector(
             private=private, public=public,
             clock_ms=clock_ms, max_frame_ms=5000,
         )
+        origin = "PRIMARY_WINDOW"
         report = await asyncio.wait_for(
             observe_cross_risk_window(
                 reader, now_ms=clock_ms,
@@ -397,6 +413,7 @@ async def run_diagnostic(
             # positions, or a different number of TP/SL rows. A separate
             # bounded GET-only diagnostic distinguishes those cases without
             # weakening the V40 risk/ownership gates.
+            origin = "INVENTORY_SHAPE"
             shape = await asyncio.wait_for(
                 observe_inventory_shape(private),
                 timeout=min(timeout_seconds, 15.0),
@@ -498,6 +515,7 @@ async def run_diagnostic(
                 mixed = MixedAccountObservation(
                     status="MIXED_ACCOUNT_READ_OR_SCHEMA_UNVERIFIED"
                 )
+        origin = "REPORT_BUILD"
         return _result(
             status=report.status,
             positions=report.observed_positions,
@@ -510,11 +528,17 @@ async def run_diagnostic(
             mixed_observation=mixed,
         )
     except asyncio.TimeoutError:
-        return _result(status="RISK_DIAGNOSTIC_GET_TIMED_OUT")
+        return _result(
+            status="RISK_DIAGNOSTIC_GET_TIMED_OUT",
+            diagnostic_failure_origin=origin,
+        )
     except Exception:
         # Never expose URL, account identifiers, exception messages,
         # hidden endpoint data, or raw venue payloads.
-        return _result(status="RISK_DIAGNOSTIC_GET_FAILED")
+        return _result(
+            status="RISK_DIAGNOSTIC_GET_FAILED",
+            diagnostic_failure_origin=origin,
+        )
 
 
 async def _main(*, environ: Mapping[str, str] | None = None) -> dict[str, Any]:
@@ -527,29 +551,54 @@ async def _main(*, environ: Mapping[str, str] | None = None) -> dict[str, Any]:
     if not key or not secret:
         return _result(status="RISK_DIAGNOSTIC_CREDENTIALS_MISSING")
 
-    # Import actual network client only AFTER preflight; no mutation methods
-    # are invoked or passed into the read-only collector.
-    from app.mexc_trade import MexcTradeClient
-    client = MexcTradeClient(
-        "https://api.mexc.com", api_key=key, api_secret=secret,
-    )
+    # Keep local runtime import, constructor, read, and cleanup distinct.
+    # All failures are redacted fixed origin codes, never exception strings.
+    try:
+        from app.mexc_trade import MexcTradeClient
+    except Exception:
+        return _result(
+            status="RISK_DIAGNOSTIC_GET_FAILED",
+            diagnostic_failure_origin="CLIENT_IMPORT",
+        )
+    try:
+        client = MexcTradeClient(
+            "https://api.mexc.com", api_key=key, api_secret=secret,
+        )
+    except Exception:
+        return _result(
+            status="RISK_DIAGNOSTIC_GET_FAILED",
+            diagnostic_failure_origin="CLIENT_INIT",
+        )
     try:
         probe = ReadOnlyMexcProbe(client)
-        return await run_diagnostic(
+        report = await run_diagnostic(
             private=probe, public=client.client,
             clock_ms=lambda: int(time.time() * 1000),
         )
     except Exception:
-        return _result(status="RISK_DIAGNOSTIC_GET_FAILED")
-    finally:
+        report = _result(
+            status="RISK_DIAGNOSTIC_GET_FAILED",
+            diagnostic_failure_origin="READ_PIPELINE",
+        )
+    # A failing close must not erase an earlier report without classification,
+    # or silently count as successful cleanup.
+    try:
         await client.close()
-
+    except Exception:
+        return _result(
+            status="RISK_DIAGNOSTIC_GET_FAILED",
+            diagnostic_failure_origin="CLIENT_CLOSE",
+        )
+    return report
 
 def cli() -> None:
     try:
         result = asyncio.run(_main())
     except Exception:
-        result = _result(status="RISK_DIAGNOSTIC_GET_FAILED")
+        result = _result(
+            status="RISK_DIAGNOSTIC_GET_FAILED",
+            diagnostic_failure_origin="CLI_RUNTIME",
+        )
     print(json.dumps(result, sort_keys=True, indent=2))
     print("PRIVATE/PUBLIC GET ONLY; NO ORDERS; LIVE TRADING DISABLED.")
     if result["status"] != "CURRENT_CROSS_RISK_OBSERVED_NONAUTHORIZING":
