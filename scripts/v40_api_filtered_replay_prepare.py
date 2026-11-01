@@ -31,7 +31,7 @@ from scripts.v40_backtest_api_coverage import (
 )
 
 PINNED_SHA256 = "2918f4589e8d564ca55b6f24aa2e9a868b5d214653ad7d92acaf1729fd1e4cb5"
-_SYMBOL = re.compile(r"[A-Z0-9]+_USDT\\Z")
+_SYMBOL = re.compile(r"[A-Z0-9]+_USDT\Z")
 
 
 def _hash_file(path: Path) -> str:
