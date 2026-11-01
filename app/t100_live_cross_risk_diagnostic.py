@@ -240,6 +240,19 @@ def _result(
             }
             else "NOT_CHECKED"
         ),
+        "mixed_account_private_row_gap": (
+            mixed.mixed_private_row_gap
+            if mixed is not None and mixed.mixed_private_row_gap in {
+                "PRIVATE_POSITION_SIDE_ROW_ABSENT",
+                "PRIVATE_POSITION_SIDE_ROWS_AMBIGUOUS",
+                "PRIVATE_MARGIN_MODE_FIELD_UNVERIFIED",
+                "PRIVATE_MARGIN_MODE_MISMATCH",
+                "PRIVATE_CURRENT_RATE_FIELDS_UNVERIFIED",
+                "CURRENT_SIDE_MODE_ROW_OBSERVED_NONAUTHORIZING",
+                "NOT_CHECKED",
+            }
+            else "NOT_CHECKED"
+        ),
         "mixed_account_current_private_side_rows_observed": bool(
             mixed is not None
             and mixed.mixed_private_current_side_row_observed is True
