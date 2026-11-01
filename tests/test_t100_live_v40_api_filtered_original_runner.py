@@ -67,6 +67,40 @@ def main():
             self.assertEqual(scope["main"](), 133)
             self.assertEqual(call_counts, [146])
 
+    def test_candidate_only_stop_prevents_portfolio_execution(self):
+        # Even a valid filter should not invoke the expensive portfolio
+        # replay during --probe-only diagnosis.
+        source_text = """
+def main():
+    pool = build_floor_pools("frozen")
+    portfolio_replay_should_not_execute()
+    return pool
+if __name__ == "__main__":
+    main()
+"""
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "src.py"
+            path.write_text(source_text)
+            sha = hashlib.sha256(path.read_bytes()).hexdigest()
+            with patch.object(runner, "PINNED_ORIGINAL_SHA", sha):
+                tree, _ = runner.prepare_original(path)
+            calls = []
+            def filter_then_stop(pools):
+                result = runner.filter_pools(pools, self.allow, self.deny)
+                self.assertEqual(len(result[4.0]), 133)
+                raise runner.CandidateHookProbeComplete()
+            def should_not_execute():
+                calls.append("BAD")
+            scope = {
+                "__name__": "__main__",
+                "build_floor_pools": lambda _: {4.0: list(self.pool)},
+                "__t100_v40_prefilter_pools__": filter_then_stop,
+                "portfolio_replay_should_not_execute": should_not_execute,
+            }
+            with self.assertRaises(runner.CandidateHookProbeComplete):
+                exec(compile(tree, str(path), "exec"), scope)
+            self.assertEqual(calls, [])
+
     def test_wrong_source_hash_and_multiple_calls_fail(self):
         with tempfile.TemporaryDirectory() as tmp:
             source = Path(tmp) / "src.py"
