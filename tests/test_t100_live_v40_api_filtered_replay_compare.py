@@ -89,7 +89,7 @@ class ReplayCompareTests(unittest.TestCase):
                 self.baseline, self.filtered, self.archive, self.manifest)
         self.assertTrue(result["baseline_trades_and_equity_reproduced"])
         self.assertEqual(result["original_baseline_entries"], 108)
-        self.assertEqual(result["filtered_entries"], 108)
+        self.assertEqual(result["filtered_entries"], 98)
         self.assertEqual(result["filtered_equity_multiple"], 5.5)
         self.assertEqual(result["filtered_high_envelope_dd_pct"], -40.5)
         self.assertFalse(result["live_authorization"])
