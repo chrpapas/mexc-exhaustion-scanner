@@ -187,6 +187,12 @@ class MixedAccountObserverTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["mixed_account_isolated_positions_observed"], 1)
         self.assertTrue(result["mixed_account_economic_parity_observed"])
         self.assertTrue(result["mixed_account_critical_inventory_stable"])
+        self.assertEqual(
+            result["mixed_account_private_risk_tier_shape"],
+            "MIXED_TIER_CURRENT_PRIVATE_SIDE_OR_MODE_UNVERIFIED",
+        )
+        self.assertFalse(result["mixed_account_current_private_side_rows_observed"])
+        self.assertFalse(result["mixed_account_incremental_terms_unmodeled"])
         self.assertFalse(result["mixed_account_cross_wallet_collateral_certified"])
         self.assertFalse(result["mixed_account_liquidation_certified"])
         self.assertFalse(result["entry_allowed"])
