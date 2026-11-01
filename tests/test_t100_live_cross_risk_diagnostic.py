@@ -2,7 +2,10 @@
 from __future__ import annotations
 
 import asyncio
+import sys
+import types
 import unittest
+from unittest.mock import patch
 
 from app.t100_live_cross_risk_diagnostic import (
     CrossRiskDiagnosticHalted, _main, _result,
@@ -66,6 +69,85 @@ class DiagnosticTests(unittest.IsolatedAsyncioTestCase):
         ))
         self.assertEqual(result["status"], "RISK_DIAGNOSTIC_PAPER_KILL_REQUIRED")
         self.assertNotIn("SHOULD_NOT_USE", str(result))
+
+    async def test_outer_missing_client_import_is_classified_without_secrets(self):
+        fake_module = types.ModuleType("app.mexc_trade")
+        with patch.dict(sys.modules, {"app.mexc_trade": fake_module}):
+            result = await _main(environ=safe_env(
+                MEXC_API_KEY="SECRET_KEY", MEXC_API_SECRET="SECRET_PRIVATE",
+            ))
+        self.assertEqual(result["status"], "RISK_DIAGNOSTIC_GET_FAILED")
+        self.assertEqual(result["diagnostic_failure_origin"], "CLIENT_IMPORT")
+        self.assertNotIn("SECRET", str(result))
+        self.assertFalse(result["entry_allowed"])
+
+    async def test_client_ctor_exception_is_redacted(self):
+        fake_module = types.ModuleType("app.mexc_trade")
+        class Broken:
+            def __init__(self, *args, **kwargs):
+                raise RuntimeError("SECRET_ACCOUNT_URL")
+        fake_module.MexcTradeClient = Broken
+        with patch.dict(sys.modules, {"app.mexc_trade": fake_module}):
+            result = await _main(environ=safe_env(
+                MEXC_API_KEY="SECRET_KEY", MEXC_API_SECRET="SECRET_PRIVATE",
+            ))
+        self.assertEqual(result["diagnostic_failure_origin"], "CLIENT_INIT")
+        self.assertFalse(result["live_authorization"])
+        self.assertNotIn("SECRET", str(result))
+
+    async def test_runtime_read_failure_and_close_failure_are_distinct(self):
+        fake_module = types.ModuleType("app.mexc_trade")
+        instances = []
+        class Client:
+            def __init__(self, *args, **kwargs):
+                self.client = object()
+                self.closed = False
+                self.fail_close = False
+                instances.append(self)
+            async def close(self):
+                self.closed = True
+                if self.fail_close:
+                    raise RuntimeError("SECRET_CLOSE_PATH")
+        fake_module.MexcTradeClient = Client
+        env = safe_env(MEXC_API_KEY="SECRET_KEY", MEXC_API_SECRET="SECRET_PRIVATE")
+        with patch.dict(sys.modules, {"app.mexc_trade": fake_module}):
+            with patch(
+                "app.t100_live_cross_risk_diagnostic.run_diagnostic",
+                side_effect=RuntimeError("SECRET_NETWORK_URL"),
+            ):
+                result = await _main(environ=env)
+            self.assertEqual(result["diagnostic_failure_origin"], "READ_PIPELINE")
+            self.assertTrue(instances[-1].closed)
+            self.assertNotIn("SECRET", str(result))
+            async def pretend_read(*args, **kwargs):
+                instances[-1].fail_close = True
+                return _result(status="RISK_DIAGNOSTIC_GET_FAILED")
+            with patch(
+                "app.t100_live_cross_risk_diagnostic.run_diagnostic",
+                side_effect=pretend_read,
+            ):
+                result = await _main(environ=env)
+            self.assertEqual(result["diagnostic_failure_origin"], "CLIENT_CLOSE")
+            self.assertTrue(instances[-1].closed)
+            self.assertFalse(result["entry_allowed"])
+            self.assertNotIn("SECRET", str(result))
+
+    async def test_collector_configuration_failure_is_identified(self):
+        result = await run_diagnostic(
+            private=ReadOnlyMexcProbe(object()),
+            public=None, clock_ms=lambda: 1_000_000,
+        )
+        self.assertEqual(result["status"], "RISK_DIAGNOSTIC_GET_FAILED")
+        self.assertEqual(result["diagnostic_failure_origin"], "COLLECTOR_SETUP")
+        self.assertFalse(result["live_authorization"])
+
+    def test_unknown_origin_is_never_echoed(self):
+        result = _result(
+            status="RISK_DIAGNOSTIC_GET_FAILED",
+            diagnostic_failure_origin="SECRET_ACCOUNT_IDENTIFIER",
+        )
+        self.assertEqual(result["diagnostic_failure_origin"], "NONE")
+        self.assertNotIn("SECRET", str(result))
 
     async def test_two_valid_read_only_frames_emit_only_redacted_counts(self):
         underlying = frame()
