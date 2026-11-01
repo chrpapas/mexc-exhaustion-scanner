@@ -19,6 +19,7 @@ import os
 from pathlib import Path
 import re
 import sys
+import traceback
 from typing import Any
 from zipfile import ZipFile
 
@@ -195,7 +196,9 @@ def main() -> None:
         # isolated by a new, unused output path.
         # It does not import the MEXC trade adapter.
         hook_observations: list[tuple[int, int]] = []
+        hook_invocations: list[int] = []
         def hook(pools: Any) -> Any:
+            hook_invocations.append(1)
             if len(hook_observations) >= 1:
                 raise ValueError("ORIGINAL_POOL_CALL_RUNTIME_DUPLICATED")
             transformed = filter_pools(
@@ -245,8 +248,43 @@ def main() -> None:
             "ORIGINAL_POOL_CALL_RUNTIME_NOT_OBSERVED",
         }
         code = str(exc) if str(exc) in safe else "REPLAY_PREPARATION_OR_LOCAL_RUNTIME_ERROR"
+        frames = traceback.extract_tb(exc.__traceback__)
+        # Report no exception strings, paths, symbols or raw source snippets:
+        # only the type and locations in verified source / wrapper code.
+        original_path = locals().get("original")
+        source_frame = next(
+            (f for f in reversed(frames)
+             if original_path is not None and Path(f.filename) == original_path),
+            None,
+        )
+        wrapper_frame = next(
+            (f for f in reversed(frames)
+             if Path(f.filename).name == "v40_api_filtered_original_runner.py"),
+            None,
+        )
         print(json.dumps({
-            "status": "V40_FILTERED_RUNNER_HALTED", "failure_code": code,
+            "status": "V40_FILTERED_RUNNER_HALTED",
+            "failure_code": code,
+            "exception_class": type(exc).__name__
+                if type(exc).__name__ in {
+                    "RuntimeError", "ValueError", "AssertionError",
+                    "KeyError", "TypeError", "IndexError", "AttributeError",
+                    "FileNotFoundError", "PermissionError",
+                } else "OTHER_EXCEPTION",
+            "original_source_lineno": source_frame.lineno if source_frame else None,
+            "original_source_function": (
+                source_frame.name if source_frame
+                and source_frame.name in {
+                    "main", "chronological_replay", "<module>"
+                } else "OTHER_OR_NOT_REACHED"
+            ),
+            "wrapper_lineno": wrapper_frame.lineno if wrapper_frame else None,
+            "candidate_filter_hook_invocations": len(
+                locals().get("hook_invocations", [])
+            ),
+            "candidate_filter_hook_completions": len(
+                locals().get("hook_observations", [])
+            ),
             "live_authorization": False, "mexc_orders_sent": False,
         }, indent=2, sort_keys=True))
         raise SystemExit(2) from None
