@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import copy
 import unittest
+from dataclasses import replace
 
 from app.t100_live_mixed_tier_shape import assess_mixed_tier_shape
 from app.t100_live_mixed_margin_observation import (
@@ -111,8 +112,7 @@ class MixedTierShapeTests(unittest.IsolatedAsyncioTestCase):
         f = mixed_with_private_sides()
         for symbol in ("TEST_USDT", "SECOND_USDT"):
             increment(f, symbol)
-        second = copy.deepcopy(f)
-        second.observed_at_ms = 1_000_450
+        second = replace(copy.deepcopy(f), observed_at_ms=1_000_450)
         for fair in second.fair_by_symbol.values():
             fair["observed_at_ms"] = 1_000_450
         obs = await observe_mixed_margin_account_window(
