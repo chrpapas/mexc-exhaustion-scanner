@@ -101,6 +101,86 @@ if __name__ == "__main__":
                 exec(compile(tree, str(path), "exec"), scope)
             self.assertEqual(calls, [])
 
+
+    def test_original_fixed_count_checks_patch_only_for_filtered_mode(self):
+        # Faithful AST shapes of original simulator lines 358, 470, 485,
+        # 489 and 497, with the other stage/accounting checks left intact.
+        sample = """
+import math
+FROZEN_ENDPOINTS = {("A", 100.): 1.0, ("B", 100.): 1.0,
+                    ("A", 200.): 1.0, ("B", 200.): 1.0}
+INITIAL_CAPITAL = 2000.
+class FakeRun:
+    def metrics(self, count):
+        return {"observed_candidate_count": count}
+def reports(reg, runs):
+    r = runs["A"]
+    m = r.metrics(146)
+    return m
+def main():
+    v39_reference_capital = 2000.
+    candidates = build_floor_pools("frozen")[4.]
+    if len(candidates)!=146: raise RuntimeError('CANDIDATE_COUNT_CHANGED')
+    if BROKEN_ACCOUNT_CHECK: raise RuntimeError("ACCOUNT_CHECK_FAILED")
+    m = reports(None, {"A": FakeRun()})
+    parity = []
+    for p,c in (FROZEN_ENDPOINTS if math.isclose(
+        INITIAL_CAPITAL,v39_reference_capital,rel_tol=0.0,abs_tol=1e-9
+    ) else {}):
+        parity.append((p,c))
+    if math.isclose(
+        INITIAL_CAPITAL,v39_reference_capital,rel_tol=0.0,abs_tol=1e-9
+    ) and len(parity)!=4:
+        raise RuntimeError('INCOMPLETE_REFERENCE_PARITY')
+    return len(candidates),m["observed_candidate_count"],len(parity)
+"""
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "original.py"
+            path.write_text(sample)
+            sha = hashlib.sha256(path.read_bytes()).hexdigest()
+            def run(*, filtered, baseline, broken_account=False):
+                with patch.object(runner, "PINNED_ORIGINAL_SHA", sha):
+                    tree, digest = runner.prepare_original(
+                        path, filtered_mode=filtered,
+                    )
+                self.assertEqual(digest, sha)
+                runtime = {"__name__": "unit_test",
+                           "__t100_v40_baseline_mode__": baseline,
+                           "__t100_v40_expected_candidate_count__": 146,
+                           "BROKEN_ACCOUNT_CHECK": broken_account}
+                def hook(pools):
+                    result = runner.filter_pools(pools, self.allow, self.deny,
+                                                 baseline=baseline)
+                    runtime["__t100_v40_expected_candidate_count__"] = len(result[4.])
+                    return result
+                runtime["__t100_v40_prefilter_pools__"] = hook
+                runtime["build_floor_pools"] = lambda _: {4.: list(self.pool)}
+                exec(compile(tree, str(path), "exec"), runtime)
+                return runtime["main"]()
+            self.assertEqual(run(filtered=False, baseline=True),
+                             (146, 146, 4))
+            self.assertEqual(run(filtered=True, baseline=False),
+                             (133, 133, 0))
+            with self.assertRaisesRegex(RuntimeError, "CANDIDATE_COUNT_CHANGED"):
+                run(filtered=False, baseline=False)
+            with self.assertRaisesRegex(RuntimeError, "ACCOUNT_CHECK_FAILED"):
+                run(filtered=True, baseline=False, broken_account=True)
+            self.assertEqual(path.read_text(), sample)
+
+    def test_adapter_fails_closed_if_pinned_original_layout_changes(self):
+        sample = """
+def reports(reg, runs):
+    return runs["A"].metrics(146)
+def main():
+    candidates = build_floor_pools("frozen")[4.]
+    if len(candidates)!=146: raise RuntimeError('CANDIDATE_COUNT_CHANGED')
+"""
+        tree = __import__("ast").parse(sample)
+        with self.assertRaisesRegex(
+            ValueError, "FILTERED_REPLAY_FIXED_CHECKS_UNVERIFIED"
+        ):
+            runner.adapt_filtered_replay_checks(tree)
+
     def test_wrong_source_hash_and_multiple_calls_fail(self):
         with tempfile.TemporaryDirectory() as tmp:
             source = Path(tmp) / "src.py"
