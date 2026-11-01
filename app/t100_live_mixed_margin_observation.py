@@ -40,6 +40,7 @@ class MixedAccountObservation:
     isolated_auto_add_field_status: str = "NOT_CHECKED"
     isolated_auto_add_worst_case_drain_bounded: bool = False
     mixed_tier_shape_status: str = "NOT_CHECKED"
+    mixed_private_row_gap: str = "NOT_CHECKED"
     mixed_private_current_side_row_observed: bool = False
     mixed_incremental_terms_present_unmodeled: bool = False
     # Only static, allowlisted FIELD NAMES. NEVER source values, IDs or symbols.
@@ -273,6 +274,7 @@ async def observe_mixed_margin_account_window(
             isolated_margin_reserved_as_separate_observation=b[4] > 0,
             isolated_auto_add_field_status=b[5],
             mixed_tier_shape_status=b[6].status,
+            mixed_private_row_gap=b[6].private_current_row_gap,
             mixed_private_current_side_row_observed=(
                 b[6].current_position_side_private_rows_present
             ),
