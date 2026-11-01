@@ -91,7 +91,112 @@ class _WrapPoolCall(ast.NodeTransformer):
         return node
 
 
-def prepare_original(source: Path) -> tuple[ast.Module, str]:
+
+def adapt_filtered_replay_checks(tree: ast.Module) -> tuple[ast.Module, dict[str, int]]:
+    """Only remove original-146 assumptions in the pinned, filtered replay.
+
+    All unrelated dataset, capacity, cashflow, exit and funding checks are
+    untouched. Baseline mode never calls this adapter. Every requested
+    in-memory AST change must match exactly one known source construct.
+    """
+    main_nodes = [
+        n for n in tree.body
+        if isinstance(n, ast.FunctionDef) and n.name == "main"
+    ]
+    reports_nodes = [
+        n for n in tree.body
+        if isinstance(n, ast.FunctionDef) and n.name == "reports"
+    ]
+    if len(main_nodes) != 1 or len(reports_nodes) != 1:
+        raise ValueError("FILTERED_REPLAY_SOURCE_LAYOUT_CHANGED")
+    main_node, reports_node = main_nodes[0], reports_nodes[0]
+    counters = {
+        "candidate_guard": 0,
+        "metric_count": 0,
+        "endpoint_loop": 0,
+        "endpoint_count_guard": 0,
+    }
+
+    def raises(node: ast.If, code: str) -> bool:
+        if len(node.body) != 1 or not isinstance(node.body[0], ast.Raise):
+            return False
+        exc = node.body[0].exc
+        return (
+            isinstance(exc, ast.Call)
+            and isinstance(exc.func, ast.Name)
+            and exc.func.id == "RuntimeError"
+            and len(exc.args) == 1
+            and isinstance(exc.args[0], ast.Constant)
+            and exc.args[0].value == code
+        )
+
+    for node in ast.walk(main_node):
+        if isinstance(node, ast.If) and raises(node, "CANDIDATE_COUNT_CHANGED"):
+            if ast.unparse(node.test) != "len(candidates) != 146":
+                raise ValueError("FILTERED_REPLAY_CANDIDATE_GUARD_UNEXPECTED")
+            node.test = ast.parse(
+                "len(candidates) != __t100_v40_expected_candidate_count__",
+                mode="eval",
+            ).body
+            counters["candidate_guard"] += 1
+        if isinstance(node, ast.For) and isinstance(node.iter, ast.IfExp):
+            conditional = node.iter
+            if isinstance(conditional.body, ast.Name) and conditional.body.id == "FROZEN_ENDPOINTS":
+                if not (
+                    isinstance(conditional.orelse, ast.Dict)
+                    and not conditional.orelse.keys
+                    and "math.isclose(" in ast.unparse(conditional.test)
+                ):
+                    raise ValueError("FILTERED_REPLAY_ENDPOINT_LOOP_UNEXPECTED")
+                conditional.test = ast.BoolOp(
+                    op=ast.And(), values=[
+                        ast.Name(id="__t100_v40_baseline_mode__", ctx=ast.Load()),
+                        conditional.test,
+                    ]
+                )
+                counters["endpoint_loop"] += 1
+        if isinstance(node, ast.If) and raises(node, "INCOMPLETE_REFERENCE_PARITY"):
+            if (
+                "math.isclose(" not in ast.unparse(node.test)
+                or "len(parity) != 4" not in ast.unparse(node.test)
+            ):
+                raise ValueError("FILTERED_REPLAY_PARITY_GUARD_UNEXPECTED")
+            node.test = ast.BoolOp(
+                op=ast.And(), values=[
+                    ast.Name(id="__t100_v40_baseline_mode__", ctx=ast.Load()),
+                    node.test,
+                ]
+            )
+            counters["endpoint_count_guard"] += 1
+
+    for node in ast.walk(reports_node):
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "metrics"
+            and isinstance(node.func.value, ast.Name)
+            and node.func.value.id == "r"
+            and len(node.args) == 1
+            and isinstance(node.args[0], ast.Constant)
+            and type(node.args[0].value) is int
+            and node.args[0].value == 146
+            and not node.keywords
+        ):
+            node.args[0] = ast.Name(
+                id="__t100_v40_expected_candidate_count__", ctx=ast.Load()
+            )
+            counters["metric_count"] += 1
+
+    if counters != {
+        "candidate_guard": 1, "metric_count": 1,
+        "endpoint_loop": 1, "endpoint_count_guard": 1,
+    }:
+        raise ValueError("FILTERED_REPLAY_FIXED_CHECKS_UNVERIFIED")
+    ast.fix_missing_locations(tree)
+    return tree, counters
+
+
+def prepare_original(source: Path, *, filtered_mode: bool = False) -> tuple[ast.Module, str]:
     if file_hash(source) != PINNED_ORIGINAL_SHA:
         raise ValueError("ORIGINAL_SOURCE_SHA_MISMATCH")
     if source.stat().st_size > 2_000_000:
@@ -112,6 +217,8 @@ def prepare_original(source: Path) -> tuple[ast.Module, str]:
     tree = patch.visit(tree)
     if patch.calls != 1:
         raise ValueError("ORIGINAL_POOL_CALL_NOT_UNIQUE")
+    if filtered_mode:
+        tree, _ = adapt_filtered_replay_checks(tree)
     ast.fix_missing_locations(tree)
     return tree, file_hash(source)
 
@@ -174,7 +281,9 @@ def main() -> None:
         root = a.root.expanduser().resolve()
         output = a.output.expanduser().resolve()
         allowed, denied = validate_manifest(manifest, archive)
-        tree, sha = prepare_original(original)
+        tree, sha = prepare_original(original, filtered_mode=(
+            not a.baseline and a.execute
+        ))
         if not root.is_dir() or not output.parent.is_dir():
             raise ValueError("REPLAY_ROOT_OR_OUTPUT_PARENT_MISSING")
         if output.exists():
@@ -213,7 +322,11 @@ def main() -> None:
             transformed = filter_pools(
                 pools, allowed, denied, baseline=a.baseline,
             )
-            hook_observations.append((len(pools[4.0]), len(transformed[4.0])))
+            count = len(transformed[4.0])
+            if (not a.baseline and count != 128) or (a.baseline and count != 146):
+                raise ValueError("REPLAY_CANDIDATE_COUNT_NOT_EXPECTED")
+            hook_observations.append((len(pools[4.0]), count))
+            scope["__t100_v40_expected_candidate_count__"] = count
             if a.probe_only:
                 raise CandidateHookProbeComplete()
             return transformed
@@ -227,6 +340,8 @@ def main() -> None:
         scope = {
             "__name__": "__main__", "__file__": str(original),
             "__t100_v40_prefilter_pools__": hook,
+            "__t100_v40_expected_candidate_count__": 146,
+            "__t100_v40_baseline_mode__": bool(a.baseline),
         }
         try:
             try:
@@ -252,6 +367,7 @@ def main() -> None:
             "status": "LOCAL_REPLAY_PROCESS_RETURNED_REVIEW_OUTPUTS",
             "baseline_candidate_count": hook_observations[0][0],
             "input_candidate_count_after_filter": hook_observations[0][1],
+            "in_memory_fixed_count_adapter": not a.baseline,
             "baseline_mode": a.baseline,
             "output_basename": output.name,
             "portfolio_metric_parity_verified": False,
@@ -269,6 +385,12 @@ def main() -> None:
             "ORIGINAL_CANDIDATE_COUNT_NOT_146", "ORIGINAL_CANDIDATES_NOT_FROZEN",
             "ORIGINAL_CANDIDATE_POOL_TYPE_UNEXPECTED", "UNKNOWN_CANDIDATE_IN_OTHER_FLOOR",
             "FILTER_NOT_APPLIED", "ORIGINAL_POOL_CALL_RUNTIME_DUPLICATED",
+            "FILTERED_REPLAY_SOURCE_LAYOUT_CHANGED",
+            "FILTERED_REPLAY_CANDIDATE_GUARD_UNEXPECTED",
+            "FILTERED_REPLAY_ENDPOINT_LOOP_UNEXPECTED",
+            "FILTERED_REPLAY_PARITY_GUARD_UNEXPECTED",
+            "FILTERED_REPLAY_FIXED_CHECKS_UNVERIFIED",
+            "REPLAY_CANDIDATE_COUNT_NOT_EXPECTED",
             "ORIGINAL_POOL_CALL_RUNTIME_NOT_OBSERVED",
         }
         code = str(exc) if str(exc) in safe else "REPLAY_PREPARATION_OR_LOCAL_RUNTIME_ERROR"
