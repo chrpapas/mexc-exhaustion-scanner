@@ -145,6 +145,10 @@ def filter_pools(pools: Any, allow: set[str], deny: set[str],
     return result
 
 
+class CandidateHookProbeComplete(BaseException):
+    """Expected stop immediately after verifying the candidate filter."""
+
+
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--source", type=Path, required=True)
@@ -154,7 +158,11 @@ def main() -> None:
     p.add_argument("--output", type=Path, required=True)
     p.add_argument("--baseline", action="store_true")
     p.add_argument("--execute", action="store_true")
+    p.add_argument("--probe-only", action="store_true",
+                   help="Stop just after candidate filter, before portfolio replay")
     a = p.parse_args()
+    if a.probe_only and a.execute:
+        p.error("--probe-only cannot be combined with --execute")
     try:
         require_readonly_controls(os.environ)
     except CrossRiskDiagnosticHalted:
@@ -183,12 +191,13 @@ def main() -> None:
             "candidate_symbols_excluded": len(denied),
             "baseline_mode": a.baseline,
             "execute_requested": a.execute,
+            "probe_only": a.probe_only,
             "replay_performed": False,
             "live_authorization": False,
             "mexc_orders_sent": False,
         }
         print(json.dumps(preflight, indent=2, sort_keys=True), flush=True)
-        if not a.execute:
+        if not a.execute and not a.probe_only:
             print("DRY RUN ONLY. ORIGINAL RESEARCH SOURCE AND DATA UNCHANGED.")
             return
 
@@ -205,6 +214,8 @@ def main() -> None:
                 pools, allowed, denied, baseline=a.baseline,
             )
             hook_observations.append((len(pools[4.0]), len(transformed[4.0])))
+            if a.probe_only:
+                raise CandidateHookProbeComplete()
             return transformed
 
         compiled = compile(tree, str(original), "exec")
@@ -218,7 +229,20 @@ def main() -> None:
             "__t100_v40_prefilter_pools__": hook,
         }
         try:
-            exec(compiled, scope, scope)
+            try:
+                exec(compiled, scope, scope)
+            except CandidateHookProbeComplete:
+                if not a.probe_only or len(hook_observations) != 1:
+                    raise ValueError("CANDIDATE_HOOK_PROBE_UNVERIFIED")
+                print(json.dumps({
+                    "status": "V40_FILTERED_CANDIDATE_HOOK_PROBE_PASS",
+                    "candidate_count_before": hook_observations[0][0],
+                    "candidate_count_after": hook_observations[0][1],
+                    "baseline_mode": a.baseline,
+                    "portfolio_replay_performed": False,
+                    "live_authorization": False, "mexc_orders_sent": False,
+                }, indent=2, sort_keys=True))
+                return
         finally:
             sys.argv = before_argv
             sys.path[:] = before_path
