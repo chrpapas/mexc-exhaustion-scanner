@@ -220,6 +220,34 @@ def _result(
             }
             else "NOT_CHECKED"
         ),
+        "mixed_account_private_risk_tier_shape": (
+            mixed.mixed_tier_shape_status
+            if mixed is not None
+            and mixed.mixed_tier_shape_status in {
+                "MIXED_TIER_INPUT_OR_ACCOUNT_SCOPE_UNVERIFIED",
+                "MIXED_TIER_SYMBOL_SCOPES_UNVERIFIED",
+                "MIXED_TIER_CONTRACT_OR_PRIVATE_SHAPE_UNVERIFIED",
+                "MIXED_TIER_UNSUPPORTED_RISK_SCHEDULE",
+                "MIXED_TIER_VENUE_CONTRACT_TERMS_UNVERIFIED",
+                "MIXED_TIER_POSITION_SIDE_OR_MODE_UNVERIFIED",
+                "MIXED_TIER_CURRENT_PRIVATE_SIDE_OR_MODE_UNVERIFIED",
+                "MIXED_TIER_PRIVATE_CURRENT_RATE_FIELDS_UNVERIFIED",
+                "MIXED_TIER_CUSTOM_SCHEDULE_UNVERIFIED",
+                "MIXED_INCREMENTAL_VOLUME_TERMS_OBSERVED_UNMODELED",
+                "MIXED_INCREMENTAL_VOLUME_TERMS_INCOMPLETE",
+                "MIXED_CUSTOM_VOLUME_TERMS_OBSERVED_NONAUTHORIZING",
+                "NOT_CHECKED",
+            }
+            else "NOT_CHECKED"
+        ),
+        "mixed_account_current_private_side_rows_observed": bool(
+            mixed is not None
+            and mixed.mixed_private_current_side_row_observed is True
+        ),
+        "mixed_account_incremental_terms_unmodeled": bool(
+            mixed is not None
+            and mixed.mixed_incremental_terms_present_unmodeled is True
+        ),
         "mixed_account_isolated_cash_drain_bounded": False,
         "mixed_account_cross_wallet_collateral_certified": False,
         "mixed_account_liquidation_certified": False,
