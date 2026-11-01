@@ -22,6 +22,7 @@ from app.t100_live_consistency import (
 )
 from app.t100_live_position_margin_witness import assess_position_margin_witness
 from app.t100_live_position_mode_shape import classify_account_position_modes
+from app.t100_live_mixed_tier_shape import MixedTierShape, assess_mixed_tier_shape
 
 
 @dataclass(frozen=True)
@@ -38,6 +39,9 @@ class MixedAccountObservation:
     # state or a bound on future transfers from available wallet.
     isolated_auto_add_field_status: str = "NOT_CHECKED"
     isolated_auto_add_worst_case_drain_bounded: bool = False
+    mixed_tier_shape_status: str = "NOT_CHECKED"
+    mixed_private_current_side_row_observed: bool = False
+    mixed_incremental_terms_present_unmodeled: bool = False
     # Only static, allowlisted FIELD NAMES. NEVER source values, IDs or symbols.
     changed_position_fields: tuple[str, ...] = ()
     changed_stop_fields: tuple[str, ...] = ()
@@ -72,7 +76,7 @@ def _finite(
 
 def _inspect_frame(
     frame: Any, *, now: int, max_age_ms: int,
-) -> tuple[str, dict[str, Decimal], int, int, int]:
+) -> tuple[str, dict[str, Decimal], int, int, int, str, MixedTierShape]:
     if type(frame) is not CrossRiskRead or type(now) is not int:
         raise ValueError("INVALID_MIXED_FRAME")
     if (
@@ -142,11 +146,16 @@ def _inspect_frame(
     # The isolated im is part of the account-wide positionMargin witness,
     # but cross-wallet collateral is NOT inferred from it or from cashBalance.
     # A separate, independently verified venue collateral model is required.
+    tier = assess_mixed_tier_shape(
+        frame.positions,
+        frame.private_risk_by_symbol,
+        frame.public_contract_by_symbol,
+    )
     return (
         _static_hash(frame), marks, len(frame.positions),
         shape.cross_short_count + shape.cross_long_count,
         shape.isolated_short_count + shape.isolated_long_count,
-        auto_add_status,
+        auto_add_status, tier,
     )
 
 
@@ -263,6 +272,14 @@ async def observe_mixed_margin_account_window(
             fair_price_window_observed=True,
             isolated_margin_reserved_as_separate_observation=b[4] > 0,
             isolated_auto_add_field_status=b[5],
+            mixed_tier_shape_status=b[6].status,
+            mixed_private_current_side_row_observed=(
+                b[6].current_position_side_private_rows_present
+            ),
+            mixed_incremental_terms_present_unmodeled=(
+                b[6].incremental_volume_contracts_observed > 0
+                and b[6].incremental_fields_well_formed
+            ),
         )
     except Exception:
         return blocked("MIXED_ACCOUNT_READ_OR_SCHEMA_UNVERIFIED")
