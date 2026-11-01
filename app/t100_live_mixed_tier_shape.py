@@ -16,6 +16,7 @@ from typing import Any
 @dataclass(frozen=True)
 class MixedTierShape:
     status: str
+    private_current_row_gap: str = "NOT_CHECKED"
     positions_checked: int = 0
     current_position_side_private_rows_present: bool = False
     incremental_volume_contracts_observed: int = 0
@@ -113,15 +114,35 @@ def assess_mixed_tier_shape(
             or _positive(p.get("holdVol")) is None
         ):
             return blocked("MIXED_TIER_POSITION_SIDE_OR_MODE_UNVERIFIED")
-        matching = [
+        # MEXC's current risk_limit response documents positionType and
+        # openType. Classify the missing proof without exposing either side,
+        # margin type, symbol, or venue values in the operator output.
+        side_rows = [
             row for row in private_rows
             if row.get("symbol") == symbol
             and row.get("positionType") == side
-            and row.get("openType") == margin_mode
         ]
-        if len(matching) != 1:
-            return blocked("MIXED_TIER_CURRENT_PRIVATE_SIDE_OR_MODE_UNVERIFIED")
-        row = matching[0]
+        if not side_rows:
+            return blocked(
+                "MIXED_TIER_CURRENT_PRIVATE_SIDE_OR_MODE_UNVERIFIED",
+                private_current_row_gap="PRIVATE_POSITION_SIDE_ROW_ABSENT",
+            )
+        if len(side_rows) != 1:
+            return blocked(
+                "MIXED_TIER_CURRENT_PRIVATE_SIDE_OR_MODE_UNVERIFIED",
+                private_current_row_gap="PRIVATE_POSITION_SIDE_ROWS_AMBIGUOUS",
+            )
+        row = side_rows[0]
+        if type(row.get("openType")) is not int or row["openType"] not in (1, 2):
+            return blocked(
+                "MIXED_TIER_CURRENT_PRIVATE_SIDE_OR_MODE_UNVERIFIED",
+                private_current_row_gap="PRIVATE_MARGIN_MODE_FIELD_UNVERIFIED",
+            )
+        if row["openType"] != margin_mode:
+            return blocked(
+                "MIXED_TIER_CURRENT_PRIVATE_SIDE_OR_MODE_UNVERIFIED",
+                private_current_row_gap="PRIVATE_MARGIN_MODE_MISMATCH",
+            )
         if (
             type(row.get("level")) is not int or row["level"] < 1
             or _positive(row.get("maxVol")) is None
@@ -130,7 +151,10 @@ def assess_mixed_tier_shape(
             or _positive(row.get("maxLeverage")) is None
             or _positive(row.get("leverage")) is None
         ):
-            return blocked("MIXED_TIER_PRIVATE_CURRENT_RATE_FIELDS_UNVERIFIED")
+            return blocked(
+                "MIXED_TIER_PRIVATE_CURRENT_RATE_FIELDS_UNVERIFIED",
+                private_current_row_gap="PRIVATE_CURRENT_RATE_FIELDS_UNVERIFIED",
+            )
         # These are a valid-looking CURRENT risk row, not the worst case
         # across adverse price moves, partial liquidation or a new order.
         if mode == "INCREASE":
@@ -158,6 +182,7 @@ def assess_mixed_tier_shape(
                 return blocked("MIXED_TIER_CUSTOM_SCHEDULE_UNVERIFIED")
 
     return MixedTierShape(
+        private_current_row_gap="CURRENT_SIDE_MODE_ROW_OBSERVED_NONAUTHORIZING",
         status=(
             "MIXED_INCREMENTAL_VOLUME_TERMS_OBSERVED_UNMODELED"
             if incremental and all_incremental_fields else
