@@ -81,6 +81,28 @@ def read_entries(path: Path, capital: int = 2000, cost_bps: int = 100,
     return HistoricalEntries(capital, cost_bps, mode, scenario, equity, symbols)
 
 
+def current_public_status(row: object) -> str:
+    """Current public eligibility only, never private API-key permissions."""
+    if row is None:
+        return "UNLISTED_NOW"
+    if type(row) is not dict:
+        return "API_FLAG_UNKNOWN"
+    api_allowed = row.get("apiAllowed")
+    if api_allowed is False:
+        return "API_DENIED_NOW"
+    if api_allowed is not True:
+        return "API_FLAG_UNKNOWN"
+    if (type(row.get("state")) is not int or row["state"] != 0
+            or type(row.get("futureType")) is not int
+            or row["futureType"] != 1
+            or type(row.get("positionOpenType")) is not int
+            or row["positionOpenType"] not in (2, 3)
+            or row.get("quoteCoin") != "USDT"
+            or row.get("settleCoin") != "USDT"):
+        return "API_ALLOWED_OTHER_RESTRICTION"
+    return "CURRENT_PUBLIC_ELIGIBLE"
+
+
 def compare_current_support(entries: HistoricalEntries, first: object,
                             second: object) -> dict[str, object]:
     """Pure calculation; fail closed if either GET is incomplete or drifting."""
@@ -91,23 +113,7 @@ def compare_current_support(entries: HistoricalEntries, first: object,
     contract_by_symbol = {r["symbol"]: r for r in rows_second}
 
     def classify(symbol: str) -> str:
-        row = contract_by_symbol.get(symbol)
-        if row is None:
-            return "UNLISTED_NOW"
-        api_allowed = row.get("apiAllowed")
-        if api_allowed is False:
-            return "API_DENIED_NOW"
-        if api_allowed is not True:
-            return "API_FLAG_UNKNOWN"
-        if (type(row.get("state")) is not int or row["state"] != 0
-                or type(row.get("futureType")) is not int
-                or row["futureType"] != 1
-                or type(row.get("positionOpenType")) is not int
-                or row["positionOpenType"] not in (2, 3)
-                or row.get("quoteCoin") != "USDT"
-                or row.get("settleCoin") != "USDT"):
-            return "API_ALLOWED_OTHER_RESTRICTION"
-        return "CURRENT_PUBLIC_ELIGIBLE"
+        return current_public_status(contract_by_symbol.get(symbol))
 
     unique = set(entries.symbols)
     status_by_symbol = {sym: classify(sym) for sym in unique}
