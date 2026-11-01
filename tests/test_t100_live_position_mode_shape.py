@@ -71,6 +71,40 @@ class AccountModeShapeTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertIsNone(duplicate.cross_short_count)
 
+    async def test_single_isolated_long_observed_without_two_position_assumption(self):
+        # A single existing manual position can still be LONG/ISOLATED.
+        # This is a shape/economic witness only, never a live-risk permit.
+        x = frame()
+        x.positions[0]["positionType"] = 1
+        x.positions[0]["openType"] = 1
+        private = FakePrivate(x)
+        public = FakePublic(x, fair_ms=1_000_400)
+        result = await run_diagnostic(
+            private=ReadOnlyMexcProbe(private),
+            public=public,
+            clock_ms=iter([
+                1_000_000, 1_000_500, 1_000_700,
+                1_001_000, 1_001_500, 1_001_700,
+                1_002_000, 1_002_500, 1_002_700,
+            ]).__next__,
+        )
+        self.assertEqual(result["failure_code"], "POSITION_NOT_VERIFIED_CROSS_SHORT")
+        self.assertEqual(result["account_position_mode_rows_observed"], 1)
+        self.assertEqual(result["account_isolated_long_positions"], 1)
+        self.assertEqual(result["account_cross_short_positions"], 0)
+        self.assertEqual(
+            result["mixed_account_risk_status"],
+            "MIXED_ACCOUNT_ECONOMIC_BOOKENDS_OBSERVED_NONAUTHORIZING",
+        )
+        self.assertEqual(result["mixed_account_positions_observed"], 1)
+        self.assertEqual(result["mixed_account_private_row_gap"], "PRIVATE_POSITION_SIDE_ROW_ABSENT")
+        self.assertFalse(result["cross_wallet_collateral_certified"])
+        self.assertFalse(result["entry_allowed"])
+        self.assertFalse(result["live_authorization"])
+        self.assertFalse(result["mexc_orders_sent"])
+        self.assertTrue(all(method == "GET" for method, *_ in private.calls + public.calls))
+        self.assertNotIn("TEST_USDT", str(result))
+
     async def test_isolated_manual_position_failure_exposes_mode_not_account_data(self):
         x = frame()
         x.positions[0]["openType"] = 1
