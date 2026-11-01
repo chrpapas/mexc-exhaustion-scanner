@@ -47,6 +47,7 @@ class MixedTierShapeTests(unittest.IsolatedAsyncioTestCase):
             "MIXED_CUSTOM_VOLUME_TERMS_OBSERVED_NONAUTHORIZING",
         )
         self.assertTrue(out.current_position_side_private_rows_present)
+        self.assertEqual(out.private_current_row_gap, "CURRENT_SIDE_MODE_ROW_OBSERVED_NONAUTHORIZING")
         self.assertEqual(out.positions_checked, 2)
         self.assertEqual(out.custom_volume_contracts_observed, 2)
         self.assertFalse(out.risk_tiers_current_certified)
@@ -83,16 +84,40 @@ class MixedTierShapeTests(unittest.IsolatedAsyncioTestCase):
 
     def test_private_position_side_and_margin_must_match(self):
         f = mixed()
+        out = self.classify(f)
         self.assertEqual(
-            self.classify(f).status,
+            out.status,
             "MIXED_TIER_CURRENT_PRIVATE_SIDE_OR_MODE_UNVERIFIED",
         )
+        self.assertEqual(out.private_current_row_gap, "PRIVATE_POSITION_SIDE_ROW_ABSENT")
         f = mixed_with_private_sides()
         f.private_risk_by_symbol["SECOND_USDT"][0]["mmr"] = None
-        self.assertEqual(
-            self.classify(f).status,
-            "MIXED_TIER_PRIVATE_CURRENT_RATE_FIELDS_UNVERIFIED",
+        out = self.classify(f)
+        self.assertEqual(out.status, "MIXED_TIER_PRIVATE_CURRENT_RATE_FIELDS_UNVERIFIED")
+        self.assertEqual(out.private_current_row_gap, "PRIVATE_CURRENT_RATE_FIELDS_UNVERIFIED")
+
+    def test_private_margin_mode_mismatch_and_missing_mode_do_not_authorize(self):
+        f = mixed_with_private_sides()
+        f.private_risk_by_symbol["SECOND_USDT"][0]["openType"] = 2
+        out = self.classify(f)
+        self.assertEqual(out.status, "MIXED_TIER_CURRENT_PRIVATE_SIDE_OR_MODE_UNVERIFIED")
+        self.assertEqual(out.private_current_row_gap, "PRIVATE_MARGIN_MODE_MISMATCH")
+        self.assertFalse(out.live_authorization)
+        f.private_risk_by_symbol["SECOND_USDT"][0].pop("openType")
+        out = self.classify(f)
+        self.assertEqual(out.private_current_row_gap, "PRIVATE_MARGIN_MODE_FIELD_UNVERIFIED")
+        self.assertFalse(out.entry_allowed)
+
+    def test_ambiguous_private_same_side_fails_without_order_permit(self):
+        f = mixed_with_private_sides()
+        f.private_risk_by_symbol["SECOND_USDT"].append(
+            copy.deepcopy(f.private_risk_by_symbol["SECOND_USDT"][0])
         )
+        out = self.classify(f)
+        self.assertEqual(out.private_current_row_gap, "PRIVATE_POSITION_SIDE_ROWS_AMBIGUOUS")
+        self.assertFalse(out.risk_tiers_current_certified)
+        self.assertFalse(out.live_authorization)
+        self.assertNotIn("SECOND_USDT", repr(out))
 
     def test_public_by_value_or_paused_contract_blocks(self):
         f = mixed_with_private_sides()
@@ -127,6 +152,7 @@ class MixedTierShapeTests(unittest.IsolatedAsyncioTestCase):
             "MIXED_INCREMENTAL_VOLUME_TERMS_OBSERVED_UNMODELED",
         )
         self.assertTrue(obs.mixed_private_current_side_row_observed)
+        self.assertEqual(obs.mixed_private_row_gap, "CURRENT_SIDE_MODE_ROW_OBSERVED_NONAUTHORIZING")
         self.assertTrue(obs.mixed_incremental_terms_present_unmodeled)
         self.assertFalse(obs.future_stressed_tiers_certified)
         self.assertFalse(obs.cross_account_collateral_certified)
