@@ -164,10 +164,11 @@ class LiveMexcAdapterContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(body["symbol"], "SIREN_USDT")
         self.assertEqual(body["side"], 3)
         self.assertEqual(body["type"], 5)
-        self.assertEqual(body["openType"], 1)
+        self.assertEqual(body["openType"], 2)  # mandatory CROSS pilot
         self.assertEqual(body["positionMode"], 1)
         self.assertEqual(body["externalOid"], "t100v1eabc")
         self.assertEqual(body["leverage"], 1)
+        self.assertEqual(self.adapter.open_type, 2)
         self.assertEqual(body["stopLossPrice"], "175")
         # Current adapter explicitly uses MEXC type 1 (latest-price trigger).
         # This checks transport shape only, not live stop efficacy or V40 parity.

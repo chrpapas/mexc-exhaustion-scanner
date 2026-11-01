@@ -15,6 +15,7 @@ import json
 import os
 from typing import Any
 
+from app.t100_live_account_reconciliation import assess_account_reconciliation
 from app.t100_live_guards import T100ExecutionControls
 from app.t100_live_inventory_completeness_probe import (
     run_current_inventory_completeness_probe,
@@ -38,6 +39,39 @@ def shareable_current_inventory_report(report: Any) -> dict[str, Any]:
     if not isinstance(counts, dict):
         counts = {}
 
+    # Pure, fail-closed account reconciliation from the SAME coherent
+    # inventory witness. Never interpret manual positions as T100-owned or
+    # allow a caller-controlled recovery flag in this shareable CLI.
+    account = assess_account_reconciliation(
+        payload, durable_nonflat_recovery_verified=False,
+    )
+    allowed_blockers = {
+        "NONFLAT_WITHOUT_OBSERVED_CURRENT_TPSL",
+        "UNRELATED_INFLIGHT_ORDERS_PRESENT",
+        "DURABLE_NONFLAT_RECOVERY_UNVERIFIED",
+        "TPSL_WITHOUT_OBSERVED_OPEN_POSITION",
+    }
+    account_status = account.get("status")
+    safe_statuses = {
+        "ACCOUNT_RECONCILIATION_INPUT_AMBIGUOUS",
+        "ACCOUNT_INVENTORY_NOT_CERTIFIED_STABLE",
+        "ACCOUNT_RECONCILIATION_COUNTS_INVALID",
+        "ACCOUNT_TPSL_COUNT_DRIFT",
+        "UNRELATED_INFLIGHT_ORDERS_PRESENT",
+        "FLAT_ACCOUNT_ORDER_COUNT_NONZERO",
+        "FLAT_ACCOUNT_RECONCILED_NONATOMIC",
+        "NONFLAT_PROTECTION_INVENTORY_INCOHERENT",
+        "NONFLAT_DURABLE_RECOVERY_REQUIRED",
+        "NONFLAT_UNRELATED_ORDER_COUNT_PRESENT",
+        "MANAGED_NONFLAT_ACCOUNT_RECONCILED_NONATOMIC",
+    }
+    diagnostic_blockers = account.get("reconciliation_blockers")
+    if not isinstance(diagnostic_blockers, list):
+        diagnostic_blockers = []
+    diagnostic_blockers = [
+        name for name in diagnostic_blockers
+        if type(name) is str and name in allowed_blockers
+    ]
     allowed_counts = {}
     for key in (
         "sumCount", "limitOrderCount", "stopOrderCount",
@@ -56,6 +90,29 @@ def shareable_current_inventory_report(report: Any) -> dict[str, Any]:
         "live_authorization": False,
         "account_wide_completeness_verified": (
             payload.get("account_wide_completeness_verified") is True
+        ),
+        "account_reconciliation_status": (
+            account_status if account_status in safe_statuses
+            else "ACCOUNT_RECONCILIATION_INPUT_AMBIGUOUS"
+        ),
+        "account_reconciled": account.get("account_reconciled") is True,
+        "observed_nonflat_without_current_tpsl": (
+            account.get("observed_nonflat_without_current_tpsl") is True
+        ),
+        "reconciliation_blockers": diagnostic_blockers,
+        "highest_priority_blocker": (
+            account.get("highest_priority_blocker")
+            if account.get("highest_priority_blocker") in allowed_blockers
+            else "NONE" if (
+                account.get("highest_priority_blocker") == "NONE"
+                and account.get("account_reconciled") is True
+            ) else "NOT_VERIFIED"
+        ),
+        "observed_unrelated_limit_orders": (
+            account["observed_unrelated_limit_orders"]
+            if type(account.get("observed_unrelated_limit_orders")) is int
+            and account["observed_unrelated_limit_orders"] >= 0
+            else None
         ),
         "exchange_atomicity_verified": False,
         "before_positions": payload.get("before_positions"),

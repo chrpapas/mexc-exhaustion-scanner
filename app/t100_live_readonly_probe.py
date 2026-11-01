@@ -218,6 +218,41 @@ class ReadOnlyMexcProbe:
             raise VenueReadHalted("FUNDING_PAGE_ROWS_UNVERIFIED")
         return raw
 
+    async def raw_order_by_external_oid(
+        self, symbol: str, external_oid: str,
+    ) -> dict[str, Any] | None:
+        """Exact immutable order origin lookup via GET only.
+
+        Reject path-injection, unsupported symbols, empty/mismatched venue
+        responses and unrecognized keys. Missing is UNKNOWN, never NO_FILL.
+        Neither missing orders nor timeouts authorize a new order attempt.
+        """
+        if (
+            type(symbol) is not str
+            or re.fullmatch(r"[A-Z0-9]+_USDT", symbol) is None
+            or type(external_oid) is not str
+            or re.fullmatch(r"[A-Za-z0-9_-]{1,128}", external_oid) is None
+        ):
+            raise VenueReadHalted("EXTERNAL_ORDER_IDENTITY_INVALID")
+        try:
+            raw = await self._client._private_get(
+                f"/api/v1/private/order/external/{symbol}/{external_oid}"
+            )
+        except Exception:
+            raise VenueReadHalted("EXTERNAL_ORDER_GET_FAILED") from None
+        if raw is None:
+            return None
+        if type(raw) is not dict:
+            raise VenueReadHalted("EXTERNAL_ORDER_RESPONSE_INVALID")
+        if (
+            raw.get("symbol") != symbol
+            or raw.get("externalOid") != external_oid
+            or not str(raw.get("orderId") or "").isdigit()
+            or int(str(raw["orderId"])) <= 0
+        ):
+            raise VenueReadHalted("EXTERNAL_ORDER_IDENTITY_MISMATCH")
+        return raw
+
     async def raw_order_by_id(self, order_id: str) -> dict[str, Any]:
         """Read one MEXC futures order by immutable exchange order ID."""
         if (

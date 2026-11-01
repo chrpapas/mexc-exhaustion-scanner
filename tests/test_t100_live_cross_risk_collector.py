@@ -178,6 +178,26 @@ class CollectorTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(result.venue_liquidation_certified)
         self.assertFalse(result.live_authorization)
 
+    async def test_position_assets_reads_are_adjacent_at_both_bookends(self):
+        await self.collector.read()
+        private_paths = [
+            path for method, path, _ in self.private_client.calls
+            if method == "GET"
+        ]
+        p = "/api/v1/private/position/open_positions"
+        a = "/api/v1/private/account/assets"
+        roots = [
+            index for index, (method, path, params)
+            in enumerate(self.private_client.calls)
+            if method == "GET" and path == p and params is None
+        ]
+        self.assertEqual(len(roots), 2)
+        for index in roots:
+            self.assertEqual(self.private_client.calls[index + 1][1], a)
+        self.assertTrue(all(
+            method == "GET" for method, _, _ in self.private_client.calls
+        ))
+
     async def test_post_position_pnl_uses_fresh_post_asset_snapshot(self):
         # MEXC unrealized PNL changes naturally while collecting metadata.
         # A current position must not be paired with STALE aggregate assets.

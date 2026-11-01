@@ -32,6 +32,10 @@ from app.t100_live_four_slot_ledger_reader import (
     CHECKPOINTS_SQL, REVISIONS_SQL, INTENTS_SQL, AMENDMENTS_SQL,
 )
 from app.t100_live_leader_fencing import LeaderLease
+from app.t100_live_shared_account_reservation_scope import (
+    SharedAccountScope, SharedAccountScopeHalted,
+    inspect_shared_account_scope,
+)
 
 
 class FourSlotAttemptHalted(RuntimeError):
@@ -110,15 +114,19 @@ def _validate(
     contract_size: Decimal,
     volume_step: Decimal,
     price_tick: Decimal,
+    shared_scope: SharedAccountScope | None = None,
 ) -> None:
     if not isinstance(intent, EntryIntent) or type(intent.signal_id) is not int or intent.signal_id <= 0:
         raise FourSlotAttemptHalted("ENTRY_INTENT_INVALID")
     if (
         not isinstance(witness, FourSlotSnapshotResult)
-        or witness.status not in {
+        or witness.status not in ({
+            "SHARED_ACCOUNT_MANUAL_ONLY_NONAUTHORIZING",
+            "SHARED_ACCOUNT_MANAGED_PROVENANCE_MATCHED_NONAUTHORIZING",
+        } if shared_scope is not None else {
             "FLAT_OBSERVED_NONAUTHORIZING",
             "NONFLAT_PROVENANCE_MATCHED_NONAUTHORIZING",
-        }
+        })
         or witness.entry_allowed is not False
         or witness.live_authorization is not False
         or not isinstance(witness.ledger_hash, str)
@@ -168,10 +176,39 @@ class PostgresFourSlotAttemptJournal:
         contract_size: Decimal,
         volume_step: Decimal,
         price_tick: Decimal,
+        shared_pre_positions: list[dict[str, Any]] | None = None,
+        shared_pre_stops: list[dict[str, Any]] | None = None,
     ) -> DurableAttemptStage:
+        shared = (
+            shared_pre_positions is not None or shared_pre_stops is not None
+        )
+        try:
+            scope = (
+                inspect_shared_account_scope(
+                    witness, shared_pre_positions, shared_pre_stops,
+                ) if shared else None
+            )
+        except SharedAccountScopeHalted:
+            raise FourSlotAttemptHalted(
+                "FOUR_SLOT_SHARED_ACCOUNT_WITNESS_UNVERIFIED"
+            ) from None
+        if scope is None and witness.status in {
+            "SHARED_ACCOUNT_MANUAL_ONLY_NONAUTHORIZING",
+            "SHARED_ACCOUNT_MANAGED_PROVENANCE_MATCHED_NONAUTHORIZING",
+        }:
+            raise FourSlotAttemptHalted(
+                "FOUR_SLOT_SHARED_ACCOUNT_ROWS_REQUIRED"
+            )
+        if scope is not None and (
+            scope.position_count >= 4 or intent.symbol in scope.all_symbols
+        ):
+            raise FourSlotAttemptHalted(
+                "FOUR_SLOT_SHARED_CAP_OR_SYMBOL_BLOCKED"
+            )
         _validate(
             intent=intent, witness=witness, lease=lease, observed_at=observed_at,
             contract_size=contract_size, volume_step=volume_step, price_tick=price_tick,
+            shared_scope=scope,
         )
         try:
             async with self.pool.acquire() as conn:
@@ -230,11 +267,26 @@ class PostgresFourSlotAttemptJournal:
                             p.symbol: p.position_id for p in witness.recovery.recovered
                         }:
                             raise FourSlotAttemptHalted("FOUR_SLOT_RECOVERY_DRIFT")
-                    if intent.symbol in cp:
+                    if scope is not None and set(cp) != set(scope.owned_symbols):
+                        raise FourSlotAttemptHalted(
+                            "FOUR_SLOT_SHARED_CHECKPOINT_SET_DRIFT"
+                        )
+                    if intent.symbol in cp or (
+                        scope is not None and intent.symbol in scope.manual_symbols
+                    ):
                         raise FourSlotAttemptHalted("FOUR_SLOT_SYMBOL_ALREADY_OPEN")
 
                     reservations = await conn.fetch(RESERVATIONS_SQL)
                     symbols = set(cp)
+                    if scope is not None:
+                        if any(
+                            str(row["symbol"]) in scope.manual_symbols
+                            for row in reservations
+                        ):
+                            raise FourSlotAttemptHalted(
+                                "FOUR_SLOT_SHARED_RESERVED_MANUAL_SYMBOL"
+                            )
+                        symbols |= set(scope.manual_symbols)
                     same = 0
                     for other in reservations:
                         sym, state = str(other["symbol"]), str(other["state"])

@@ -26,6 +26,15 @@ def assess_account_reconciliation(
         "managed_nonflat_account_reconciled": False,
         "account_wide_completeness_verified": False,
         "exchange_atomicity_verified": False,
+        # Independent nonauthorizing risk flags are collected only after
+        # account-wide current-inventory evidence is coherent. They do not
+        # relax the original short-circuit reconciliation gates.
+        "observed_nonflat_without_current_tpsl": False,
+        "observed_unrelated_limit_orders": None,
+        "reconciliation_blockers": [],
+        # A separately prioritized diagnostic, not an alternate admission
+        # status. Existing fail-closed gating and status remain unchanged.
+        "highest_priority_blocker": "NOT_VERIFIED",
         "entry_allowed": False,
         "live_authorization": False,
     }
@@ -87,7 +96,25 @@ def assess_account_reconciliation(
         + counts["planOrderCount"]
         + counts["trackOrderCount"]
     )
+    # Do not allow a benign-looking unrelated limit order to obscure an
+    # observed protection gap in the same coherent account snapshot.
+    # Conversely, no single zero-stop count proves an alternative external
+    # protection mechanism is absent. This is CURRENT native-TP/SL evidence.
+    missing_native = positions > 0 and stops == 0
+    result["observed_nonflat_without_current_tpsl"] = missing_native
+    result["observed_unrelated_limit_orders"] = counts["limitOrderCount"]
     result["unrelated_inflight_orders"] = unrelated
+    blockers = []
+    if missing_native:
+        blockers.append("NONFLAT_WITHOUT_OBSERVED_CURRENT_TPSL")
+    if unrelated:
+        blockers.append("UNRELATED_INFLIGHT_ORDERS_PRESENT")
+    if positions > 0 and durable_nonflat_recovery_verified is not True:
+        blockers.append("DURABLE_NONFLAT_RECOVERY_UNVERIFIED")
+    if positions == 0 and stops > 0:
+        blockers.append("TPSL_WITHOUT_OBSERVED_OPEN_POSITION")
+    result["reconciliation_blockers"] = blockers
+    result["highest_priority_blocker"] = blockers[0] if blockers else "NONE"
     if unrelated:
         result["status"] = "UNRELATED_INFLIGHT_ORDERS_PRESENT"
         return result

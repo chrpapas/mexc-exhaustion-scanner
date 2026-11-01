@@ -30,6 +30,13 @@ from app.t100_live_cross_risk_observation import (
 )
 from app.t100_live_guards import T100ExecutionControls
 from app.t100_live_readonly_probe import ReadOnlyMexcProbe
+from app.t100_live_pnl_pair_recheck import (
+    PnlPairRecheck, recheck_pnl_pair_readonly,
+)
+from app.t100_live_position_mode_shape import PositionModeShape
+from app.t100_live_mixed_margin_observation import (
+    MixedAccountObservation, observe_mixed_margin_account_window,
+)
 
 
 class CrossRiskDiagnosticHalted(RuntimeError):
@@ -63,6 +70,12 @@ def _result(
     *, status: str, positions: int | None = None,
     witness: Any = None,
     inventory_shape: InventoryShapeObservation | None = None,
+    pnl_recheck: PnlPairRecheck | None = None,
+    original_pnl_failure_code: str = "NONE",
+    full_window_retry_status: str = "NOT_CHECKED",
+    full_window_retry_failure_code: str = "NONE",
+    mixed_observation: MixedAccountObservation | None = None,
+    diagnostic_failure_origin: str = "NONE",
 ) -> dict[str, Any]:
     """Allowlist-only output; never serialize a venue payload."""
     possible = {
@@ -142,10 +155,193 @@ def _result(
         risk_mode, risk_type, risk_fields = (
             "NOT_CHECKED", "NOT_CHECKED", "NOT_CHECKED",
         )
+    pnl = pnl_recheck if type(pnl_recheck) is PnlPairRecheck else None
+    mode = getattr(witness, "position_mode_shape", None)
+    if type(mode) is not PositionModeShape:
+        # This is independently sampled GET-only evidence from two
+        # internally reconciled and stable position/asset pairs, not a
+        # replacement for the full all-account completeness witness.
+        mode = getattr(pnl, "position_mode_shape", None)
+    if type(mode) is not PositionModeShape:
+        mode = None
+    mode_valid = (
+        mode is not None
+        and mode.status in {
+            "ACCOUNT_ALL_CROSS_SHORT_OBSERVED_NONAUTHORIZING",
+            "ACCOUNT_MIXED_SIDE_OR_MARGIN_OBSERVED_NONAUTHORIZING",
+        }
+    )
+    mixed = (
+        mixed_observation
+        if type(mixed_observation) is MixedAccountObservation else None
+    )
+    # Fixed local code only. Do not echo exception type, string, URL or payload.
+    safe_origins = {
+        "NONE", "COLLECTOR_SETUP", "PRIMARY_WINDOW",
+        "INVENTORY_SHAPE", "REPORT_BUILD",
+        "CLIENT_IMPORT", "CLIENT_INIT", "READ_PIPELINE",
+        "CLIENT_CLOSE", "CLI_RUNTIME",
+    }
+    origin = (
+        diagnostic_failure_origin
+        if type(diagnostic_failure_origin) is str
+        and diagnostic_failure_origin in safe_origins else "NONE"
+    )
     return {
+        "diagnostic_failure_origin": origin,
+        "mixed_account_risk_status": (
+            mixed.status if mixed is not None else "NOT_CHECKED"
+        ),
+        "mixed_account_positions_observed": (
+            mixed.positions_observed if mixed is not None else None
+        ),
+        "mixed_account_cross_positions_observed": (
+            mixed.cross_margin_positions if mixed is not None else None
+        ),
+        "mixed_account_isolated_positions_observed": (
+            mixed.isolated_margin_positions if mixed is not None else None
+        ),
+        "mixed_account_economic_parity_observed": bool(
+            mixed is not None and mixed.economic_parity_observed is True
+        ),
+        "mixed_account_critical_inventory_stable": bool(
+            mixed is not None and mixed.stable_critical_inventory is True
+        ),
+        "mixed_account_drift_position_fields": (
+            list(mixed.changed_position_fields) if mixed is not None else []
+        ),
+        "mixed_account_drift_stop_fields": (
+            list(mixed.changed_stop_fields) if mixed is not None else []
+        ),
+        "mixed_account_drift_asset_fields": (
+            list(mixed.changed_asset_fields) if mixed is not None else []
+        ),
+        "mixed_account_drift_private_risk_schedule": bool(
+            mixed is not None and mixed.private_risk_schedule_changed
+        ),
+        "mixed_account_drift_public_contract_terms": bool(
+            mixed is not None and mixed.public_contract_terms_changed
+        ),
+        "mixed_account_isolated_auto_add_field": (
+            mixed.isolated_auto_add_field_status
+            if mixed is not None
+            and mixed.isolated_auto_add_field_status in {
+                "MEXC_AUTO_ADD_FIELD_TRUE_SEMANTICS_UNVERIFIED",
+                "MEXC_AUTO_ADD_FIELD_FALSE_SEMANTICS_UNVERIFIED",
+                "MEXC_AUTO_ADD_FIELD_MISSING_OR_UNVERIFIED",
+                "MEXC_ISOLATED_POSITION_SCOPE_UNVERIFIED",
+                "NOT_CHECKED",
+            }
+            else "NOT_CHECKED"
+        ),
+        "mixed_account_private_risk_tier_shape": (
+            mixed.mixed_tier_shape_status
+            if mixed is not None
+            and mixed.mixed_tier_shape_status in {
+                "MIXED_TIER_INPUT_OR_ACCOUNT_SCOPE_UNVERIFIED",
+                "MIXED_TIER_SYMBOL_SCOPES_UNVERIFIED",
+                "MIXED_TIER_CONTRACT_OR_PRIVATE_SHAPE_UNVERIFIED",
+                "MIXED_TIER_UNSUPPORTED_RISK_SCHEDULE",
+                "MIXED_TIER_VENUE_CONTRACT_TERMS_UNVERIFIED",
+                "MIXED_TIER_POSITION_SIDE_OR_MODE_UNVERIFIED",
+                "MIXED_TIER_CURRENT_PRIVATE_SIDE_OR_MODE_UNVERIFIED",
+                "MIXED_TIER_PRIVATE_CURRENT_RATE_FIELDS_UNVERIFIED",
+                "MIXED_TIER_CUSTOM_SCHEDULE_UNVERIFIED",
+                "MIXED_INCREMENTAL_VOLUME_TERMS_OBSERVED_UNMODELED",
+                "MIXED_INCREMENTAL_VOLUME_TERMS_INCOMPLETE",
+                "MIXED_CUSTOM_VOLUME_TERMS_OBSERVED_NONAUTHORIZING",
+                "NOT_CHECKED",
+            }
+            else "NOT_CHECKED"
+        ),
+        "mixed_account_private_row_gap": (
+            mixed.mixed_private_row_gap
+            if mixed is not None and mixed.mixed_private_row_gap in {
+                "PRIVATE_POSITION_SIDE_ROW_ABSENT",
+                "PRIVATE_POSITION_SIDE_ROWS_AMBIGUOUS",
+                "PRIVATE_MARGIN_MODE_FIELD_UNVERIFIED",
+                "PRIVATE_MARGIN_MODE_MISMATCH",
+                "PRIVATE_CURRENT_RATE_FIELDS_UNVERIFIED",
+                "CURRENT_SIDE_MODE_ROW_OBSERVED_NONAUTHORIZING",
+                "NOT_CHECKED",
+            }
+            else "NOT_CHECKED"
+        ),
+        "mixed_account_current_private_side_rows_observed": bool(
+            mixed is not None
+            and mixed.mixed_private_current_side_row_observed is True
+        ),
+        "mixed_account_incremental_terms_unmodeled": bool(
+            mixed is not None
+            and mixed.mixed_incremental_terms_present_unmodeled is True
+        ),
+        "mixed_account_isolated_cash_drain_bounded": False,
+        "mixed_account_cross_wallet_collateral_certified": False,
+        "mixed_account_liquidation_certified": False,
         "status": safe_status,
         "failure_stage": stage,
         "failure_code": code,
+        "account_position_mode_shape_status": (
+            mode.status if mode is not None else "NOT_CHECKED"
+        ),
+        "account_cross_short_positions": (
+            mode.cross_short_count if mode_valid else None
+        ),
+        "account_cross_long_positions": (
+            mode.cross_long_count if mode_valid else None
+        ),
+        "account_isolated_short_positions": (
+            mode.isolated_short_count if mode_valid else None
+        ),
+        "account_isolated_long_positions": (
+            mode.isolated_long_count if mode_valid else None
+        ),
+        "account_position_mode_rows_observed": (
+            mode.total_positions_observed if mode_valid else None
+        ),
+        "account_position_mode_observation_authorizing": False,
+        "pnl_pair_recheck_status": (
+            pnl.status if pnl is not None else "NOT_CHECKED"
+        ),
+        "initial_pnl_window_failure_code": (
+            original_pnl_failure_code
+            if original_pnl_failure_code in {
+                "COLLECTOR_PRE_UNREALIZED_PNL_MISMATCH",
+                "COLLECTOR_POST_UNREALIZED_PNL_MISMATCH",
+            }
+            else "NONE"
+        ),
+        "pnl_full_window_retry_status": (
+            full_window_retry_status
+            if full_window_retry_status in possible else "NOT_CHECKED"
+        ),
+        "pnl_full_window_retry_failure_code": (
+            full_window_retry_failure_code
+            if full_window_retry_failure_code
+            in SAFE_COLLECTOR_FAILURE_CODES | SAFE_FRAME_FAILURE_CODES
+            | {"NONE", "UNCLASSIFIED_READ_OR_EVIDENCE_FAILURE"}
+            else "NONE"
+        ),
+        "pnl_pair_recheck_pairs_observed": (
+            pnl.pairs_observed if pnl is not None else 0
+        ),
+        "pnl_pair_recheck_positions_stable": (
+            pnl.positions_stable_across_pairs if pnl is not None else False
+        ),
+        "pnl_pair_recheck_position_pnl_moved": (
+            pnl.position_unrealized_moved_across_pairs
+            if pnl is not None else False
+        ),
+        "pnl_pair_recheck_asset_pnl_moved": (
+            pnl.asset_unrealized_moved_across_pairs
+            if pnl is not None else False
+        ),
+        "pnl_pair_recheck_first_pair_matched": (
+            pnl.first_pair_reconciled if pnl is not None else False
+        ),
+        "pnl_pair_recheck_second_pair_matched": (
+            pnl.second_pair_reconciled if pnl is not None else False
+        ),
         "risk_schedule_mode": risk_mode,
         "risk_schedule_type": risk_type,
         "risk_schedule_fields": risk_fields,
@@ -192,11 +388,13 @@ async def run_diagnostic(
     """Dependency-injected diagnostics can be tested without HTTP or secrets."""
     if not (type(timeout_seconds) in (int, float) and 0 < timeout_seconds <= 60):
         return _result(status="RISK_DIAGNOSTIC_GET_FAILED")
+    origin = "COLLECTOR_SETUP"
     try:
         reader = MexcReadOnlyCrossRiskCollector(
             private=private, public=public,
             clock_ms=clock_ms, max_frame_ms=5000,
         )
+        origin = "PRIMARY_WINDOW"
         report = await asyncio.wait_for(
             observe_cross_risk_window(
                 reader, now_ms=clock_ms,
@@ -215,22 +413,132 @@ async def run_diagnostic(
             # positions, or a different number of TP/SL rows. A separate
             # bounded GET-only diagnostic distinguishes those cases without
             # weakening the V40 risk/ownership gates.
+            origin = "INVENTORY_SHAPE"
             shape = await asyncio.wait_for(
                 observe_inventory_shape(private),
                 timeout=min(timeout_seconds, 15.0),
             )
+        # A transient PNL mismatch is investigated with two strict paired
+        # GETs, then ONE complete new two-frame cross-risk window. Never
+        # invent a tolerance or reuse the original inconsistent snapshot.
+        # A later successfully checked window is fresh, but NONAUTHORIZING.
+        pnl_recheck = None
+        original_pnl_code = "NONE"
+        full_retry_status = "NOT_CHECKED"
+        full_retry_code = "NONE"
+        if (
+            report.status == "CROSS_RISK_READ_OR_EVIDENCE_UNVERIFIED"
+            and report.failure_stage in {"READ_FIRST", "READ_SECOND"}
+            and report.failure_code in {
+                "COLLECTOR_PRE_UNREALIZED_PNL_MISMATCH",
+                "COLLECTOR_POST_UNREALIZED_PNL_MISMATCH",
+            }
+        ):
+            try:
+                pnl_recheck = await asyncio.wait_for(
+                    recheck_pnl_pair_readonly(private),
+                    timeout=min(timeout_seconds, 8.0),
+                )
+            except Exception:
+                pnl_recheck = PnlPairRecheck(
+                    status="PNL_RECHECK_READ_OR_SCHEMA_UNVERIFIED",
+                )
+        if (
+            pnl_recheck is not None
+            and pnl_recheck.status == "PNL_RECHECK_TWO_PAIRS_MATCH_NONAUTHORIZING"
+            and pnl_recheck.positions_stable_across_pairs is True
+            and pnl_recheck.position_unrealized_moved_across_pairs is False
+            and pnl_recheck.asset_unrealized_moved_across_pairs is False
+        ):
+            original_pnl_code = report.failure_code
+            try:
+                fresh = await asyncio.wait_for(
+                    observe_cross_risk_window(
+                        reader, now_ms=clock_ms,
+                        max_age_ms=5000, max_separation_ms=5000,
+                    ),
+                    timeout=min(timeout_seconds, 15.0),
+                )
+                full_retry_status = fresh.status
+                full_retry_code = fresh.failure_code
+                # The fresh window is independently checked under the
+                # original strict gates. A next-stage risk-tier/contract
+                # rejection is useful; a new GET failure is not evidence
+                # that the original PNL discrepancy was resolved.
+                if (
+                    fresh.status == "CURRENT_CROSS_RISK_OBSERVED_NONAUTHORIZING"
+                    or fresh.failure_stage in {"VALIDATE_FIRST", "VALIDATE_SECOND"}
+                ):
+                    report = fresh
+            except Exception:
+                full_retry_status = "RISK_DIAGNOSTIC_GET_FAILED"
+                full_retry_code = "NONE"
+                # Keep the original failure if the follow-up could not run.
+        # The original all-CROSS-SHORT stress gate cannot model isolated
+        # long manual exposure. Run a separate full-account ECONOMIC/SHAPE
+        # observation; never reinterpret success as cross-collateral safety.
+        mixed = None
+        mode = getattr(report, "position_mode_shape", None)
+        if (
+            type(mode) is not PositionModeShape
+            and pnl_recheck is not None
+            and pnl_recheck.status == "PNL_RECHECK_TWO_PAIRS_MATCH_NONAUTHORIZING"
+            and pnl_recheck.positions_stable_across_pairs is True
+        ):
+            mode = pnl_recheck.position_mode_shape
+        if (
+            report.status == "CROSS_RISK_READ_OR_EVIDENCE_UNVERIFIED"
+            and (
+                report.failure_code == "POSITION_NOT_VERIFIED_CROSS_SHORT"
+                or (
+                    original_pnl_code in {
+                        "COLLECTOR_PRE_UNREALIZED_PNL_MISMATCH",
+                        "COLLECTOR_POST_UNREALIZED_PNL_MISMATCH",
+                    }
+                    and full_retry_status !=
+                        "CURRENT_CROSS_RISK_OBSERVED_NONAUTHORIZING"
+                )
+            )
+            and type(mode) is PositionModeShape
+            and mode.status ==
+                "ACCOUNT_MIXED_SIDE_OR_MARGIN_OBSERVED_NONAUTHORIZING"
+        ):
+            try:
+                mixed = await asyncio.wait_for(
+                    observe_mixed_margin_account_window(
+                        reader, now_ms=clock_ms,
+                        max_age_ms=5000, max_separation_ms=5000,
+                    ),
+                    timeout=min(timeout_seconds, 15.0),
+                )
+            except Exception:
+                mixed = MixedAccountObservation(
+                    status="MIXED_ACCOUNT_READ_OR_SCHEMA_UNVERIFIED"
+                )
+        origin = "REPORT_BUILD"
         return _result(
             status=report.status,
             positions=report.observed_positions,
             witness=report,
             inventory_shape=shape,
+            pnl_recheck=pnl_recheck,
+            original_pnl_failure_code=original_pnl_code,
+            full_window_retry_status=full_retry_status,
+            full_window_retry_failure_code=full_retry_code,
+            mixed_observation=mixed,
         )
     except asyncio.TimeoutError:
-        return _result(status="RISK_DIAGNOSTIC_GET_TIMED_OUT")
+        return _result(
+            status="RISK_DIAGNOSTIC_GET_TIMED_OUT",
+            diagnostic_failure_origin=origin,
+        )
     except Exception:
         # Never expose URL, account identifiers, exception messages,
         # hidden endpoint data, or raw venue payloads.
-        return _result(status="RISK_DIAGNOSTIC_GET_FAILED")
+        return _result(
+            status="RISK_DIAGNOSTIC_GET_FAILED",
+            diagnostic_failure_origin=origin,
+        )
 
 
 async def _main(*, environ: Mapping[str, str] | None = None) -> dict[str, Any]:
@@ -243,29 +551,54 @@ async def _main(*, environ: Mapping[str, str] | None = None) -> dict[str, Any]:
     if not key or not secret:
         return _result(status="RISK_DIAGNOSTIC_CREDENTIALS_MISSING")
 
-    # Import actual network client only AFTER preflight; no mutation methods
-    # are invoked or passed into the read-only collector.
-    from app.mexc_trade import MexcTradeClient
-    client = MexcTradeClient(
-        "https://api.mexc.com", api_key=key, api_secret=secret,
-    )
+    # Keep local runtime import, constructor, read, and cleanup distinct.
+    # All failures are redacted fixed origin codes, never exception strings.
+    try:
+        from app.mexc_trade import MexcTradeClient
+    except Exception:
+        return _result(
+            status="RISK_DIAGNOSTIC_GET_FAILED",
+            diagnostic_failure_origin="CLIENT_IMPORT",
+        )
+    try:
+        client = MexcTradeClient(
+            "https://api.mexc.com", api_key=key, api_secret=secret,
+        )
+    except Exception:
+        return _result(
+            status="RISK_DIAGNOSTIC_GET_FAILED",
+            diagnostic_failure_origin="CLIENT_INIT",
+        )
     try:
         probe = ReadOnlyMexcProbe(client)
-        return await run_diagnostic(
+        report = await run_diagnostic(
             private=probe, public=client.client,
             clock_ms=lambda: int(time.time() * 1000),
         )
     except Exception:
-        return _result(status="RISK_DIAGNOSTIC_GET_FAILED")
-    finally:
+        report = _result(
+            status="RISK_DIAGNOSTIC_GET_FAILED",
+            diagnostic_failure_origin="READ_PIPELINE",
+        )
+    # A failing close must not erase an earlier report without classification,
+    # or silently count as successful cleanup.
+    try:
         await client.close()
-
+    except Exception:
+        return _result(
+            status="RISK_DIAGNOSTIC_GET_FAILED",
+            diagnostic_failure_origin="CLIENT_CLOSE",
+        )
+    return report
 
 def cli() -> None:
     try:
         result = asyncio.run(_main())
     except Exception:
-        result = _result(status="RISK_DIAGNOSTIC_GET_FAILED")
+        result = _result(
+            status="RISK_DIAGNOSTIC_GET_FAILED",
+            diagnostic_failure_origin="CLI_RUNTIME",
+        )
     print(json.dumps(result, sort_keys=True, indent=2))
     print("PRIVATE/PUBLIC GET ONLY; NO ORDERS; LIVE TRADING DISABLED.")
     if result["status"] != "CURRENT_CROSS_RISK_OBSERVED_NONAUTHORIZING":
