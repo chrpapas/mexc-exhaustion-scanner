@@ -16,6 +16,7 @@ import hashlib
 import io
 import json
 import os
+import re
 from pathlib import Path
 from typing import Any
 from zipfile import ZipFile
@@ -30,6 +31,7 @@ from scripts.v40_backtest_api_coverage import (
 )
 
 PINNED_SHA256 = "2918f4589e8d564ca55b6f24aa2e9a868b5d214653ad7d92acaf1729fd1e4cb5"
+_SYMBOL = re.compile(r"[A-Z0-9]+_USDT\\Z")
 
 
 def _hash_file(path: Path) -> str:
@@ -65,9 +67,7 @@ def prepare_manifest(
     candidate_symbols: set[str] = set()
     for row in candidates:
         symbol, timestamp = row.get("symbol"), row.get("entry_ts")
-        if (type(symbol) is not str or not symbol.endswith("_USDT")
-                or not symbol.replace("_USDT", "").isalnum()
-                or not symbol.replace("_USDT", "").isupper()
+        if (type(symbol) is not str or _SYMBOL.fullmatch(symbol) is None
                 or type(timestamp) is not str or not timestamp.isdigit()):
             raise ValueError("CANDIDATE_SCHEMA_INVALID")
         key = (symbol, timestamp)
@@ -93,12 +93,6 @@ def prepare_manifest(
     eligible_entry_count = sum(s in set(supported) for s in entries.symbols)
     if eligible_entry_count != baseline_coverage["currently_eligible_entries"]:
         raise ValueError("ENTRY_COHORT_COVERAGE_CONTRADICTION")
-    if require_pinned and (baseline_coverage["currently_eligible_entries"] != 97
-                           or baseline_coverage["currently_eligible_unique"] != 75):
-        # The public universe is live, so changed values must be investigated,
-        # not silently assumed to remain at the user's prior snapshot.
-        # Do not block such changes: report them as current data.
-        pass
     local_manifest = {
         "type": "V40_CURRENT_PUBLIC_API_CANDIDATE_PREFILTER",
         "archive_sha256": sha,
