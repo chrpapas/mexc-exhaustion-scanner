@@ -194,8 +194,15 @@ def main() -> None:
         # An explicit opt-in triggers the archived local research engine,
         # isolated by a new, unused output path.
         # It does not import the MEXC trade adapter.
+        hook_observations: list[tuple[int, int]] = []
         def hook(pools: Any) -> Any:
-            return filter_pools(pools, allowed, denied, baseline=a.baseline)
+            if len(hook_observations) >= 1:
+                raise ValueError("ORIGINAL_POOL_CALL_RUNTIME_DUPLICATED")
+            transformed = filter_pools(
+                pools, allowed, denied, baseline=a.baseline,
+            )
+            hook_observations.append((len(pools[4.0]), len(transformed[4.0])))
+            return transformed
 
         compiled = compile(tree, str(original), "exec")
         before_argv, before_path = sys.argv[:], sys.path[:]
@@ -212,8 +219,12 @@ def main() -> None:
         finally:
             sys.argv = before_argv
             sys.path[:] = before_path
+        if len(hook_observations) != 1:
+            raise ValueError("ORIGINAL_POOL_CALL_RUNTIME_NOT_OBSERVED")
         print(json.dumps({
             "status": "LOCAL_REPLAY_PROCESS_RETURNED_REVIEW_OUTPUTS",
+            "baseline_candidate_count": hook_observations[0][0],
+            "input_candidate_count_after_filter": hook_observations[0][1],
             "baseline_mode": a.baseline,
             "output_basename": output.name,
             "portfolio_metric_parity_verified": False,
@@ -230,7 +241,8 @@ def main() -> None:
             "OUTPUT_COLLIDES_WITH_SOURCE", "ORIGINAL_CANDIDATE_POOLS_UNEXPECTED",
             "ORIGINAL_CANDIDATE_COUNT_NOT_146", "ORIGINAL_CANDIDATES_NOT_FROZEN",
             "ORIGINAL_CANDIDATE_POOL_TYPE_UNEXPECTED", "UNKNOWN_CANDIDATE_IN_OTHER_FLOOR",
-            "FILTER_NOT_APPLIED",
+            "FILTER_NOT_APPLIED", "ORIGINAL_POOL_CALL_RUNTIME_DUPLICATED",
+            "ORIGINAL_POOL_CALL_RUNTIME_NOT_OBSERVED",
         }
         code = str(exc) if str(exc) in safe else "REPLAY_PREPARATION_OR_LOCAL_RUNTIME_ERROR"
         print(json.dumps({
