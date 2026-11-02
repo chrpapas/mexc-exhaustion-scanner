@@ -154,6 +154,7 @@ class StopUpdatePersistencePipeline:
                 amendment,
                 before_stops=before_stops,
                 after_stops=after_stops,
+                position_quantity=previous.contracts,
                 finished_stops=finished_stops,
             )
         )
@@ -191,6 +192,7 @@ class StopUpdatePersistencePipeline:
             await self.amendments.reconcile_current_outcome(
                 amendment,
                 current_stops=current_stops,
+                position_quantity=previous.contracts,
                 finished_stops=finished_stops,
             )
         )
