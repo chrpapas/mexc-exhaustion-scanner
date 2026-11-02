@@ -100,6 +100,7 @@ def stop(**kw):
         "positionId": "10",
         "symbol": "SIREN_USDT",
         "state": 1,
+        "positionType": 2,
         "isFinished": 0,
         "stopLossPrice": D("175"),
         "vol": D("20"),
@@ -227,6 +228,9 @@ class StopUpdatePipelineTests(unittest.IsolatedAsyncioTestCase):
             stop(stopLossPrice=D("90"), state=2),
             stop(stopLossPrice=D("90"), vol=None),
             stop(stopLossPrice=D("90"), vol=D("19.99")),
+            stop(stopLossPrice=D("90"), positionType=1),
+            stop(stopLossPrice=D("90"), positionType=True),
+            stop(stopLossPrice=D("90"), positionType=None),
         ):
             with self.subTest(bad=bad):
                 await self.asyncSetUp()
