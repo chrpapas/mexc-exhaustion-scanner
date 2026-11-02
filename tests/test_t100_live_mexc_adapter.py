@@ -249,7 +249,10 @@ class LiveMexcAdapterContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(rows), 1)
         self.assertEqual(self.client.open_stop_calls, ["SIREN_USDT"])
 
-    async def test_legacy_send_then_read_verifies_without_second_post(self):
+    async def test_legacy_send_then_read_stop_mutation_is_unconditionally_disabled(self):
+        # Historical helper had no durable journal fencing and could mutate
+        # a stop outside exactly-once-attempt orchestration. Refuse it even
+        # when a test constructs an otherwise certified permit.
         self.client.current_stops = [{
             "id": 99,
             "positionId": 10,
@@ -257,31 +260,18 @@ class LiveMexcAdapterContractTests(unittest.IsolatedAsyncioTestCase):
             "state": 1,
             "stopLossPrice": "89",
         }]
-        await self.adapter.tighten_native_short_stop(
-            symbol="SIREN_USDT",
-            stop_order_id=99,
-            position_id=10,
-            previous_stop_price="175",
-            new_stop_price="90",
-            permit=permit(),
-        )
-        self.assertEqual(len(self.client.posts), 1)
-        self.assertEqual(self.client.open_stop_calls, ["SIREN_USDT"])
-
-    async def test_legacy_send_then_read_fails_if_current_stop_not_verified(self):
-        self.client.current_stops = []
-        with self.assertRaisesRegex(
-            RuntimeError, "NATIVE_STOP_MODIFICATION_UNVERIFIED"
-        ):
-            await self.adapter.tighten_native_short_stop(
-                symbol="SIREN_USDT",
-                stop_order_id=99,
-                position_id=10,
-                previous_stop_price="175",
-                new_stop_price="90",
-                permit=permit(),
-            )
-        self.assertEqual(len(self.client.posts), 1)
+        for active_permit in (permit(), None):
+            with self.subTest(active_permit=active_permit is not None):
+                with self.assertRaisesRegex(
+                    RuntimeError, "LEGACY_STOP_MUTATION_REQUIRES_DURABLE_JOURNAL",
+                ):
+                    await self.adapter.tighten_native_short_stop(
+                        symbol="SIREN_USDT", stop_order_id=99,
+                        position_id=10, previous_stop_price="175",
+                        new_stop_price="90", permit=active_permit,
+                    )
+                self.assertEqual(self.client.posts, [])
+                self.assertEqual(self.client.open_stop_calls, [])
 
 
 if __name__ == "__main__":
