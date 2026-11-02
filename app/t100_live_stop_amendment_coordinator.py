@@ -81,8 +81,14 @@ class StopAmendmentLifecycleCoordinator:
 
     async def mark_submitting(self, amendment: StopAmendment) -> str:
         state = await self._state(amendment)
+        # Never regard an already-SUBMITTING journal as our CAS victory.
+        # Another worker may have changed PREPARED -> SUBMITTING between the
+        # caller's first read and this one. Returning success would allow a
+        # second real stop mutation POST for the same durable amendment.
         if state == "SUBMITTING":
-            return "SUBMITTING"
+            raise StopAmendmentCoordinatorHalted(
+                "STOP_SUBMISSION_ALREADY_STARTED_RECONCILE_ONLY"
+            )
         if state != "PREPARED":
             raise StopAmendmentCoordinatorHalted(
                 "STOP_SUBMISSION_REQUIRES_PREPARED"
