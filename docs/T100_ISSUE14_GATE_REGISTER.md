@@ -305,3 +305,56 @@ simulator using independent portfolio state. It still starts from prescribed
 admission events: skipped/rejected candidates, absent fills and full autonomous
 runtime are not certified. Snapshot lots are research assumptions, not current
 account permission. The previous lot-audit head 75672c3b passed all five CI checks.
+
+## 2026-11-02 — GET-backed protected finalization and real PostgreSQL termination evidence
+
+Development branch `codex/t100-readiness-issue-14`, tested head
+`4688cfddcb6b7122e5e1195374bb5d6ff02f53f4`. This evidence
+supersedes earlier claims that GET-to-disposable-PostgreSQL linkage was absent.
+
+- Added `app/t100_live_four_slot_protected_get_evidence.py` and read-only
+  `inspect_staged_four_slot_prepared_get_only`. For **already staged**
+  SUBMITTING attempts, it gathers two full-account position/stop, exact-origin
+  order, complete order-deal and completeness GET bookends. It rejects
+  unresolved order origins, changed fills, duplicate/missing/partial deals,
+  unmatched stops and drift, and **only prepares an offline bundle**.
+  Nothing in this bridge retries a venue POST, grants a permit, persists an
+  ACK, edits a stop or touches the production database.
+- `tests/test_t100_live_four_slot_simulated_lifecycle.py` now tests staged
+  journal -> verified GET bridge -> rollback-capable fake-DB atomic commit ->
+  independently reconstructed four-position restart, with crashes, UNKNOWN,
+  stale fencing and all seven injected commit write failures.
+- `tests/test_t100_live_v40_postgres_integration.py` additionally consumes a
+  **fresh mock PRIVATE GET-backed bundle** and writes it through the actual
+  `PostgresProtectedV40Commit` under disposable PostgreSQL 16. Missing
+  orders, unavailable or partial deal history, missing stops and GET timeouts
+  never mutate the database. Exact persisted fill digest and duplicate-commit
+  refusal are checked.
+- One more CI-only test **terminates the actual PostgreSQL backend during
+  checkpoint INSERT**, after earlier ACK/fill writes inside the transaction.
+  It independently rereads from a fresh connection and verifies exact
+  precommit state is restored. With the trigger removed, protected
+  finalization can proceed without any duplicate simulated exchange order.
+  This is stronger than a controlled SQL `RAISE EXCEPTION` alone.
+- At the above head all FIVE GitHub Actions checks PASS:
+  [isolated PostgreSQL](https://github.com/chrpapas/mexc-exhaustion-scanner/actions/runs/41538175660),
+  [offline safety](https://github.com/chrpapas/mexc-exhaustion-scanner/actions/runs/41538175795),
+  [scanner/trader split](https://github.com/chrpapas/mexc-exhaustion-scanner/actions/runs/41538175602),
+  [promotion](https://github.com/chrpapas/mexc-exhaustion-scanner/actions/runs/41538175697)
+  and [dashboard](https://github.com/chrpapas/mexc-exhaustion-scanner/actions/runs/41538175484).
+
+**Scope:** This closes specific *offline connection-loss rollback* and
+*mock-GET-to-real-isolated-DB* subtasks in G4/G6. It DOES NOT close G4/G5/G6,
+nor certify venue POST/stop create/amend/close, distributed exchange/DB
+atomicity, genuine process crash/restart on Render, full 0–4-slot executor,
+account cross-collateral and current margin tiers, mandatory protected soak,
+or independent reviewer sign-off. Migration 031 remains unapplied in
+production; no service deployed. `LIVE_ADAPTER_STATUS` remains
+`NOT_IMPLEMENTED`; `entry_allowed=false`, `live_authorization=false`,
+`mexc_orders_sent=false`. BOXWAVE untouched.
+
+**Next critical tasks:** true independent current account margin/collateral
+and stop semantics verification (with separately authorized venue
+lifecycle evidence), completed full four-slot runtime transport and
+non-flat recovery, operator-approved **read-only** current-build Render soak,
+and independent release review. Do not bypass these with passing CI.
