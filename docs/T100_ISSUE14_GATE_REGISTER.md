@@ -399,3 +399,47 @@ semantics, exchange/database distributed atomicity, current account exposure
 and collateral, production Render service recovery or real-money safety.
 The live adapter is NOT_IMPLEMENTED, migration 031 is not deployed, and
 independent release review is outstanding. G4/G5/G6/G7/G8/G9 still BLOCK.
+
+## 2026-11-03 — Native-stop duplicate-mutation and protection hardening
+
+Safety-hardening branch `codex/t100-readiness-issue-14`, reviewed tested
+source SHA `c4aa4e88bfe83929b4f4873f2bcfe6fe77465acc`.
+
+1. **Competing stop workers:** `StopAmendmentLifecycleCoordinator.mark_submitting`
+   can NO LONGER report success when it merely sees an already-SUBMITTING
+   state. A worker that loses the durable PREPARED -> SUBMITTING
+   compare-and-swap must reconcile, never POST. Regression test synchronizes
+   two workers at a stale PREPARED read and requires exactly ONE mocked stop
+   mutation request across both, including subsequent restart.
+2. **Unjournaled mutation bypass disabled:** `LiveMexcAdapter.tighten_native_short_stop`
+   (old send-then-read shortcut) now unconditionally raises
+   `LEGACY_STOP_MUTATION_REQUIRES_DURABLE_JOURNAL`, even with a valid
+   test permit. The approved *future* transport interface remains
+   `submit_native_short_stop_tightening`, invoked only by the durable
+   stop executor. Prevents a second unauthorized stop-edit path.
+3. **Before durable stop VERIFIED:** `StopUpdatePersistencePipeline`
+   checks exactly one active, unfinished **SHORT-side** native SL row
+   with effective protective volume equal to the full checkpoint contracts.
+   Checks both pre/post when bookended; checks current row when restarting.
+   Rejects missing/partial/zero volume, inactive/finished or wrong-side stop,
+   preventing a misleading VERIFIED journal before checkpoint rejection.
+4. **Checkpoint ownership bind:** the same pipeline requires an OPEN
+   PositionCheckpoint matching the stop amendment's position ID, symbol,
+   original native stop ID and original stop price **before** the amendment
+   can be marked VERIFIED. Mismatched/REVIEW checkpoints or restarts leave
+   SUBMITTING/UNKNOWN unresolved and do not persist a checkpoint.
+
+All five workflows passed at the tested source SHA:
+[offline safety](https://github.com/chrpapas/mexc-exhaustion-scanner/actions/runs/41543481729),
+[isolated PostgreSQL](https://github.com/chrpapas/mexc-exhaustion-scanner/actions/runs/41543481691),
+[scanner/trader separation](https://github.com/chrpapas/mexc-exhaustion-scanner/actions/runs/41543481709),
+[promotion](https://github.com/chrpapas/mexc-exhaustion-scanner/actions/runs/41543481686),
+[daily dashboard](https://github.com/chrpapas/mexc-exhaustion-scanner/actions/runs/41543481690).
+
+**Evidence boundary:** these are developer safeguards and in-memory concurrent
+test cases; they do NOT prove actual native-stop create/amend/close behavior,
+current MEXC credential rights, account collateral, stop execution under
+gap/liquidation, or a four-slot live runner. They do not close G5/G6.
+Live adapter certification remains NOT_IMPLEMENTED; manual positions are
+untouched. No MEXC POST, Render deploy, production DB write, key change or
+BOXWAVE modification. Production release and real trading remain blocked.
