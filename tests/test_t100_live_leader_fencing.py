@@ -80,8 +80,9 @@ class LeaderFencingTests(unittest.IsolatedAsyncioTestCase):
         await self.c.require_current(second)
 
     def test_postgres_acquire_fences_expired_same_holder_in_sql(self):
-        from app.t100_live_leader_fencing import PostgresLeaderLeaseStore
         import inspect
+
+        from app.t100_live_leader_fencing import PostgresLeaderLeaseStore
 
         source = inspect.getsource(PostgresLeaderLeaseStore.acquire)
         self.assertIn(
@@ -108,9 +109,8 @@ class LeaderFencingTests(unittest.IsolatedAsyncioTestCase):
 
     def test_ttl_bounds(self):
         for ttl in (0, 14, 121):
-            with self.subTest(ttl=ttl):
-                with self.assertRaises(ValueError):
-                    LeaderLeaseCoordinator(Store(), ttl_seconds=ttl)
+            with self.subTest(ttl=ttl), self.assertRaises(ValueError):
+                LeaderLeaseCoordinator(Store(), ttl_seconds=ttl)
 
 
 if __name__ == "__main__":
@@ -125,6 +125,5 @@ class MalformedLeaseTests(unittest.IsolatedAsyncioTestCase):
         coordinator = LeaderLeaseCoordinator(store)
         lease = await coordinator.acquire("worker")
         for token in (True, 1.0, "1", None):
-            with self.subTest(token=token):
-                with self.assertRaises(LeaderLeaseHalted):
-                    await coordinator.require_current(replace(lease, fencing_token=token))
+            with self.subTest(token=token), self.assertRaises(LeaderLeaseHalted):
+                await coordinator.require_current(replace(lease, fencing_token=token))

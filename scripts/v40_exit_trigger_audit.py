@@ -33,7 +33,7 @@ def audit_position(entry_price, notional, candles, exits, *, start=None, end=Non
     by_time = defaultdict(list)
     for row in exits:
         by_time[timestamp(row['exit_time'])].append(row)
-    counts = dict(candles=0, triggers=0, normal_fills=0, delayed_fills=0, trims=0)
+    counts = {'candles': 0, 'triggers': 0, 'normal_fills': 0, 'delayed_fills': 0, 'trims': 0}
 
     def consume(row, expected_price, expected_reason):
         nonlocal remaining

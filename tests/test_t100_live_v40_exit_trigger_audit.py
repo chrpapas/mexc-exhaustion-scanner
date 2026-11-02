@@ -4,7 +4,7 @@ from scripts.v40_exit_trigger_audit import audit_position
 
 
 def exit_row(time, price, reason, kind='normal_exit', amount='100'):
-    return dict(exit_time=time, exit=str(price), reason=reason, kind=kind, notional=amount)
+    return {'exit_time': time, 'exit': str(price), 'reason': reason, 'kind': kind, 'notional': amount}
 
 
 class ExitTriggerAuditTests(unittest.TestCase):
