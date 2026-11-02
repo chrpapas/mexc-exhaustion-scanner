@@ -60,6 +60,10 @@ def _pos(value: Any) -> D:
     return result
 
 
+def _enum(value: Any, expected: int) -> bool:
+    return type(value) is int and value == expected
+
+
 def _identity(value: Any) -> str:
     if value is None or type(value) is bool:
         raise ValueError("INVALID_ID")
@@ -220,9 +224,11 @@ def assess_staged_protected_attempts(
                 or _pos(p.get("holdAvgPrice")) != previous.entry_price
                 or _pos(s.get("stopLossPrice")) != previous.stop_price
                 or _identity(s.get("id")) != previous.stop_order_id
-                or p.get("positionType") != 2 or p.get("state") != 1
-                or s.get("state") != 1 or s.get("isFinished") != 0
-                or s.get("positionType") != 2
+                or not _enum(p.get("positionType"), 2)
+                or not _enum(p.get("openType"), 2)
+                or not _enum(p.get("state"), 1)
+                or not _enum(s.get("state"), 1) or not _enum(s.get("isFinished"), 0)
+                or not _enum(s.get("positionType"), 2)
                 or effective_protective_quantity(s, position_quantity=previous.contracts) != previous.contracts
             ):
                 return block("ATTEMPT_PREEXISTING_POSITION_CHANGED", **common)
@@ -231,8 +237,8 @@ def assess_staged_protected_attempts(
             order = oid_map[intent.external_oid]
             if (
                 order.get("symbol") != intent.symbol
-                or order.get("side") != 3
-                or order.get("state") != 3
+                or not _enum(order.get("side"), 3)
+                or not _enum(order.get("state"), 3)
                 or _identity(order.get("orderId")) in {
                     _identity(o.get("orderId")) for o in orders
                     if o is not order
@@ -248,9 +254,9 @@ def assess_staged_protected_attempts(
                 return block("ATTEMPT_FILLED_POSITION_OR_STOP_MISSING", **common)
             if (
                 p.get("symbol") != intent.symbol or s.get("symbol") != intent.symbol
-                or p.get("positionType") != 2 or p.get("openType") != 2
-                or p.get("state") != 1 or s.get("state") != 1
-                or s.get("positionType") != 2 or s.get("isFinished") != 0
+                or not _enum(p.get("positionType"), 2) or not _enum(p.get("openType"), 2)
+                or not _enum(p.get("state"), 1) or not _enum(s.get("state"), 1)
+                or not _enum(s.get("positionType"), 2) or not _enum(s.get("isFinished"), 0)
                 or _pos(p.get("holdVol")) != deal
                 or _pos(p.get("holdAvgPrice")) != _pos(order.get("dealAvgPrice"))
                 or _pos(s.get("stopLossPrice")) > _pos(intent.stop_price)

@@ -1,0 +1,34 @@
+{
+  "100": {
+    "status": "EXPORTED_CASHFLOW_AND_OCCUPANCY_AUDIT_PASS",
+    "entries_checked": 108,
+    "exit_cashflows_checked": 128,
+    "fills_checked": 236,
+    "peak_slots": 4,
+    "final_open_slots": 3,
+    "recomputed_fee_and_slippage": "5140.4573769660",
+    "funding_independently_verified": false,
+    "final_equity_independently_verified": false,
+    "drawdown_independently_verified": false,
+    "venue_execution_certified": false,
+    "entry_allowed": false,
+    "live_authorization": false,
+    "mexc_orders_sent": false
+  },
+  "200": {
+    "status": "EXPORTED_CASHFLOW_AND_OCCUPANCY_AUDIT_PASS",
+    "entries_checked": 108,
+    "exit_cashflows_checked": 128,
+    "fills_checked": 236,
+    "peak_slots": 4,
+    "final_open_slots": 3,
+    "recomputed_fee_and_slippage": "8299.2220384736",
+    "funding_independently_verified": false,
+    "final_equity_independently_verified": false,
+    "drawdown_independently_verified": false,
+    "venue_execution_certified": false,
+    "entry_allowed": false,
+    "live_authorization": false,
+    "mexc_orders_sent": false
+  }
+}

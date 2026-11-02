@@ -5,21 +5,15 @@ production gateway. These tests must never use MEXC POST or enable live mode.
 """
 from __future__ import annotations
 
-import copy
 from dataclasses import replace
 from decimal import Decimal as D
 import unittest
 
-from app.t100_live_execution import EntryIntent
-from app.t100_live_four_slot_attempt_journal import DurableAttemptStage
 from app.t100_live_four_slot_attempt_outcome import (
-    assess_staged_protected_attempts, observe_staged_protected_attempts,
-)
-from app.t100_live_four_slot_snapshot_coordinator import (
-    FourSlotSnapshotCoordinator,
+    observe_staged_protected_attempts,
 )
 from tests.test_t100_live_four_slot_snapshot_coordinator import (
-    fixture, Ledger, Venue, Completeness, report,
+    fixture, Venue, Completeness, report,
 )
 import tests.test_t100_live_four_slot_attempt_journal as stage_tests
 
@@ -92,6 +86,27 @@ class ProtectedOutcomeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.venue.order_reads, 2)
         self.assertEqual(self.pg.new_intents[0]["state"], "SUBMITTING")
         self.assertEqual(self.pg.reserved[0]["state"], "SUBMITTING")
+
+    async def test_preexisting_margin_mode_drift_blocks(self):
+        for rows in (self.venue.first_positions, self.venue.last_positions):
+            rows[0]["openType"] = 1
+        self.assertEqual((await self.observe()).status,
+                         "ATTEMPT_PREEXISTING_POSITION_CHANGED")
+
+    async def test_boolean_venue_states_do_not_count_as_integer_enums(self):
+        for index in (0, -1):
+            for collection, field, value in (
+                ("positions", "state", True),
+                ("stops", "state", True),
+                ("stops", "isFinished", False),
+            ):
+                with self.subTest(index=index, collection=collection, field=field):
+                    await self.asyncSetUp()
+                    for prefix in ("first_", "last_"):
+                        getattr(self.venue, prefix + collection)[index][field] = value
+                    result = await self.observe()
+                    self.assertFalse(result.all_staged_attempts_fully_filled_and_protected)
+                    self.assertFalse(result.native_stop_witness_observed)
 
     async def test_partial_fill_is_never_marked_protected(self):
         key = ("FOURTH_USDT", self.intent.external_oid)

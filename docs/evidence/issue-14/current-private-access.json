@@ -1,0 +1,12 @@
+{
+  "status": "POSITIONS_READ_SUCCEEDED",
+  "http_status": 200,
+  "read_only": true,
+  "private_get_only": true,
+  "one_request_maximum": true,
+  "mexc_orders_sent": false,
+  "entry_allowed": false,
+  "live_authorization": false,
+  "account_wide_completeness_certified": false,
+  "venue_liquidation_certified": false
+}

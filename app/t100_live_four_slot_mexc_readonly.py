@@ -12,6 +12,7 @@ already configured GET-only client and an independent SELECT-only ledger.
 from __future__ import annotations
 
 from typing import Any, Sequence
+from copy import deepcopy
 
 from app.t100_live_execution import EntryIntent
 from app.t100_live_four_slot_attempt_journal import DurableAttemptStage
@@ -20,7 +21,7 @@ from app.t100_live_four_slot_attempt_outcome import (
 )
 from app.t100_live_four_slot_snapshot_coordinator import (
     FourSlotSnapshotCoordinator, FourSlotSnapshotResult,
-    LedgerSnapshotReader,
+    LedgerSnapshotReader, _venue_digest,
 )
 from app.t100_live_inventory_completeness_probe import (
     run_current_inventory_completeness_probe,
@@ -35,12 +36,18 @@ class FourSlotMexcReadVenue:
         if not isinstance(probe, ReadOnlyMexcProbe):
             raise TypeError("FOUR_SLOT_GET_PROBE_REQUIRED")
         self.probe = probe
+        self.last_positions = None
+        self.last_stops = None
 
     async def open_positions(self) -> list[dict[str, Any]]:
-        return await self.probe.raw_open_positions()
+        rows = await self.probe.raw_open_positions()
+        self.last_positions = deepcopy(rows)
+        return rows
 
     async def open_stop_orders(self) -> list[dict[str, Any]]:
-        return await self.probe.raw_open_stops()
+        rows = await self.probe.raw_open_stops()
+        self.last_stops = deepcopy(rows)
+        return rows
 
     async def order_by_external_oid(
         self, symbol: str, external_oid: str,
@@ -58,12 +65,17 @@ class FourSlotMexcReadVenue:
 class FourSlotMexcCompleteness:
     """Actual GET-only inventory completeness, not a caller's asserted booleans."""
 
-    def __init__(self, probe: ReadOnlyMexcProbe) -> None:
+    def __init__(self, probe: ReadOnlyMexcProbe, venue: FourSlotMexcReadVenue | None = None) -> None:
         if not isinstance(probe, ReadOnlyMexcProbe):
             raise TypeError("FOUR_SLOT_GET_PROBE_REQUIRED")
         self.probe = probe
+        self.venue = venue
 
     async def inspect(self) -> dict[str, Any]:
+        if (self.venue is None or self.venue.last_positions is None
+                or self.venue.last_stops is None):
+            raise RuntimeError("FOUR_SLOT_COMPLETENESS_UNBOUND")
+        expected = _venue_digest(self.venue.last_positions, self.venue.last_stops)
         result = await run_current_inventory_completeness_probe(self.probe)
         if not isinstance(result, dict):
             raise RuntimeError("FOUR_SLOT_COMPLETENESS_RESPONSE_INVALID")
@@ -74,6 +86,9 @@ class FourSlotMexcCompleteness:
             raise RuntimeError("FOUR_SLOT_GET_ENTRY_ASSERTION_INVALID")
         if result.get("live_authorization") is not False:
             raise RuntimeError("FOUR_SLOT_GET_AUTHORIZATION_ASSERTION_INVALID")
+        if (result.get("account_wide_completeness_verified") is True
+                and result.get("critical_inventory_sha256") != expected):
+            raise RuntimeError("FOUR_SLOT_COMPLETENESS_DIFFERENT_INVENTORY")
         return result
 
 
@@ -81,7 +96,8 @@ def _components(
     client: PrivateGet,
 ) -> tuple[FourSlotMexcReadVenue, FourSlotMexcCompleteness]:
     probe = ReadOnlyMexcProbe(client)
-    return FourSlotMexcReadVenue(probe), FourSlotMexcCompleteness(probe)
+    venue = FourSlotMexcReadVenue(probe)
+    return venue, FourSlotMexcCompleteness(probe, venue)
 
 
 async def inspect_existing_four_slots_get_only(

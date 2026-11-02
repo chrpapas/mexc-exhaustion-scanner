@@ -19,14 +19,14 @@ separate reviewer, and protected operations require the operator.
 
 | ID | Status | Current evidence | Remaining acceptance work |
 |---|---|---|---|
-| G1 Source/strategy parity | FAIL | Fresh original and filtered chronological replays completed. Both 100/200-bps baseline entries, gate decisions and every frozen metric match. Entry audit: 146 candidates, 7,154 prior bars, 648 exact reference notionals, zero discrepancies. | Independently implement/audit full exit/fill/funding paths and four-slot runtime parity; archive has no full exit/fill paths. Resolve broad-suite failures. Original replay rerun is not independent strategy implementation certification. |
-| G2 Current account capabilities | BLOCKED | Existing account observation/risk/eligibility modules and offline tests; dated public filter only. Current process has no MEXC read credentials. | Secure read-only credential availability, fresh complete account/key/contract/collateral inventory, unrelated-position isolation. Do not infer current rights from public eligibility. |
+| G1 Source/strategy parity | FAIL | Fresh original and filtered chronological replays completed. Both 100/200-bps baseline entries, gate decisions and every frozen metric match. Entry audit: 146 candidates, 7,154 prior bars, 648 exact reference notionals, zero discrepancies. | Independently implement/audit full exit/fill/funding paths and four-slot runtime parity; archive has no full exit/fill paths. Broad-suite failures are resolved; independent full decision parity remains. Original replay rerun is not independent strategy implementation certification. |
+| G2 Current account capabilities | BLOCKED | Keychain reads established; stable current account inventory and 98-candidate current public/private risk observations collected. | Complete contract/key capability and collateral certification; resolve unrelated-position/order isolation and cross-mode prerequisite without modifying the current account. Do not infer current rights from public eligibility. |
 | G3 Venue execution/stress | UNKNOWN | Capacity, cross-margin and stop-gap models covered by focused offline suite; historical replay is candle-based. | Observed L2/partial-fill/queue/gap/funding/liquidation/multi-slot conflict evidence and model calibration. Never infer executable capacity from turnover or enable leverage. |
 | G4 Fenced coordinator/journal | FAIL | Reservation, attempt/outcome and protected-commit modules; offline contention/fault tests pass. Migration 031 remains unapplied. | Complete certified runtime transport integration, full runtime transport/privilege certification beyond the isolated PostgreSQL proofs below. No local postgres/Docker available. Production migration requires approval. |
 | G5 Native protection/recovery | BLOCKED | Pure/mock native-stop, checkpoint, trailing and nonflat recovery tests pass. | Independent venue stop create/update/close semantics, no uncovered interval, orphan/ambiguity and 0–4-position lifecycle proofs. Actual mutations require explicit operator approval. Never adopt manual positions. |
 | G6 Fault/restart/interference | FAIL | Focused suite passes reservation contention, UNKNOWN/no retry, stale fencing, drift and restart simulations. | End-to-end runtime crash injection at every durable/venue boundary, real isolated DB evidence, four-worker/account interference review. Unit simulations alone do not close this gate. |
 | G7 Render/shadow soak | BLOCKED | Repository manifest starts `app.t100_200_scanner` and `app.t100_200_trader`; draft separate shadow starts `app.t100_live_shadow_runtime`, manual deploy. These are repository facts, not a running-build attestation. | Operator-approved deployment, actual running SHA, sustained uninterrupted soak, Discord delivery evidence. No deployment/service change authorized or performed; preserve kill latches. |
-| G8 Independent release/security review | FAIL | Readiness fixes committed; focused CI suite passes; rollback/emergency runbooks exist. | Independent code/DDL/security/dependency review, clean applicable CI and disposition of broad-suite failures, verified rollback/incident drill. No reviewer approval claimed. |
+| G8 Independent release/security review | FAIL | Readiness fixes committed; focused CI suite passes; rollback/emergency runbooks exist. | Independent code/DDL/security/dependency review, current-head CI, verified rollback/incident drill; broad-suite failures are resolved. No reviewer approval claimed. |
 | G9 Real venue lifecycle pilot | BLOCKED | No orders sent. Adapter remains `NOT_IMPLEMENTED`. | BLOCKED_PENDING_EXPLICIT_OPERATOR_AUTHORIZATION. Separately reviewed loss-bounded restricted lifecycle plan and verified controls before any order/stop POST. Full four-slot production cannot be the first lifecycle test. |
 
 ## Evidence and reproduction
@@ -120,3 +120,58 @@ This supersedes the earlier broad-suite failure blocker, while retaining its
 original log for provenance. G1/G4/G6/G8 remain open for the remaining runtime,
 full-path parity and independent-review requirements. Secure credential
 location has been requested for G2; no credentials were printed or changed.
+
+## Current account evidence — Keychain access established
+
+2026-11-02: existing `MEXC_API_KEY` and `MEXC_API_SECRET` Keychain service
+entries were read directly into process memory, without secret logging or
+credential changes. Signed access returned HTTP 200 / POSITIONS_READ_SUCCEEDED.
+The GET-only completeness probe (with a transport hook rejecting non-GET)
+verified stable current inventory, count reconciliation, margin witness and
+symbol-scoped redundancy. See `current-private-access.json` and
+`current-account-inventory.json`.
+
+G2 credential availability is resolved. Account reconciliation remains BLOCKED:
+one observed nonflat position, zero current TP/SL rows, one unrelated limit
+order, and no verified durable T100 recovery provenance. No position or order
+was adopted, canceled, closed or modified. Completeness is explicitly
+non-atomic and does not certify protective stop execution or trading rights.
+This supersedes earlier statements that current read credentials were unavailable.
+
+## Continued recovery and independent replay audit
+
+The real GET adapter now binds the completeness witness to a fingerprint of
+its own critical positions/stops. Equal row counts from a different inventory
+are rejected. Protected-attempt observation also rejects pre-existing margin
+mode changes and boolean values masquerading as integer venue state codes.
+Regression coverage includes a complete but different inventory, old-position
+margin drift and malformed state values.
+
+An independent CSV audit (`scripts/v40_replay_cashflow_audit.py`) recomputes
+per-side fees/slippage and exit PnL, validates exit origins, rejects duplicate
+open symbols and checks four-slot occupancy. It models opening trims/delayed
+exits before admission and normal exits after admission. Both original and
+filtered HYBRID runs pass at 100/200 bps. These are exported-trace checks, not
+independent signal/exit-decision certification.
+
+`independent-funding-equity.json` and `rebuild_funding_equity.py` independently
+reconstruct funding from local SQLite data and remaining exported notionals,
+using strictly earlier close marks for funding and final observed close marks
+for open positions. Funding event counts match exactly (2,536/2,535 baseline,
+2,266/2,266 filtered). Largest final-equity difference is below 0.000005 USDT.
+The candle DB is read with WAL-aware read-only transaction semantics; the
+funding DB uses the original immutable main-file snapshot with its documented
+missing-WAL completeness limitation. This diagnostic script is supporting
+research evidence; full decision parity and independent drawdown remain open.
+
+Current account risk matrix: all 98 historically filtered candidate contracts
+were checked with two public and two private GETs each, with pacing and a
+non-GET transport rejection hook. Public eligibility and private short-tier
+observations were stable, but none corroborated cross mode. A separate
+four-GET witness for candidate index 0 independently agreed on ISOLATED mode
+across risk-limit and leverage endpoints. This is not a mode-change request,
+future order permission, full-V40 size or liquidation certificate. No account
+settings, manual positions or orders were modified. See the redacted matrix
+and margin witness JSON files for exact observation timestamps and filter hash.
+
+The funding reconstruction now has a synthetic regression proving strictly prior marks, exclusion of entry-time funding, and funding-before-same-bar-exit ordering at both cost levels. All audit and recovery regressions are included in focused CI. See `recovery-binding-tests.txt` for the final broad-suite result for this checkpoint.

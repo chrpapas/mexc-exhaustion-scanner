@@ -9,9 +9,9 @@ import copy
 import json
 from decimal import Decimal as D
 import unittest
+from unittest.mock import patch
 
 from app.t100_live_four_slot_mexc_readonly import (
-    FourSlotMexcReadVenue, FourSlotMexcCompleteness,
     inspect_existing_four_slots_get_only,
     inspect_staged_four_slot_fill_get_only,
 )
@@ -107,6 +107,22 @@ class ReadOnlyFourSlotGetTests(unittest.IsolatedAsyncioTestCase):
                 for path, _ in client.calls), 3,
         )
         self.assertTrue(all("/private/" in path for path, _ in client.calls))
+
+    async def test_same_counts_from_different_inventory_cannot_certify_snapshot(self):
+        from app.t100_live_inventory_completeness_probe import run_current_inventory_completeness_probe
+        snap, orders, positions, stops = prepare_rows(1)
+        client = MockMexcGetOnly(orders, positions, stops)
+        peer_positions, peer_stops = copy.deepcopy(positions), copy.deepcopy(stops)
+        peer_positions[0]["positionId"] = "999001"
+        peer_stops[0]["positionId"] = "999001"
+        peer = MockMexcGetOnly(orders, peer_positions, peer_stops)
+        witness = await run_current_inventory_completeness_probe(ReadOnlyMexcProbe(peer))
+        self.assertTrue(witness["account_wide_completeness_verified"])
+        with patch("app.t100_live_four_slot_mexc_readonly.run_current_inventory_completeness_probe",
+                   return_value=witness):
+            result = await inspect_existing_four_slots_get_only(ledger=Ledger(snap), client=client)
+        self.assertEqual(result.status, "INVENTORY_READ_OR_FORMAT_FAILED")
+        self.assertFalse(result.live_authorization)
 
     async def test_flat_clean_research_observation_is_not_entry_authorization(self):
         snap, orders, positions, stops = prepare_rows(0)
