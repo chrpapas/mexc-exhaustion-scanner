@@ -267,3 +267,23 @@ ordering, nonpositive equity and malformed-input rejection. Full offline suite:
 quantity certification remains open; this is not a current venue risk model.
 Reproduce by invoking `rebuild_marked_equity_drawdown.audit` with the original
 read-only data root, fresh baseline/filtered folders and `audit_trims=True`.
+
+## Independent lot inventory and prior-bar capacity audit
+
+`scripts/v40_lot_capacity_audit.py` independently verifies recorded contract
+units, USDT fill notionals, minimum/step/maximum child-order partitions, exact
+remaining lot inventory, and shared per-symbol/bar quota against the strictly
+previous candle's raw amount. Source databases are opened read-only with WAL
+visibility. Across four scenarios, 848 known-spec fills pass; 50 unknown-spec
+fills have quota checks but explicitly no contract-lot certification. Filtered
+runs have two unknown-spec fills per cost case. No overclose or subminimum
+known-lot residual is accepted. The three open known positions per scenario
+are reconciled inventory, not a claim of a flat terminal portfolio.
+
+Artifacts: `independent-{baseline,filtered}-lot-capacity.json`. Synthetic tests
+reject impossible child partitions, optimistic quota substitution and residual
+dust. Full suite output is `lot-capacity-tests.txt`. The snapshot is the pinned
+research `t100-cross-margin-solvency-v36/mexc_current_public_contract_specs.json`;
+current specifications do not certify historical venue rules. This audits
+recorded fills, not absent/zero-fill attempts or independent optimal sizing.
+Full sizing-decision/runtime parity and actual L2 capacity remain open.

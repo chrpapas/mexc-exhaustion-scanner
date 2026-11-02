@@ -1,0 +1,20 @@
+{
+  "100": {
+    "known_lot_fills": 210,
+    "unknown_spec_fills": 2,
+    "quota_groups": 212,
+    "remaining_known_positions": 3,
+    "full_sizing_decisions_certified": false,
+    "venue_execution_certified": false,
+    "live_authorization": false
+  },
+  "200": {
+    "known_lot_fills": 212,
+    "unknown_spec_fills": 2,
+    "quota_groups": 214,
+    "remaining_known_positions": 3,
+    "full_sizing_decisions_certified": false,
+    "venue_execution_certified": false,
+    "live_authorization": false
+  }
+}
