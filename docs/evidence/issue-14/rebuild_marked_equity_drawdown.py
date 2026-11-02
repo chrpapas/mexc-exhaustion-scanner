@@ -23,7 +23,7 @@ def conn(path, immutable=False):
     return c
 
 
-def audit(root, folders, start=start, end=end):
+def audit(root, folders, start=start, end=end, audit_trims=False):
     candles = conn(root / "historical-market-data-min30-v1/historical-market-data-min30-v1.sqlite")
     funds = conn(root / "mexc-certification-cache-v1.sqlite", True)
     results = {}
@@ -63,6 +63,8 @@ def audit(root, folders, start=start, end=end):
             entry_diff = D(0)
             fund = D(0)
             event_count = 0
+            trim_plans = 0
+            trim_fills = 0
 
             def equity(prices=None, index=0):
                 return cash + sum(
@@ -108,11 +110,22 @@ def audit(root, folders, start=start, end=end):
                         cash += v
                         fund += v
                         event_count += 1
+                if audit_trims:
+                    from scripts.v40_risk_trim_audit import planned_trims
+                    plans = planned_trims(equity(), {
+                        sym: p["n"]*p["mark"]/p["entry"] for sym, p in active.items()
+                    }, cost)
+                    trim_plans += len(plans)
                 for sym, p in active.items():
                     if sym in prices:
                         p["mark"] = prices[sym][0]
                 for row in exits[t]:
                     if row["kind"] in ("trim", "delayed_exit"):
+                        if audit_trims and row["kind"] == "trim":
+                            sym = row["symbol"]
+                            if sym not in plans or D(row["notional"]) > active[sym]["n"]*plans[sym]+D('.001'):
+                                raise ValueError('TRIM_EXCEEDS_PRIOR_CLOSE_PLAN')
+                            trim_fills += 1
                         close(row)
                 for row in entries[t]:
                     sym = row["symbol"]
@@ -150,6 +163,11 @@ def audit(root, folders, start=start, end=end):
                 "venue_execution_certified": False,
                 "live_authorization": False,
             }
+            if audit_trims:
+                results[f"{cohort}_{cost}"].update(
+                    prior_close_trim_plans=trim_plans, observed_trim_fills_checked=trim_fills,
+                    trim_fill_quantities_certified=False,
+                )
     candles.close()
     funds.close()
     return results

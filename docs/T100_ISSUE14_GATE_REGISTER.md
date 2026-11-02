@@ -253,3 +253,17 @@ cashflow audit, not an exchange dust waiver or proof of executable closing lots.
 
 The preceding DB fault-matrix head `043a1ea059be94008e68608c0b25fafa49abc57e`
 passed all five CI checks, including every injected real-PostgreSQL write fault.
+
+## Prior-close risk-trim audit
+
+The independent `scripts/v40_risk_trim_audit.py` computes frozen pooled-proxy
+reduction and largest-exposure-first allocation from reconstructed prior-close
+equity after funding. It imports no simulator code. All four traces pass:
+baseline 100/200-bps plans/fills 0/0 and 1/1; filtered 0/0 and 2/2.
+Every recorded trim is within its independently requested reduction; see
+`independent-risk-trim-plans.json`. Synthetic tests verify headroom algebra,
+ordering, nonpositive equity and malformed-input rejection. Full offline suite:
+2,028 passed, 557 subtests (`risk-trim-tests.txt`). Exact capacity/lot fill
+quantity certification remains open; this is not a current venue risk model.
+Reproduce by invoking `rebuild_marked_equity_drawdown.audit` with the original
+read-only data root, fresh baseline/filtered folders and `audit_trims=True`.
