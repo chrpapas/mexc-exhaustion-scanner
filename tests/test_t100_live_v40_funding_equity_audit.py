@@ -24,8 +24,8 @@ class FundingEquityAuditTests(unittest.TestCase):
             close = '2026-01-01T01:00:00+00:00'
             epoch = int(datetime.fromisoformat(start).timestamp())
             with sqlite3.connect(directory / 'historical-market-data-min30-v1.sqlite') as db:
-                db.execute('CREATE TABLE candles(symbol TEXT, interval TEXT, open_ts INTEGER, open REAL, high REAL, close REAL)')
-                db.executemany('INSERT INTO candles VALUES(?,?,?,?,?,?)',
+                db.execute('CREATE TABLE candles(symbol TEXT, interval TEXT, open_ts INTEGER, open REAL, high REAL, close REAL, amount REAL DEFAULT 2000)')
+                db.executemany('INSERT INTO candles(symbol,interval,open_ts,open,high,close) VALUES(?,?,?,?,?,?)',
                                [('TEST_USDT','Min30',epoch,10,11,10), ('TEST_USDT','Min30',epoch+1800,10,12,8.5),
                                 ('TEST_USDT','Min30',epoch+3600,9,10,1)])
             with sqlite3.connect(root / 'mexc-certification-cache-v1.sqlite') as db:
@@ -35,7 +35,7 @@ class FundingEquityAuditTests(unittest.TestCase):
             rows = {name: [] for name in ('entries','exits','fills','metrics')}
             for cost, pnl, final in ((100,'9.028','2008.798'), (200,'8.128','2006.898')):
                 base = {'scenario':f'V32_VOL30_SKIP_H4_S{cost}_CAP5_V39_HYBRID'}
-                rows['entries'].append(dict(base,symbol='TEST_USDT',time=start,notional='100',equity_at_entry='2000'))
+                rows['entries'].append(dict(base,symbol='TEST_USDT',time=start,notional='100',equity_at_entry='2000',atr='6'))
                 rows['exits'].append(dict(base,symbol='TEST_USDT',entry_time=start,exit_time=close,
                                          notional='100',pnl_net_before_funding=pnl,kind='normal_exit',exit='9'))
                 rows['fills'].append(dict(base,symbol='TEST_USDT',time=start,kind='entry',price='10'))
@@ -62,3 +62,7 @@ class FundingEquityAuditTests(unittest.TestCase):
                 expected_high = Decimal('-1.054') if name.endswith('_100') else Decimal('-1.104')
                 self.assertEqual(Decimal(report['high_drawdown_pct']), expected_high)
                 self.assertFalse(report['strategy_decisions_independently_certified'])
+
+            # Prescribed entry records must not bypass missing causal history.
+            with self.assertRaisesRegex(ValueError, 'RECONSTRUCTED_ENTRY_NOT_ADMITTED'):
+                marked.audit(root, {'baseline': root, 'filtered': root}, epoch, epoch+3600, entry_specs={})

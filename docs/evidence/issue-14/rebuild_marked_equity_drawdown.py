@@ -23,7 +23,7 @@ def conn(path, immutable=False):
     return c
 
 
-def audit(root, folders, start=start, end=end, audit_trims=False):
+def audit(root, folders, start=start, end=end, audit_trims=False, entry_specs=None):
     candles = conn(root / "historical-market-data-min30-v1/historical-market-data-min30-v1.sqlite")
     funds = conn(root / "mexc-certification-cache-v1.sqlite", True)
     results = {}
@@ -65,6 +65,8 @@ def audit(root, folders, start=start, end=end, audit_trims=False):
             event_count = 0
             trim_plans = 0
             trim_fills = 0
+            sizing_checked = 0
+            sizing_max_difference = D(0)
 
             def equity(prices=None, index=0):
                 return cash + sum(
@@ -134,6 +136,36 @@ def audit(root, folders, start=start, end=end, audit_trims=False):
                         raise ValueError("ADMISSION_CONFLICT")
                     n = D(row["notional"])
                     price = entry_prices[(sym, t)]
+                    if entry_specs is not None:
+                        from app.t100_v40_admission import PriorBar, admission, lot_quantize_v39
+                        history = [PriorBar(int(ts), float(hi), float(cl), float(amount)) for ts, hi, cl, amount in candles.execute(
+                            "SELECT open_ts,high,close,amount FROM candles WHERE symbol=? AND interval='Min30' AND open_ts>=? AND open_ts<? ORDER BY open_ts",
+                            (sym, t-49*1800, t),
+                        )]
+                        used = sum((D(x['notional'])*D(x['exit'])/D(x['entry']) for x in exits[t]
+                                    if x['symbol']==sym and x['kind'] in ('trim','delayed_exit')), D(0))
+                        decision = admission(prior_bars=history, admission_open_ts=t,
+                            equity_usdt=float(equity()), marked_existing_usdt=float(sum(
+                                (p['n']*p['mark']/p['entry'] for p in active.values()), D(0))),
+                            stage1_atr7_pct=float(row['atr']), active_positions=len(active),
+                            already_open_symbol=sym in active, used_same_bar_usdt=float(used), cost_bps=cost)
+                        if decision.action != 'ADMIT':
+                            raise ValueError('RECONSTRUCTED_ENTRY_NOT_ADMITTED')
+                        requested = min(decision.desired_notional_usdt, decision.equity_budget_usdt)
+                        if abs(D(str(requested))-D(row['desired_before_liquidity'])) > D('.001'):
+                            raise ValueError('RECONSTRUCTED_REQUESTED_SIZE_MISMATCH')
+                        expected = D(str(decision.modeled_notional_usdt))
+                        if sym in entry_specs:
+                            spec = entry_specs[sym]
+                            _, expected, _ = lot_quantize_v39(modeled_notional=decision.modeled_notional_usdt,
+                                entry_price=float(price), contract_size=str(spec['contractSize']),
+                                volume_step=str(spec['volUnit']), min_volume=str(spec['minVol']),
+                                max_volume=str(spec['maxVol']) if spec.get('maxVol') is not None else None)
+                        delta = abs(expected-n)
+                        sizing_max_difference = max(sizing_max_difference, delta)
+                        if delta > D('.001'):
+                            raise ValueError('RECONSTRUCTED_ENTRY_SIZE_MISMATCH')
+                        sizing_checked += 1
                     cash -= n * rate
                     active[sym] = {"time": t, "n": n, "entry": price, "mark": price}
                 eq = equity()
@@ -163,6 +195,12 @@ def audit(root, folders, start=start, end=end, audit_trims=False):
                 "venue_execution_certified": False,
                 "live_authorization": False,
             }
+            if entry_specs is not None:
+                results[f"{cohort}_{cost}"].update(
+                    reconstructed_entry_sizes_checked=sizing_checked,
+                    maximum_entry_size_difference=str(sizing_max_difference),
+                    rejected_candidates_certified=False,
+                )
             if audit_trims:
                 results[f"{cohort}_{cost}"].update(
                     prior_close_trim_plans=trim_plans, observed_trim_fills_checked=trim_fills,

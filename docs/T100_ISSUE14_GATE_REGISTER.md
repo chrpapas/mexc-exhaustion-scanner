@@ -287,3 +287,21 @@ research `t100-cross-margin-solvency-v36/mexc_current_public_contract_specs.json
 current specifications do not certify historical venue rules. This audits
 recorded fills, not absent/zero-fill attempts or independent optimal sizing.
 Full sizing-decision/runtime parity and actual L2 capacity remain open.
+
+## Admission sizing from independently reconstructed portfolio state
+
+The marked-equity audit can now run with `entry_specs` from the pinned snapshot.
+At each recorded admission, it invokes the repository admission/lot policy
+using freshly queried 49-bar history, independently reconstructed equity and
+marked exposure, actual occupied slots and opening-fill quota usage. All 412
+entries across four traces reproduce both requested pre-liquidity size and
+final lot-adjusted size. Maximum final-size difference is 0.0000004883 USDT.
+See `independent-reconstructed-entry-sizing.json`. A regression rejects a
+prescribed admission when its causal history is missing; the existing admission
+policy suite also passes. Full suite: `reconstructed-sizing-tests.txt`.
+
+This specifically strengthens repository-policy parity against the original
+simulator using independent portfolio state. It still starts from prescribed
+admission events: skipped/rejected candidates, absent fills and full autonomous
+runtime are not certified. Snapshot lots are research assumptions, not current
+account permission. The previous lot-audit head 75672c3b passed all five CI checks.
