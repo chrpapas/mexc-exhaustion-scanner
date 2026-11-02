@@ -19,6 +19,9 @@ from app.t100_live_four_slot_attempt_journal import DurableAttemptStage
 from app.t100_live_four_slot_attempt_outcome import (
     ProtectedAttemptObservation, observe_staged_protected_attempts,
 )
+from app.t100_live_four_slot_protected_get_evidence import (
+    ProtectedGetPreparation, observe_and_prepare_staged_protection_get_only,
+)
 from app.t100_live_four_slot_snapshot_coordinator import (
     FourSlotSnapshotCoordinator, FourSlotSnapshotResult,
     LedgerSnapshotReader, _venue_digest,
@@ -124,6 +127,24 @@ async def inspect_staged_four_slot_fill_get_only(
     """Observe a staged outcome; never retry an ambiguous exchange order."""
     venue, completeness = _components(client)
     return await observe_staged_protected_attempts(
+        stages=stages, intents=intents,
+        pre_attempt_witness=pre_attempt_witness,
+        venue=venue, completeness=completeness,
+    )
+
+async def inspect_staged_four_slot_prepared_get_only(
+    *, stages: Sequence[DurableAttemptStage],
+    intents: Sequence[EntryIntent],
+    pre_attempt_witness: FourSlotSnapshotResult,
+    client: PrivateGet,
+) -> ProtectedGetPreparation:
+    """Signed GET-only order/deal/full-account evidence -> offline bundle.
+
+    No DB writes, venue POST, ACK persistence, live permit or Render effects.
+    Failure leaves the SUBMITTING outcome unresolved; never retries a POST.
+    """
+    venue, completeness = _components(client)
+    return await observe_and_prepare_staged_protection_get_only(
         stages=stages, intents=intents,
         pre_attempt_witness=pre_attempt_witness,
         venue=venue, completeness=completeness,
