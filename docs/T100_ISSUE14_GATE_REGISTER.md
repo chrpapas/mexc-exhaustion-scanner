@@ -22,7 +22,7 @@ separate reviewer, and protected operations require the operator.
 | G1 Source/strategy parity | FAIL | Fresh original and filtered chronological replays completed. Both 100/200-bps baseline entries, gate decisions and every frozen metric match. Entry audit: 146 candidates, 7,154 prior bars, 648 exact reference notionals, zero discrepancies. | Independently implement/audit full exit/fill/funding paths and four-slot runtime parity; archive has no full exit/fill paths. Resolve broad-suite failures. Original replay rerun is not independent strategy implementation certification. |
 | G2 Current account capabilities | BLOCKED | Existing account observation/risk/eligibility modules and offline tests; dated public filter only. Current process has no MEXC read credentials. | Secure read-only credential availability, fresh complete account/key/contract/collateral inventory, unrelated-position isolation. Do not infer current rights from public eligibility. |
 | G3 Venue execution/stress | UNKNOWN | Capacity, cross-margin and stop-gap models covered by focused offline suite; historical replay is candle-based. | Observed L2/partial-fill/queue/gap/funding/liquidation/multi-slot conflict evidence and model calibration. Never infer executable capacity from turnover or enable leverage. |
-| G4 Fenced coordinator/journal | FAIL | Reservation, attempt/outcome and protected-commit modules; offline contention/fault tests pass. Migration 031 remains unapplied. | Complete certified runtime transport integration, independent PostgreSQL transactions/privileges/crash proofs at candidate SHA; no local postgres/Docker available. Existing isolated CI workflow is the safe integration path. Production migration requires approval. |
+| G4 Fenced coordinator/journal | FAIL | Reservation, attempt/outcome and protected-commit modules; offline contention/fault tests pass. Migration 031 remains unapplied. | Complete certified runtime transport integration, full runtime transport/privilege certification beyond the isolated PostgreSQL proofs below. No local postgres/Docker available. Production migration requires approval. |
 | G5 Native protection/recovery | BLOCKED | Pure/mock native-stop, checkpoint, trailing and nonflat recovery tests pass. | Independent venue stop create/update/close semantics, no uncovered interval, orphan/ambiguity and 0–4-position lifecycle proofs. Actual mutations require explicit operator approval. Never adopt manual positions. |
 | G6 Fault/restart/interference | FAIL | Focused suite passes reservation contention, UNKNOWN/no retry, stale fencing, drift and restart simulations. | End-to-end runtime crash injection at every durable/venue boundary, real isolated DB evidence, four-worker/account interference review. Unit simulations alone do not close this gate. |
 | G7 Render/shadow soak | BLOCKED | Repository manifest starts `app.t100_200_scanner` and `app.t100_200_trader`; draft separate shadow starts `app.t100_live_shadow_runtime`, manual deploy. These are repository facts, not a running-build attestation. | Operator-approved deployment, actual running SHA, sustained uninterrupted soak, Discord delivery evidence. No deployment/service change authorized or performed; preserve kill latches. |
@@ -89,3 +89,17 @@ are the next evidence prerequisites. Production deployment, DB migration,
 credential/key permissions, exchange mutations and real funds remain outside
 this authorization. Runbooks and emergency controls require independent
 verification before any separately approved pilot or rollout.
+
+## CI checkpoint after publication
+
+At `5fa1d5d68f0b7063620c09cb518a045e770b789a`, all five PR checks
+completed successfully, including the real PostgreSQL ephemeral integration:
+
+- [Real PostgreSQL transaction/recovery integration](https://github.com/chrpapas/mexc-exhaustion-scanner/actions/runs/41408388457/job/125155537682): PASS.
+- [Focused offline safety suite](https://github.com/chrpapas/mexc-exhaustion-scanner/actions/runs/41408388440/job/125155537862): PASS.
+- [Dashboard validation](https://github.com/chrpapas/mexc-exhaustion-scanner/actions/runs/41408388447), [promotion validation](https://github.com/chrpapas/mexc-exhaustion-scanner/actions/runs/41408388475), [service split validation](https://github.com/chrpapas/mexc-exhaustion-scanner/actions/runs/41408388488): PASS.
+
+This advances G4/G6 isolated database evidence, not full exchange-runtime
+certification. No production database was accessed. The broad local run
+still has 18 failures (including subtests), 2,001 passes and 517 passing
+subtests. Independent review and the remaining gate actions are unresolved.
