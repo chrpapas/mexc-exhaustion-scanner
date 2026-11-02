@@ -83,6 +83,7 @@ class RealPostgresProtectedV40Tests(unittest.IsolatedAsyncioTestCase):
 
     async def asyncSetUp(self):
         require_isolated_ci()
+        self.read_pool = None
         self.pool = await asyncpg.create_pool(
             host="127.0.0.1", port=5432,
             user="postgres", password=TEST_PASSWORD,
@@ -175,6 +176,8 @@ class RealPostgresProtectedV40Tests(unittest.IsolatedAsyncioTestCase):
             await journal.create_initial(checkpoint_from_row(cp_row))
 
     async def asyncTearDown(self):
+        if self.read_pool is not None:
+            await self.read_pool.close()
         await self.pool.close()
 
     async def finalize(self):
@@ -595,8 +598,46 @@ class RealPostgresProtectedV40Tests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(start["new_intent"])
         self.assertEqual(start["checkpoints"], 3)
 
+        # A real ledger witness MUST use the restricted, read-only DB role.
+        # Connecting with the administrative/migration role correctly fails.
+        from app.t100_live_role_preflight import TARGET_ROLE
+        async with self.pool.acquire() as db:
+            await db.execute("""
+                DO $ci$
+                BEGIN
+                  IF NOT EXISTS (
+                    SELECT 1 FROM pg_roles
+                    WHERE rolname='t100_live_executor_runtime'
+                  ) THEN
+                    CREATE ROLE t100_live_executor_runtime
+                    LOGIN PASSWORD 't100-ci-only-local-postgres'
+                    NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION;
+                  END IF;
+                END $ci$;
+            """)
+            await db.execute(
+                "GRANT CONNECT ON DATABASE mexc_exhaustion TO t100_live_executor_runtime"
+            )
+            await db.execute(
+                "GRANT USAGE ON SCHEMA public TO t100_live_executor_runtime"
+            )
+            await db.execute("""
+                GRANT SELECT ON
+                    public.t100_live_position_checkpoints,
+                    public.t100_live_position_checkpoint_revisions,
+                    public.t100_live_order_intents,
+                    public.t100_live_stop_amendments
+                TO t100_live_executor_runtime
+            """)
+        self.read_pool = await asyncpg.create_pool(
+            host="127.0.0.1", port=5432,
+            user=TARGET_ROLE, password=TEST_PASSWORD,
+            database=EXPECTED_DATABASE, min_size=1, max_size=1,
+            timeout=5,
+            server_settings={"default_transaction_read_only": "on"},
+        )
         _, old_orders, old_positions, old_stops = prepare_rows(3)
-        ledger = PostgresFourSlotLedgerReader(self.pool)
+        ledger = PostgresFourSlotLedgerReader(self.read_pool)
         client_before = MockMexcGetOnly(old_orders, old_positions, old_stops)
         witness = await inspect_existing_four_slots_get_only(
             ledger=ledger, client=client_before,
