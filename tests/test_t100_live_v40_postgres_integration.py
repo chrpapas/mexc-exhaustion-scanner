@@ -256,6 +256,140 @@ class RealPostgresProtectedV40Tests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(recovered.recovered), 4)
         self.assertFalse(recovered.live_authorization)
 
+
+    async def test_real_postgres_commit_requires_fresh_two_bookend_private_get_fill_evidence(self):
+        """One test crosses mocked PRIVATE GETs into REAL disposable PostgreSQL.
+
+        The exchange is a fixture: never MEXC POST or real native stops.
+        Restart from actual persisted rows is exercised in the companion
+        test_real_postgres_atomic_commit_and_restart_recovery.
+        """
+        from decimal import Decimal
+        from app.t100_live_four_slot_mexc_readonly import (
+            inspect_staged_four_slot_prepared_get_only,
+        )
+        from tests.test_t100_live_four_slot_mexc_readonly import MockMexcGetOnly
+        from tests.test_t100_live_v40_protected_finalization import deal
+        from app.t100_live_leader_fencing import LeaderLease
+
+        entry = self.batch.entries[0]
+        positions = [dict(x) for x in self.position_rows]
+        stops = [dict(x) for x in self.stop_rows]
+        for row in positions:
+            row.update({"im": Decimal("10"), "unRealizedPnl": Decimal("0")})
+        client = MockMexcGetOnly([self.new_order], positions, stops)
+        client.deals[entry.order_id] = [deal()]
+        before = await self.state()
+        self.assertEqual(before["new_intent"], "SUBMITTING")
+        self.assertEqual(before["slot"], "SUBMITTING")
+
+        # Exchange observation cannot write ACK or a new checkpoint.
+        observed = await inspect_staged_four_slot_prepared_get_only(
+            stages=[entry.stage], intents=[entry.intent],
+            pre_attempt_witness=self.witness, client=client,
+        )
+        self.assertEqual(
+            observed.status, "PROTECTED_GET_BATCH_PREPARED_NONAUTHORIZING",
+        )
+        self.assertEqual(observed.orders_observed, 1)
+        self.assertEqual(observed.deal_histories_observed, 1)
+        self.assertEqual(
+            sum("/private/order/deal_details/" in path
+                for path, _ in client.calls), 2,
+        )
+        self.assertTrue(all("/private/" in path for path, _ in client.calls))
+        self.assertFalse(observed.live_authorization)
+        self.assertFalse(observed.mexc_orders_sent)
+        self.assertEqual(await self.state(), before)
+
+        # The fresh GET-backed bundle, not self.batch from an offline helper,
+        # is the ONLY input to actual PostgreSQL ACK+fill/checkpoint writes.
+        batch = observed.prepared_batch
+        self.assertIsNotNone(batch)
+        saved = await self.executor.persist(
+            batch=batch, pre_attempt_witness=self.witness,
+            lease=LeaderLease("t100-live-executor", "worker-A", 11, 45),
+            observed_at=self.observed_at,
+        )
+        self.assertEqual(
+            saved.status,
+            "V40_PROTECTED_RECORDS_ATOMICALLY_PERSISTED_NONAUTHORIZING",
+        )
+        self.assertFalse(saved.live_authorization)
+        self.assertEqual(await self.state(), {
+            "new_intent": "ACK", "slot": "PROTECTED",
+            "fills": 1, "fill_sets": 1, "checkpoints": 4, "revisions": 4,
+        })
+        async with self.pool.acquire() as db:
+            persisted = await db.fetchrow("""
+                SELECT order_id, fill_digest_sha256, fill_count
+                FROM public.t100_live_order_fill_sets WHERE order_id=$1
+            """, entry.order_id)
+            self.assertEqual(persisted["order_id"], entry.order_id)
+            self.assertEqual(
+                persisted["fill_digest_sha256"],
+                batch.entries[0].fill_set.fill_digest_sha256,
+            )
+            self.assertEqual(persisted["fill_count"], 1)
+        with self.assertRaises(ProtectedCommitHalted):
+            await self.executor.persist(
+                batch=batch, pre_attempt_witness=self.witness,
+                lease=LeaderLease("t100-live-executor", "worker-A", 11, 45),
+                observed_at=self.observed_at,
+            )
+        self.assertEqual((await self.state())["fills"], 1)
+
+    async def test_real_postgres_stays_unmodified_after_invalid_private_get_outcomes(self):
+        """Every GET failure blocks before any real database ACK/INSERT."""
+        from decimal import Decimal
+        from app.t100_live_four_slot_mexc_readonly import (
+            inspect_staged_four_slot_prepared_get_only,
+        )
+        from tests.test_t100_live_four_slot_mexc_readonly import MockMexcGetOnly
+        from tests.test_t100_live_v40_protected_finalization import deal
+
+        entry = self.batch.entries[0]
+        positions = [dict(x) for x in self.position_rows]
+        stops = [dict(x) for x in self.stop_rows]
+        for row in positions:
+            row.update({"im": Decimal("10"), "unRealizedPnl": Decimal("0")})
+        baseline = await self.state()
+
+        for mode in ("missing_order", "no_deals", "partial_deal",
+                     "missing_stop", "timeout"):
+            with self.subTest(mode=mode):
+                client = MockMexcGetOnly([self.new_order], positions, stops)
+                client.deals[entry.order_id] = [deal()]
+                if mode == "missing_order":
+                    client.orders.clear()
+                elif mode == "no_deals":
+                    client.deals.clear()
+                elif mode == "partial_deal":
+                    client.deals[entry.order_id] = [
+                        deal(vol=Decimal("249")),
+                    ]
+                elif mode == "missing_stop":
+                    client.stops.pop()
+                else:
+                    client.fail_path = (
+                        "/api/v1/private/order/deal_details/" + entry.order_id
+                    )
+                observed = await inspect_staged_four_slot_prepared_get_only(
+                    stages=[entry.stage], intents=[entry.intent],
+                    pre_attempt_witness=self.witness, client=client,
+                )
+                self.assertIsNone(observed.prepared_batch)
+                self.assertNotEqual(
+                    observed.status,
+                    "PROTECTED_GET_BATCH_PREPARED_NONAUTHORIZING",
+                )
+                self.assertFalse(observed.entry_allowed)
+                self.assertFalse(observed.mexc_orders_sent)
+                self.assertEqual(await self.state(), baseline)
+                self.assertTrue(
+                    all("/private/" in path for path, _ in client.calls),
+                )
+
     async def test_restricted_postgres_plus_get_only_four_slot_recovery_and_missing_stop(self):
         """Exercise actual read-only DB SELECTs and MEXC GET contracts TOGETHER.
 
