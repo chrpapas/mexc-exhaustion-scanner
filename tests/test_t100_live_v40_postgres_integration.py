@@ -566,12 +566,12 @@ class RealPostgresProtectedV40Tests(unittest.IsolatedAsyncioTestCase):
         async with self.pool.acquire() as db:
             await db.execute("""
                 CREATE FUNCTION public.t100_ci_terminate_during_checkpoint()
-                RETURNS trigger LANGUAGE plpgsql AS $
+                RETURNS trigger LANGUAGE plpgsql AS $t100ci$
                 BEGIN
                     PERFORM pg_terminate_backend(pg_backend_pid());
                     RETURN NEW;
                 END
-                $
+                $t100ci$
             """)
             await db.execute("""
                 CREATE TRIGGER t100_ci_terminate_checkpoint
