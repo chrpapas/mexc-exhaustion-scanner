@@ -554,6 +554,144 @@ class RealPostgresProtectedV40Tests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue((await self.finalize()).db_atomic_commit_observed)
 
 
+
+    async def test_real_postgres_reserve_stage_get_commit_and_restart_fourth_slot(self):
+        """One entire real-SQL 4th-slot lifecycle; exchange remains a GET mock.
+
+        Unlike the setup's pre-seeded SUBMITTING row, this test creates the
+        reservation + durable intent with the actual transaction writers.
+        It then proves a GET-only full fill/stop witness before real SQL
+        ACK/fill/checkpoint writes and read-only nonflat restart recovery.
+        """
+        from decimal import Decimal as D
+        from app.t100_live_execution import EntryIntent
+        from app.t100_live_four_slot_reservations import PostgresFourSlotReservations
+        from app.t100_live_four_slot_attempt_journal import PostgresFourSlotAttemptJournal
+        from app.t100_live_four_slot_ledger_reader import PostgresFourSlotLedgerReader
+        from app.t100_live_four_slot_mexc_readonly import (
+            inspect_existing_four_slots_get_only,
+            inspect_staged_four_slot_prepared_get_only,
+        )
+        from app.t100_live_four_slot_planner import plan_four_slot_v40
+        from app.t100_live_leader_fencing import LeaderLease
+        from tests.test_t100_live_four_slot_planner import prior, OPEN_TS
+        from tests.test_t100_live_four_slot_mexc_readonly import (
+            MockMexcGetOnly, prepare_rows,
+        )
+        from tests.test_t100_live_v40_protected_finalization import deal
+
+        setup_entry = self.batch.entries[0]
+        async with self.pool.acquire() as db:
+            await db.execute("""
+                DELETE FROM public.t100_live_v40_slot_reservations
+                WHERE signal_id=$1
+            """, setup_entry.intent.signal_id)
+            await db.execute("""
+                DELETE FROM public.t100_live_order_intents
+                WHERE signal_id=$1
+            """, setup_entry.intent.signal_id)
+        start = await self.state()
+        self.assertIsNone(start["slot"])
+        self.assertIsNone(start["new_intent"])
+        self.assertEqual(start["checkpoints"], 3)
+
+        _, old_orders, old_positions, old_stops = prepare_rows(3)
+        ledger = PostgresFourSlotLedgerReader(self.pool)
+        client_before = MockMexcGetOnly(old_orders, old_positions, old_stops)
+        witness = await inspect_existing_four_slots_get_only(
+            ledger=ledger, client=client_before,
+        )
+        self.assertEqual(witness.status,
+                         "NONFLAT_PROVENANCE_MATCHED_NONAUTHORIZING")
+        self.assertEqual(witness.occupied_slots, 3)
+        self.assertFalse(witness.live_authorization)
+
+        plan = plan_four_slot_v40(
+            inventory=witness.inventory,
+            durable_recovery=witness.recovery,
+            symbol="FOURTH_USDT", prior_bars=prior(),
+            admission_open_ts=OPEN_TS,
+            stage1_atr7_pct=6., equity_usdt=10000.,
+            marked_existing_usdt=0.,
+        )
+        self.assertEqual(plan.action, "ADMIT")
+        leader = LeaderLease("t100-live-executor", "worker-A", 11, 45)
+        moment = datetime.now(timezone.utc)
+        reservation = await PostgresFourSlotReservations(self.pool).reserve(
+            plan=plan, witness=witness, observed_at=moment,
+            lease=leader, signal_id=setup_entry.intent.signal_id,
+            symbol="FOURTH_USDT",
+        )
+        self.assertEqual((await self.state())["slot"], "RESERVED")
+        entry = EntryIntent(
+            signal_id=reservation.signal_id, symbol=reservation.symbol,
+            reference_price=D("2"), notional_usdt=D("500"),
+            volume_contracts=D("250"), stop_price=D("3.5"),
+            external_oid=reservation.external_oid,
+        )
+        stage = await PostgresFourSlotAttemptJournal(self.pool).stage(
+            intent=entry, witness=witness, lease=leader,
+            observed_at=moment,
+            contract_size=D("1"), volume_step=D("1"),
+            price_tick=D("0.01"),
+        )
+        self.assertEqual(stage.state, "SUBMITTING")
+        staged_state = await self.state()
+        self.assertEqual(staged_state["slot"], "SUBMITTING")
+        self.assertEqual(staged_state["new_intent"], "SUBMITTING")
+        self.assertEqual(staged_state["fills"], 0)
+
+        after_positions = [dict(x) for x in self.position_rows]
+        after_stops = [dict(x) for x in self.stop_rows]
+        for row in after_positions:
+            row.update({"im": D("10"), "unRealizedPnl": D("0")})
+        simulated_order = dict(self.new_order)
+        simulated_order["externalOid"] = entry.external_oid
+        simulated_order["feeCurrency"] = "USDT"
+        client_after = MockMexcGetOnly(
+            [simulated_order], after_positions, after_stops,
+        )
+        client_after.deals[str(simulated_order["orderId"])] = [deal()]
+        observed = await inspect_staged_four_slot_prepared_get_only(
+            stages=[stage], intents=[entry],
+            pre_attempt_witness=witness, client=client_after,
+        )
+        self.assertEqual(
+            observed.status, "PROTECTED_GET_BATCH_PREPARED_NONAUTHORIZING",
+        )
+        self.assertEqual(await self.state(), staged_state)
+        self.assertFalse(observed.mexc_orders_sent)
+
+        saved = await self.executor.persist(
+            batch=observed.prepared_batch,
+            pre_attempt_witness=witness, lease=leader, observed_at=moment,
+        )
+        self.assertTrue(saved.db_atomic_commit_observed)
+        self.assertFalse(saved.live_authorization)
+        self.assertEqual(await self.state(), {
+            "new_intent": "ACK", "slot": "PROTECTED",
+            "fills": 1, "fill_sets": 1, "checkpoints": 4, "revisions": 4,
+        })
+        # Read all durable rows from PostgreSQL, independently re-GET
+        # origins/positions/stops and reconstruct four owned protected slots.
+        old_orders.append(simulated_order)
+        client_restart = MockMexcGetOnly(
+            old_orders, after_positions, after_stops,
+        )
+        restored = await inspect_existing_four_slots_get_only(
+            ledger=ledger, client=client_restart,
+        )
+        self.assertEqual(
+            restored.status, "NONFLAT_PROVENANCE_MATCHED_NONAUTHORIZING",
+        )
+        self.assertEqual(restored.occupied_slots, 4)
+        self.assertFalse(restored.live_authorization)
+        self.assertTrue(
+            all("/private/" in path for path, _ in
+                [*client_before.calls, *client_after.calls,
+                 *client_restart.calls])
+        )
+
     async def test_terminated_postgres_backend_rolls_back_partial_protected_commit(self):
         """Kill only the CI backend mid-commit; another connection sees no ACK.
 
