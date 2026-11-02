@@ -553,6 +553,52 @@ class RealPostgresProtectedV40Tests(unittest.IsolatedAsyncioTestCase):
                 await db.execute("DROP FUNCTION public.t100_ci_block_protected()")
         self.assertTrue((await self.finalize()).db_atomic_commit_observed)
 
+
+    async def test_terminated_postgres_backend_rolls_back_partial_protected_commit(self):
+        """Kill only the CI backend mid-commit; another connection sees no ACK.
+
+        A database exception is not the same as losing its connection after
+        some writes. The single transaction must roll back the ACK/fills
+        even when a backend is terminated during checkpoint insertion.
+        This trigger is installed only in the guarded disposable CI DB.
+        """
+        require_isolated_ci()
+        async with self.pool.acquire() as db:
+            await db.execute("""
+                CREATE FUNCTION public.t100_ci_terminate_during_checkpoint()
+                RETURNS trigger LANGUAGE plpgsql AS $
+                BEGIN
+                    PERFORM pg_terminate_backend(pg_backend_pid());
+                    RETURN NEW;
+                END
+                $
+            """)
+            await db.execute("""
+                CREATE TRIGGER t100_ci_terminate_checkpoint
+                BEFORE INSERT ON public.t100_live_position_checkpoints
+                FOR EACH ROW
+                EXECUTE FUNCTION public.t100_ci_terminate_during_checkpoint()
+            """)
+        before = await self.state()
+        self.assertEqual(before["new_intent"], "SUBMITTING")
+        try:
+            with self.assertRaises(ProtectedCommitHalted):
+                await self.finalize()
+            # A fresh pool checkout must observe a fully rolled-back TX,
+            # not an ACK, fill or partially persisted stop/checkpoint.
+            self.assertEqual(await self.state(), before)
+        finally:
+            async with self.pool.acquire() as db:
+                await db.execute("""
+                    DROP TRIGGER IF EXISTS t100_ci_terminate_checkpoint
+                    ON public.t100_live_position_checkpoints
+                """)
+                await db.execute("""
+                    DROP FUNCTION IF EXISTS public.t100_ci_terminate_during_checkpoint()
+                """)
+        self.assertTrue((await self.finalize()).db_atomic_commit_observed)
+        self.assertEqual((await self.state())["new_intent"], "ACK")
+
     async def test_duplicate_after_ack_fails_closed_with_no_duplicate_fills(self):
         await self.finalize()
         before = await self.state()
