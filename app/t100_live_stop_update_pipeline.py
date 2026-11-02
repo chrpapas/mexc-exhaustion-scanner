@@ -101,6 +101,8 @@ class StopUpdatePersistencePipeline:
         if (
             type(stop.get("state")) is not int
             or stop["state"] != 1
+            or type(stop.get("positionType")) is not int
+            or stop["positionType"] != 2
             or type(stop.get("isFinished")) is not int
             or stop["isFinished"] != 0
             or effective_protective_quantity(
