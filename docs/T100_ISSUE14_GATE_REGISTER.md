@@ -103,3 +103,20 @@ This advances G4/G6 isolated database evidence, not full exchange-runtime
 certification. No production database was accessed. The broad local run
 still has 18 failures (including subtests), 2,001 passes and 517 passing
 subtests. Independent review and the remaining gate actions are unresolved.
+
+## Continued engineering — broad-suite failures resolved
+
+2026-11-02: `offline-tests-followup.txt` records **2,005 passed, 520 passing
+subtests**, with the two CI-only PostgreSQL modules excluded as before.
+Scanner fixtures now declare the current audit setting. Persistence research
+fixtures supply a valid ATR witness and assert the current promoted strategy;
+production strategy defaults are unchanged. The unused one-slot coordinator
+is explicitly retired: every submission raises before any supplier or gateway
+call. Its obsolete happy-path tests are replaced by unconditional-rejection
+coverage using admitted, skipped and missing admission objects. The focused
+CI workflow now includes this retirement regression.
+
+This supersedes the earlier broad-suite failure blocker, while retaining its
+original log for provenance. G1/G4/G6/G8 remain open for the remaining runtime,
+full-path parity and independent-review requirements. Secure credential
+location has been requested for G2; no credentials were printed or changed.

@@ -5,7 +5,6 @@ from pathlib import Path
 
 from app.daily_bull_persistence_strategy import (
     DAILY_BULL_PERSISTENCE_V2_FREEZE_AT,
-    DAILY_CORE_PERSISTENCE_SKIP_STRATEGY_V2,
     daily_bull_persistence_v2_state,
     mature_run_weak_breakdown_v1_state,
 )
@@ -66,10 +65,12 @@ def test_current_research_v2_tracks_mature_branch_and_clean_forward_freeze():
     winner["confirmed_at"] = DAILY_BULL_PERSISTENCE_V2_FREEZE_AT + timedelta(minutes=2)
     winner["target_5_at"] = winner["confirmed_at"] + timedelta(hours=1)
 
+    # Current research also requires the independently promoted ATR gate.
+    winner["feature_snapshot"]["atr_15m"] = winner["entry_price"] * 0.03
     report = build_current_strategy_research(
         [mature, winner], generated_at=DAILY_BULL_PERSISTENCE_V2_FREEZE_AT + timedelta(days=1)
     )
-    assert report.strategy == DAILY_CORE_PERSISTENCE_SKIP_STRATEGY_V2
+    assert report.strategy == "tp5_nostop_adv30_runner50_trail1_daily_core_persistence_atr_hard_v1"
     assert report.persistence_flagged == 1
     assert report.admitted_signals == 1
     assert report.prospective_total_signals == 2
