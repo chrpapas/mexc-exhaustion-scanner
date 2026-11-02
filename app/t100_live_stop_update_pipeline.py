@@ -50,6 +50,30 @@ class StopUpdatePersistencePipeline:
         self.checkpoints = checkpoint_coordinator
 
     @staticmethod
+    def _require_checkpoint_amendment_identity(
+        previous: PositionCheckpoint,
+        amendment: StopAmendment,
+    ) -> None:
+        """Prevent a mismatched amendment being journal-VERIFIED first.
+
+        Previously the checkpoint writer rejected this mismatch only after
+        the amendment journal had already transitioned to VERIFIED.
+        """
+        if (
+            not isinstance(previous, PositionCheckpoint)
+            or previous.lifecycle_state != "OPEN"
+            or not isinstance(amendment, StopAmendment)
+            or previous.symbol != amendment.symbol
+            or previous.position_id != amendment.position_id
+            or previous.stop_order_id != amendment.stop_order_id
+            or previous.stop_price != amendment.previous_stop
+            or amendment.proposed_stop >= previous.stop_price
+        ):
+            raise StopUpdatePipelineHalted(
+                "STOP_AMENDMENT_CHECKPOINT_PROVENANCE_MISMATCH"
+            )
+
+    @staticmethod
     def _require_full_native_protection(
         previous: PositionCheckpoint,
         stops: Any,
@@ -120,6 +144,7 @@ class StopUpdatePersistencePipeline:
         positions_complete: bool,
         stops_complete: bool,
     ) -> StopUpdatePersistenceOutcome:
+        self._require_checkpoint_amendment_identity(previous, amendment)
         self._require_full_native_protection(previous, before_stops)
         self._require_full_native_protection(previous, after_stops)
         reconciliation = (
@@ -158,6 +183,7 @@ class StopUpdatePersistencePipeline:
         stops_complete: bool,
     ) -> StopUpdatePersistenceOutcome:
         """Restart-safe path for SUBMITTING/UNKNOWN/VERIFIED amendments."""
+        self._require_checkpoint_amendment_identity(previous, amendment)
         self._require_full_native_protection(previous, current_stops)
         reconciliation = (
             await self.amendments.reconcile_current_outcome(
