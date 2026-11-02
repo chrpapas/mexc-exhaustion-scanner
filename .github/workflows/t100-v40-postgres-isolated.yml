@@ -3,6 +3,8 @@ name: T100 V40 isolated PostgreSQL transaction integration
 on:
   pull_request:
     paths:
+      - 'pyproject.toml'
+      - 'docs/T100_ISSUE14_GATE_REGISTER.md'
       - 'app/t100_live_v40_protected_commit.py'
       - 'app/t100_live_v40_protected_finalization.py'
       - 'app/t100_live_four_slot_*.py'
