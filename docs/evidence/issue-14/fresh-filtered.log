@@ -1,0 +1,64 @@
+{
+  "baseline_mode": false,
+  "candidate_symbols_allowed": 98,
+  "candidate_symbols_excluded": 13,
+  "execute_requested": true,
+  "live_authorization": false,
+  "mexc_orders_sent": false,
+  "original_build_floor_pools_calls_wrapped": 1,
+  "original_source_sha256": "bf8ba6a08332abdb5bdddd38356249a08b8c3e85d4d695a426bbd51b3d51867c",
+  "probe_only": false,
+  "replay_performed": false,
+  "status": "V40_FILTERED_SOURCE_HOOK_PREPARED"
+}
+V40 CAPITAL SWEEP initial_usdt 2000.0 v39_reference_usdt 2000.0
+
+===== EXACT V2 DATASET VALIDATION =====
+stage_rows                     got=27776 expected=27776 [OK]
+episodes                       got=21838 expected=21838 [OK]
+multi_stage_ge2                got=4314 expected=4314 [OK]
+multi_stage_ge3                got=1172 expected=1172 [OK]
+long_episode_gt30d             got=2 expected=2 [OK]
+strict180_complete30           got=14508 expected=14508 [OK]
+strict365_complete30           got=9668 expected=9668 [OK]
+unaligned_ts                   got=0 expected=0 [OK]
+duplicate_stage_keys           got=0 expected=0 [OK]
+EXACT_V2_ANCHOR_PASS=True
+FUNDING_CACHE_WARNING WAL_FORMAT_NO_WAL_FILE; earlier uncheckpointed transactions, if any, cannot be recovered
+FUNDING_SNAPSHOT_READ_ONLY_OK size_bytes= 81272832 wal_format= True
+V39.1 INTEGER LOT INVENTORY REPLAY 12 scenarios 128 candidates funding 419348
+BARS 15000 / 63853 CONTROL_VOL30_100 2503.08
+BARS 30000 / 63853 CONTROL_VOL30_100 3631.37
+BARS 45000 / 63853 CONTROL_VOL30_100 8240.47
+BARS 60000 / 63853 CONTROL_VOL30_100 21082.73
+BARS 63853 / 63853 CONTROL_VOL30_100 13385.09
+========== V39.1 INTEGER-LOT CHRONOLOGICAL SENSITIVITY ==========
+V32 EXACT 4/4 ORIGINAL H4 ENDPOINT PARITY MANDATORY; HISTORICAL LOT/TIER DATA NOT PROVIDED
+Same 5pct prior30 turnover cap, fees, funding, signal and exit rule; re-evaluated sizes and portfolio paths
+CASE VOL20_SKIP COST 100 MODE REFERENCE X 6.013046 equity 12026.09 2026x 1.4300032897574622 vsOriginalX 0.0 entries 65 exits 62 pending 0 missing 0 missingSpecAccepted 0 missingSpecSkipped 0 lotEntryCuts 0 lotExitCuts 0 blockedSubminimumExits 0 integerFullCloses 0 dustPrevented 0 minQuotaDeferrals 0 additionalChildren 0 rounddownEntryUSDT 0 highDD -40.2555 complete True
+CASE VOL20_SKIP COST 100 MODE HYBRID X 5.999163 equity 11998.33 2026x 1.4295930549823133 vsOriginalX -0.013883 entries 65 exits 62 pending 0 missing 0 missingSpecAccepted 1 missingSpecSkipped 0 lotEntryCuts 64 lotExitCuts 15 blockedSubminimumExits 0 integerFullCloses 61 dustPrevented 0 minQuotaDeferrals 0 additionalChildren 7 rounddownEntryUSDT 107.855019 highDD -40.2755 complete True
+CASE VOL20_SKIP COST 100 MODE KNOWN_ONLY X 5.867469 equity 11734.94 2026x 1.4277353116508502 vsOriginalX -0.145577 entries 64 exits 61 pending 0 missing 0 missingSpecAccepted 0 missingSpecSkipped 1 lotEntryCuts 64 lotExitCuts 15 blockedSubminimumExits 0 integerFullCloses 61 dustPrevented 0 minQuotaDeferrals 0 additionalChildren 5 rounddownEntryUSDT 79.221619 highDD -40.4923 complete True
+CASE VOL20_SKIP COST 200 MODE REFERENCE X 3.995116 equity 7990.23 2026x 1.2312489627712024 vsOriginalX 0.0 entries 65 exits 62 pending 0 missing 0 missingSpecAccepted 0 missingSpecSkipped 0 lotEntryCuts 0 lotExitCuts 0 blockedSubminimumExits 0 integerFullCloses 0 dustPrevented 0 minQuotaDeferrals 0 additionalChildren 0 rounddownEntryUSDT 0 highDD -43.4694 complete True
+CASE VOL20_SKIP COST 200 MODE HYBRID X 3.984015 equity 7968.03 2026x 1.230348723694736 vsOriginalX -0.011101 entries 65 exits 62 pending 0 missing 0 missingSpecAccepted 1 missingSpecSkipped 0 lotEntryCuts 64 lotExitCuts 16 blockedSubminimumExits 0 integerFullCloses 61 dustPrevented 0 minQuotaDeferrals 0 additionalChildren 1 rounddownEntryUSDT 96.611157 highDD -43.4956 complete True
+CASE VOL20_SKIP COST 200 MODE KNOWN_ONLY X 3.872676 equity 7745.35 2026x 1.226855316760138 vsOriginalX -0.12244 entries 64 exits 61 pending 0 missing 0 missingSpecAccepted 0 missingSpecSkipped 1 lotEntryCuts 64 lotExitCuts 16 blockedSubminimumExits 0 integerFullCloses 61 dustPrevented 0 minQuotaDeferrals 0 additionalChildren 1 rounddownEntryUSDT 72.288988 highDD -43.8363 complete True
+CASE VOL30_SKIP COST 100 MODE REFERENCE X 6.692544 equity 13385.09 2026x 0.9607683558699562 vsOriginalX 0.0 entries 98 exits 95 pending 0 missing 0 missingSpecAccepted 0 missingSpecSkipped 0 lotEntryCuts 0 lotExitCuts 0 blockedSubminimumExits 0 integerFullCloses 0 dustPrevented 0 minQuotaDeferrals 0 additionalChildren 0 rounddownEntryUSDT 0 highDD -55.8941 complete True
+CASE VOL30_SKIP COST 100 MODE HYBRID X 6.678104 equity 13356.21 2026x 0.9609521509976686 vsOriginalX -0.01444 entries 98 exits 95 pending 0 missing 0 missingSpecAccepted 1 missingSpecSkipped 0 lotEntryCuts 97 lotExitCuts 19 blockedSubminimumExits 0 integerFullCloses 94 dustPrevented 0 minQuotaDeferrals 0 additionalChildren 42 rounddownEntryUSDT 144.708584 highDD -55.9209 complete True
+CASE VOL30_SKIP COST 100 MODE KNOWN_ONLY X 6.561096 equity 13122.19 2026x 0.9638117266957038 vsOriginalX -0.131448 entries 97 exits 94 pending 0 missing 0 missingSpecAccepted 0 missingSpecSkipped 1 lotEntryCuts 97 lotExitCuts 19 blockedSubminimumExits 0 integerFullCloses 94 dustPrevented 0 minQuotaDeferrals 0 additionalChildren 42 rounddownEntryUSDT 171.020961 highDD -56.1597 complete True
+CASE VOL30_SKIP COST 200 MODE REFERENCE X 4.052294 equity 8104.59 2026x 0.8002739165440805 vsOriginalX 0.0 entries 98 exits 95 pending 0 missing 0 missingSpecAccepted 0 missingSpecSkipped 0 lotEntryCuts 0 lotExitCuts 0 blockedSubminimumExits 0 integerFullCloses 0 dustPrevented 0 minQuotaDeferrals 0 additionalChildren 0 rounddownEntryUSDT 0 highDD -66.2096 complete True
+CASE VOL30_SKIP COST 200 MODE HYBRID X 4.044767 equity 8089.53 2026x 0.8000801680966857 vsOriginalX -0.007527 entries 98 exits 95 pending 0 missing 0 missingSpecAccepted 1 missingSpecSkipped 0 lotEntryCuts 97 lotExitCuts 21 blockedSubminimumExits 0 integerFullCloses 94 dustPrevented 0 minQuotaDeferrals 0 additionalChildren 38 rounddownEntryUSDT 107.773788 highDD -66.2204 complete True
+CASE VOL30_SKIP COST 200 MODE KNOWN_ONLY X 3.946935 equity 7893.87 2026x 0.7990709675160809 vsOriginalX -0.105359 entries 97 exits 94 pending 0 missing 0 missingSpecAccepted 0 missingSpecSkipped 1 lotEntryCuts 97 lotExitCuts 21 blockedSubminimumExits 0 integerFullCloses 94 dustPrevented 0 minQuotaDeferrals 0 additionalChildren 38 rounddownEntryUSDT 133.603133 highDD -66.3875 complete True
+INTERPRETATION: HYBRID knowingly retains unknown-spec simulations; KNOWN_ONLY excludes those historical trades.
+Splits are simulated at the SAME candle price; future L2/missed fills and extra order-level costs unverified.
+CURRENT metadata cannot establish past executable contract increments; NO historical venue certification.
+OUTPUT /private/tmp/t100-issue14-filtered-20261102 NO NETWORK NO ORDERS NOT HISTORICAL LOT OR FILL CERTIFIED
+{
+  "baseline_candidate_count": 146,
+  "baseline_mode": false,
+  "in_memory_fixed_count_adapter": true,
+  "input_candidate_count_after_filter": 128,
+  "live_authorization": false,
+  "mexc_orders_sent": false,
+  "output_basename": "t100-issue14-filtered-20261102",
+  "portfolio_metric_parity_verified": false,
+  "status": "LOCAL_REPLAY_PROCESS_RETURNED_REVIEW_OUTPUTS"
+}

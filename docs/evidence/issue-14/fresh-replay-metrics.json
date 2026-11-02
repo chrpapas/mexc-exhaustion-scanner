@@ -1,0 +1,42 @@
+{
+  "baseline": {
+    "100": {
+      "entered": "108",
+      "final_equity": "14476.81238416",
+      "high_envelope_dd_pct": "-54.8664",
+      "funding_net": "-2777.66184",
+      "fee_and_slip": "5140.45738",
+      "chronology_complete": "True",
+      "historical_venue_executable_certified": "False"
+    },
+    "200": {
+      "entered": "108",
+      "final_equity": "9030.3755517",
+      "high_envelope_dd_pct": "-63.7195",
+      "funding_net": "-2211.5306",
+      "fee_and_slip": "8299.22204",
+      "chronology_complete": "True",
+      "historical_venue_executable_certified": "False"
+    }
+  },
+  "filtered": {
+    "100": {
+      "entered": "98",
+      "final_equity": "13356.20798561",
+      "high_envelope_dd_pct": "-55.9209",
+      "funding_net": "-2545.37792",
+      "fee_and_slip": "4758.3973",
+      "chronology_complete": "True",
+      "historical_venue_executable_certified": "False"
+    },
+    "200": {
+      "entered": "98",
+      "final_equity": "8089.53447634",
+      "high_envelope_dd_pct": "-66.2204",
+      "funding_net": "-2022.85904",
+      "fee_and_slip": "7616.5354",
+      "chronology_complete": "True",
+      "historical_venue_executable_certified": "False"
+    }
+  }
+}
