@@ -227,3 +227,29 @@ remain blocked after SUBMITTING and UNKNOWN. Manual inventory is unchanged.
 These tests use the existing disposable localhost CI guard and no venue client.
 They strengthen DB-boundary evidence; real process/network crash recovery and
 full runtime transport remain separate open G4/G6 requirements.
+
+
+## Independent stop/trailing decision audit
+
+`scripts/v40_exit_trigger_audit.py` uses no simulator imports. From the
+prescribed entries it reconstructs prior-bar trailing state, adverse-first
+75% pre-trail stops, 14% activation / 0.5% trailing gap, gap-adjusted buyback
+prices and pending delayed-exit state. It rejects missing candles, lookahead
+trailing exits, invented delayed exits and optimistic gap prices.
+
+Both cost cases pass: baseline 108 positions each, 210 normal exit fills and
+45 delayed fills across the two cases; filtered 98 positions each, 190 normal
+exit fills and 38 delayed fills. No pending mandatory exits remain. See
+`independent-{baseline,filtered}-exit-triggers.json`. Synthetic tests establish
+adverse-first precedence, next-bar trail activation, partial/pending handling,
+gap fills and missing-bar rejection. Broad suite: **2,025 passed, 554 subtests**
+(`exit-trigger-tests.txt`); only the two guarded real-PostgreSQL modules excluded.
+
+This closes the recorded stop/trailing trigger and price audit, not independent
+entry selection, opening risk-trim decisions, lot/capacity quantity decisions
+or full runtime parity. Those remain explicit G1 work. The reported remaining
+notional uses the same 0.001-USDT exported-CSV reconciliation tolerance as the
+cashflow audit, not an exchange dust waiver or proof of executable closing lots.
+
+The preceding DB fault-matrix head `043a1ea059be94008e68608c0b25fafa49abc57e`
+passed all five CI checks, including every injected real-PostgreSQL write fault.
