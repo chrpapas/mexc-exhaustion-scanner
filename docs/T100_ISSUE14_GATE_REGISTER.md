@@ -443,3 +443,28 @@ gap/liquidation, or a four-slot live runner. They do not close G5/G6.
 Live adapter certification remains NOT_IMPLEMENTED; manual positions are
 untouched. No MEXC POST, Render deploy, production DB write, key change or
 BOXWAVE modification. Production release and real trading remain blocked.
+
+### 2026-11-03 — Direct stop-coordinator bypass is also fail-closed
+
+Source SHA `abf9e503c9a6943136c3d228bc518efac64ca4cf`:
+`StopAmendmentLifecycleCoordinator.reconcile_observed_transition` and
+`reconcile_current_outcome` now require an explicit positive Decimal
+`position_quantity` and insist on one active unfinished SHORT-side native
+stop with effective protection equal to those contracts before any durable
+journal `VERIFIED` transition. The higher-level no-POST stop pipeline
+passes quantity from its immutable OPEN checkpoint and retains its own
+separate provenance/coverage check. Even a future *direct* caller cannot
+silently omit this evidence. Regression tests cover partial, wrong-side,
+finished and untyped stops at SUBMITTING and UNKNOWN restart boundaries.
+
+The exact SHA passed isolated PostgreSQL
+https://github.com/chrpapas/mexc-exhaustion-scanner/actions/runs/41544066200
+and offline safety
+https://github.com/chrpapas/mexc-exhaustion-scanner/actions/runs/41544066205
+plus scanner-trader separation
+https://github.com/chrpapas/mexc-exhaustion-scanner/actions/runs/41544066199
+and promotion
+https://github.com/chrpapas/mexc-exhaustion-scanner/actions/runs/41544066209 .
+This is still simulated/pure-Python journal verification: current venue
+stop amendment shape, actual MEXC execution, multi-worker deployed fencing,
+cross collateral and live authorization remain unverified and BLOCKED.
