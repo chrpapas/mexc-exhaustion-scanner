@@ -1,5 +1,6 @@
 """Offline end-to-end tests for no-POST stop update persistence."""
 import unittest
+from dataclasses import replace
 from decimal import Decimal as D
 
 from app.t100_live_checkpoint_coordinator import (
@@ -261,6 +262,48 @@ class StopUpdatePipelineTests(unittest.IsolatedAsyncioTestCase):
             self.journal.states[self.amendment.external_id], "UNKNOWN",
         )
         self.assertEqual(self.writer.calls, [])
+
+    async def test_checkpoint_drift_never_marks_an_unowned_amendment_verified(self):
+        for different in (
+            replace(cp(), symbol="OTHER_USDT"),
+            replace(cp(), position_id="999"),
+            replace(cp(), stop_order_id="888"),
+            replace(cp(), stop_price=D("174")),
+            replace(cp(), lifecycle_state="REVIEW"),
+        ):
+            with self.subTest(different=different):
+                await self.asyncSetUp()
+                with self.assertRaisesRegex(
+                    StopUpdatePipelineHalted,
+                    "STOP_AMENDMENT_CHECKPOINT_PROVENANCE_MISMATCH",
+                ):
+                    await self.pipeline.reconcile_observed_and_persist(
+                        different, self.amendment,
+                        before_stops=[stop()],
+                        after_stops=[stop(stopLossPrice=D("90"))],
+                        best_profit_pct=D("14"), armed=True,
+                        **gates(),
+                    )
+                self.assertEqual(
+                    self.journal.states[self.amendment.external_id],
+                    "SUBMITTING",
+                )
+                self.assertEqual(self.writer.calls, [])
+
+    async def test_restart_drift_keeps_unknown_stop_unverified(self):
+        await self.amendments.mark_unknown(self.amendment)
+        with self.assertRaisesRegex(
+            StopUpdatePipelineHalted,
+            "STOP_AMENDMENT_CHECKPOINT_PROVENANCE_MISMATCH",
+        ):
+            await self.pipeline.reconcile_current_and_persist(
+                replace(cp(), position_id="999"), self.amendment,
+                current_stops=[stop(stopLossPrice=D("90"))],
+                best_profit_pct=D("14"), armed=True, **gates(),
+            )
+        self.assertEqual(
+            self.journal.states[self.amendment.external_id], "UNKNOWN",
+        )
 
     async def test_previously_undercovered_stop_cannot_be_amended_as_owned(self):
         with self.assertRaisesRegex(
