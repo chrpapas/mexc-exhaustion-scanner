@@ -1,4 +1,5 @@
 """Offline exactly-once-attempt stop mutation tests."""
+import asyncio
 import unittest
 from unittest.mock import patch
 from dataclasses import replace
@@ -179,6 +180,59 @@ class StopMutationExecutorTests(unittest.IsolatedAsyncioTestCase):
                 permit=permit(),
             )
         self.assertEqual(self.transport.posts, 1)
+
+    async def test_two_workers_with_same_prepared_snapshot_only_one_post(self):
+        # Both executors initially see PREPARED. Once the winner advances
+        # the durable CAS, the loser MUST NOT treat SUBMITTING as its own
+        # successful transition. This interleaving exposed a duplicate-POST
+        # race in the older mark_submitting implementation.
+        original_state = self.journal.state
+        both_read = asyncio.Event()
+        initial_readers = 0
+
+        async def competing_state(external_id):
+            nonlocal initial_readers
+            snapshot = await original_state(external_id)
+            initial_readers += 1
+            if initial_readers <= 2:
+                if initial_readers == 2:
+                    both_read.set()
+                await both_read.wait()
+                return snapshot
+            return snapshot
+
+        self.journal.state = competing_state
+        results = await asyncio.wait_for(
+            asyncio.gather(
+                self.executor.submit_once(self.amendment, permit=permit()),
+                self.executor.submit_once(self.amendment, permit=permit()),
+                return_exceptions=True,
+            ),
+            timeout=2,
+        )
+        self.assertEqual(
+            sum(not isinstance(x, Exception) for x in results), 1,
+        )
+        self.assertEqual(
+            sum(isinstance(x, StopMutationExecutionHalted) for x in results),
+            1,
+        )
+        self.assertEqual(self.transport.posts, 1)
+        self.assertEqual(
+            self.journal.states[self.amendment.external_id], "SUBMITTING",
+        )
+        # No duplicate POST is permitted after a worker restart either.
+        with self.assertRaises(StopMutationExecutionHalted):
+            await self.executor.submit_once(self.amendment, permit=permit())
+        self.assertEqual(self.transport.posts, 1)
+
+    async def test_second_mark_submitting_is_not_an_idempotent_post_permit(self):
+        await self.lifecycle.mark_submitting(self.amendment)
+        with self.assertRaisesRegex(
+            Exception, "ALREADY_STARTED_RECONCILE_ONLY",
+        ):
+            await self.lifecycle.mark_submitting(self.amendment)
+        self.assertEqual(self.transport.posts, 0)
 
     async def test_submitting_state_never_emits_second_post(self):
         await self.lifecycle.mark_submitting(self.amendment)
