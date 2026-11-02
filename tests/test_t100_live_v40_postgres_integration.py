@@ -65,6 +65,22 @@ def require_isolated_ci() -> None:
 
 
 class RealPostgresProtectedV40Tests(unittest.IsolatedAsyncioTestCase):
+    async def test_lease_expiry_uses_wall_clock_inside_long_transaction(self):
+        from app.t100_live_leader_fencing import PostgresLeaderLeaseStore
+        async with self.pool.acquire() as db:
+            async with db.transaction():
+                await db.execute("""UPDATE t100_live_executor_leases
+                    SET lease_expires_at=clock_timestamp()+interval '100 milliseconds'
+                    WHERE lease_name='t100-live-executor'""")
+                store = PostgresLeaderLeaseStore(db)
+                await db.execute("SELECT pg_sleep(0.2)")
+                self.assertFalse(await store.assert_current('t100-live-executor', 'worker-A', 11))
+                self.assertFalse(await store.renew('t100-live-executor', 'worker-A', 11, 30))
+                token, acquired = await store.acquire('t100-live-executor', 'worker-A', 30)
+                self.assertTrue(acquired)
+                self.assertEqual(token, 12)
+                self.assertTrue(await store.assert_current('t100-live-executor', 'worker-A', 12))
+
     async def asyncSetUp(self):
         require_isolated_ci()
         self.pool = await asyncpg.create_pool(

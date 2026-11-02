@@ -135,8 +135,8 @@ class LeaderLeaseCoordinator:
             not isinstance(lease, LeaderLease)
             or lease.lease_name != self.lease_name
             or lease.ttl_seconds != self.ttl_seconds
-            or not lease.holder_id
-            or isinstance(lease.fencing_token, bool)
+            or not isinstance(lease.holder_id, str) or not lease.holder_id.strip()
+            or type(lease.fencing_token) is not int
             or lease.fencing_token <= 0
         ):
             raise LeaderLeaseHalted("LEADER_LEASE_INVALID")
@@ -154,20 +154,20 @@ class PostgresLeaderLeaseStore:
         row = await self.pool.fetchrow(
             """INSERT INTO t100_live_executor_leases
                (lease_name,holder_id,fencing_token,lease_expires_at,updated_at)
-               VALUES($1,$2,1,now()+($3 * interval '1 second'),now())
+               VALUES($1,$2,1,clock_timestamp()+($3 * interval '1 second'),clock_timestamp())
                ON CONFLICT (lease_name) DO UPDATE
                SET holder_id=EXCLUDED.holder_id,
                    fencing_token=CASE
                      WHEN t100_live_executor_leases.holder_id=EXCLUDED.holder_id
-                      AND t100_live_executor_leases.lease_expires_at > now()
+                      AND t100_live_executor_leases.lease_expires_at > clock_timestamp()
                      THEN t100_live_executor_leases.fencing_token
                      ELSE t100_live_executor_leases.fencing_token+1
                    END,
                    lease_expires_at=EXCLUDED.lease_expires_at,
-                   updated_at=now()
+                   updated_at=clock_timestamp()
                WHERE
                  t100_live_executor_leases.holder_id=EXCLUDED.holder_id
-                 OR t100_live_executor_leases.lease_expires_at <= now()
+                 OR t100_live_executor_leases.lease_expires_at <= clock_timestamp()
                RETURNING fencing_token""",
             lease_name,
             holder_id,
@@ -186,12 +186,12 @@ class PostgresLeaderLeaseStore:
     ) -> bool:
         row = await self.pool.fetchval(
             """UPDATE t100_live_executor_leases
-               SET lease_expires_at=now()+($4 * interval '1 second'),
-                   updated_at=now()
+               SET lease_expires_at=clock_timestamp()+($4 * interval '1 second'),
+                   updated_at=clock_timestamp()
                WHERE lease_name=$1
                  AND holder_id=$2
                  AND fencing_token=$3
-                 AND lease_expires_at > now()
+                 AND lease_expires_at > clock_timestamp()
                RETURNING fencing_token""",
             lease_name,
             holder_id,
@@ -209,7 +209,7 @@ class PostgresLeaderLeaseStore:
                WHERE lease_name=$1
                  AND holder_id=$2
                  AND fencing_token=$3
-                 AND lease_expires_at > now()""",
+                 AND lease_expires_at > clock_timestamp()""",
             lease_name,
             holder_id,
             fencing_token,
@@ -221,7 +221,7 @@ class PostgresLeaderLeaseStore:
     ) -> bool:
         row = await self.pool.fetchval(
             """UPDATE t100_live_executor_leases
-               SET lease_expires_at=now(),updated_at=now()
+               SET lease_expires_at=clock_timestamp(),updated_at=clock_timestamp()
                WHERE lease_name=$1
                  AND holder_id=$2
                  AND fencing_token=$3

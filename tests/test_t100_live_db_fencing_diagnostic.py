@@ -57,7 +57,7 @@ class Conn:
             record = self.db.rows.get(name)
             if record is None or record["holder"] != holder or record["token"] != token:
                 return None
-            if "AND lease_expires_at > now()" in query:
+            if "AND lease_expires_at > clock_timestamp()" in query:
                 if record["expires"] <= self.db.now:
                     return None
                 record["expires"] = self.db.now + args[3]

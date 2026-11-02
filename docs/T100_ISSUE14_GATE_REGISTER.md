@@ -1,7 +1,7 @@
 # T100/V40 release gate register — issue #14
 
 Owner: Codex engineering. Updated: 2026-11-02 (Europe/Zurich).
-Code tested: `ff40c29064385b552912d35954f711a6c5550e24`.
+Initial checkpoint code tested: `ff40c29064385b552912d35954f711a6c5550e24`.
 GitHub code commit: `270c3174da14d267881ab3edbfaba231322ef5b4`.
 Its tree equals the tested local code tree exactly:
 `4811284feefde60cb716bc628dec5394afae4949`. Commit IDs differ because
@@ -25,7 +25,7 @@ separate reviewer, and protected operations require the operator.
 | G4 Fenced coordinator/journal | FAIL | Reservation, attempt/outcome and protected-commit modules; offline contention/fault tests pass. Migration 031 remains unapplied. | Complete certified runtime transport integration, full runtime transport/privilege certification beyond the isolated PostgreSQL proofs below. No local postgres/Docker available. Production migration requires approval. |
 | G5 Native protection/recovery | BLOCKED | Pure/mock native-stop, checkpoint, trailing and nonflat recovery tests pass. | Independent venue stop create/update/close semantics, no uncovered interval, orphan/ambiguity and 0–4-position lifecycle proofs. Actual mutations require explicit operator approval. Never adopt manual positions. |
 | G6 Fault/restart/interference | FAIL | Focused suite passes reservation contention, UNKNOWN/no retry, stale fencing, drift and restart simulations. | End-to-end runtime crash injection at every durable/venue boundary, real isolated DB evidence, four-worker/account interference review. Unit simulations alone do not close this gate. |
-| G7 Render/shadow soak | BLOCKED | Repository manifest starts `app.t100_200_scanner` and `app.t100_200_trader`; draft separate shadow starts `app.t100_live_shadow_runtime`, manual deploy. These are repository facts, not a running-build attestation. | Operator-approved deployment, actual running SHA, sustained uninterrupted soak, Discord delivery evidence. No deployment/service change authorized or performed; preserve kill latches. |
+| G7 Render/shadow soak | BLOCKED | Repository manifest starts `app.t100_200_scanner` and `app.t100_200_trader`; draft separate shadow starts `app.t100_live_shadow_runtime`, manual deploy. Read-only Render inspection now identifies live deploy 9073ce99; recent samples remain kill-latched (see current-render-shadow.json). This is an older build, not this PR. | Operator-approved deployment, actual running SHA, sustained uninterrupted soak, Discord delivery evidence. No deployment/service change authorized or performed; preserve kill latches. |
 | G8 Independent release/security review | FAIL | Readiness fixes committed; focused CI suite passes; rollback/emergency runbooks exist. | Independent code/DDL/security/dependency review, current-head CI, verified rollback/incident drill; broad-suite failures are resolved. No reviewer approval claimed. |
 | G9 Real venue lifecycle pilot | BLOCKED | No orders sent. Adapter remains `NOT_IMPLEMENTED`. | BLOCKED_PENDING_EXPLICIT_OPERATOR_AUTHORIZATION. Separately reviewed loss-bounded restricted lifecycle plan and verified controls before any order/stop POST. Full four-slot production cannot be the first lifecycle test. |
 
@@ -175,3 +175,39 @@ settings, manual positions or orders were modified. See the redacted matrix
 and margin witness JSON files for exact observation timestamps and filter hash.
 
 The funding reconstruction now has a synthetic regression proving strictly prior marks, exclusion of entry-time funding, and funding-before-same-bar-exit ordering at both cost levels. All audit and recovery regressions are included in focused CI. See `recovery-binding-tests.txt` for the final broad-suite result for this checkpoint.
+
+
+## Wall-clock fencing, marked equity and current shadow checkpoint
+
+The lease store now uses PostgreSQL `clock_timestamp()` for expiry checks and
+renewals. Transaction-start `now()` could otherwise accept an expired lease
+inside a long transaction. Malformed fencing tokens are rejected before store
+access. A real isolated PostgreSQL regression expires a lease inside an open
+transaction, rejects its old token and renewal, then verifies a new token.
+The diagnostic fake was updated to recognize the new renewal predicate.
+Local suite: **2,021 passed, 552 subtests**, excluding only the two explicitly
+CI-only PostgreSQL modules; project verification and diff checks pass.
+See `lease-wall-clock-tests.txt`. CI on the published head remains required.
+
+`rebuild_marked_equity_drawdown.py` independently reconstructs all 63,853
+half-hour bars from prescribed exported trades, prior funding marks and local
+candles. Its output reproduces `independent-marked-equity-drawdown.json` exactly.
+Across both cohorts and both cost levels, final equity differs by less than
+0.000001 USDT, entry equity by less than 0.000001 USDT, and drawdowns by less
+than 0.00005 percentage points (the frozen metric rounding precision).
+The synthetic regression verifies high-price drawdown and funding before a
+same-bar exit, excluding entry-time funding. This closes the independent
+marked-equity arithmetic task, not full independent signal/exit-decision parity.
+The funding source completeness limitation remains unchanged.
+Reproduce with the evidence script's --data-root, --baseline and --filtered
+arguments pointing to the original read-only sources and fresh output folders.
+
+Read-only Render inspection found the existing manual-deploy T100 shadow on
+`9073ce99d31ad86132db35335a54746d7d5a1ad3`, deploy
+`dep-dbh0qhmc6qcc73cq3kkg` (live since 2026-10-28). The bounded 2026-11-02
+12:52–13:13 UTC sample reports stable critical observations but
+`OBSERVING_KILL_LATCHED`, `NATIVE_PROTECTION_LOST`, position observed and no
+TP/SL observed. Entry and live authorization are false. This is neither this
+PR's running-build attestation nor an uninterrupted successful protection soak.
+No service, deployment, latch, account setting, position or order was changed.
+G7 remains blocked; `current-render-shadow.json` preserves the bounded evidence.
