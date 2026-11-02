@@ -7,6 +7,8 @@ on:
       - 'app/t100_v40_admission.py'
       - 'tests/test_t100_live_*.py'
       - 'tests/test_t100_v40_admission.py'
+      - 'scripts/v40_*.py'
+      - 'pyproject.toml'
       - '.github/workflows/t100-live-safety-offline.yml'
   push:
     branches:

@@ -12,13 +12,39 @@ import argparse
 import csv
 import json
 import math
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any
+from zipfile import ZipFile
 
 from scripts.v40_api_filtered_original_runner import (
     validate_manifest,
 )
-from scripts.v40_backtest_api_coverage import read_entries, scenario_label
+from scripts.v40_backtest_api_coverage import _csv_from_zip, read_entries, scenario_label
+
+
+def _frozen_row_matches(actual: dict[str, str], expected: dict[str, str]) -> bool:
+    """Compare every frozen field, including chronology, size and risk metrics.
+
+    Permit only tiny serialization noise for finite numbers. Missing columns,
+    NaN/Infinity, changed text and booleans fail closed. Additional output
+    diagnostics do not change the frozen comparison surface.
+    """
+    for field, value in expected.items():
+        observed = actual.get(field)
+        if observed is None:
+            return False
+        try:
+            left, right = Decimal(observed), Decimal(value)
+        except (InvalidOperation, TypeError):
+            if observed != value:
+                return False
+        else:
+            if not left.is_finite() or not right.is_finite():
+                return False
+            if abs(left - right) > max(Decimal("1e-8"), abs(right) * Decimal("1e-10")):
+                return False
+    return True
 
 
 def _find_one_csv(folder: Path, filename: str) -> Path:
@@ -78,6 +104,15 @@ def compare_replays(
     if not math.isclose(b_equity, original.final_equity,
                         rel_tol=1e-8, abs_tol=0.02):
         raise ValueError("BASELINE_EQUITY_NOT_REPRODUCED")
+    with ZipFile(archive) as frozen:
+        frozen_entries = [r for r in _csv_from_zip(frozen, "capital_2000/entries.csv")
+                          if r.get("scenario") == scenario]
+        frozen_metrics = [r for r in _csv_from_zip(frozen, "capital_2000/metrics.csv")
+                          if r.get("scenario") == scenario]
+    if not all(_frozen_row_matches(a, e) for a, e in zip(be, frozen_entries, strict=True)):
+        raise ValueError("BASELINE_ENTRY_FIELDS_NOT_REPRODUCED")
+    if not _frozen_row_matches(bm, frozen_metrics[0]):
+        raise ValueError("BASELINE_METRIC_FIELDS_NOT_REPRODUCED")
     if any(r.get("symbol") not in allowed for r in fe):
         raise ValueError("FILTERED_ENTRY_INELIGIBLE_SYMBOL")
     if any(r.get("symbol") in denied for r in fe):
@@ -106,6 +141,8 @@ def compare_replays(
         "filtered_high_envelope_dd_pct": dd(filtered_dd),
         "excluded_symbols_in_filtered_entries": 0,
         "baseline_trades_and_equity_reproduced": True,
+        "baseline_all_frozen_entry_fields_reproduced": True,
+        "baseline_all_frozen_metric_fields_reproduced": True,
         "historical_api_permissions_certified": False,
         "venue_execution_certified": False,
         "live_authorization": False,
@@ -136,6 +173,7 @@ def main() -> None:
             "REPLAY_FINAL_EQUITY_INVALID", "REPLAY_OUTPUT_DIRS_IDENTICAL",
             "BASELINE_ENTRY_COUNT_NOT_REPRODUCED", "BASELINE_TRADE_ORDER_NOT_REPRODUCED",
             "BASELINE_EQUITY_NOT_REPRODUCED", "FILTERED_ENTRY_INELIGIBLE_SYMBOL",
+            "BASELINE_ENTRY_FIELDS_NOT_REPRODUCED", "BASELINE_METRIC_FIELDS_NOT_REPRODUCED",
             "FILTERED_ENTRY_EXCLUDED_SYMBOL", "FROZEN_ARCHIVE_SHA_MISMATCH",
             "FILTER_MANIFEST_NOT_VERIFIED", "FILTER_COHORT_NOT_VERIFIED",
             "CANDIDATE_SOURCE_TOO_LARGE", "FILTER_COHORT_ARCHIVE_MISMATCH",
