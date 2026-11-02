@@ -211,3 +211,19 @@ TP/SL observed. Entry and live authorization are false. This is neither this
 PR's running-build attestation nor an uninterrupted successful protection soak.
 No service, deployment, latch, account setting, position or order was changed.
 G7 remains blocked; `current-render-shadow.json` preserves the bounded evidence.
+
+
+## Database submission-boundary fault matrix
+
+All five CI checks passed at `a9677c67d8d1f62bff13b8fb8b0b6d7b21ea0692`
+(tree identical to local `a40680c9`), including the long-transaction lease
+expiry regression on isolated PostgreSQL 16.
+
+The next isolated PostgreSQL matrix injects failures at all three durable
+staging writes (intent INSERT, intent transition, slot transition), and both
+UNKNOWN-latch writes. It requires rollback to RESERVED/no intent before any
+transport, or SUBMITTING/SUBMITTING after an ambiguous outcome; restaging must
+remain blocked after SUBMITTING and UNKNOWN. Manual inventory is unchanged.
+These tests use the existing disposable localhost CI guard and no venue client.
+They strengthen DB-boundary evidence; real process/network crash recovery and
+full runtime transport remain separate open G4/G6 requirements.
