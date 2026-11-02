@@ -358,3 +358,44 @@ and stop semantics verification (with separately authorized venue
 lifecycle evidence), completed full four-slot runtime transport and
 non-flat recovery, operator-approved **read-only** current-build Render soak,
 and independent release review. Do not bypass these with passing CI.
+
+### Complete fourth-slot SQL reservation -> stage -> GET -> commit -> restart witness
+
+An additional disposable PostgreSQL 16 test now begins before the
+SUBMITTING order state, using the **real** V40 four-slot reservation and
+attempt journal instead of a manually pre-seeded SQL row:
+
+1. DELETE only the test's seeded fourth-slot order/slot in ephemeral CI.
+2. Inspect the three existing owned positions against actual restricted
+   `t100_live_executor_runtime` PostgreSQL SELECT-only
+   REPEATABLE READ snapshots and mock signed MEXC private GETs.
+3. Apply the repository V40 planner, take a leader-fenced reservation,
+   and atomically transition it to SUBMITTING in PostgreSQL.
+4. Observe a **simulated** fully filled fourth entry and exchange-native
+   stop through two GET-only order/deal/position/stop bookends.
+5. Commit the exact GET-derived protected batch as ACK, immutable fills,
+   OPEN checkpoint and revision through the real database transaction.
+6. Restart from the REAL restricted PostgreSQL reader and independently
+   re-GET all four origins/positions/stops. The four managed positions must
+   recover with `live_authorization=false`.
+
+The test originally demonstrated a correct privileged-reader rejection
+(`LEDGER_READ_OR_CONTRACT_FAILED`) when pointed at the migration admin
+role. It now creates and uses the required restricted read-only CI role
+before proceeding; no production role/grant was modified.
+
+**Verified head:**
+`6053339c9cb702df9b5b9206a6e044cf1911b6ed`.
+At that SHA **5/5 workflows passed**:
+[PostgreSQL](https://github.com/chrpapas/mexc-exhaustion-scanner/actions/runs/41538891672),
+[offline safety](https://github.com/chrpapas/mexc-exhaustion-scanner/actions/runs/41538891465),
+[scanner/trader split](https://github.com/chrpapas/mexc-exhaustion-scanner/actions/runs/41538891747),
+[promotion](https://github.com/chrpapas/mexc-exhaustion-scanner/actions/runs/41538891760),
+[dashboard](https://github.com/chrpapas/mexc-exhaustion-scanner/actions/runs/41538891570).
+
+G4/G6 now have actual real-SQL full *simulated* lifecycle integration.
+This is NOT proof of an actual MEXC order POST, protective stop create/update
+semantics, exchange/database distributed atomicity, current account exposure
+and collateral, production Render service recovery or real-money safety.
+The live adapter is NOT_IMPLEMENTED, migration 031 is not deployed, and
+independent release review is outstanding. G4/G5/G6/G7/G8/G9 still BLOCK.
