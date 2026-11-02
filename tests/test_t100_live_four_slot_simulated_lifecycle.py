@@ -8,7 +8,6 @@ NOT a live fill or an order-submission certification.
 from __future__ import annotations
 
 from copy import deepcopy
-from dataclasses import asdict
 import unittest
 
 from app.t100_live_durable_recovery import recover_nonflat
@@ -18,9 +17,6 @@ from app.t100_live_four_slot_protected_get_evidence import (
 from app.t100_live_v40_protected_commit import ProtectedCommitHalted
 from tests.test_t100_live_four_slot_attempt_journal import lease
 from tests.test_t100_live_four_slot_snapshot_coordinator import fixture
-from tests.test_t100_live_durable_recovery import (
-    intent as historical_intent,
-)
 from tests.test_t100_live_v40_protected_commit import ProtectedCommitTests
 from tests.test_t100_live_v40_protected_finalization import deal
 
@@ -105,23 +101,29 @@ class SimulatedFullLifecycleTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(self.pg.committed_checkpoints), 1)
         self.assertEqual(len(self.pg.committed_revisions), 1)
 
-        # Reconstruct restart ledger from the exact committed batch, not an
-        # inferred current account position or manually adopted position.
+        # Reconstruct restart ledger from actual fake-DB INSERT arguments,
+        # NOT the input batch's hypothetical checkpoint. A missing write or
+        # wrong inserted field must break the independent recovery witness.
         snap, old_orders, _, _ = fixture(3)
-        entry = result.prepared_batch.entries[0]
-        record = asdict(entry.checkpoint)
-        snap.checkpoints.append(record)
-        snap.revisions.append({
-            **record, "write_reason": "ENTRY_PROTECTED",
-        })
-        snap.intents.append(historical_intent(
-            symbol=entry.checkpoint.symbol,
-            external_oid=entry.checkpoint.external_oid,
-            exchange_order_id=entry.checkpoint.exchange_order_id,
-            volume_contracts=entry.checkpoint.contracts,
-            stop_price=self.intent.stop_price,
-            state="ACK",
-        ))
+        cp_fields = (
+            "position_id", "symbol", "external_oid", "exchange_order_id",
+            "contracts", "entry_price", "stop_order_id", "stop_price",
+            "best_profit_pct", "armed", "lifecycle_state",
+            "checkpoint_version", "last_write_reason",
+        )
+        revision_fields = (
+            "position_id", "checkpoint_version", "write_reason", "symbol",
+            "external_oid", "exchange_order_id", "contracts",
+            "entry_price", "stop_order_id", "stop_price",
+            "best_profit_pct", "armed", "lifecycle_state",
+        )
+        cp_values = self.pg.committed_checkpoints["900"]
+        revision_values = self.pg.committed_revisions[("900", 1)]
+        self.assertEqual(len(cp_values), len(cp_fields))
+        self.assertEqual(len(revision_values), len(revision_fields))
+        snap.checkpoints.append(dict(zip(cp_fields, cp_values)))
+        snap.revisions.append(dict(zip(revision_fields, revision_values)))
+        snap.intents.append(deepcopy(self.pg.new_intents[0]))
         old_orders.append(deepcopy(
             self.venue.orders[(self.intent.symbol, self.intent.external_oid)]
         ))
