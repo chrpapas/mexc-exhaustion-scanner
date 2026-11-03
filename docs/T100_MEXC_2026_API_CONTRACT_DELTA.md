@@ -34,26 +34,30 @@ Current official TP/SL docs describe the following:
 - `POST /api/v1/private/stoporder/change_price` is documented as
   **modify TP/SL on a LIMIT ORDER** with `orderId`, and is NOT
   equivalent to modifying a position native stop by its TP/SL `id`.
-- The old MEXC contract reference documents
+- The **current** MEXC Futures API reference explicitly documents
   `POST /api/v1/private/stoporder/change_plan_price` with
-  `stopPlanOrderId`, but that contract's semantics for the currently
-  returned position TP/SL `id` have NOT been independently verified
-  against the current official endpoint reference and actual venue.
-  Reusing it as an assumed native position-stop amendment is unsafe.
+  `stopPlanOrderId` for a TP/SL planned-order ID; this is no longer
+  merely an old-documentation endpoint. However, exact mapping from a
+  live *position* TP/SL `GET /stoporder/open_orders` `id` to this
+  amendment request has NOT been independently witnessed. In particular,
+  no protected real-position amendment/GET/terminal-history lifecycle
+  has been certified. Endpoint documentation is not authorization.
 
 Sources:
 - https://www.mexc.io/api-docs/futures/account-and-trading-endpoints/get-current-take-profitstop-loss-order-list
 - https://www.mexc.co/api-docs/futures/account-and-trading-endpoints/modify-tpsl-prices-on-a-limit-order
+- https://www.mexc.io/api-docs/futures/account-and-trading-endpoints/modify-tpsl-prices-on-a-tpsl-planned-order
 - https://mexcdevelop.github.io/apidocs/contract_v1_en/
 
 ## New fail-closed safeguards
 
-1. `LIVE_NATIVE_STOP_AMENDMENT_STATUS` is independently pinned to
-   `UNVERIFIED_CURRENT_DOCS`; the old native-stop mutation adapter
-   refuses to call its `change_plan_price` POST even when a separate
-   tiny-pilot permit has been constructed, unless this independent
-   endpoint certification flag has been explicitly updated in
-   reviewed source. The global adapter also remains NOT_IMPLEMENTED.
+1. `LIVE_NATIVE_STOP_AMENDMENT_STATUS` remains independently pinned to
+   `UNVERIFIED_CURRENT_DOCS` (legacy constant value; endpoint now
+   documented but the **position-ID mapping and lifecycle are unverified**).
+   The native-stop mutation adapter refuses its `change_plan_price` POST
+   even when a separate tiny-pilot permit has been constructed, until
+   actual venue-scoped contract and lifecycle evidence is independently
+   reviewed and this source gate is explicitly updated. The global adapter also remains NOT_IMPLEMENTED.
 2. `assess_native_short_market_stop_row` is a separate, pure read-only
    audit of supplied current MEXC GET fields. It requires exact native
    order/position identity, current state, short side, **market**
@@ -88,3 +92,25 @@ not prevent liquidation before trigger.
   and safe rollout review.
 - No MEXC POST, native stop edit, production DB migration/role change,
   Render deployment, credential change, or BOXWAVE change occurred.
+
+## 2026-11-03 — Position-origin and stop-state distinctions
+
+MEXC current `GET /api/v1/private/stoporder/open_orders` specifies
+`orderId=0` for a TP/SL **placed by position**. The same response
+documents `triggerSide=0` for an untriggered order and `errorCode=0`
+for normal execution state. The new strict T100/V40 native-market
+stop-row audit explicitly requires all three values. A TP/SL linked to
+an ordinary limit order, an already triggered record, or an error
+record cannot be counted as independently observed position protection.
+Missing or malformed fields are blockers.
+
+This can correctly cause a current entry's embedded
+`POST /private/order/create` `stopLossPrice` to be **rejected as a
+position-origin stop**, depending on how MEXC actually materializes the
+linked TP/SL. We do not assume a successful entry response provides
+a position-origin `orderId=0` stop. A fully safe live entry/stop
+lifecycle, including its atomicity or protection-gap handling, remains
+a separate release blocker. No real endpoint was invoked.
+
+- https://www.mexc.io/api-docs/futures/account-and-trading-endpoints/get-current-take-profitstop-loss-order-list
+- https://www.mexc.io/api-docs/futures/account-and-trading-endpoints/place-order
