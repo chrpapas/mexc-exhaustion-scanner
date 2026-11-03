@@ -712,3 +712,45 @@ account manual position unprotected, actual venue/native-stop execution
 not certified, current account collateral and tier envelope unverified,
 no deployed current-code protected Render soak, no independent release
 signoff, no authorized tiny venue pilot. G2/G4/G5/G6/G7/G8/G9 OPEN.
+
+### 2026-11-03 — V40 immutable claim runtime privilege audit and dynamic blocker
+
+Added a read-only effective permissions/trigger audit:
+`app/t100_live_v40_dispatch_privilege_audit.py`. It inspects the
+actual `t100_live_executor_runtime` login inside a verified READ ONLY,
+REPEATABLE READ transaction on `mexc_exhaustion` and checks:
+- the V40 claim table is NOT owned by the runtime;
+- runtime role has SELECT and INSERT but NOT UPDATE/DELETE/TRUNCATE/
+  TRIGGER on `t100_live_v40_dispatch_claims`;
+- runtime cannot CREATE objects in public schema or in database;
+- the actual immutable UPDATE/DELETE-rejecting PostgreSQL trigger exists
+  and is ENABLED on the intended claim table.
+
+Malformed evidence, missing table, privileged/wrong login, absent
+INSERT, excessive rights, disabled trigger or read failure blocks.
+`run_dynamic_readiness_bundle` now requires the privilege audit to
+PASS, in addition to state/schema/account checks; an operator/admin
+connection or unconfigured runtime cannot be labeled dynamically ready.
+The status remains *NONAUTHORIZING* regardless of a PASS.
+
+Real disposable PostgreSQL 16 CI tests explicitly grant/revoke an unsafe
+DELETE privilege and disable/restore the immutable trigger to verify
+the report is blocked when either invariant is violated. These
+test-only changes run only on CI's local ephemeral PostgreSQL
+container. No live role grant, schema change or deployment occurred.
+
+**Verified tested SHA:**
+`468e688585eef1b5bc1cf772be67e068c09f7a06`.
+All 5 GitHub checks PASS:
+[isolated PostgreSQL](https://github.com/chrpapas/mexc-exhaustion-scanner/actions/runs/41647114828),
+[offline safety](https://github.com/chrpapas/mexc-exhaustion-scanner/actions/runs/41647114740),
+[split](https://github.com/chrpapas/mexc-exhaustion-scanner/actions/runs/41647114691),
+[promotion](https://github.com/chrpapas/mexc-exhaustion-scanner/actions/runs/41647114696),
+[dashboard](https://github.com/chrpapas/mexc-exhaustion-scanner/actions/runs/41647114697).
+
+**Unresolved:** migration 032 is unapplied in prod and existing pinned
+runtime grants do not include V40 claim table; the current production
+role is not certified for V40. The new permission audit is a future
+safety gate, not license to apply grants now. Actual MEXC native
+protection and execution, 4-slot runner, cross collateral and tiers,
+Render protected soak and independent release review remain blocked.
