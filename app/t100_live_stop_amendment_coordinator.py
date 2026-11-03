@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from decimal import Decimal
 from typing import Any
 
-from app.t100_live_active_tpsl import effective_protective_quantity
+from app.t100_live_native_stop_execution_audit import assess_native_short_market_stop_row
 
 from app.t100_live_expected_stop_transition import (
     ExpectedStopTransition,
@@ -85,16 +85,20 @@ class StopAmendmentLifecycleCoordinator:
             raise StopAmendmentCoordinatorHalted(
                 "STOP_RECONCILIATION_STOP_NOT_UNIQUE"
             )
-        stop = matching[0]
+        # State/quantity alone cannot certify a stop: MEXC also supports
+        # order-attached and limit SL rows. This is a static GET witness
+        # only, and never certifies market execution or live authorization.
+        report = assess_native_short_market_stop_row(
+            stop=matching[0], symbol=amendment.symbol,
+            position_id=amendment.position_id,
+            position_quantity=position_quantity,
+            maximum_short_stop_price=amendment.previous_stop,
+        )
         if (
-            type(stop.get("state")) is not int or stop["state"] != 1
-            or type(stop.get("isFinished")) is not int
-            or stop["isFinished"] != 0
-            or type(stop.get("positionType")) is not int
-            or stop["positionType"] != 2
-            or effective_protective_quantity(
-                stop, position_quantity=position_quantity,
-            ) != position_quantity
+            report.status
+            != "NATIVE_MARKET_SHORT_SL_ROW_OBSERVED_NONAUTHORIZING"
+            or report.active_native_full_volume_market_sl_observed is not True
+            or report.stop_execution_certified is not False
         ):
             raise StopAmendmentCoordinatorHalted(
                 "STOP_RECONCILIATION_NATIVE_FULL_COVERAGE_UNVERIFIED"
