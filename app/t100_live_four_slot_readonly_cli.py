@@ -184,6 +184,7 @@ async def run_readonly_four_slot_audit(
 async def _main(
     env: Mapping[str, str], *,
     shared_manual_observation: bool = False,
+    restart_preflight: bool = False,
 ) -> dict[str, Any]:
     try:
         require_readonly_controls(env)
@@ -219,8 +220,25 @@ async def _main(
         mexc = MexcTradeClient(
             "https://api.mexc.com", api_key=key, api_secret=secret,
         )
+        ledger = PostgresFourSlotLedgerReader(pool)
+        if restart_preflight:
+            # Only the explicit CLI flag enables the NEW read-only
+            # restart preflight; legacy four-slot audit is unchanged.
+            # The triage always uses the same restricted SELECT-only pool.
+            from app.t100_live_four_slot_restart_triage import (
+                PostgresFourSlotRestartTriage,
+            )
+            from app.t100_live_four_slot_restart_supervisor import (
+                run_four_slot_restart_readonly_cycle,
+            )
+            return await run_four_slot_restart_readonly_cycle(
+                triage=PostgresFourSlotRestartTriage(pool),
+                ledger=ledger, client=mexc, env=env,
+                # Observe external manual positions, NEVER adopt or edit.
+                shared_manual_observation=True,
+            )
         return await run_readonly_four_slot_audit(
-            ledger=PostgresFourSlotLedgerReader(pool), client=mexc, env=env,
+            ledger=ledger, client=mexc, env=env,
             shared_manual_observation=shared_manual_observation,
         )
     except Exception:
@@ -239,11 +257,18 @@ def main() -> None:
         help="GET/SELECT-only account partition with independent manual "
              "positions; NEVER authorizes cross-margin trading",
     )
+    parser.add_argument(
+        "--restart-preflight", action="store_true",
+        help="Opt-in restricted SQL + GET-only V40 restart triage; "
+             "never sends an order, requires migrations 031/032 and "
+             "observes manual positions without adopting them",
+    )
     args = parser.parse_args()
     try:
         output = asyncio.run(_main(
             os.environ,
             shared_manual_observation=args.shared_manual_observation,
+            restart_preflight=args.restart_preflight,
         ))
     except Exception:
         output = _report("FOUR_SLOT_READONLY_DIAGNOSTIC_HALTED")
