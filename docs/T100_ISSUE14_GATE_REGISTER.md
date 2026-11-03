@@ -513,3 +513,52 @@ venue transport, native stop creation/amend/close, cash/collateral
 verification, Render restart and protected soak, and independent release
 review remain BLOCKED. Manual position untouched. No real MEXC POST,
 production DB change, Render deployment, credentials or BOXWAVE changes.
+
+### 2026-11-03 — One-shot exchange POST possibility claim (unapplied migration 032)
+
+**Engineering evidence only; no MEXC POST.** Introduced CREATE-ONLY,
+unapplied `migrations/032_t100_live_v40_dispatch_claims.sql` and
+`PostgresFourSlotDispatchClaims`. A claim can be inserted only if:
+- a verified current leader fencing token matches the active lease and
+  the exact reservation holder/fence;
+- an existing `SUBMITTING` V40 slot and `SUBMITTING` order-intent row
+  match the exact signal, symbol and `external_oid`;
+- staged snapshot age is bounded before the claim; this is a
+  refusal gate, **not** live exchange/account risk evidence;
+- the account-wide V40 advisory TX lock is acquired before all reads;
+- the unique immutable `signal_id`/origin claim is absent.
+
+Once one transaction commits the `POST_POSSIBLE_UNRESOLVED` row, the
+same or another worker and even a new leader can never claim it again.
+A future order transport must treat the row as *possibly POSTed*, avoid
+retries on absent/unknown GET, and require separately certified
+exchange/account preflight, permits, native stop rules, and explicit
+operator approval before any real mutation. This module has NO POST,
+no MEXC credential usage, no order recovery retry, no claim release
+or reset method, and always emits `entry_allowed=false` and
+`live_authorization=false`.
+
+Disposable PostgreSQL 16 tests verify:
+1. exactly one persisted claim; restart sees a duplicate and can only
+   reconcile,
+2. two competing workers yield exactly one successful claim, 
+3. mismatch, UNKNOWN journal, and stale leader block before INSERT,
+4. terminating the database backend *after INSERT but before COMMIT*
+   rolls back the uncommitted claim, leaves stage SUBMITTING, and sends
+   no order, while a later fresh SQL-only claim can proceed.
+
+**Exact tested head:** `7f53400e64c347cc2256dd5f21fd89edcce3c13f`.
+All FIVE GitHub checks PASSED:
+[isolated PostgreSQL](https://github.com/chrpapas/mexc-exhaustion-scanner/actions/runs/41597556488),
+[offline safety](https://github.com/chrpapas/mexc-exhaustion-scanner/actions/runs/41597558722),
+[scanner/trader split](https://github.com/chrpapas/mexc-exhaustion-scanner/actions/runs/41597556545),
+[promotion](https://github.com/chrpapas/mexc-exhaustion-scanner/actions/runs/41597556559),
+[dashboard](https://github.com/chrpapas/mexc-exhaustion-scanner/actions/runs/41597556557).
+
+**Important:** this makes the durable V40 POST-attempt ownership design
+testable; it is NOT exchange order submission, not an exchange execution
+certificate, and not independent enforcement of a current account risk
+snapshot. G4/G5/G6/G7/G8/G9 remain OPEN. Migration 031 and 032 are
+NOT approved for production deployment or runtime privileges. No real
+orders, stop changes, Render deployment, production DB mutation,
+credential change or BOXWAVE change.
