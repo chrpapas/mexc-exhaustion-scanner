@@ -329,9 +329,14 @@ class LiveOrderGateway:
                 raise ExecutionHalted(
                     "PARTIAL_OR_NONFINAL_FILL_REQUIRES_MANUAL_INTERVENTION"
                 )
-            position_id = str(order.get("positionId") or "")
-            if not position_id or position_id == "0":
-                raise ExecutionHalted("FILL_WITHOUT_POSITION_ID")
+            raw_position_id = order.get("positionId")
+            if (
+                type(raw_position_id) not in (int, str)
+                or not str(raw_position_id).isdigit()
+                or int(str(raw_position_id)) <= 0
+            ):
+                raise ExecutionHalted("FILL_WITHOUT_VALID_POSITION_ID")
+            position_id = str(raw_position_id)
             try:
                 stops = await self.exchange.open_stop_orders(intent.symbol)
             except Exception as exc:
@@ -354,6 +359,15 @@ class LiveOrderGateway:
                     "UNPROTECTED_REAL_POSITION_MANUAL_INTERVENTION_REQUIRED"
                 )
             stop = candidates[0]
+            raw_stop_id = stop.get("id") or stop.get("stopPlanOrderId")
+            if (
+                type(raw_stop_id) not in (int, str)
+                or not str(raw_stop_id).isdigit()
+                or int(str(raw_stop_id)) <= 0
+            ):
+                raise ExecutionHalted(
+                    "NATIVE_PROTECTIVE_STOP_IDENTITY_UNVERIFIED"
+                )
             try:
                 actual_price = Decimal(str(stop.get("stopLossPrice") or 0))
                 protected_qty = effective_protective_quantity(
@@ -379,9 +393,13 @@ class LiveOrderGateway:
                     "UNPROTECTED_REAL_POSITION_MANUAL_INTERVENTION_REQUIRED"
                 )
 
-        # Only AFTER the full-fill native stop witness do we persist ACK.
-        # An accepted but unfilled exchange order can be ACKed as unfilled;
-        # this must never be treated as an owned/protected open position.
+        # An unfilled accepted order remains SUBMITTING/UNKNOWN: it can fill
+        # later, and an HTTP/order lookup alone cannot prove protective
+        # native stop attachment. Do not prematurely mark it ACK.
+        if dealt == 0:
+            return "ORDER_ACCEPTED_UNFILLED_RECONCILE_ONLY"
+
+        # Only AFTER full-fill native stop verification do we persist ACK.
         if state in {"SUBMITTING", "UNKNOWN"}:
             if not await self.ledger.transition(
                 intent.external_oid, state, "ACK",
@@ -390,4 +408,4 @@ class LiveOrderGateway:
                 raise ExecutionHalted(
                     "ORDER_ACK_LEDGER_CAS_FAILED_RECONCILIATION_REQUIRED"
                 )
-        return "VERIFIED_PROTECTED" if dealt > 0 else "ACK_UNFILLED"
+        return "VERIFIED_PROTECTED"
