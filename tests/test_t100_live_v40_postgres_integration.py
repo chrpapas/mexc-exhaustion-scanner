@@ -183,7 +183,7 @@ class RealPostgresProtectedV40Tests(unittest.IsolatedAsyncioTestCase):
 
     async def finalize(self):
         from app.t100_live_leader_fencing import LeaderLease
-        return await self.executor.persist(
+        return await self.executor.persist_offline_unclaimed(
             batch=self.batch, pre_attempt_witness=self.witness,
             lease=LeaderLease("t100-live-executor", "worker-A", 11, 45),
             observed_at=self.observed_at,
@@ -963,7 +963,7 @@ class RealPostgresProtectedV40Tests(unittest.IsolatedAsyncioTestCase):
         # is the ONLY input to actual PostgreSQL ACK+fill/checkpoint writes.
         batch = observed.prepared_batch
         self.assertIsNotNone(batch)
-        saved = await self.executor.persist(
+        saved = await self.executor.persist_offline_unclaimed(
             batch=batch, pre_attempt_witness=self.witness,
             lease=LeaderLease("t100-live-executor", "worker-A", 11, 45),
             observed_at=self.observed_at,
@@ -989,7 +989,7 @@ class RealPostgresProtectedV40Tests(unittest.IsolatedAsyncioTestCase):
             )
             self.assertEqual(persisted["fill_count"], 1)
         with self.assertRaises(ProtectedCommitHalted):
-            await self.executor.persist(
+            await self.executor.persist_offline_unclaimed(
                 batch=batch, pre_attempt_witness=self.witness,
                 lease=LeaderLease("t100-live-executor", "worker-A", 11, 45),
                 observed_at=self.observed_at,
@@ -1357,7 +1357,7 @@ class RealPostgresProtectedV40Tests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await self.state(), staged_state)
         self.assertFalse(observed.mexc_orders_sent)
 
-        saved = await self.executor.persist(
+        saved = await self.executor.persist_offline_unclaimed(
             batch=observed.prepared_batch,
             pre_attempt_witness=witness, lease=leader, observed_at=moment,
         )
