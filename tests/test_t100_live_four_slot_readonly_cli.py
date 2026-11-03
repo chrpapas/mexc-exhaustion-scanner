@@ -2,7 +2,8 @@
 from __future__ import annotations
 
 import unittest
-from unittest.mock import patch
+from types import ModuleType
+from unittest.mock import AsyncMock, patch
 
 from app.t100_live_four_slot_readonly_cli import (
     _main, run_readonly_four_slot_audit,
@@ -123,6 +124,62 @@ class FourSlotOperatorCliTests(unittest.IsolatedAsyncioTestCase):
                     result["status"], "FOUR_SLOT_READONLY_PAPER_KILL_REQUIRED",
                 )
         self.assertEqual(client.calls, [])
+
+    async def test_restart_preflight_cli_opt_in_routes_through_restricted_sql(self):
+        """No actual credential, network GET or POST is used in this test."""
+        from app.t100_live_four_slot_restart_triage import (
+            PostgresFourSlotRestartTriage,
+        )
+        from tests.test_t100_live_four_slot_restart_triage import (
+            FakePool, sample,
+        )
+        fake_pool = FakePool([sample()])
+        fake_pool.close = AsyncMock()
+        client = MockMexcGetOnly([], [], [])
+        client.close = AsyncMock()
+        fake_asyncpg = ModuleType("asyncpg")
+        fake_asyncpg.create_pool = AsyncMock(return_value=fake_pool)
+        fake_mexc = ModuleType("app.mexc_trade")
+        fake_mexc.MexcTradeClient = lambda *a, **kw: client
+
+        env = {
+            **PAPER_KILLED,
+            "MEXC_API_KEY": "fake-ci-key",
+            "MEXC_API_SECRET": "fake-ci-secret",
+        }
+        with patch.dict(
+            "sys.modules",
+            {"asyncpg": fake_asyncpg, "app.mexc_trade": fake_mexc},
+        ), patch(
+            "app.t100_live_four_slot_readonly_cli.getpass.getpass",
+            side_effect=["ci-test-password", "postgres://fake-ci-host"],
+        ):
+            result = await _main(env, restart_preflight=True)
+        self.assertEqual(
+            result["status"],
+            "RESTART_PENDING_ATTEMPT_EXACT_ORIGIN_RECONCILE_ONLY",
+        )
+        self.assertEqual(result["pending_v40_attempts"], 1)
+        self.assertEqual(client.calls, [])
+        self.assertGreater(len(fake_pool.conn.calls), 0)
+        fake_asyncpg.create_pool.assert_awaited_once()
+        client.close.assert_awaited_once()
+        fake_pool.close.assert_awaited_once()
+        self.assertFalse(result["entry_allowed"])
+        self.assertFalse(result["live_authorization"])
+        self.assertFalse(result["mexc_orders_sent"])
+        self.assertNotIn("ci-test-password", str(result))
+        self.assertNotIn("fake-ci-secret", str(result))
+
+    async def test_restart_preflight_refuses_before_any_credential_prompt(self):
+        with patch(
+            "app.t100_live_four_slot_readonly_cli.getpass.getpass",
+            side_effect=AssertionError("must not ask password"),
+        ):
+            result = await _main({}, restart_preflight=True)
+        self.assertEqual(
+            result["status"], "FOUR_SLOT_READONLY_PAPER_KILL_REQUIRED"
+        )
 
     async def test_invalid_controls_block_before_hidden_prompt(self):
         with patch(
