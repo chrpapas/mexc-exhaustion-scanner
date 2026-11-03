@@ -305,6 +305,45 @@ class RealPostgresProtectedV40Tests(unittest.IsolatedAsyncioTestCase):
                 ), 1,
             )
 
+    async def test_one_shot_claim_cannot_be_reset_with_direct_update_or_delete(self):
+        """Database-level invariant, even in the privileged disposable CI role."""
+        from app.t100_live_four_slot_dispatch_claims import (
+            PostgresFourSlotDispatchClaims,
+        )
+        from app.t100_live_leader_fencing import LeaderLease
+
+        stage = self.batch.entries[0].stage
+        store = PostgresFourSlotDispatchClaims(self.pool)
+        leader = LeaderLease("t100-live-executor", "worker-A", 11, 45)
+        await store.claim(stage=stage, lease=leader)
+        async with self.pool.acquire() as db:
+            for query in (
+                """UPDATE public.t100_live_v40_dispatch_claims
+                   SET state='POST_POSSIBLE_UNRESOLVED'
+                   WHERE signal_id=$1""",
+                """DELETE FROM public.t100_live_v40_dispatch_claims
+                   WHERE signal_id=$1""",
+            ):
+                with self.subTest(query=query.split()[0]):
+                    with self.assertRaisesRegex(
+                        asyncpg.PostgresError,
+                        "T100_DISPATCH_CLAIM_IMMUTABLE",
+                    ):
+                        await db.execute(query, stage.signal_id)
+            saved = await db.fetchrow("""
+                SELECT signal_id, external_oid, state, holder_id,
+                       fencing_token
+                FROM public.t100_live_v40_dispatch_claims
+                WHERE signal_id=$1
+            """, stage.signal_id)
+            self.assertEqual(saved["external_oid"], stage.external_oid)
+            self.assertEqual(saved["holder_id"], "worker-A")
+            self.assertEqual(saved["fencing_token"], 11)
+            self.assertEqual(saved["state"], "POST_POSSIBLE_UNRESOLVED")
+            self.assertEqual(await db.fetchval("""
+                SELECT count(*) FROM public.t100_live_v40_dispatch_claims
+            """), 1)
+
     async def test_two_competing_dispatch_claims_have_exactly_one_winner(self):
         from app.t100_live_four_slot_dispatch_claims import (
             PostgresFourSlotDispatchClaims, FourSlotDispatchClaimHalted,
