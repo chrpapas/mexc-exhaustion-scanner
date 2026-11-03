@@ -20,6 +20,7 @@ from app.t100_live_four_slot_snapshot_coordinator import (
 )
 
 from app.t100_live_active_tpsl import effective_protective_quantity
+from app.t100_live_native_stop_execution_audit import assess_native_short_market_stop_row
 from app.t100_live_execution import EntryIntent
 from app.t100_live_four_slot_attempt_journal import DurableAttemptStage
 from app.t100_live_four_slot_snapshot_coordinator import FourSlotSnapshotResult
@@ -263,6 +264,24 @@ def assess_staged_protected_attempts(
                 or effective_protective_quantity(s, position_quantity=deal) != deal
             ):
                 return block("ATTEMPT_NATIVE_STOP_OR_POSITION_UNVERIFIED", **common)
+            native_market = assess_native_short_market_stop_row(
+                stop=s,
+                symbol=intent.symbol,
+                position_id=pid,
+                position_quantity=deal,
+                maximum_short_stop_price=intent.stop_price,
+            )
+            if (
+                native_market.status
+                != "NATIVE_MARKET_SHORT_SL_ROW_OBSERVED_NONAUTHORIZING"
+                or native_market.active_native_full_volume_market_sl_observed
+                is not True
+                or native_market.stop_execution_certified is not False
+            ):
+                return block(
+                    "ATTEMPT_NATIVE_MARKET_STOP_SEMANTICS_UNVERIFIED",
+                    **common,
+                )
         if {p.symbol for p in old} | expected_new_symbols != {
             p.get("symbol") for p in positions
         }:
