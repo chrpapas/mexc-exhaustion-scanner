@@ -1403,3 +1403,56 @@ Official docs:
 
 The production T100 runtime, other accounts and BOXWAVE were not
 touched. **No additional live order is authorized**.
+
+
+### 2026-11-03 — REAL MEXC signed GET post-pilot forensic classification (T100-only subaccount)
+
+Operator ran `t100_pilot_stop_forensics_readonly.py` locally on the
+separate $50 T100/225 BTC pilot subaccount. Two authenticated
+inventory bookends observed the account **flat**. This is venue
+evidence (operator-supplied sanitized status), not synthetic replay.
+
+- Pilot journal: `FLAT_BUT_STOP_LIFECYCLE_NOT_VERIFIED`; historical
+  entry `state=3`, positive deal volume, positive embedded SL price,
+  `lossTrend=1`.
+- Finished TP/SL history: one page/one row, linked to the **actual**
+  pilot position. History completeness **NOT certified**.
+- Historical row:
+  `orderId>0` => **ORDER_ATTACHED**, *not* position-origin;
+  `volType=1` partial-TP/SL mode;
+  `profitLossVolType=SEPARATE`; positive `vol` and
+  `stopLossVol`; positive `stopLossPrice`;
+  `lossTrend=1`; `stopLossReverse=2`;
+  **`stopLossType=MISSING`**, **`stopLossOrderPrice=MISSING`**.
+- Terminal row: **`state=2` CANCELED**,
+  **`isFinished=1`**, **`triggerSide=0` UNTRIGGERED**,
+  and `errorCode` nonzero (actual numeric value redacted).
+  This row was never observed to trigger or execute an SL.
+- The earlier live attempt failed before `stop_report` would have
+  checked position origin because `stopLossType` was missing.
+  This missing field must **not** be silently inferred as
+  `market`, even though official MEXC GET example also omits
+  `stopLossType`. The discovered *order-attached* origin would
+  independently fail position-native certification.
+- This **disproves** treating `order/create` with embedded
+  `stopLossPrice` as sufficient evidence of a position-origin
+  `orderId=0` market SL or as an automatically safe
+  `change_plan_price.stopPlanOrderId` target.
+- MEXC documents `POST /api/v1/private/stoporder/place` as
+  the separate **place TP/SL by position** endpoint, requiring
+  `positionId` and other parameters, including
+  `stopLossType=0` for market stop. A subsequent position-native
+  POST/GET witness, amendment GET, cancellation/close, and failure
+  reconciliation is still necessary. **Do not retry v3** unchanged.
+- No further live trades, stop amendments, production credential
+  changes or BOXWAVE actions were undertaken.
+
+References:
+https://www.mexc.io/api-docs/futures/account-and-trading-endpoints/get-current-take-profitstop-loss-order-list
+https://www.mexc.io/api-docs/futures/account-and-trading-endpoints/place-tpsl-order-by-position
+https://www.mexc.io/api-docs/futures/account-and-trading-endpoints/modify-tpsl-prices-on-a-tpsl-planned-order
+
+**LIVE TRADING UNAUTHORIZED** until separate, supervised,
+financially limited end-to-end verification; maintain strict
+failure-on-missing-field policy and separate main-account/BOXWAVE
+identities.
