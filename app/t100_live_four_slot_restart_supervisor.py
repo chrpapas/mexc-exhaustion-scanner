@@ -102,12 +102,12 @@ def _triage_contract_verified(status: FourSlotRestartTriage) -> bool:
 async def inspect_restart_db_gate(
     *, triage: PostgresFourSlotRestartTriage,
     env: Mapping[str, str],
-) -> dict[str, Any] | None:
+) -> dict[str, Any] | FourSlotRestartTriage:
     """Only a fresh, internally consistent SELECT result may permit GETs.
 
-    Returns a redacted blocker on unsafe/pending evidence; returns None
-    only when there are zero pending database attempts. None authorizes
-    GET-only observation, NOT a trade, POST, new reservation or stop edit.
+    Returns a redacted blocker for unsafe/pending evidence, otherwise
+    the validated read-only triage snapshot. A clean snapshot allows
+    GET-only observation, NOT a trade, POST, reservation or stop edit.
     """
     try:
         require_readonly_controls(env)
@@ -133,7 +133,7 @@ async def inspect_restart_db_gate(
             pending_attempts=status.pending_attempts,
             durable_claims=status.durable_claims,
         )
-    return None
+    return status
 
 
 async def run_four_slot_restart_readonly_cycle(
@@ -146,13 +146,17 @@ async def run_four_slot_restart_readonly_cycle(
     if type(shared_manual_observation) is not bool:
         return _blocked("RESTART_READONLY_READER_OR_MODE_INVALID")
     result = await inspect_restart_db_gate(triage=triage, env=env)
-    if result is not None:
+    if type(result) is dict:
         return result
 
     # This fresh triage gate deliberately runs again if the CLI already
     # checked DB before constructing its GET client; a changed journal
     # must never be overlooked between those two observations.
-    fields = {}
+    fields = {
+        "active_slots": result.active_slots,
+        "pending_attempts": result.pending_attempts,
+        "durable_claims": result.durable_claims,
+    }
     try:
         inventory = await run_readonly_four_slot_audit(
             ledger=ledger, client=client, env=env,
