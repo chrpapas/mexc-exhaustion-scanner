@@ -63,7 +63,7 @@ class SimulatedFullLifecycleTests(unittest.IsolatedAsyncioTestCase):
         ))
 
     async def persist(self, batch):
-        return await self.source.store.persist(
+        return await self.source.store.persist_offline_unclaimed(
             batch=batch, pre_attempt_witness=self.witness,
             lease=lease(),
             observed_at=self.pg.reserved[0]["snapshot_observed_at"],
