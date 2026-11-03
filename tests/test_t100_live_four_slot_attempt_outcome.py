@@ -55,6 +55,8 @@ class ProtectedOutcomeTests(unittest.IsolatedAsyncioTestCase):
             "id": "999", "state": 1, "isFinished": 0,
             "positionType": 2, "stopLossPrice": D("3.5"),
             "vol": D("250"),
+            "volType": 1, "profitLossVolType": "SAME",
+            "stopLossType": 0, "stopLossReverse": 2, "lossTrend": 1,
         })
         self.venue = Venue([*oldorders, new_order], positions, stops)
         self.complete = Completeness(report(4))
