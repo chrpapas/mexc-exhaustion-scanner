@@ -282,6 +282,15 @@ async def _main(
             report = await observe_pending_origins_get_only(
                 triage=fresh_origins, client=_PrivateGetOnly(mexc),
             )
+            # A third restricted SQL bookend prevents a journal update
+            # during the GET window from being displayed as stable.
+            # No bookend can establish cross-system atomicity.
+            post_get_origins = await triage.inspect()
+            if (
+                not _triage_contract_verified(post_get_origins)
+                or post_get_origins != fresh_origins
+            ):
+                return _report("PENDING_ORIGIN_SQL_CHANGED_DURING_GET_NO_RETRY")
             return report.safe_summary()
         return await run_readonly_four_slot_audit(
             ledger=ledger, client=mexc, env=env,
