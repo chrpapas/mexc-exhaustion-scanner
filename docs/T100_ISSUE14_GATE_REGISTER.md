@@ -893,3 +893,60 @@ Full four-slot live executor, current MEXC native-stop behavior,
 collateral and margin-tier certification, Render current-code soak,
 independent release review and separately approved limited pilot
 remain BLOCKED.
+
+### 2026-11-03 — Separate pending-order exact-origin GET-only witness
+
+Source milestone `8883a52aa613fe80fd2e5a15b95db7ff4bcb7b31`
+introduces `app/t100_live_four_slot_pending_origin_get.py` and a
+separate explicitly opt-in
+`python -m app.t100_live_four_slot_readonly_cli --pending-origin-audit`.
+The normal read-only restart supervisor **still blocks** any pending
+order attempt before constructing a MEXC client. This separate manual
+diagnostic is only for determining whether an unresolved immutable
+order origin is observable, never for deciding that a POST may be
+retried or that a position is protected.
+
+The operator must enable paper mode, disable the live-order API and
+engage the kill switch. The CLI performs a restricted, read-only
+REPEATABLE READ V40 triage BEFORE constructing the GET client, a
+second SQL triage before GET, two independent signed PRIVATE GET
+`/order/external/{symbol}/{externalOid}` rounds (no new endpoint),
+and a third restricted SQL triage AFTER the venue GET window. If any
+SQL state changes or the order identity/side/payload changes, the
+result is discarded and no retry is offered. At most four active V40
+slots are inspected; RESERVED slots trigger no order GET.
+
+Two matching order reads are `ORDERS_SEEN_UNPROTECTED_NONAUTHORIZING`
+rather than an ACK/fill/stop certificate. Two absent order reads
+remain `ALL_ABSENT_STILL_UNKNOWN_NO_RETRY`; a missing exchange order
+is NEVER evidence that a previous POST failed. Mixed, malformed,
+wrong-side, changing, read-failed and inaccessible/mismatched states
+all fail closed. Only aggregate counts/statuses are emitted: no
+symbols, externalOid, position/order IDs, prices, collateral,
+credentials or raw MEXC payloads.
+
+Offline tests verify order present/absent/mixed, bookend drift,
+wrong-side/identity, failed exchange GET, invalid SQL triage,
+reserved-only, no retry, no mutation and no leaked identifiers.
+Real disposable PostgreSQL tests prove that pending order origins can
+be observed read-only before and after a durable dispatch claim; no
+DB ACK/checkpoint, trade, stop or ledger mutation occurs. CLI tests
+prove missing/invalid preclient SQL prevents client construction,
+drift after client creation blocks BEFORE GET, and journal changes
+DURING GET invalidate the observation. This module is not an
+automatic recovery executor and is not wired to Render.
+
+All FIVE code CI checks PASSED at tested SHA:
+[offline safety](https://github.com/chrpapas/mexc-exhaustion-scanner/actions/runs/41680751212),
+[isolated PostgreSQL](https://github.com/chrpapas/mexc-exhaustion-scanner/actions/runs/41680751110),
+[scanner/trader split](https://github.com/chrpapas/mexc-exhaustion-scanner/actions/runs/41680751364),
+[promotion](https://github.com/chrpapas/mexc-exhaustion-scanner/actions/runs/41680751306),
+[daily dashboard](https://github.com/chrpapas/mexc-exhaustion-scanner/actions/runs/41680751307).
+
+Detailed runbook: `docs/T100_V40_PENDING_ORIGIN_GET_ONLY.md`.
+Migrations 031/032 have NOT been deployed to production and runtime
+permissions remain unapproved. The actual MEXC native stop execution
+lifecycle, account collateral/margin-tier risk, complete four-slot
+order executor, independent review and protected Render soak remain
+BLOCKED. No MEXC POST, real order, stop modification, production DB
+write, Render redeploy, credential change, or BOXWAVE modification.
