@@ -141,6 +141,7 @@ class T100LiveShadowRuntime:
         # Process identity is only a diagnostic label, never an authorization.
         self._run_id = uuid.uuid4().hex[:12]
         self._cycle_index = 0
+        self._redacted_origin_logged = False
 
     async def close(self) -> None:
         await self.notifier.close()
@@ -310,6 +311,42 @@ class T100LiveShadowRuntime:
         margin_witness = (
             witness.get("position_inventory_margin_witness_observed") is True
         )
+        if not read_failed and not self._redacted_origin_logged:
+            self._redacted_origin_logged = True
+            # Fixed, allowlisted aggregate counts ONLY: no names, IDs,
+            # balances, prices, volume, keys or private HTTP response body.
+            for label, key in (
+                ("current", "redacted_current_tpsl_origin_evidence"),
+                ("finished_page1", "redacted_finished_tpsl_origin_evidence_page1"),
+            ):
+                evidence = preflight.get(key)
+                if type(evidence) is not dict:
+                    continue
+                LOGGER.info(
+                    "T100 signed_GET native_TPSL_origin %s rows=%d "
+                    "position_origin=%d order_attached=%d unknown_origin=%d "
+                    "valid_native_id=%d linked_current_position=%d "
+                    "market_SL=%d limit_SL=%d unknown_SL_type=%d "
+                    "untriggered=%d triggered_SL=%d normal_error=%d "
+                    "other_error=%d nonfinal=%d final=%d "
+                    "amendment_post_verified=false live_authorization=false",
+                    label,
+                    int(evidence.get("rows") or 0),
+                    int(evidence.get("position_origin_order_id_zero") or 0),
+                    int(evidence.get("order_attached_positive_order_id") or 0),
+                    int(evidence.get("missing_or_invalid_order_id") or 0),
+                    int(evidence.get("positive_native_tpsl_id") or 0),
+                    int(evidence.get("linked_to_current_position") or 0),
+                    int(evidence.get("market_stop_loss_type_zero") or 0),
+                    int(evidence.get("limit_stop_loss_type_one") or 0),
+                    int(evidence.get("missing_or_invalid_stop_loss_type") or 0),
+                    int(evidence.get("untriggered") or 0),
+                    int(evidence.get("triggered_stop_loss") or 0),
+                    int(evidence.get("normal_error_code") or 0),
+                    int(evidence.get("nonzero_error_code") or 0),
+                    int(evidence.get("nonfinal") or 0),
+                    int(evidence.get("final") or 0),
+                )
         active_tpsl = preflight.get("active_tpsl_semantics") or {}
         protection_semantics_verified = (
             active_tpsl.get("active_tpsl_row_semantics_verified") is True
