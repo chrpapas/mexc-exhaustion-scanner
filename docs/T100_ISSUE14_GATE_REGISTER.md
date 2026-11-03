@@ -620,3 +620,44 @@ soak, independent reviewer approval and separately authorized live
 pilot are all missing. This work must NOT be interpreted as exchange
 atomicity or a real execution certificate. The manual position remains
 unmanaged, and G4/G5/G6/G7/G8/G9 stay OPEN.
+
+### 2026-11-03 — Dispatch claim independently checked in protected DB transaction
+
+A new explicitly named `PostgresProtectedV40Commit.persist_claimed`
+entry point requires **each** exact immutable V40 one-shot dispatch claim
+(signal ID, externalOid, original holder/fencing token and
+`POST_POSSIBLE_UNRESOLVED` state) inside the SAME PostgreSQL transaction
+as durable ACK + immutable fill-set/fill + position checkpoint + slot
+PROTECTED writes, under the shared advisory lock and current leader fence.
+If the claim is absent, wrong-origin or wrong-fence, the transaction
+fails BEFORE ACK/fill/checkpoint writes.
+
+The older `persist` method is retained for historical **offline-only
+fixtures** and is NOT an approved live runner entry point. It remains
+possible to bypass claim checking through that legacy API in tests;
+future release integration must remove/forbid all non-claim-bound
+production callsites and review runtime privileges and credentials.
+No live execution is wired to either method.
+
+The real disposable PostgreSQL integration test now follows:
+restricted read-only claim reader -> exact mock PRIVATE GET
+order/deals/native stop bookends -> claim-bound same-transaction
+DB ACK/protected commit. Another test supplies an otherwise valid
+prepared bundle with NO claim or with a mismatched immutable claim;
+both fail closed and preserve the original DB state.
+
+Tested source SHA:
+`0669a2f60fd5d3a53405251b13d700f7d4ca54cb`.
+All 5 workflows PASSED:
+[isolated PostgreSQL](https://github.com/chrpapas/mexc-exhaustion-scanner/actions/runs/41599870949),
+[offline safety](https://github.com/chrpapas/mexc-exhaustion-scanner/actions/runs/41599870905),
+[scanner/trader split](https://github.com/chrpapas/mexc-exhaustion-scanner/actions/runs/41599871026),
+[promotion](https://github.com/chrpapas/mexc-exhaustion-scanner/actions/runs/41599871045),
+[dashboard](https://github.com/chrpapas/mexc-exhaustion-scanner/actions/runs/41599871069).
+
+These are mocks of venue positions/fills/stops and real **ephemeral**
+PostgreSQL. No MEXC POST, stop changes, production schema writes,
+Render deployment, credentials, or BOXWAVE modifications. This advances
+the G4/G6 database/attempt-provenance implementation but does NOT certify
+real exchange behavior, current cross collateral, a four-slot live
+executor or crash/restart in production. Keep all live gates BLOCKED.
