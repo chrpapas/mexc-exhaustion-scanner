@@ -85,6 +85,85 @@ async def _refresh_public_contract_specs_bounded(
 
 
 
+
+def _redacted_tpsl_origin_evidence(
+    rows: list[dict[str, Any]],
+    positions: list[dict[str, Any]],
+) -> dict[str, int | bool]:
+    """Counts only from signed private GET rows. Never disclose account values.
+
+    A finished row is historical evidence, not proof of current protection,
+    effective amendment semantics, stop execution, or exchange atomicity.
+    """
+    def ascii_nonnegative(raw: Any) -> int | None:
+        if type(raw) not in (int, str):
+            return None
+        value = str(raw)
+        if not value.isascii() or not value.isdigit():
+            return None
+        try:
+            return int(value)
+        except ValueError:
+            return None
+
+    existing_position_ids = {
+        str(row.get("positionId"))
+        for row in positions
+        if ascii_nonnegative(row.get("positionId")) not in (None, 0)
+    }
+    out: dict[str, int | bool] = {
+        "rows": len(rows),
+        "position_origin_order_id_zero": 0,
+        "order_attached_positive_order_id": 0,
+        "missing_or_invalid_order_id": 0,
+        "positive_native_tpsl_id": 0,
+        "linked_to_current_position": 0,
+        "market_stop_loss_type_zero": 0,
+        "limit_stop_loss_type_one": 0,
+        "missing_or_invalid_stop_loss_type": 0,
+        "untriggered": 0,
+        "triggered_stop_loss": 0,
+        "normal_error_code": 0,
+        "nonzero_error_code": 0,
+        "nonfinal": 0,
+        "final": 0,
+        "read_only": True,
+        "amendment_post_verified": False,
+        "live_authorization": False,
+    }
+    for row in rows:
+        order = ascii_nonnegative(row.get("orderId"))
+        if order == 0:
+            out["position_origin_order_id_zero"] += 1
+        elif order is not None and order > 0:
+            out["order_attached_positive_order_id"] += 1
+        else:
+            out["missing_or_invalid_order_id"] += 1
+        sid = ascii_nonnegative(row.get("id"))
+        out["positive_native_tpsl_id"] += int(sid is not None and sid > 0)
+        pid = ascii_nonnegative(row.get("positionId"))
+        out["linked_to_current_position"] += int(
+            pid is not None and pid > 0 and str(pid) in existing_position_ids
+        )
+        stop_type = ascii_nonnegative(row.get("stopLossType"))
+        if stop_type == 0:
+            out["market_stop_loss_type_zero"] += 1
+        elif stop_type == 1:
+            out["limit_stop_loss_type_one"] += 1
+        else:
+            out["missing_or_invalid_stop_loss_type"] += 1
+        trigger = ascii_nonnegative(row.get("triggerSide"))
+        out["untriggered"] += int(trigger == 0)
+        out["triggered_stop_loss"] += int(trigger == 2)
+        error = ascii_nonnegative(row.get("errorCode"))
+        out["normal_error_code"] += int(error == 0)
+        out["nonzero_error_code"] += int(error is not None and error > 0)
+        finished = ascii_nonnegative(row.get("isFinished"))
+        out["nonfinal"] += int(finished == 0)
+        out["final"] += int(finished == 1)
+    return out
+
+
 async def read_only_preflight(
     *,
     client: MexcTradeClient | None = None,
@@ -143,6 +222,9 @@ async def read_only_preflight(
         result["redacted_inventory_schema"] = summarize_inventory_schema(positions, stops)
         assessment_evidence = result["redacted_inventory_schema"]
         result["stop_schema_source"] = "open_orders"
+        result["redacted_current_tpsl_origin_evidence"] = (
+            _redacted_tpsl_origin_evidence(stops, positions)
+        )
         result["active_stop_schema_observed"] = bool(stops)
         result["historical_stop_schema_observed"] = False
         if include_historical_stop_schema and not stops:
@@ -154,6 +236,9 @@ async def read_only_preflight(
             result["redacted_historical_stop_schema_page1"] = summarize_inventory_schema(
                 [], historical_stops
             )["stops"]
+            result["redacted_finished_tpsl_origin_evidence_page1"] = (
+                _redacted_tpsl_origin_evidence(historical_stops, positions)
+            )
             result["recent_finished_tpsl_transition"] = (
                 assess_recent_finished_tpsl_transition(
                     positions, historical_stops
@@ -354,6 +439,12 @@ def shareable_contract_report(result: dict[str, Any]) -> dict[str, Any]:
         "shadow_schema_assessment": result.get("shadow_schema_assessment"),
         "redacted_historical_stop_schema_page1": result.get(
             "redacted_historical_stop_schema_page1"
+        ),
+        "redacted_current_tpsl_origin_evidence": result.get(
+            "redacted_current_tpsl_origin_evidence"
+        ),
+        "redacted_finished_tpsl_origin_evidence_page1": result.get(
+            "redacted_finished_tpsl_origin_evidence_page1"
         ),
         "recent_finished_tpsl_transition": result.get(
             "recent_finished_tpsl_transition"
