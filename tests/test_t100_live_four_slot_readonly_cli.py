@@ -298,6 +298,50 @@ class FourSlotOperatorCliTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(result["mexc_orders_sent"])
         client.close.assert_awaited_once()
 
+    async def test_pending_origin_sql_changes_during_get_are_discarded(self):
+        from tests.test_t100_live_four_slot_restart_triage import (
+            FakePool, sample,
+        )
+
+        pool = FakePool([sample()])
+        # pre-client, pre-GET, then post-GET changes to a clean ledger.
+        pool.conn.fetch = AsyncMock(
+            side_effect=[[sample()], [sample()], []],
+        )
+        pool.close = AsyncMock()
+        order = {
+            "symbol": "EXAMPLE_USDT", "externalOid": "opaque-order-origin",
+            "orderId": "901", "side": 3, "state": 3,
+        }
+        client = MockMexcGetOnly([order], [], [])
+        client.close = AsyncMock()
+        asyncpg_module = ModuleType("asyncpg")
+        asyncpg_module.create_pool = AsyncMock(return_value=pool)
+        mexc_module = ModuleType("app.mexc_trade")
+        mexc_module.MexcTradeClient = MagicMock(return_value=client)
+        env = {
+            **PAPER_KILLED, "MEXC_API_KEY": "fixture-key",
+            "MEXC_API_SECRET": "fixture-secret",
+        }
+        with patch.dict(
+            "sys.modules",
+            {"asyncpg": asyncpg_module, "app.mexc_trade": mexc_module},
+        ), patch(
+            "app.t100_live_four_slot_readonly_cli.getpass.getpass",
+            side_effect=["fixture-password", "postgres://dummy-host"],
+        ):
+            result = await _main(env, pending_origin_audit=True)
+        self.assertEqual(
+            result["status"], "PENDING_ORIGIN_SQL_CHANGED_DURING_GET_NO_RETRY",
+        )
+        self.assertEqual(pool.conn.fetch.await_count, 3)
+        self.assertEqual(len(client.calls), 2)
+        self.assertFalse(result["live_authorization"])
+        self.assertFalse(result["mexc_orders_sent"])
+        self.assertFalse(result["database_writes_sent"])
+        client.close.assert_awaited_once()
+        pool.close.assert_awaited_once()
+
     async def test_pending_origin_audit_requires_pending_before_client_creation(self):
         from tests.test_t100_live_four_slot_restart_triage import FakePool
         pool = FakePool([])
