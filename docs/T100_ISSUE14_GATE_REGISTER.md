@@ -1246,3 +1246,66 @@ DB write, no Render deployment, no credential change, no BOXWAVE change.
 Engineering completion estimate remains ~70% (subjective);
 `LIVE_ADAPTER_STATUS=NOT_IMPLEMENTED`,
 `LIVE_NATIVE_STOP_AMENDMENT_STATUS=UNVERIFIED_CURRENT_DOCS`.
+
+### 2026-11-03 — ACTUAL signed MEXC GET probe on Render (not a POST test)
+
+The existing `mexc-t100-live-shadow` Render worker (`srv-dbf5798m7kps73fqcuog`)
+was redeployed on its own read-only feature branch with a strictly
+redacted first-cycle diagnostic. The diagnostic consumes the already
+configured signed `GET /api/v1/private/position/open_positions`,
+`GET /api/v1/private/stoporder/open_orders` and
+`GET /api/v1/private/stoporder/list/orders` page-1 results in the
+process; it emits fixed aggregate counts only, never credentials,
+position IDs, symbols, order IDs, balances, prices or volumes.
+
+- Read-only feature commit:
+  `a9692afbd0cedd314054427e37ce1aac70f75577`.
+- Render deploy: `dep-dbl2tk61egvs739d9qqg`, confirmed LIVE at
+  `2026-11-03T18:59:03.911Z`.
+- Signed GET diagnostic timestamp: `2026-11-03T18:59:10.626Z`.
+- Current account: **1 open position, 0 active TP/SL**.
+- Finished TP/SL history page 1: **4** observed rows, **2**
+  with `orderId=0` (position-origin), **2** with a positive
+  attached order ID, **4** with positive native TP/SL `id`.
+- **2** historical TP/SL rows link to the currently observed
+  position ID. **3** show `stopLossType=0` (market SL), **0**
+  show limit SL, **1** has unknown/missing stop-loss type.
+- **4** finished rows have nonzero `errorCode`, **0** normal;
+  all 4 have `triggerSide=0` and `isFinished=1`.
+  These are historical, apparently canceled/terminal rows;
+  `errorCode` needs context, do not infer current stop errors.
+- Runtime immediately relatched `NATIVE_PROTECTION_LOST`, with
+  `entry_allowed=false`, `live_authorization=false`,
+  and stable REST/WS/REST continuity. No exchange POST or
+  account mutation happened.
+
+**Verified with real exchange evidence:** read permission and current
+position/stop counts; current GET historical TP/SL row shape; position
+vs attached origin distinction; native stop IDs exist in historical rows.
+
+**Still NOT verified:** whether a position-origin `GET id` is accepted
+as `stopPlanOrderId` by the real
+`POST /api/v1/private/stoporder/change_plan_price`; amendment
+roundtrip and uncertain POST recovery; stop placement/activation, SL
+trigger/filled execution, slippage/gap/liquidation protection.
+There is currently **no active stop to amend**, and the credential is
+used in read-only/paper mode (previous operator evidence says trading
+permission disabled). MEXC official documentation states its API
+has no sandbox environment. An actual POST test would change real
+financial exposure and requires an approved, bounded test position,
+a properly permissioned credential and explicit operational safeguards.
+No attempt to bypass the read-only gate was made.
+
+The Render PostgreSQL read-only connector query failed because its
+external database access was blocked by SSL/IP allowlist constraints;
+**no SQL result** was obtained and no DB mutation attempted.
+
+Sources: current MEXC TP/SL GET and amendment documents:
+https://www.mexc.io/api-docs/futures/account-and-trading-endpoints/get-take-profitstop-loss-order-list
+https://www.mexc.io/api-docs/futures/account-and-trading-endpoints/modify-tpsl-prices-on-a-tpsl-planned-order
+and official sandbox statement:
+https://www.mexc.com/mexc-api .
+
+**Progress remains NOT LIVE READY.** Do not equate GET evidence
+with live order/cancel/stop execution certification. BOXWAVE
+and main trading workers were not changed.
