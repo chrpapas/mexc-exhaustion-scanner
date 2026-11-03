@@ -30,6 +30,8 @@ class Pool:
             "prepared_order_intents": 0,
             "submitting_order_intents": 0,
             "unknown_order_intents": 0,
+            "review_order_intents": 0,
+            "unprotected_ack_intents": 0,
             "unresolved_stop_amendments": 0,
             "review_checkpoints": 0,
             "closing_checkpoints": 0,
