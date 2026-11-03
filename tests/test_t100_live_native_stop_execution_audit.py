@@ -129,6 +129,25 @@ class NativeMarketStopContractTests(unittest.TestCase):
                 r = audit(row(stopLossPrice=v))
                 self.assertEqual(r.status, "NATIVE_SL_PRICE_NOT_PROTECTIVE")
 
+    def test_unknown_volume_modes_never_certify_full_native_coverage(self):
+        for change in (
+            {"volType": None}, {"volType": 3},
+            {"profitLossVolType": None},
+            {"profitLossVolType": "UNKNOWN"},
+            {"profitLossVolType": ["SAME"]},
+        ):
+            with self.subTest(change=change):
+                r = audit(row(vol="250", **change))
+                self.assertEqual(r.status, "NATIVE_SL_FULL_CONTRACT_COVERAGE_UNVERIFIED")
+                self.assertFalse(r.active_native_full_volume_market_sl_observed)
+                self.assertFalse(r.live_authorization)
+
+    def test_malformed_unicode_id_fails_closed_without_exception(self):
+        for value in ("²", "９９", "99x", "0", "", True):
+            with self.subTest(value=value):
+                r = audit(row(id=value))
+                self.assertEqual(r.status, "NATIVE_SL_IDENTITY_OR_OWNERSHIP_UNVERIFIED")
+
     def test_bad_expected_position_never_qualifies(self):
         for bad in (D("0"), D("-1"), D("NaN"), None, 250):
             with self.subTest(qty=bad):
