@@ -980,3 +980,61 @@ All 5 workflows PASS:
 No Render deployment or live exchange activity occurred. This is
 read-only observability hardening, NOT native stop/exchange atomicity
 certification; real-money gates remain BLOCKED.
+
+### 2026-11-03 — Current MEXC API order direction and native market SL contract audit
+
+**Verified documentation change:** MEXC official Futures API update log
+dated 2026-10-23 added required `sideType` (`buy`/`sell`) and
+`positionType` direction to `POST /api/v1/private/order/create`.
+Existing T100 SHORT_SELL adapter omitted both fields. Its currently
+**unexecuted** request payload now explicitly sets `side=3`,
+`sideType=sell`, `positionType=short`, retaining hedge
+`positionMode=1`, CROSS `openType=2`, immutable externalOid,
+reference stopLossPrice and the existing 1x tiny-pilot restriction.
+This is API shape correction in development, NOT venue POST certification.
+
+**Unverified stop amendment compatibility:** The current official
+`/private/stoporder/change_price` documentation covers limit-order
+TP/SL by `orderId`; the old `change_plan_price` reference
+uses `stopPlanOrderId`. The mapping of a *position* TP/SL current
+`id` to the latter legacy endpoint has not been independently
+certified. Therefore the concrete adapter's legacy
+`submit_native_short_stop_tightening` transport now requires
+**independent** `LIVE_NATIVE_STOP_AMENDMENT_STATUS=CERTIFIED`,
+pinned to `UNVERIFIED_CURRENT_DOCS` in ordinary production source.
+Even a hypothetically issued tiny pilot permit alone cannot send
+this amendment through the adapter. The repository-wide
+`LIVE_ADAPTER_STATUS=NOT_IMPLEMENTED` remains unchanged.
+
+**New independent GET-only native stop-shape audit:**
+`assess_native_short_market_stop_row` checks exact short position
+ownership and stop identity, active/nonfinal status, MARKET SL
+`stopLossType=0` (not limit `1`), `stopLossReverse=2`,
+`lossTrend=1`, a positive bounded short stop price, and effective
+whole-position volume (SAME and SEPARATE modes). Wrong/missing
+type, wrong side, reverse, trigger mismatch, limit SL, undercoverage
+and stop ID drift fail closed. **Even success emits
+`stop_execution_certified=false` and `live_authorization=false`**:
+one static GET row cannot prove trigger execution, price, slippage,
+exchange atomicity, account-wide collateral or liquidation timing.
+
+Authoritative current source links and differences:
+`docs/T100_MEXC_2026_API_CONTRACT_DELTA.md`.
+CI-tested source SHA `23cb3bb62f54ac945c4372ac6c209220ab177633`.
+All five workflows PASS:
+[offline safety](https://github.com/chrpapas/mexc-exhaustion-scanner/actions/runs/41683705427),
+[isolated PostgreSQL](https://github.com/chrpapas/mexc-exhaustion-scanner/actions/runs/41683705298),
+[scanner/trader separation](https://github.com/chrpapas/mexc-exhaustion-scanner/actions/runs/41683705367),
+[promotion](https://github.com/chrpapas/mexc-exhaustion-scanner/actions/runs/41683705245),
+[daily dashboard](https://github.com/chrpapas/mexc-exhaustion-scanner/actions/runs/41683705385).
+
+This is **not** certification of real SL placement/amend/cancel.
+MEXC order access and native-stop endpoint/response contract,
+account-wide CROSS collateral and risk schedule, protected Render
+soak, full four-slot POST execution, independent reviewer and
+explicit tiny pilot release are all BLOCKED. Existing manual position
+is untouched. No MEXC POST/stop edit, production DB mutation,
+Render redeploy, credential or BOXWAVE change occurred.
+
+The engineering progress estimate is **70%** (subjective);
+live trading remains **NOT AUTHORIZED**, not 70% safe.
