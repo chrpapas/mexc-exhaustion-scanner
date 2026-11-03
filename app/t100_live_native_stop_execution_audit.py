@@ -124,6 +124,19 @@ def assess_native_short_market_stop_row(
             status="NATIVE_SL_PRICE_NOT_PROTECTIVE", **verified,
         )
 
+    # The shared legacy volume interpreter predates explicit MEXC mode
+    # fields. This stricter native-market witness must reject unknown or
+    # absent modes before using it to assess full-position coverage.
+    if (
+        type(stop.get("volType")) is not int
+        or stop["volType"] not in (1, 2)
+        or stop.get("profitLossVolType") not in ("SAME", "SEPARATE")
+    ):
+        return NativeMarketShortStopAudit(
+            status="NATIVE_SL_FULL_CONTRACT_COVERAGE_UNVERIFIED",
+            **verified,
+        )
+
     effective = effective_protective_quantity(
         stop, position_quantity=position_quantity,
     )
