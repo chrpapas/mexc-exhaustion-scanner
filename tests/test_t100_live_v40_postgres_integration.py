@@ -572,6 +572,62 @@ class RealPostgresProtectedV40Tests(unittest.IsolatedAsyncioTestCase):
                     FROM t100_live_executor_runtime
                 """)
 
+    async def test_real_postgres_restart_supervisor_never_gets_before_pending_attempt_recovery(self):
+        """End-to-end restricted SQL triage -> no GET while POST ambiguous."""
+        from app.t100_live_four_slot_restart_triage import (
+            PostgresFourSlotRestartTriage,
+        )
+        from app.t100_live_four_slot_restart_supervisor import (
+            run_four_slot_restart_readonly_cycle,
+        )
+        from app.t100_live_four_slot_ledger_reader import (
+            PostgresFourSlotLedgerReader,
+        )
+        from app.t100_live_four_slot_dispatch_claims import (
+            PostgresFourSlotDispatchClaims,
+        )
+        from app.t100_live_leader_fencing import LeaderLease
+        from tests.test_t100_live_four_slot_readonly_cli import PAPER_KILLED
+        from tests.test_t100_live_four_slot_mexc_readonly import MockMexcGetOnly
+
+        await self.restricted_dispatch_claim_reader()
+        triage = PostgresFourSlotRestartTriage(self.read_pool)
+        ledger = PostgresFourSlotLedgerReader(self.read_pool)
+        client = MockMexcGetOnly([], [], [])
+        initial = await self.state()
+        blocked = await run_four_slot_restart_readonly_cycle(
+            triage=triage, ledger=ledger, client=client,
+            env=PAPER_KILLED,
+        )
+        self.assertEqual(
+            blocked["status"],
+            "RESTART_PENDING_ATTEMPT_EXACT_ORIGIN_RECONCILE_ONLY",
+        )
+        self.assertEqual(blocked["durable_v40_dispatch_claims"], 0)
+        self.assertEqual(client.calls, [])
+        self.assertEqual(await self.state(), initial)
+
+        # Even a committed claim never permits a fresh exchange POST
+        # or a normal inventory-only restart while still SUBMITTING.
+        entry = self.batch.entries[0]
+        await PostgresFourSlotDispatchClaims(self.pool).claim(
+            stage=entry.stage,
+            lease=LeaderLease("t100-live-executor", "worker-A", 11, 45),
+        )
+        again = await run_four_slot_restart_readonly_cycle(
+            triage=triage, ledger=ledger, client=client,
+            env=PAPER_KILLED,
+        )
+        self.assertEqual(again["durable_v40_dispatch_claims"], 1)
+        self.assertEqual(
+            again["status"],
+            "RESTART_PENDING_ATTEMPT_EXACT_ORIGIN_RECONCILE_ONLY",
+        )
+        self.assertEqual(client.calls, [])
+        self.assertFalse(again["order_retry_allowed"])
+        self.assertFalse(again["live_authorization"])
+        self.assertEqual(await self.state(), initial)
+
     async def test_real_postgres_restricted_restart_triage_is_reconcile_only(self):
         """Database recovery triage cannot retry even before dispatch claim.
 
