@@ -661,3 +661,54 @@ Render deployment, credentials, or BOXWAVE modifications. This advances
 the G4/G6 database/attempt-provenance implementation but does NOT certify
 real exchange behavior, current cross collateral, a four-slot live
 executor or crash/restart in production. Keep all live gates BLOCKED.
+
+### 2026-11-03 — Readiness false-green prevention: V40 claims, reservations, REVIEW and orphan ACK
+
+**New read-only V40 state gate:** `app/t100_live_v40_state_gate.py`
+checks for BOTH migrations 031 and 032, counts nonfinal reservations
+(RESERVED/SUBMITTING/UNKNOWN/ACK/HALTED), unresolved one-shot claims,
+PROTECTED reservations without an exact dispatch claim, and immutable
+claim/slot/order-intent identity/ownership drift. Missing tables,
+inaccessible or malformed rows, and any unresolved count block
+`v40_unresolved_dispatch_state_absent`. An exact settled
+PROTECTED/ACK/claim chain can be called `V40_DB_STATE_CLEAR_NONAUTHORIZING`,
+but this DOES NOT certify native stops, venue atomicity, collateral,
+current inventory, margin permissions or operator authorization.
+The existing read-only `run_dynamic_readiness_bundle` now requires the
+V40 state gate in addition to its older dynamic checks. An account can
+never report `dynamic_readiness_verified` when 031/032 are absent or
+V40 dispatch outcomes unresolved.
+
+**Expanded legacy journal gate:** `assess_unresolved_live_state` now
+blocks REVIEW order intents and ACK order intents without a matching
+OPEN/non-CLOSED protected checkpoint (including exact externalOid and
+exchange_order_id), in addition to PREPARED/SUBMITTING/UNKNOWN,
+unresolved stop amendments and REVIEW/CLOSING checkpoints. An accepted
+HTTP order or unprotected ACK cannot bypass this durability gate.
+
+**Evidence:**
+- Mocks test missing/partial V40 schema, real asyncpg.Record-like row
+  shapes, invalid counts, read failures, all pending/ambiguous V40 states,
+  and the combined bundle with otherwise clean old journals.
+- Real disposable PostgreSQL 16 tests prove the new V40 gate follows
+  SUBMITTING -> durable one-shot dispatch claim -> atomic protected
+  V40 slot/ACK while remaining `live_authorization=false`.
+- Additional real PostgreSQL test proves REVIEW and orphan ACK fail
+  the legacy dynamic journal gate and that an atomic protected
+  checkpoint can clear those particular journal blockers.
+- No MEXC calls, live order settings, production migrations, Render
+  deployment, manual account mutation or BOXWAVE changes.
+
+**Exact tested SHA:** `631fc96ecde36e093518319bd993420a6ff091f0`;
+5/5 workflows passed:
+[offline safety](https://github.com/chrpapas/mexc-exhaustion-scanner/actions/runs/41646000123),
+[isolated PostgreSQL](https://github.com/chrpapas/mexc-exhaustion-scanner/actions/runs/41646000141),
+[scanner/trader separation](https://github.com/chrpapas/mexc-exhaustion-scanner/actions/runs/41646000127),
+[promotion](https://github.com/chrpapas/mexc-exhaustion-scanner/actions/runs/41646000102),
+[dashboard](https://github.com/chrpapas/mexc-exhaustion-scanner/actions/runs/41646000267).
+
+**Gating remains:** migration 031/032 unapplied production, active
+account manual position unprotected, actual venue/native-stop execution
+not certified, current account collateral and tier envelope unverified,
+no deployed current-code protected Render soak, no independent release
+signoff, no authorized tiny venue pilot. G2/G4/G5/G6/G7/G8/G9 OPEN.
