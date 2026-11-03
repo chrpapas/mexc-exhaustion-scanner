@@ -1038,3 +1038,35 @@ Render redeploy, credential or BOXWAVE change occurred.
 
 The engineering progress estimate is **70%** (subjective);
 live trading remains **NOT AUTHORIZED**, not 70% safe.
+
+### 2026-11-03 — Strict current native-market SL volume shape (offline only)
+
+At current native-market stop-shape audit level, reject missing/unknown
+`volType` or `profitLossVolType` before accepting a full-position SL
+quantity. The older generic `effective_protective_quantity` parser is
+still used by legacy snapshot/stop recovery tests that omit these MEXC
+fields; changing it globally prematurely caused many offline fixture
+failures, so that broad change was reversed. The strict new native
+witness now independently requires documented volume modes. Follow-up:
+migrate and independently re-certify the **legacy shared parser and all
+dependent fixtures** before relying on its permissive mode behavior as
+an actual live protection certificate.
+
+Also reject Unicode-digit and malformed stop IDs without parser
+exceptions. New native-stop audit regressions cover unknown volume
+mode, absent volume mode, malformed identity and nonauthorizing outputs.
+
+**CI-tested code SHA:** `a807bc5a2d06200d60093cddb73985a4b023254e`.
+All five checks PASS:
+[offline safety](https://github.com/chrpapas/mexc-exhaustion-scanner/actions/runs/41685582860),
+[isolated PostgreSQL](https://github.com/chrpapas/mexc-exhaustion-scanner/actions/runs/41685582869),
+[scanner/trader separation](https://github.com/chrpapas/mexc-exhaustion-scanner/actions/runs/41685582884),
+[promotion](https://github.com/chrpapas/mexc-exhaustion-scanner/actions/runs/41685582983),
+[daily dashboard](https://github.com/chrpapas/mexc-exhaustion-scanner/actions/runs/41685582964).
+
+This safety fix is observational only and adds NO live authority. Global
+`LIVE_ADAPTER_STATUS=NOT_IMPLEMENTED` and independent native stop
+amendment contract remain BLOCKED. Production Render, exchange orders,
+stop mutations, account positions, production DB and credentials are
+unchanged. BOXWAVE remains isolated. Engineering completion remains
+approximately **70% subjective**, with zero live-order authorization.
