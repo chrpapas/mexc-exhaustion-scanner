@@ -46,8 +46,10 @@ guards in the calling environment:
 - `T100_LIVE_ORDER_API_ENABLED=false`
 - `T100_LIVE_KILL_SWITCH=true`
 
-It uses existing locally supplied **read-only** exchange credentials
-and prompts privately for a restricted DB login/password. Do not
+It uses locally supplied exchange credentials; a **GET-only API key is
+strongly recommended**, but the code cannot certify the key's venue
+permissions. It prompts privately for the restricted DB password and
+connection URL; the expected database role is pinned in the source. Do not
 paste credentials or connection strings into tickets or chat. Do not
 run against current production until migrations 031/032, runtime role
 privileges and the deployment plan have been separately approved;
