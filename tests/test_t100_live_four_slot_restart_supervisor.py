@@ -32,6 +32,9 @@ class FourSlotReadOnlySupervisorTests(unittest.IsolatedAsyncioTestCase):
             shared_manual_observation=False,
         )
         self.assertEqual(r["status"], "RESTART_OBSERVED_NONAUTHORIZING")
+        self.assertEqual(r["active_v40_slots"], 0)
+        self.assertEqual(r["pending_v40_attempts"], 0)
+        self.assertEqual(r["durable_v40_dispatch_claims"], 0)
         self.assertEqual(
             r["inventory_status"],
             "NONFLAT_PROVENANCE_MATCHED_NONAUTHORIZING",
