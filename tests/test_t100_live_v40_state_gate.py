@@ -63,10 +63,10 @@ class V40StateGateTests(unittest.IsolatedAsyncioTestCase):
         for field in ("slots_present", "claims_present"):
             with self.subTest(field=field):
                 p = ReadPool()
-                p.schema = RecordLike(dict(
-                    slots_present=True, claims_present=True,
-                    **{field: False},
-                ))
+                p.schema = RecordLike({
+                    **dict(slots_present=True, claims_present=True),
+                    field: False,
+                })
                 r = await assess_v40_unresolved_dispatch_state(p)
                 self.assertEqual(
                     r["status"], "V40_DB_STATE_MIGRATIONS_NOT_OBSERVED",
