@@ -206,7 +206,6 @@ async def _main(
     from app.t100_live_role_preflight import TARGET_ROLE
     from app.t100_live_four_slot_ledger_reader import PostgresFourSlotLedgerReader
     import asyncpg
-    from app.mexc_trade import MexcTradeClient
 
     pool = None
     mexc = None
@@ -217,24 +216,36 @@ async def _main(
             min_size=1, max_size=1,
             server_settings={"default_transaction_read_only": "on"},
         )
-        mexc = MexcTradeClient(
-            "https://api.mexc.com", api_key=key, api_secret=secret,
-        )
         ledger = PostgresFourSlotLedgerReader(pool)
+        triage = None
         if restart_preflight:
-            # Only the explicit CLI flag enables the NEW read-only
-            # restart preflight; legacy four-slot audit is unchanged.
-            # The triage always uses the same restricted SELECT-only pool.
+            # Audit the restricted SQL journal BEFORE even importing or
+            # constructing the order-capable exchange client. Ambiguous
+            # attempts and missing V40 migrations must cause zero venue
+            # object construction and zero HTTP requests.
             from app.t100_live_four_slot_restart_triage import (
                 PostgresFourSlotRestartTriage,
             )
             from app.t100_live_four_slot_restart_supervisor import (
+                inspect_restart_db_gate,
+            )
+            triage = PostgresFourSlotRestartTriage(pool)
+            blocked = await inspect_restart_db_gate(
+                triage=triage, env=env,
+            )
+            if blocked is not None:
+                return blocked
+        from app.mexc_trade import MexcTradeClient
+        mexc = MexcTradeClient(
+            "https://api.mexc.com", api_key=key, api_secret=secret,
+        )
+        if restart_preflight:
+            from app.t100_live_four_slot_restart_supervisor import (
                 run_four_slot_restart_readonly_cycle,
             )
             return await run_four_slot_restart_readonly_cycle(
-                triage=PostgresFourSlotRestartTriage(pool),
-                ledger=ledger, client=mexc, env=env,
-                # Observe external manual positions, NEVER adopt or edit.
+                triage=triage, ledger=ledger, client=mexc, env=env,
+                # Re-read the DB after client construction to reject drift.
                 shared_manual_observation=True,
             )
         return await run_readonly_four_slot_audit(
