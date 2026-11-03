@@ -10,7 +10,8 @@ This report verifies fields of a supplied authenticated GET row ONLY:
   order placement, fill reliability, gap losses or liquidation risk;
 - never permits a POST, writes a database, stores venue identifiers,
   adopts user/manual positions or authorizes live trading.
-Missing optional/undocumented venue fields are conservative blockers.
+Documented orderId, triggerSide and errorCode fields are strict blockers
+if absent, unknown or inconsistent; passing still cannot prove execution.
 """
 from __future__ import annotations
 
@@ -92,6 +93,31 @@ def assess_native_short_market_stop_row(
         row_shape_verified=True,
         owned_position_match_verified=True,
     )
+    # The current MEXC GET contract distinguishes a position TP/SL
+    # (orderId=0) from TP/SL attached to a limit order. Requiring the
+    # position origin avoids treating an entry-order attachment as
+    # independently confirmed native position protection.
+    origin_order_id = stop.get("orderId")
+    if (
+        type(origin_order_id) not in (int, str)
+        or str(origin_order_id) != "0"
+    ):
+        return NativeMarketShortStopAudit(
+            status="NATIVE_SL_POSITION_ORDER_ORIGIN_UNVERIFIED", **verified,
+        )
+    # The documented untriggered/normal flags are separate from state=1.
+    # Malformed, missing, or already-triggered rows are not active
+    # protection even if the loss price and quantity still look valid.
+    if (
+        type(stop.get("triggerSide")) is not int
+        or stop["triggerSide"] != 0
+        or type(stop.get("errorCode")) is not int
+        or stop["errorCode"] != 0
+    ):
+        return NativeMarketShortStopAudit(
+            status="NATIVE_SL_TRIGGER_OR_EXECUTION_ERROR_UNVERIFIED",
+            **verified,
+        )
     if (
         type(stop.get("state")) is not int or stop["state"] != 1
         or type(stop.get("isFinished")) is not int
