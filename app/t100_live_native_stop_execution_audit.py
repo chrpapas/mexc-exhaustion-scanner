@@ -32,11 +32,12 @@ def _positive(raw: Any) -> Decimal | None:
 
 
 def _positive_id(raw: Any) -> bool:
-    return (
-        type(raw) in (int, str)
-        and str(raw).isdigit()
-        and int(str(raw)) > 0
-    )
+    if type(raw) not in (int, str):
+        return False
+    value = str(raw)
+    # Unicode isdigit() accepts some glyphs int() cannot parse. Treat
+    # external venue IDs as ASCII digits and never raise for malformed GETs.
+    return value.isascii() and value.isdigit() and any(ch != "0" for ch in value)
 
 
 @dataclass(frozen=True)
