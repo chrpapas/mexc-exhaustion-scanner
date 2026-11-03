@@ -7,6 +7,7 @@ import signal
 from datetime import UTC, datetime
 
 from app.t100_200_strategy import PAPER_RUN_ID, STRATEGY_ID
+from app.t100_live_guards import T100ExecutionControls, require_paper_portfolio
 from app.t100_200_worker import M30, T100Worker, configure_logging
 
 LOGGER = logging.getLogger(__name__)
@@ -26,6 +27,8 @@ class T100Trader(T100Worker):
     """
 
     async def initialize(self) -> None:
+        # Refuse live mode BEFORE any DB migration, paper fill or network execution.
+        require_paper_portfolio(T100ExecutionControls.from_env())
         await self.db.connect()
         await self.db.migrate()
         row = await self.db.pool.fetchrow(

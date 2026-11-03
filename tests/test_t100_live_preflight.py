@@ -1,0 +1,637 @@
+"""Preflight regression tests: injected fake client, no network or real orders."""
+import os
+import unittest
+from unittest.mock import patch
+
+from app.t100_live_preflight import (
+    read_only_preflight, shareable_contract_report, _run_cli_preflight,
+    _refresh_public_contract_specs_bounded,
+)
+
+
+class FakeClient:
+    def __init__(self, positions=None, stops=None, stop_history=None,
+                 funding_page=None, account_assets=None,
+                 open_order_counts=None):
+        self.positions = [] if positions is None else positions
+        self.stops = [] if stops is None else stops
+        self.stop_history = [] if stop_history is None else stop_history
+        self.funding_page = funding_page
+        self.account_assets = (
+            [{"currency": "USDT", "positionMargin": 0, "unrealized": 0}]
+            if account_assets is None else account_assets
+        )
+        self.open_order_counts = (
+            {
+                "sumCount": len(self.stops),
+                "limitOrderCount": 0,
+                "stopOrderCount": len(self.stops),
+                "planOrderCount": 0,
+                "trackOrderCount": 0,
+            }
+            if open_order_counts is None else open_order_counts
+        )
+        self.calls = []
+        self._spec_cache = {"SIREN_USDT": object()}
+
+    async def ping(self):
+        return True
+
+    async def usdt_asset(self):
+        return {"equity": 100}
+
+    async def usdt_available_balance(self):
+        return 100.0
+
+    async def position_mode(self):
+        return 1
+
+    async def refresh_contract_specs(self):
+        return None
+
+    async def _private_get(self, path, params=None):
+        self.calls.append((path, params))
+        if path == "/api/v1/private/account/assets":
+            return self.account_assets
+        if path == "/api/v1/private/order/open_order_total_count":
+            return self.open_order_counts
+        if path == "/api/v1/private/position/open_positions":
+            if params and params.get("symbol"):
+                return [
+                    row for row in self.positions
+                    if isinstance(row, dict)
+                    and row.get("symbol") == params["symbol"]
+                ]
+            return self.positions
+        if path == "/api/v1/private/stoporder/open_orders":
+            if params and params.get("symbol"):
+                return [
+                    row for row in self.stops
+                    if isinstance(row, dict)
+                    and row.get("symbol") == params["symbol"]
+                ]
+            return self.stops
+        if path == "/api/v1/private/stoporder/list/orders":
+            if params != {"page_num": 1, "page_size": 100, "is_finished": 1}:
+                raise AssertionError("UNEXPECTED_STOP_HISTORY_PARAMS")
+            return self.stop_history
+        if path == "/api/v1/private/position/funding_records":
+            if params != {"position_id": 10, "page_num": 1, "page_size": 100}:
+                raise AssertionError("UNEXPECTED_FUNDING_PARAMS")
+            if self.funding_page is None:
+                raise AssertionError("FUNDING_PAGE_NOT_CONFIGURED")
+            return self.funding_page
+        raise AssertionError("UNEXPECTED_PRIVATE_READ")
+
+
+class PreflightTests(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        self.env = patch.dict(os.environ, {
+            "MEXC_API_KEY": "FAKE_ONLY",
+            "MEXC_API_SECRET": "FAKE_ONLY",
+            "T100_EXECUTION_MODE": "paper",
+        })
+        self.env.start()
+
+    async def asyncTearDown(self):
+        self.env.stop()
+
+    async def test_public_contract_transient_timeout_one_retry_recovers(self):
+        class ReadTimeout(Exception):
+            pass
+        class Intermittent(FakeClient):
+            attempts = 0
+            async def refresh_contract_specs(self):
+                self.attempts += 1
+                if self.attempts == 1:
+                    raise ReadTimeout("NEVER_SHOW_PRIVATE_DIAGNOSTIC")
+        async def no_sleep(_):
+            return None
+        client = Intermittent()
+        result = {}
+        await _refresh_public_contract_specs_bounded(
+            client, result, sleep=no_sleep
+        )
+        self.assertEqual(client.attempts, 2)
+        self.assertEqual(result["public_contract_specs_retries_used"], 1)
+        self.assertEqual(result["public_contract_specs_attempt_count"], 2)
+        self.assertEqual(result["public_contract_specs_status"], "SUCCESS_AFTER_RETRY")
+        self.assertEqual(result["public_contract_specs_failure_type"], "ReadTimeout")
+        self.assertNotIn("NEVER_SHOW_PRIVATE", str(result))
+
+    async def test_public_contract_double_timeout_remains_fail_closed(self):
+        class ConnectTimeout(Exception):
+            pass
+        class Offline(FakeClient):
+            attempts = 0
+            async def refresh_contract_specs(self):
+                self.attempts += 1
+                raise ConnectTimeout("DO_NOT_LOG")
+        async def no_sleep(_):
+            return None
+        client = Offline()
+        result = {}
+        with self.assertRaises(ConnectTimeout):
+            await _refresh_public_contract_specs_bounded(
+                client, result, sleep=no_sleep
+            )
+        self.assertEqual(client.attempts, 2)
+        self.assertEqual(result["public_contract_specs_status"], "FAILED_CLOSED")
+        self.assertEqual(result["public_contract_specs_retries_used"], 1)
+        self.assertNotIn("DO_NOT_LOG", str(result))
+
+    async def test_public_contract_invalid_response_is_never_retried(self):
+        class BadShape(FakeClient):
+            attempts = 0
+            async def refresh_contract_specs(self):
+                self.attempts += 1
+                raise ValueError("INTERNAL_RESPONSE_DO_NOT_SHOW")
+        client = BadShape()
+        result = {}
+        with self.assertRaises(ValueError):
+            await _refresh_public_contract_specs_bounded(client, result)
+        self.assertEqual(client.attempts, 1)
+        self.assertEqual(result["public_contract_specs_status"], "FAILED_CLOSED")
+        self.assertEqual(result["public_contract_specs_retries_used"], 0)
+
+    async def test_public_contract_healthy_path_never_retries(self):
+        client = FakeClient()
+        result = {}
+        await _refresh_public_contract_specs_bounded(client, result)
+        self.assertEqual(result["public_contract_specs_attempt_count"], 1)
+        self.assertEqual(result["public_contract_specs_retries_used"], 0)
+        self.assertEqual(result["public_contract_specs_status"], "SUCCESS")
+        self.assertEqual(result["public_contract_specs_loaded"], 1)
+
+    async def test_preflight_failure_stage_is_redacted_and_shareable(self):
+        class TimeoutClient(FakeClient):
+            async def ping(self):
+                raise TimeoutError("DO_NOT_LOG_SECRET")
+        result = await read_only_preflight(client=TimeoutClient())
+        self.assertEqual(result["read_failure_type"], "TimeoutError")
+        self.assertEqual(result["read_failure_step"], "server_ping")
+        shared = shareable_contract_report(result)
+        self.assertEqual(shared["read_failure_step"], "server_ping")
+        self.assertNotIn("DO_NOT_LOG_SECRET", str(shared))
+
+    async def test_empty_inventory_is_still_uncertified(self):
+        c = FakeClient()
+        result = await read_only_preflight(client=c)
+        self.assertEqual(result["open_futures_positions"], 0)
+        self.assertEqual(result["open_futures_stop_orders"], 0)
+        self.assertIn("venue_read_contract_and_pagination_not_certified",
+                      result["preflight_failures"])
+        self.assertFalse(result["live_order_submission_possible"])
+        self.assertEqual(len(c.calls), 2)
+        self.assertEqual(
+            result["t100_native_protection_presence"],
+            "NO_POSITION_OR_CURRENT_TPSL_OBSERVED_COMPLETENESS_UNVERIFIED")
+        self.assertTrue(result["redacted_inventory_schema"]["positions"]["empty_rows_cannot_establish_schema"])
+        self.assertEqual(result["shadow_schema_assessment"]["overall"], "INCOMPLETE_SCHEMA_EVIDENCE")
+
+    async def test_funding_probe_verifies_position_scoped_pagination_only(self):
+        c = FakeClient(
+            positions=[{
+                "positionId": 10, "symbol": "SIREN_USDT",
+                "positionType": 2, "holdVol": 5, "state": 1,
+            }],
+            funding_page={
+                "pageSize": 100, "totalCount": 1, "totalPage": 1,
+                "currentPage": 1,
+                "resultList": [{
+                    "id": 1, "symbol": "SIREN_USDT",
+                    "positionType": 2, "positionValue": 100,
+                    "funding": -0.1, "rate": 0.001,
+                    "settleTime": 123456,
+                }],
+            },
+        )
+        result = await read_only_preflight(
+            client=c, include_funding_probe=True)
+        funding = result["funding_observed_position_probe"]
+        self.assertEqual(
+            funding["status"],
+            "PAGINATION_VERIFIED_SIGN_SEMANTICS_UNCERTIFIED")
+        self.assertTrue(
+            funding["pagination_verified_for_observed_position"])
+        self.assertFalse(funding["funding_sign_semantics_verified"])
+        self.assertFalse(
+            funding["account_wide_funding_completeness_verified"])
+        shared = shareable_contract_report(result)
+        self.assertNotIn("SIREN_USDT", str(shared["funding_observed_position_probe"]))
+        self.assertNotIn("-0.1", str(shared["funding_observed_position_probe"]))
+
+    async def test_funding_probe_runtime_shape_mismatch_is_contained(self):
+        c = FakeClient(
+            positions=[{
+                "positionId": 10, "symbol": "SIREN_USDT",
+                "positionType": 2, "holdVol": 5, "state": 1,
+            }],
+            funding_page={"unexpected": []},
+        )
+        result = await read_only_preflight(
+            client=c, include_funding_probe=True)
+        funding = result["funding_observed_position_probe"]
+        self.assertEqual(funding["status"],
+                         "FUNDING_READ_CONTRACT_UNVERIFIED")
+        self.assertFalse(
+            funding["pagination_verified_for_observed_position"])
+
+    async def test_funding_economics_can_be_observed_without_values(self):
+        c = FakeClient(
+            positions=[{
+                "positionId": 10, "symbol": "SIREN_USDT",
+                "positionType": 2, "holdVol": 5, "state": 1,
+            }],
+            funding_page={
+                "pageSize": 100, "totalCount": 2, "totalPage": 1,
+                "currentPage": 1,
+                "resultList": [
+                    {
+                        "id": 1, "symbol": "SIREN_USDT",
+                        "positionType": 2, "positionValue": 100,
+                        "funding": 0.1, "rate": 0.001,
+                        "settleTime": 123456,
+                    },
+                    {
+                        "id": 2, "symbol": "SIREN_USDT",
+                        "positionType": 2, "positionValue": 100,
+                        "funding": -0.1, "rate": -0.001,
+                        "settleTime": 123457,
+                    },
+                ],
+            },
+        )
+        result = await read_only_preflight(
+            client=c, include_funding_probe=True)
+        funding = result["funding_observed_position_probe"]
+        self.assertEqual(
+            funding["status"],
+            "PAGINATION_AND_FUNDING_ECONOMICS_OBSERVED")
+        self.assertTrue(funding["funding_sign_semantics_verified"])
+        self.assertTrue(funding["funding_formula_semantics_verified"])
+        self.assertEqual(
+            funding["funding_economics"]["sign_consistent_rows"], 2)
+        shared = shareable_contract_report(result)
+        for secret in ("SIREN_USDT", "0.1", "123456"):
+            self.assertNotIn(secret, str(shared["funding_observed_position_probe"]))
+
+    async def test_raw_double_read_consistency_is_non_authorizing(self):
+        result = await read_only_preflight(
+            client=FakeClient(
+                positions=[{"positionId": 10, "symbol": "SIREN_USDT",
+                            "positionType": 2, "holdVol": 1, "state": 1}],
+                stops=[],
+            ),
+            include_raw_consistency=True,
+        )
+        self.assertTrue(result["critical_inventory_double_read_consistent"])
+        self.assertTrue(result["raw_inventory_double_read_consistent"])
+        self.assertFalse(result["raw_inventory_completeness_verified"])
+        self.assertEqual(result["inventory_double_read_mode"],
+                         "READ_ONLY_DISCOVERY_PROJECTED")
+        self.assertFalse(result["live_order_submission_possible"])
+
+    async def test_projected_preflight_ignores_only_volatile_pnl_drift(self):
+        class VolatileClient(FakeClient):
+            def __init__(self):
+                super().__init__(
+                    positions=[{
+                        "positionId": 10, "symbol": "SIREN_USDT",
+                        "positionType": 2, "holdVol": 1, "state": 1,
+                        "holdAvgPrice": 100, "unRealizedPnl": 1.0,
+                    }],
+                    stops=[],
+                )
+                self.position_reads = 0
+
+            async def _private_get(self, path, params=None):
+                if path == "/api/v1/private/position/open_positions" and not params:
+                    self.position_reads += 1
+                    row = dict(self.positions[0])
+                    if self.position_reads >= 3:
+                        row["unRealizedPnl"] = 2.0
+                    self.calls.append((path, params))
+                    return [row]
+                return await super()._private_get(path, params)
+
+        result = await read_only_preflight(
+            client=VolatileClient(),
+            include_raw_consistency=True,
+        )
+        self.assertTrue(
+            result["critical_inventory_double_read_consistent"])
+        self.assertFalse(result["raw_inventory_double_read_consistent"])
+        self.assertEqual(
+            result["changed_position_field_names"], ["unRealizedPnl"])
+        self.assertNotIn(
+            "critical_inventory_double_read_unverified",
+            result["preflight_failures"],
+        )
+
+    async def test_symbol_scoped_inventory_crosscheck_is_shareable(self):
+        c = FakeClient(
+            positions=[{
+                "positionId": 10, "symbol": "SIREN_USDT",
+                "positionType": 2, "holdVol": 5, "state": 1,
+                "holdAvgPrice": 100, "unRealizedPnl": 123.45,
+            }],
+            stops=[],
+        )
+        result = await read_only_preflight(
+            client=c, include_symbol_crosscheck=True)
+        cross = result["symbol_scoped_inventory_crosscheck"]
+        self.assertEqual(
+            cross["status"], "SYMBOL_SCOPED_REDUNDANCY_MATCH")
+        self.assertTrue(cross["position_symbol_scoped_match"])
+        self.assertTrue(cross["current_tpsl_symbol_scoped_match"])
+        self.assertTrue(cross["symbol_scoped_crosscheck_verified"])
+        self.assertFalse(cross["account_wide_completeness_verified"])
+        self.assertFalse(cross["exchange_atomicity_verified"])
+        shared = shareable_contract_report(result)
+        self.assertNotIn(
+            "SIREN_USDT",
+            str(shared["symbol_scoped_inventory_crosscheck"]),
+        )
+        self.assertNotIn(
+            "123.45",
+            str(shared["symbol_scoped_inventory_crosscheck"]),
+        )
+
+    async def test_position_margin_economic_witness_is_shareable(self):
+        c = FakeClient(
+            positions=[{
+                "positionId": 10,
+                "symbol": "SIREN_USDT",
+                "positionType": 2,
+                "holdVol": 5,
+                "state": 1,
+                "holdAvgPrice": 100,
+                "im": 12.5,
+                "unRealizedPnl": -1.25,
+            }],
+            account_assets=[
+                {
+                    "currency": "USDT",
+                    "positionMargin": 12.5,
+                    "unrealized": -1.25,
+                },
+                {
+                    "currency": "MX",
+                    "positionMargin": 0,
+                    "unrealized": 0,
+                },
+            ],
+        )
+        result = await read_only_preflight(
+            client=c,
+            include_position_margin_witness=True,
+        )
+        witness = result["position_inventory_economic_witness"]
+        self.assertTrue(
+            witness["position_inventory_economic_witness_observed"])
+        self.assertTrue(witness["usdt_position_margin_reconciled"])
+        self.assertTrue(witness["usdt_unrealized_reconciled"])
+        self.assertFalse(witness["account_wide_completeness_verified"])
+        shared = shareable_contract_report(result)
+        text = str(shared["position_inventory_economic_witness"])
+        for secret in ("SIREN_USDT", "12.5", "-1.25"):
+            self.assertNotIn(secret, text)
+
+    async def test_current_inventory_completeness_can_be_certified_nonatomic(self):
+        c = FakeClient(
+            positions=[{
+                "positionId": 10,
+                "symbol": "SIREN_USDT",
+                "positionType": 2,
+                "holdVol": 5,
+                "state": 1,
+                "im": 12.5,
+                "unRealizedPnl": -1.25,
+            }],
+            stops=[{
+                "id": 99,
+                "positionId": "10",
+                "symbol": "SIREN_USDT",
+                "positionType": 2,
+                "state": 1,
+                "isFinished": 0,
+                "stopLossPrice": 175.0,
+                "vol": 5,
+            }],
+            account_assets=[{
+                "currency": "USDT",
+                "positionMargin": 12.5,
+                "unrealized": -1.25,
+            }],
+        )
+        result = await read_only_preflight(
+            client=c,
+            include_current_inventory_completeness=True,
+        )
+        proof = result["current_inventory_completeness_probe"]
+        self.assertTrue(proof["account_wide_completeness_verified"])
+        self.assertTrue(result["account_wide_completeness_verified"])
+        self.assertFalse(proof["exchange_atomicity_verified"])
+        self.assertFalse(result["live_order_submission_possible"])
+        self.assertNotIn(
+            "current_account_inventory_completeness_not_certified",
+            result["preflight_failures"],
+        )
+        shared = shareable_contract_report(result)
+        self.assertTrue(shared["account_wide_completeness_verified"])
+        self.assertNotIn("SIREN_USDT", str(
+            shared["current_inventory_completeness_probe"][
+                "current_inventory_completeness"
+            ]
+        ))
+
+    async def test_current_inventory_count_mismatch_stays_uncertified(self):
+        c = FakeClient(
+            positions=[],
+            stops=[],
+            open_order_counts={
+                "sumCount": 1,
+                "limitOrderCount": 0,
+                "stopOrderCount": 1,
+                "planOrderCount": 0,
+                "trackOrderCount": 0,
+            },
+        )
+        result = await read_only_preflight(
+            client=c,
+            include_current_inventory_completeness=True,
+        )
+        self.assertFalse(result["account_wide_completeness_verified"])
+        self.assertIn(
+            "current_account_inventory_completeness_not_certified",
+            result["preflight_failures"],
+        )
+
+    async def test_schema_only_history_can_fill_stop_shape_without_certifying_pagination(self):
+        c = FakeClient(
+            positions=[{"positionId": 10, "symbol": "SIREN_USDT",
+                        "positionType": 2, "holdVol": 1, "state": 1}],
+            stop_history=[{"id": 99, "positionId": 10, "state": 3,
+                           "stopLossPrice": 1.25, "vol": 1}],
+        )
+        result = await read_only_preflight(
+            client=c, include_historical_stop_schema=True)
+        self.assertEqual(result["stop_schema_source"], "historical_finished_page1")
+        self.assertEqual(
+            result["shadow_schema_assessment"]["overall"],
+            "PARSER_SHAPE_COMPATIBLE_UNCERTIFIED")
+        self.assertFalse(result["shadow_schema_assessment"]["pagination_verified"])
+        self.assertFalse(result["shadow_schema_assessment"]["active_stop_schema_observed"])
+        self.assertTrue(result["shadow_schema_assessment"]["historical_stop_schema_observed"])
+        self.assertFalse(result["shadow_schema_assessment"]["active_stop_contract_verified"])
+        self.assertEqual(len(c.calls), 3)
+
+    async def test_recent_finished_transition_is_shareable_without_values(self):
+        c = FakeClient(
+            positions=[{
+                "positionId": 10, "symbol": "SIREN_USDT",
+                "positionType": 2, "holdVol": 5, "state": 1,
+            }],
+            stops=[],
+            stop_history=[{
+                "id": 999, "positionId": "10", "symbol": "SIREN_USDT",
+                "state": 2, "triggerSide": 0, "isFinished": 1,
+                "updateTime": 1, "stopLossPrice": 175.0, "vol": 5,
+            }],
+        )
+        with patch("app.t100_live_stop_transition.time.time", return_value=0.001):
+            result = await read_only_preflight(
+                client=c, include_historical_stop_schema=True)
+        transition = result["recent_finished_tpsl_transition"]
+        self.assertEqual(transition["latest_terminal_state"], "CANCELED")
+        self.assertEqual(transition["latest_trigger_side"], "UNTRIGGERED")
+        shared = shareable_contract_report(result)
+        self.assertEqual(
+            shared["recent_finished_tpsl_transition"]["latest_terminal_state"],
+            "CANCELED")
+        for secret in ("SIREN_USDT", "175.0", "999"):
+            self.assertNotIn(
+                secret, str(shared["recent_finished_tpsl_transition"]))
+
+    async def test_empty_history_does_not_create_false_stop_schema(self):
+        result = await read_only_preflight(
+            client=FakeClient(), include_historical_stop_schema=True)
+        self.assertEqual(result["stop_schema_source"], "open_orders")
+        self.assertEqual(
+            result["shadow_schema_assessment"]["overall"],
+            "INCOMPLETE_SCHEMA_EVIDENCE")
+        self.assertFalse(result["shadow_schema_assessment"]["active_stop_schema_observed"])
+        self.assertFalse(result["shadow_schema_assessment"]["historical_stop_schema_observed"])
+
+    async def test_active_tpsl_semantics_are_shareable_without_values(self):
+        c = FakeClient(
+            positions=[{
+                "positionId": 10, "symbol": "SIREN_USDT",
+                "positionType": 2, "holdVol": 5, "state": 1,
+            }],
+            stops=[{
+                "id": 99, "positionId": "10", "symbol": "SIREN_USDT",
+                "positionType": 2, "state": 1, "isFinished": 0,
+                "stopLossPrice": 175.0, "vol": 5,
+                "profitLossVolType": "SAME",
+            }],
+        )
+        result = await read_only_preflight(client=c)
+        self.assertTrue(
+            result["active_tpsl_semantics"][
+                "active_tpsl_row_semantics_verified"
+            ]
+        )
+        shared = shareable_contract_report(result)
+        self.assertTrue(
+            shared["active_tpsl_semantics"][
+                "all_rows_link_to_observed_position"
+            ]
+        )
+        for value in ("SIREN_USDT", "175.0", "99"):
+            self.assertNotIn(value, str(shared["active_tpsl_semantics"]))
+
+    async def test_schema_evidence_redacts_account_values(self):
+        c = FakeClient(positions=[{"positionId": "PRIVATE-123",
+                                   "symbol": "SIREN_USDT",
+                                   "unknownSecretField": "SECRET-XYZ"}],
+                       stops=[{"id": "PRIVATE-STOP-999"}])
+        result = await read_only_preflight(client=c)
+        schema = str(result["redacted_inventory_schema"])
+        for secret in ("PRIVATE-123", "SIREN_USDT", "SECRET-XYZ",
+                       "unknownSecretField", "PRIVATE-STOP-999"):
+            self.assertNotIn(secret, schema)
+        self.assertEqual(result["redacted_inventory_schema"]["positions"]["unlisted_field_occurrences"], 1)
+
+    async def test_nonempty_positions_block(self):
+        result = await read_only_preflight(
+            client=FakeClient(positions=[{"positionId": "10"}]))
+        self.assertIn("account_has_existing_positions", result["preflight_failures"])
+        self.assertIn("t100_position_without_observed_native_tpsl",
+                      result["preflight_failures"])
+        self.assertEqual(result["t100_native_protection_presence"],
+                         "POSITION_WITHOUT_OBSERVED_CURRENT_TPSL")
+
+    async def test_orphan_stop_blocks(self):
+        result = await read_only_preflight(
+            client=FakeClient(stops=[{"id": "99"}]))
+        self.assertIn("account_has_existing_stop_orders", result["preflight_failures"])
+        self.assertIn("t100_current_tpsl_without_observed_position",
+                      result["preflight_failures"])
+        self.assertEqual(result["t100_native_protection_presence"],
+                         "CURRENT_TPSL_WITHOUT_OBSERVED_POSITION")
+
+    async def test_malformed_positions_cannot_look_flat(self):
+        result = await read_only_preflight(
+            client=FakeClient(positions=[{"positionId": "10"}, None]))
+        self.assertIn("private_or_public_read_failed", result["preflight_failures"])
+        self.assertNotIn("open_futures_positions", result)
+
+    async def test_malformed_stops_cannot_look_flat(self):
+        result = await read_only_preflight(
+            client=FakeClient(stops=[{"id": "99"}, None]))
+        self.assertIn("private_or_public_read_failed", result["preflight_failures"])
+        self.assertNotIn("open_futures_stop_orders", result)
+
+    async def test_null_positions_fail(self):
+        c = FakeClient()
+        c.positions = None
+        result = await read_only_preflight(client=c)
+        self.assertIn("private_or_public_read_failed", result["preflight_failures"])
+
+    async def test_null_stops_fail(self):
+        c = FakeClient()
+        c.stops = None
+        result = await read_only_preflight(client=c)
+        self.assertIn("private_or_public_read_failed", result["preflight_failures"])
+
+    async def test_shareable_report_never_includes_account_values(self):
+        result = await read_only_preflight(client=FakeClient())
+        result["usdt_equity"] = 987654321.12
+        result["api_key"] = "DO_NOT_SHARE"
+        shared = shareable_contract_report(result)
+        self.assertNotIn("987654321", str(shared))
+        self.assertNotIn("DO_NOT_SHARE", str(shared))
+        self.assertFalse(shared["venue_contract_certified"])
+        self.assertFalse(shared["pagination_certified"])
+        self.assertEqual(shared["shadow_schema_assessment"]["overall"], "INCOMPLETE_SCHEMA_EVIDENCE")
+
+    async def test_cli_timeout_fails_closed(self):
+        async def times_out(**kwargs):
+            import asyncio
+            raise asyncio.TimeoutError()
+        with patch("app.t100_live_preflight.read_only_preflight", times_out):
+            result = await _run_cli_preflight(schema_only=True)
+        self.assertEqual(result["credential_status"],
+                         "READ_ONLY_PREFLIGHT_TIMED_OUT")
+        self.assertFalse(result["live_order_submission_possible"])
+        self.assertIn("overall_read_only_preflight_timeout",
+                      result["preflight_failures"])
+
+    async def test_missing_credentials_makes_no_calls(self):
+        with patch.dict(os.environ, {"MEXC_API_KEY": "", "MEXC_API_SECRET": ""}):
+            c = FakeClient()
+            result = await read_only_preflight(client=c)
+            self.assertEqual(c.calls, [])
+            self.assertIn("MISSING", result["credential_status"])

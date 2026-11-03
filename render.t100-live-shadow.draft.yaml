@@ -1,0 +1,60 @@
+# DRAFT ONLY — do not sync/deploy yet.
+#
+# Independent read-only T100 live-shadow supervisor for Render.
+# This service has no DATABASE_URL and no live-order authorization.
+# It exists only to observe MEXC private account state, run continuity checks,
+# latch on safety anomalies, and notify Discord.
+#
+# Target deployment sequence is documented in docs/T100_LIVE_SHADOW_RENDER.md.
+
+services:
+  - type: worker
+    name: mexc-t100-live-shadow
+    runtime: python
+    plan: starter
+    region: frankfurt
+    branch: main
+    buildCommand: pip install .
+    startCommand: python -m app.t100_live_shadow_runtime
+
+    # Manual deployment only. Never deploy this service merely because a commit
+    # landed on main; operator review is required for every shadow-runtime rollout.
+    autoDeployTrigger: off
+    maxShutdownDelaySeconds: 60
+
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.12.11"
+
+      # Hard non-authorizing execution boundary.
+      - key: T100_EXECUTION_MODE
+        value: paper
+      - key: T100_LIVE_ORDER_API_ENABLED
+        value: "false"
+      - key: T100_LIVE_KILL_SWITCH
+        value: "true"
+
+      # Continuous observation cadence.
+      - key: T100_SHADOW_CYCLE_SECONDS
+        value: "90"
+      - key: T100_SHADOW_WS_WINDOW_SECONDS
+        value: "30"
+      - key: T100_SHADOW_HEALTH_REPORT_SECONDS
+        value: "21600"
+      - key: T100_SHADOW_NOTIFICATION_COOLDOWN_SECONDS
+        value: "900"
+      - key: T100_SHADOW_REQUIRE_DISCORD
+        value: "true"
+
+      - key: LOG_LEVEL
+        value: INFO
+
+      # Read-only MEXC credentials. Configure in Render Dashboard; never commit.
+      - key: MEXC_API_KEY
+        sync: false
+      - key: MEXC_API_SECRET
+        sync: false
+
+      # Operational cockpit. Configure in Render Dashboard; never commit.
+      - key: DISCORD_TRADER_EVENTS_WEBHOOK_URL
+        sync: false
