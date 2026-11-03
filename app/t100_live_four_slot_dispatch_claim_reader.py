@@ -9,6 +9,8 @@ No exchange requests, writes, notifications, or credentials are handled here.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from hashlib import sha256
+import json
 from typing import Any, Sequence
 
 from app.t100_live_db_inspect import EXPECTED_DATABASE
@@ -37,6 +39,9 @@ class DispatchClaimRecovery:
     status: str
     claimed_attempts: int = 0
     all_claims_exact_and_durable: bool = False
+    # Hash of the exact SELECT witness, not raw account/order identifiers.
+    # Used to invalidate a bookended observation if SQL changes during GET.
+    claim_snapshot_sha256: str = ""
     reconciliation_required: bool = True
     resubmission_allowed: bool = False
     entry_allowed: bool = False
@@ -147,10 +152,29 @@ class PostgresFourSlotDispatchClaimReader:
                                 claimed_attempts=len(rows),
                             )
                         seen.add(sid)
+                    # Summary booleans alone cannot detect a valid journal
+                    # transition (e.g. SUBMITTING -> UNKNOWN) during a GET
+                    # window. Fingerprint all claim/slot/intent identity and
+                    # state fields without releasing their raw values.
+                    fields = (
+                        "signal_id", "external_oid", "holder_id",
+                        "fencing_token", "claim_state", "slot_external_oid",
+                        "slot_holder_id", "slot_fencing_token", "slot_state",
+                        "intent_external_oid", "intent_state",
+                    )
+                    witness = [
+                        [row[field] for field in fields] for row in rows
+                    ]
+                    digest = sha256(
+                        json.dumps(
+                            witness, separators=(",", ":"), ensure_ascii=True,
+                        ).encode("ascii")
+                    ).hexdigest()
                     return DispatchClaimRecovery(
                         status="DISPATCH_CLAIMS_PRESENT_RECONCILE_ONLY",
                         claimed_attempts=len(rows),
                         all_claims_exact_and_durable=True,
+                        claim_snapshot_sha256=digest,
                     )
         except DispatchClaimRecoveryHalted:
             raise
