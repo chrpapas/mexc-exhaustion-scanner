@@ -1070,3 +1070,50 @@ amendment contract remain BLOCKED. Production Render, exchange orders,
 stop mutations, account positions, production DB and credentials are
 unchanged. BOXWAVE remains isolated. Engineering completion remains
 approximately **70% subjective**, with zero live-order authorization.
+
+### 2026-11-03 — Four-slot staged outcome and offline checkpoint now require MARKET native SL
+
+The prior four-slot staged-attempt observer and protected-fill preparation
+could accept an apparently active volume-complete native stop without
+distinguishing `stopLossType=0` MARKET SL from `stopLossType=1` LIMIT SL.
+The independent strict current MEXC GET-row witness is now enforced twice:
+
+1. `assess_staged_protected_attempts` rejects non-market/unknown native
+   stop type, reversal, wrong trigger and invalid or unknown volume-mode
+   semantics for every newly observed position. It does not mark the
+   staged attempt fully protected or issue any live authority on failure.
+2. `prepare_protected_entries` independently rejects the same unsupported
+   native SL evidence before preparing any offline ACK/fill/checkpoint
+   bundle, even if an earlier generic witness is positive.
+
+Both stages remain GET-only / in-memory and **NONAUTHORIZING**. They
+cannot prove that a future native SL triggers, fills, survives volatility,
+precedes liquidation, or atomically protects an entry. Historical/manual
+positions and legacy snapshot parser remain separate, noncertified
+readiness blockers.
+
+New regressions cover LIMIT SL, missing stop type, reversal, wrong
+trigger, unknown volume semantics, plus staged bookended GET preparation.
+Only in-memory venue fixtures were used; there was no venue mutation.
+
+**CI-tested code SHA:** `4c75d243fdb8ee20665165f18793a501fd18c6c7`.
+All FIVE workflows PASS:
+[offline safety](https://github.com/chrpapas/mexc-exhaustion-scanner/actions/runs/41692036603),
+[isolated PostgreSQL](https://github.com/chrpapas/mexc-exhaustion-scanner/actions/runs/41692037014),
+[scanner/trader separation](https://github.com/chrpapas/mexc-exhaustion-scanner/actions/runs/41692036721),
+[promotion](https://github.com/chrpapas/mexc-exhaustion-scanner/actions/runs/41692036898),
+[daily dashboard](https://github.com/chrpapas/mexc-exhaustion-scanner/actions/runs/41692036647).
+
+Additional current official API caveat: MEXC
+`POST /api/v1/private/stoporder/place` notes that a pre-existing
+non-final TP/SL at the same price can return its previous ID and update
+quantity **asynchronously**. Therefore a successful POST/returned ID or
+single GET cannot certify an immediately protected owned position.
+The independent private-stop placement/identity, amendment/cancel
+semantics, stop lifecycle and exchange gap execution are still BLOCKED.
+Reference:
+https://www.mexc.io/api-docs/futures/account-and-trading-endpoints/place-tpsl-order-by-position
+
+No real order, stop modification, production DB mutation, credential
+change, Render deployment or BOXWAVE modification. The engineering
+estimate remains approximately 70%; live trading remains blocked.
