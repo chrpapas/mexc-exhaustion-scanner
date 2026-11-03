@@ -11,8 +11,12 @@ from dataclasses import replace
 from decimal import Decimal as D
 import unittest
 
+from app.t100_live_four_slot_dispatch_claim_reader import (
+    DispatchClaimRecovery,
+)
 from app.t100_live_four_slot_protected_get_evidence import (
     observe_and_prepare_staged_protection_get_only,
+    observe_claimed_staged_protection_get_only,
 )
 from tests.test_t100_live_four_slot_attempt_outcome import ProtectedOutcomeTests
 from tests.test_t100_live_v40_protected_finalization import deal
@@ -79,6 +83,75 @@ class ProtectedGetBridgeTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(r.mexc_orders_sent)
         self.assertEqual(self.pg.new_intents[0]["state"], "SUBMITTING")
         self.assertEqual(self.pg.reserved[0]["state"], "SUBMITTING")
+
+    async def test_claim_bound_bridge_rejects_missing_claim_before_all_venue_gets(self):
+        class Claims:
+            calls = 0
+            async def inspect(self, stages):
+                self.calls += 1
+                return DispatchClaimRecovery("DISPATCH_CLAIMS_MISSING_NO_RETRY")
+
+        claims = Claims()
+        result = await observe_claimed_staged_protection_get_only(
+            stages=[self.stage], intents=[self.intent],
+            pre_attempt_witness=self.before,
+            claim_reader=claims, venue=self.venue,
+            completeness=self.complete,
+        )
+        self.assertEqual(claims.calls, 1)
+        self.assertEqual(
+            result.status, "PROTECTED_GET_DISPATCH_CLAIM_NOT_VERIFIED_NO_RETRY",
+        )
+        self.assertIsNone(result.prepared_batch)
+        self.assertFalse(result.dispatch_claims_verified)
+        self.assertEqual(self.venue.positions_reads, 0)
+        self.assertEqual(self.venue.order_reads, 0)
+        self.assertEqual(self.deal_reads, 0)
+        self.assertEqual(self.complete.calls, 0)
+
+    async def test_claim_bound_bridge_prepares_only_after_exact_claim(self):
+        class Claims:
+            async def inspect(self, stages):
+                return DispatchClaimRecovery(
+                    status="DISPATCH_CLAIMS_PRESENT_RECONCILE_ONLY",
+                    claimed_attempts=1,
+                    all_claims_exact_and_durable=True,
+                )
+
+        result = await observe_claimed_staged_protection_get_only(
+            stages=[self.stage], intents=[self.intent],
+            pre_attempt_witness=self.before,
+            claim_reader=Claims(), venue=self.venue,
+            completeness=self.complete,
+        )
+        self.assertEqual(
+            result.status, "PROTECTED_GET_BATCH_PREPARED_NONAUTHORIZING",
+        )
+        self.assertTrue(result.dispatch_claims_verified)
+        self.assertEqual(result.orders_observed, 1)
+        self.assertEqual(result.deal_histories_observed, 1)
+        self.assertTrue(result.two_bookends_equal)
+        self.assertFalse(result.durable_ack_persisted)
+        self.assertFalse(result.live_authorization)
+        self.assertFalse(result.mexc_orders_sent)
+
+    async def test_claim_bound_bridge_fails_closed_if_claim_reader_crashes(self):
+        class Claims:
+            async def inspect(self, stages):
+                raise ConnectionError("database connection unavailable")
+
+        result = await observe_claimed_staged_protection_get_only(
+            stages=[self.stage], intents=[self.intent],
+            pre_attempt_witness=self.before,
+            claim_reader=Claims(), venue=self.venue,
+            completeness=self.complete,
+        )
+        self.assertEqual(
+            result.status, "PROTECTED_GET_DISPATCH_CLAIM_READ_FAILED_NO_RETRY",
+        )
+        self.assertEqual(self.venue.positions_reads, 0)
+        self.assertEqual(self.deal_reads, 0)
+        self.assertFalse(result.entry_allowed)
 
     async def test_exact_order_missing_blocks_before_deal_get(self):
         self.venue.orders.clear()
