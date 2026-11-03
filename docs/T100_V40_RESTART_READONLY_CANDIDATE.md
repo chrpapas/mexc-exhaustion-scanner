@@ -101,3 +101,38 @@ at MEXC by the account operator. The software did not amend it.
 No actual orders, production DB/role changes, Render deployments,
 credential changes, or BOXWAVE changes were performed while preparing
 this development artifact.
+
+## Additional fail-closed startup boundaries (verified 2026-11-03)
+
+- **Two restricted DB checks, one exchange decision:** in opt-in
+  `--restart-preflight`, the CLI now verifies the restricted PostgreSQL
+  restart journal BEFORE importing or constructing `MexcTradeClient`.
+  Missing schema, ambiguous order, or mismatched claim returns a redacted
+  blocker without constructing a trading-capable HTTP client. On a clean
+  first check, the CLI creates the client but the supervisor **rechecks
+  PostgreSQL immediately before ANY signed exchange GET**; an attempt
+  staged between reads blocks all GETs.
+- **Self-consistent triage contract:** the supervisor insists on exact
+  0–4 slot counts, matching pending/claimed attempt counts and states,
+  read-only evidence and zero DB/venue mutations or manual adoption.
+  Contradictory, privileged, malformed or forged triage results are
+  refused without GETs.
+- **RELEASED is not a hiding place:** a released V40 reservation whose
+  order intent is still unresolved, or whose committed one-shot claim
+  has inconsistent original ownership, blocks the restart. The same
+  restricted read-only REPEATABLE READ transaction checks both released
+  anomalies and active reservations. This is not evidence that a
+  correctly closed released slot was historically safe; closure still
+  requires separate independent accounting.
+- Redacted outputs retain verified active/pending/claimed counts for
+  settled nonauthorizing audits. All statuses remain nonauthorizing.
+
+Code SHA `8054b576c874f93c625f55d188d273634db24ba1`
+passed all FIVE GitHub checks, including
+[offline safety](https://github.com/chrpapas/mexc-exhaustion-scanner/actions/runs/41661435766)
+and [disposable PostgreSQL](https://github.com/chrpapas/mexc-exhaustion-scanner/actions/runs/41661435869).
+The PostgreSQL tests explicitly release an unfinished attempt and
+introduce a wrong-origin dispatch claim, proving both are blocked
+before account observation. This was **development-only**; there was
+no deployment, DB migration/role change, exchange account mutation,
+credential change or live authorization.
