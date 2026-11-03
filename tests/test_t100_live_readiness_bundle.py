@@ -16,6 +16,16 @@ class Pool:
         }
         self.indexes = set(REQUIRED_INDEXES)
         self.sequences = set(REQUIRED_SEQUENCES)
+        self.v40_slots_present = True
+        self.v40_claims_present = True
+        self.v40_counts = {
+            "unresolved_reservations": 0,
+            "unresolved_dispatch_claims": 0,
+            "unclaimed_protected_reservations": 0,
+            "dispatch_claim_provenance_mismatches": 0,
+            "protected_reservations": 0,
+            "total_dispatch_claims": 0,
+        }
         self.unresolved = {
             "prepared_order_intents": 0,
             "submitting_order_intents": 0,
@@ -57,6 +67,13 @@ class Pool:
         raise AssertionError("unexpected fetch")
 
     async def fetchrow(self, sql):
+        if "to_regclass(" in sql:
+            return {
+                "slots_present": self.v40_slots_present,
+                "claims_present": self.v40_claims_present,
+            }
+        if "unclaimed_protected_reservations" in sql:
+            return dict(self.v40_counts)
         return dict(self.unresolved)
 
 
@@ -124,6 +141,44 @@ class DynamicReadinessTests(unittest.IsolatedAsyncioTestCase):
             "unresolved_mutations_absent",
             r["dynamic_blockers"],
         )
+
+    async def test_missing_v40_migrations_blocks_otherwise_clean_dynamic_bundle(self):
+        p = Pool()
+        p.v40_claims_present = False
+        r = await run_dynamic_readiness_bundle(client=Client(), pool=p)
+        self.assertFalse(r["dynamic_readiness_verified"])
+        self.assertIn(
+            "v40_unresolved_dispatch_state_absent", r["dynamic_blockers"],
+        )
+        self.assertEqual(
+            r["v40_dispatch_state"]["status"],
+            "V40_DB_STATE_MIGRATIONS_NOT_OBSERVED",
+        )
+        self.assertFalse(r["live_authorization"])
+
+    async def test_unresolved_v40_claim_blocks_clean_legacy_journals(self):
+        for kind in (
+            "unresolved_reservations",
+            "unresolved_dispatch_claims",
+            "unclaimed_protected_reservations",
+            "dispatch_claim_provenance_mismatches",
+        ):
+            with self.subTest(kind=kind):
+                p = Pool()
+                p.v40_counts[kind] = 1
+                r = await run_dynamic_readiness_bundle(
+                    client=Client(), pool=p,
+                )
+                self.assertFalse(r["dynamic_readiness_verified"])
+                self.assertFalse(
+                    r["v40_unresolved_dispatch_state_absent"],
+                )
+                self.assertIn(
+                    "v40_unresolved_dispatch_state_absent",
+                    r["dynamic_blockers"],
+                )
+                self.assertFalse(r["entry_allowed"])
+                self.assertFalse(r["live_authorization"])
 
     async def test_nonflat_requires_durable_recovery(self):
         c = Client()
