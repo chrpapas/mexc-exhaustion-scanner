@@ -58,11 +58,6 @@ def effective_protective_quantity(
     vol_type = _integer(stop.get("volType"))
     quantity_mode = stop.get("profitLossVolType")
 
-    # Unrecognized or missing MEXC volume modes cannot establish native
-    # stop coverage, even if an apparently sufficient vol field is present.
-    if vol_type not in (1, 2) or quantity_mode not in ("SAME", "SEPARATE"):
-        return None
-
     if vol_type == 2 and quantity_mode == "SAME":
         return position_quantity
 
