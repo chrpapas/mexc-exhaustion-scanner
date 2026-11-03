@@ -327,6 +327,58 @@ class ShadowRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(runtime.kill.tripped)
         self.assertEqual(runtime.kill.first_reason, "READ_FAILURE")
 
+    async def test_redacted_native_stop_get_evidence_has_no_private_fields(self):
+        from app.t100_live_preflight import _redacted_tpsl_origin_evidence
+        rows = [
+            {
+                "id": "9922244", "orderId": "0", "positionId": "123456",
+                "symbol": "PRIVATE_USDT", "stopLossPrice": "15.42",
+                "vol": "38.2", "stopLossType": 0, "triggerSide": 2,
+                "errorCode": 0, "isFinished": 1,
+            },
+            {
+                "id": "778", "orderId": "993399", "positionId": "999",
+                "symbol": "SECOND_USDT", "stopLossType": 1,
+                "triggerSide": 0, "errorCode": 9, "isFinished": 0,
+            },
+        ]
+        out = _redacted_tpsl_origin_evidence(
+            rows, [{"positionId": "123456"}],
+        )
+        self.assertEqual(out["rows"], 2)
+        self.assertEqual(out["position_origin_order_id_zero"], 1)
+        self.assertEqual(out["order_attached_positive_order_id"], 1)
+        self.assertEqual(out["linked_to_current_position"], 1)
+        self.assertEqual(out["market_stop_loss_type_zero"], 1)
+        self.assertEqual(out["limit_stop_loss_type_one"], 1)
+        self.assertFalse(out["amendment_post_verified"])
+        self.assertFalse(out["live_authorization"])
+        rendered = str(out)
+        for private in ("123456", "993399", "9922244", "PRIVATE_USDT", "15.42", "38.2"):
+            self.assertNotIn(private, rendered)
+
+    async def test_shadow_logs_redacted_get_origin_counts_once(self):
+        pf = preflight(positions=1, stops=0)
+        pf["redacted_current_tpsl_origin_evidence"] = {
+            "rows": 0, "position_origin_order_id_zero": 0,
+        }
+        pf["redacted_finished_tpsl_origin_evidence_page1"] = {
+            "rows": 2, "position_origin_order_id_zero": 1,
+            "order_attached_positive_order_id": 1,
+        }
+        runtime = self.make_runtime(pf=pf)
+        with self.assertLogs("app.t100_live_shadow_runtime", level="INFO") as captured:
+            await runtime.cycle()
+            await runtime.cycle()
+        lines = [
+            v for v in captured.output
+            if "signed_GET native_TPSL_origin" in v
+        ]
+        self.assertEqual(len(lines), 2)
+        self.assertIn("finished_page1 rows=2 position_origin=1", lines[1])
+        self.assertIn("amendment_post_verified=false", lines[1])
+        self.assertNotIn("MEXC_API_SECRET", "\n".join(lines))
+
     async def test_refuses_live_mode(self):
         with patch.dict(
             os.environ, {"T100_EXECUTION_MODE": "live"}, clear=False
