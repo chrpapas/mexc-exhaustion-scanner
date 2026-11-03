@@ -136,3 +136,25 @@ introduce a wrong-origin dispatch claim, proving both are blocked
 before account observation. This was **development-only**; there was
 no deployment, DB migration/role change, exchange account mutation,
 credential change or live authorization.
+
+## 2026-11-03 follow-up — post-GET restricted SQL bookend
+
+The normal settled-slot GET-only restart supervisor now performs
+another restricted, read-only PostgreSQL V40 triage **after** its
+account/stop/order GET window. If V40 slot, intent or dispatch-claim
+state changed between the pre-GET and post-GET snapshots, it returns
+`RESTART_DB_CHANGED_DURING_GET_NO_RETRY`, never
+`RESTART_OBSERVED_NONAUTHORIZING`. A post-GET database read failure
+also blocks with the same redacted status.
+
+An offline test injects a synthetic pending reservation during the
+account GET window. A real disposable PostgreSQL integration test
+changes a protected slot and its intent to UNKNOWN during the
+simulated GET window. Both verify the clean result is discarded,
+with no exchange order POST and no automatic retry.
+
+**Tested SHA** `bda38851866f3e906df1d0bc3f550f0fa87d8154`;
+all five CI workflows passed, including
+[isolated PostgreSQL](https://github.com/chrpapas/mexc-exhaustion-scanner/actions/runs/41681560496)
+and [offline safety](https://github.com/chrpapas/mexc-exhaustion-scanner/actions/runs/41681561124).
+This is NOT cross-system atomicity certification or a release approval.
