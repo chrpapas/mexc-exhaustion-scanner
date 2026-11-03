@@ -63,6 +63,8 @@ class LiveMexcAdapter:
                 "vol": str(intent.volume_contracts),
                 "leverage": 1,
                 "side": 3,
+                "sideType": "sell",
+                "positionType": "short",
                 "type": 5,
                 "openType": self.open_type,
                 "positionMode": 1,
