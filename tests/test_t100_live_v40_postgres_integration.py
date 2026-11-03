@@ -393,6 +393,53 @@ class RealPostgresProtectedV40Tests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(recovered.live_authorization)
 
 
+    async def test_v40_dispatch_readiness_gate_tracks_real_sql_stage_claim_and_ack(self):
+        """Read-only gate sees unresolved states and a protected claim outcome."""
+        from app.t100_live_v40_state_gate import (
+            assess_v40_unresolved_dispatch_state,
+        )
+        from app.t100_live_four_slot_dispatch_claims import (
+            PostgresFourSlotDispatchClaims,
+        )
+        from app.t100_live_leader_fencing import LeaderLease
+
+        staged = await assess_v40_unresolved_dispatch_state(self.pool)
+        self.assertEqual(staged["status"],
+                         "V40_DB_DISPATCH_OR_RESERVATION_UNRESOLVED")
+        self.assertEqual(staged["unresolved_reservations"], 1)
+        self.assertEqual(staged["unresolved_dispatch_claims"], 0)
+        self.assertFalse(staged["v40_unresolved_dispatch_state_absent"])
+
+        entry = self.batch.entries[0]
+        leader = LeaderLease("t100-live-executor", "worker-A", 11, 45)
+        await PostgresFourSlotDispatchClaims(self.pool).claim(
+            stage=entry.stage, lease=leader,
+        )
+        claimed = await assess_v40_unresolved_dispatch_state(self.pool)
+        self.assertEqual(claimed["unresolved_reservations"], 1)
+        self.assertEqual(claimed["unresolved_dispatch_claims"], 1)
+        self.assertFalse(claimed["live_authorization"])
+
+        committed = await self.executor.persist_claimed(
+            batch=self.batch, pre_attempt_witness=self.witness,
+            lease=leader, observed_at=self.observed_at,
+        )
+        self.assertTrue(committed.db_atomic_commit_observed)
+        cleared = await assess_v40_unresolved_dispatch_state(self.pool)
+        self.assertEqual(
+            cleared["status"], "V40_DB_STATE_CLEAR_NONAUTHORIZING",
+        )
+        self.assertTrue(cleared["v40_unresolved_dispatch_state_absent"])
+        self.assertEqual(cleared["unresolved_reservations"], 0)
+        self.assertEqual(cleared["unresolved_dispatch_claims"], 0)
+        self.assertEqual(cleared["unclaimed_protected_reservations"], 0)
+        self.assertEqual(cleared["dispatch_claim_provenance_mismatches"], 0)
+        self.assertEqual(cleared["protected_reservations"], 1)
+        self.assertEqual(cleared["total_dispatch_claims"], 1)
+        self.assertFalse(cleared["entry_allowed"])
+        self.assertFalse(cleared["live_authorization"])
+        self.assertFalse(cleared["mexc_orders_sent"])
+
     async def test_one_shot_dispatch_claim_is_durable_and_never_reclaimed(self):
         """Claim is NOT order permission; no code in this test sends a POST."""
         from app.t100_live_four_slot_dispatch_claims import (
