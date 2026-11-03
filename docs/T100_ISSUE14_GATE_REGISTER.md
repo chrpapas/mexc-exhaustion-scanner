@@ -1157,3 +1157,51 @@ No exchange POST, native stop amendment, production DB update, Render
 deployment, credential changes or BOXWAVE changes. Live execution,
 native stop lifecycle, account collateral/liquidation evidence and
 independent production release review remain **BLOCKED**.
+
+### 2026-11-03 — Position-origin stop guards and legacy trailing recovery tightened
+
+Current MEXC official GET TP/SL documentation distinguishes a
+**position-origin** stop with `orderId=0` from an order-attached
+TP/SL. It also documents `triggerSide=0` for untriggered
+and `errorCode=0` for normal rows. The strict
+`assess_native_short_market_stop_row` now rejects missing,
+nonzero, malformed and unexpected values for these fields;
+it continues to require active, full-volume short MARKET SL
+(`stopLossType=0`), no reversal, latest-price trigger, exact
+position identity and nonlooser price. Its result remains
+observational, never exchange execution certification.
+
+The four-slot staged-outcome and offline checkpoint path inherit
+this stricter gate. Additionally, the legacy no-POST
+`StopAmendmentLifecycleCoordinator` and
+`StopUpdatePersistencePipeline` independently require the strict
+native row before journal VERIFIED and checkpoint persistence. Tests
+cover rejected limit SL, order-attached SL, already-triggered and
+error rows, reversal, wrong trigger, unknown quantity mode,
+and crash/restart UNKNOWN recovery. Shared manual-account fixtures
+now carry explicit documented MEXC fields; other manual positions
+remain untouched.
+
+**Code SHA tested:** `eeb092321cb354907138ef7a5884568a95f6f43d`.
+All five checks PASS:
+[offline safety](https://github.com/chrpapas/mexc-exhaustion-scanner/actions/runs/41696241266),
+[isolated PostgreSQL](https://github.com/chrpapas/mexc-exhaustion-scanner/actions/runs/41696241153),
+[scanner/trader separation](https://github.com/chrpapas/mexc-exhaustion-scanner/actions/runs/41696241233),
+[promotion](https://github.com/chrpapas/mexc-exhaustion-scanner/actions/runs/41696241194),
+[daily dashboard](https://github.com/chrpapas/mexc-exhaustion-scanner/actions/runs/41696241256).
+
+**Current docs correction:** MEXC *does* now document
+`POST /api/v1/private/stoporder/change_plan_price` for
+`stopPlanOrderId`. The independent gate remains pinned blocked
+because actual live position-TP/SL `id` mapping, amendment
+POST/GET/terminal-history behavior, stop activation timing and
+execution/gap reliability have not been independently witnessed.
+The direct legacy checkpoint writer and remaining shared/generic
+volume parser paths still need audited upgrade before live certification.
+A successful entry order with embedded `stopLossPrice` is NOT
+presumed to create an independently verified `orderId=0`
+position stop.
+
+No order, native stop edit, production DB or Render mutation,
+key change or BOXWAVE change. Approximately 70% subjective
+engineering progress remains; **LIVE_AUTHORIZATION = FALSE**.
