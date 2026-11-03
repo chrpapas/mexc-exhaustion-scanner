@@ -27,6 +27,7 @@ from app.t100_live_inventory_completeness_probe import (
 )
 from app.t100_live_readonly_probe import ReadOnlyMexcProbe
 from app.t100_live_schema_gate import assess_live_schema_and_privileges
+from app.t100_live_v40_state_gate import assess_v40_unresolved_dispatch_state
 
 
 async def run_dynamic_readiness_bundle(
@@ -60,6 +61,7 @@ async def run_dynamic_readiness_bundle(
 
     schema = await assess_live_schema_and_privileges(pool)
     state = await assess_unresolved_live_state(pool)
+    v40_state = await assess_v40_unresolved_dispatch_state(pool)
     inventory = await run_current_inventory_completeness_probe(
         ReadOnlyMexcProbe(client)
     )
@@ -72,6 +74,7 @@ async def run_dynamic_readiness_bundle(
     result.update({
         "durable_schema": schema,
         "durable_state": state,
+        "v40_dispatch_state": v40_state,
         "current_inventory": inventory,
         "account_reconciliation": account,
         "durable_nonflat_recovery_evidence_verified": False,
@@ -80,6 +83,9 @@ async def run_dynamic_readiness_bundle(
         ),
         "unresolved_mutations_absent": (
             state.get("unresolved_mutations_absent") is True
+        ),
+        "v40_unresolved_dispatch_state_absent": (
+            v40_state.get("v40_unresolved_dispatch_state_absent") is True
         ),
         "current_inventory_completeness_verified": (
             inventory.get("account_wide_completeness_verified") is True
@@ -92,6 +98,7 @@ async def run_dynamic_readiness_bundle(
     for key in (
         "durable_schema_deployed_verified",
         "unresolved_mutations_absent",
+        "v40_unresolved_dispatch_state_absent",
         "current_inventory_completeness_verified",
         "account_reconciled",
     ):
