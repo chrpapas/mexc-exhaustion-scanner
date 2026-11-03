@@ -242,8 +242,9 @@ class LiveTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaisesRegex(ExecutionHalted, "UNPROTECTED"):
             await self.gateway.reconcile(self.intent)
         self.mexc.stops = [dict(
-            positionId="199", symbol=self.intent.symbol, positionType=2,
-            state=1, isFinished=0, stopLossPrice="3.5", vol="250",
+            id="99", positionId="199", symbol=self.intent.symbol,
+            positionType=2, state=1, isFinished=0,
+            stopLossPrice="3.5", vol="250",
         )]
         self.assertEqual(await self.gateway.reconcile(self.intent), "VERIFIED_PROTECTED")
 
@@ -259,9 +260,10 @@ class LiveTests(unittest.IsolatedAsyncioTestCase):
             positionId="199",
         )
         self.mexc.stops = [dict(
-            positionId="199", symbol=self.intent.symbol, positionType=2,
-            state=1, isFinished=0, stopLossPrice="3.5",
-            vol="0", volType=2, profitLossVolType="SAME",
+            id="99", positionId="199", symbol=self.intent.symbol,
+            positionType=2, state=1, isFinished=0,
+            stopLossPrice="3.5", vol="0", volType=2,
+            profitLossVolType="SAME",
         )]
         self.assertEqual(
             await self.gateway.reconcile(self.intent),
@@ -288,8 +290,9 @@ class LiveTests(unittest.IsolatedAsyncioTestCase):
             state=3, dealVol="250", positionId="199",
         )
         candidate = dict(
-            positionId="199", symbol=self.intent.symbol, positionType=2,
-            state=1, isFinished=0, stopLossPrice="3.5", vol="250",
+            id="99", positionId="199", symbol=self.intent.symbol,
+            positionType=2, state=1, isFinished=0,
+            stopLossPrice="3.5", vol="250",
         )
         invalid = [
             dict(candidate, vol="249"),
@@ -300,6 +303,9 @@ class LiveTests(unittest.IsolatedAsyncioTestCase):
             dict(candidate, stopLossPrice="3.501"),
             dict(candidate, symbol="OTHER_USDT"),
             dict(candidate, positionId="200"),
+            dict(candidate, id=None),
+            dict(candidate, id=True),
+            dict(candidate, id="0"),
         ]
         for row in invalid:
             with self.subTest(row=row):
@@ -315,6 +321,35 @@ class LiveTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await self.gateway.reconcile(self.intent), "VERIFIED_PROTECTED")
         self.assertEqual(self.ledger.values[self.intent.external_oid], "ACK")
         self.assertEqual(self.ledger.history.count("UNKNOWN->ACK"), 1)
+        self.assertEqual(self.mexc.posts, 0)
+
+    async def test_unfilled_exchange_order_must_remain_unresolved_without_stop(self):
+        self.ledger.values[self.intent.external_oid] = "SUBMITTING"
+        self.mexc.order = dict(
+            orderId="98765", symbol=self.intent.symbol,
+            externalOid=self.intent.external_oid, side=3,
+            state=1, dealVol="0",
+        )
+        observed = await self.gateway.reconcile(self.intent)
+        self.assertEqual(observed, "ORDER_ACCEPTED_UNFILLED_RECONCILE_ONLY")
+        self.assertEqual(self.ledger.values[self.intent.external_oid], "SUBMITTING")
+        self.assertNotIn("SUBMITTING->ACK", self.ledger.history)
+        self.assertEqual(self.mexc.posts, 0)
+
+    async def test_full_fill_with_ambiguous_position_id_never_acknowledges(self):
+        self.ledger.values[self.intent.external_oid] = "UNKNOWN"
+        for bad in (None, 0, True, "not-an-id", "-1"):
+            with self.subTest(positionId=bad):
+                self.mexc.order = dict(
+                    orderId="98765", symbol=self.intent.symbol,
+                    externalOid=self.intent.external_oid, side=3,
+                    state=3, dealVol="250", positionId=bad,
+                )
+                with self.assertRaises(ExecutionHalted):
+                    await self.gateway.reconcile(self.intent)
+                self.assertEqual(
+                    self.ledger.values[self.intent.external_oid], "UNKNOWN",
+                )
         self.assertEqual(self.mexc.posts, 0)
 
     async def test_bad_exchange_order_metadata_never_acknowledges(self):
