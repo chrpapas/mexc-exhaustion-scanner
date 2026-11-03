@@ -18,7 +18,7 @@ from app.t100_live_cross_risk_diagnostic import (
 )
 from app.t100_live_four_slot_readonly_cli import run_readonly_four_slot_audit
 from app.t100_live_four_slot_restart_triage import (
-    PostgresFourSlotRestartTriage,
+    FourSlotRestartTriage, PostgresFourSlotRestartTriage, RecoveryAttempt,
 )
 
 
@@ -47,6 +47,95 @@ def _blocked(
     }
 
 
+def _triage_contract_verified(status: FourSlotRestartTriage) -> bool:
+    """Reject contradictory counters, privileged or forged observer results."""
+    if type(status) is not FourSlotRestartTriage:
+        return False
+    if (
+        type(status.active_slots) is not int
+        or type(status.pending_attempts) is not int
+        or type(status.durable_claims) is not int
+        or not 0 <= status.active_slots <= 4
+        or not 0 <= status.pending_attempts <= status.active_slots
+        or not 0 <= status.durable_claims <= status.active_slots
+        or type(status.attempts) is not tuple
+        or len(status.attempts) != status.active_slots
+        or status.read_only is not True
+        or status.retry_allowed is not False
+        or status.entry_allowed is not False
+        or status.live_authorization is not False
+        or status.mexc_orders_sent is not False
+        or status.database_writes_sent is not False
+        or status.manual_position_adopted is not False
+        or status.account_inventory_verified is not False
+        or status.native_stop_protection_verified is not False
+    ):
+        return False
+    if any(
+        type(item) is not RecoveryAttempt
+        or type(item.claim_present) is not bool
+        or item.action != "EXACT_ORIGIN_RECONCILIATION_ONLY"
+        or item.retry_allowed is not False
+        or item.manual_position_adopted is not False
+        for item in status.attempts
+    ):
+        return False
+    expected_pending = sum(
+        item.slot_state != "PROTECTED" for item in status.attempts
+    )
+    expected_claimed = sum(
+        item.claim_present for item in status.attempts
+    )
+    if (
+        status.pending_attempts != expected_pending
+        or status.durable_claims != expected_claimed
+        or status.status != (
+            "RESTART_TRIAGE_UNRESOLVED_RECONCILE_ONLY"
+            if expected_pending else
+            "RESTART_TRIAGE_NO_PENDING_NONAUTHORIZING"
+        )
+    ):
+        return False
+    return True
+
+
+async def inspect_restart_db_gate(
+    *, triage: PostgresFourSlotRestartTriage,
+    env: Mapping[str, str],
+) -> dict[str, Any] | None:
+    """Only a fresh, internally consistent SELECT result may permit GETs.
+
+    Returns a redacted blocker on unsafe/pending evidence; returns None
+    only when there are zero pending database attempts. None authorizes
+    GET-only observation, NOT a trade, POST, new reservation or stop edit.
+    """
+    try:
+        require_readonly_controls(env)
+    except (CrossRiskDiagnosticHalted, ValueError, TypeError):
+        return _blocked("RESTART_READONLY_PAPER_KILL_REQUIRED")
+    if type(triage) is not PostgresFourSlotRestartTriage:
+        return _blocked("RESTART_READONLY_READER_OR_MODE_INVALID")
+    try:
+        status = await triage.inspect()
+    except Exception:
+        return _blocked("RESTART_READONLY_TRIAGE_READ_FAILED")
+    if status.status not in (
+        "RESTART_TRIAGE_NO_PENDING_NONAUTHORIZING",
+        "RESTART_TRIAGE_UNRESOLVED_RECONCILE_ONLY",
+    ):
+        return _blocked("RESTART_READONLY_DURABLE_STATE_UNVERIFIED")
+    if not _triage_contract_verified(status):
+        return _blocked("RESTART_READONLY_TRIAGE_CONTRACT_UNVERIFIED")
+    if status.pending_attempts:
+        return _blocked(
+            "RESTART_PENDING_ATTEMPT_EXACT_ORIGIN_RECONCILE_ONLY",
+            active_slots=status.active_slots,
+            pending_attempts=status.pending_attempts,
+            durable_claims=status.durable_claims,
+        )
+    return None
+
+
 async def run_four_slot_restart_readonly_cycle(
     *, triage: PostgresFourSlotRestartTriage,
     ledger: Any, client: Any,
@@ -54,54 +143,16 @@ async def run_four_slot_restart_readonly_cycle(
     shared_manual_observation: bool = True,
 ) -> dict[str, Any]:
     """A single nonauthorizing cycle; no implicit retries of any kind."""
-    try:
-        require_readonly_controls(env)
-    except (CrossRiskDiagnosticHalted, ValueError, TypeError):
-        return _blocked("RESTART_READONLY_PAPER_KILL_REQUIRED")
-
-    if (
-        type(triage) is not PostgresFourSlotRestartTriage
-        or type(shared_manual_observation) is not bool
-    ):
+    if type(shared_manual_observation) is not bool:
         return _blocked("RESTART_READONLY_READER_OR_MODE_INVALID")
+    result = await inspect_restart_db_gate(triage=triage, env=env)
+    if result is not None:
+        return result
 
-    try:
-        status = await triage.inspect()
-    except Exception:
-        return _blocked("RESTART_READONLY_TRIAGE_READ_FAILED")
-
-    if status.status not in (
-        "RESTART_TRIAGE_NO_PENDING_NONAUTHORIZING",
-        "RESTART_TRIAGE_UNRESOLVED_RECONCILE_ONLY",
-    ):
-        return _blocked("RESTART_READONLY_DURABLE_STATE_UNVERIFIED")
-    if (
-        status.retry_allowed is not False
-        or status.entry_allowed is not False
-        or status.live_authorization is not False
-        or status.database_writes_sent is not False
-        or not 0 <= status.active_slots <= 4
-        or not 0 <= status.pending_attempts <= status.active_slots
-        or not 0 <= status.durable_claims <= status.active_slots
-        or (
-            status.status == "RESTART_TRIAGE_NO_PENDING_NONAUTHORIZING"
-            and status.pending_attempts != 0
-        )
-    ):
-        return _blocked("RESTART_READONLY_TRIAGE_CONTRACT_UNVERIFIED")
-    fields = {
-        "active_slots": status.active_slots,
-        "pending_attempts": status.pending_attempts,
-        "durable_claims": status.durable_claims,
-    }
-    if status.pending_attempts:
-        # An absent claim does NOT prove that the exchange POST was absent.
-        # A separate exact-origin GET recovery process and complete
-        # native-protection evidence are mandatory before any finalization.
-        return _blocked(
-            "RESTART_PENDING_ATTEMPT_EXACT_ORIGIN_RECONCILE_ONLY",
-            **fields,
-        )
+    # This fresh triage gate deliberately runs again if the CLI already
+    # checked DB before constructing its GET client; a changed journal
+    # must never be overlooked between those two observations.
+    fields = {}
     try:
         inventory = await run_readonly_four_slot_audit(
             ledger=ledger, client=client, env=env,
