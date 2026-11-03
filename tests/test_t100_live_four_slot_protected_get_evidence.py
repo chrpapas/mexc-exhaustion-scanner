@@ -216,6 +216,25 @@ class ProtectedGetBridgeTests(unittest.IsolatedAsyncioTestCase):
             r.status, "PROTECTED_GET_FILL_OR_NATIVE_STOP_UNVERIFIED_NO_RETRY"
         )
 
+    async def test_bookended_limit_sl_never_prepares_checkpoint(self):
+        for field, value in (
+            ("stopLossType", 1), ("stopLossType", None),
+            ("stopLossReverse", 1), ("lossTrend", 2),
+            ("volType", None), ("profitLossVolType", "UNKNOWN"),
+        ):
+            with self.subTest(field=field, value=value):
+                await self.asyncSetUp()
+                self.venue.first_stops[-1][field] = value
+                self.venue.last_stops[-1][field] = value
+                r = await self.run_bridge()
+                self.assertEqual(
+                    r.status,
+                    "PROTECTED_GET_FILL_OR_NATIVE_STOP_UNVERIFIED_NO_RETRY",
+                )
+                self.assertIsNone(r.prepared_batch)
+                self.assertFalse(r.live_authorization)
+                self.assertFalse(r.mexc_orders_sent)
+
     async def test_stage_prevalidation_does_not_touch_venue(self):
         bad = replace(self.stage, external_oid="wrong")
         r = await self.run_bridge(stages=[bad])
