@@ -71,6 +71,21 @@ class PrepareProtectedEntriesTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(batch.live_authorization)
         self.assertFalse(batch.mexc_orders_sent)
 
+    async def test_non_market_native_stop_never_prepares_protected_checkpoint(self):
+        for field, value in (
+            ("stopLossType", 1), ("stopLossType", None),
+            ("stopLossReverse", 1), ("lossTrend", 2),
+            ("volType", 3), ("volType", None),
+            ("profitLossVolType", "UNKNOWN"),
+            ("isFinished", 1), ("positionType", 1),
+        ):
+            with self.subTest(field=field, value=value):
+                original = self.stops[-1].get(field)
+                self.stops[-1][field] = value
+                with self.assertRaises(ProtectedFinalizeHalted):
+                    self.prepare()
+                self.stops[-1][field] = original
+
     async def test_partial_deal_histories_halt_with_no_checkpoint(self):
         self.deals["990"][0]["vol"] = D("249")
         with self.assertRaises(ProtectedFinalizeHalted):
