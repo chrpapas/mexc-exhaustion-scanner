@@ -488,6 +488,90 @@ class RealPostgresProtectedV40Tests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(cleared["live_authorization"])
         self.assertFalse(cleared["mexc_orders_sent"])
 
+    async def test_restricted_v40_dispatch_claim_privileges_and_trigger(self):
+        """Audit real, disposable PostgreSQL role and immutable trigger.
+
+        GRANT/REVOKE/DISABLE operations exist ONLY in CI-guarded ephemeral
+        database; the audit itself never writes or changes a permission.
+        """
+        from app.t100_live_v40_dispatch_privilege_audit import (
+            assess_v40_dispatch_claim_privileges,
+        )
+
+        require_isolated_ci()
+        await self.restricted_dispatch_claim_reader()
+        role = "t100_live_executor_runtime"
+        async with self.pool.acquire() as admin:
+            await admin.execute("""
+                REVOKE INSERT, UPDATE, DELETE, TRUNCATE, TRIGGER
+                ON public.t100_live_v40_dispatch_claims
+                FROM t100_live_executor_runtime
+            """)
+
+        async def inspect():
+            async with self.read_pool.acquire() as conn:
+                async with conn.transaction(
+                    isolation="repeatable_read", readonly=True,
+                ):
+                    return await assess_v40_dispatch_claim_privileges(conn)
+
+        before = await inspect()
+        self.assertEqual(
+            before["status"], "V40_DISPATCH_CLAIM_PRIVILEGES_BLOCKED",
+        )
+        self.assertFalse(before["dispatch_claim_privileges_verified"])
+        self.assertFalse(before["live_authorization"])
+
+        try:
+            async with self.pool.acquire() as admin:
+                await admin.execute("""
+                    GRANT INSERT ON public.t100_live_v40_dispatch_claims
+                    TO t100_live_executor_runtime
+                """)
+            allowed = await inspect()
+            self.assertEqual(
+                allowed["status"],
+                "V40_DISPATCH_CLAIM_PRIVILEGES_VERIFIED_NONAUTHORIZING",
+            )
+            self.assertTrue(allowed["immutable_trigger_verified"])
+            self.assertTrue(allowed["runtime_ddl_rights_absent"])
+
+            async with self.pool.acquire() as admin:
+                await admin.execute("""
+                    GRANT DELETE ON public.t100_live_v40_dispatch_claims
+                    TO t100_live_executor_runtime
+                """)
+            unsafe = await inspect()
+            self.assertFalse(unsafe["dispatch_claim_privileges_verified"])
+            self.assertEqual(
+                unsafe["status"], "V40_DISPATCH_CLAIM_PRIVILEGES_BLOCKED",
+            )
+            async with self.pool.acquire() as admin:
+                await admin.execute("""
+                    REVOKE DELETE ON public.t100_live_v40_dispatch_claims
+                    FROM t100_live_executor_runtime
+                """)
+                await admin.execute("""
+                    ALTER TABLE public.t100_live_v40_dispatch_claims
+                    DISABLE TRIGGER t100_v40_dispatch_claim_immutable
+                """)
+            trigger_disabled = await inspect()
+            self.assertFalse(trigger_disabled["immutable_trigger_verified"])
+            self.assertFalse(
+                trigger_disabled["dispatch_claim_privileges_verified"],
+            )
+        finally:
+            async with self.pool.acquire() as admin:
+                await admin.execute("""
+                    ALTER TABLE public.t100_live_v40_dispatch_claims
+                    ENABLE TRIGGER t100_v40_dispatch_claim_immutable
+                """)
+                await admin.execute("""
+                    REVOKE INSERT, DELETE
+                    ON public.t100_live_v40_dispatch_claims
+                    FROM t100_live_executor_runtime
+                """)
+
     async def test_one_shot_dispatch_claim_is_durable_and_never_reclaimed(self):
         """Claim is NOT order permission; no code in this test sends a POST."""
         from app.t100_live_four_slot_dispatch_claims import (
