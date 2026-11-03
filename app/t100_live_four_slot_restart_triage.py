@@ -39,6 +39,30 @@ ORDER BY s.signal_id
 """
 
 
+RELEASED_STATE_DRIFT_SQL = """
+SELECT count(*)
+FROM public.t100_live_v40_slot_reservations AS s
+LEFT JOIN public.t100_live_order_intents AS i
+  ON i.signal_id=s.signal_id
+LEFT JOIN public.t100_live_v40_dispatch_claims AS c
+  ON c.signal_id=s.signal_id
+WHERE s.state='RELEASED' AND (
+    (i.signal_id IS NOT NULL AND i.state<>'CLOSED')
+    OR (
+        c.signal_id IS NOT NULL
+        AND (
+            i.signal_id IS NULL OR i.state<>'CLOSED'
+            OR c.external_oid<>s.external_oid
+            OR c.holder_id<>s.holder_id
+            OR c.fencing_token<>s.fencing_token
+            OR c.state<>'POST_POSSIBLE_UNRESOLVED'
+            OR i.external_oid<>s.external_oid
+        )
+    )
+)
+"""
+
+
 @dataclass(frozen=True)
 class RecoveryAttempt:
     signal_id: int
@@ -114,6 +138,20 @@ class PostgresFourSlotRestartTriage:
                     ):
                         return FourSlotRestartTriage(
                             "RESTART_TRIAGE_RESTRICTED_CONTEXT_UNVERIFIED"
+                        )
+                    # A released slot is not active, but it must NOT
+                    # conceal an unresolved order/possible venue POST.
+                    # Verify it within the SAME restricted DB snapshot.
+                    released_drift = await conn.fetchval(
+                        RELEASED_STATE_DRIFT_SQL,
+                    )
+                    if type(released_drift) is not int or released_drift < 0:
+                        return FourSlotRestartTriage(
+                            "RESTART_TRIAGE_RELEASED_STATE_READ_UNVERIFIED"
+                        )
+                    if released_drift:
+                        return FourSlotRestartTriage(
+                            "RESTART_TRIAGE_RELEASED_ATTEMPT_UNRESOLVED"
                         )
                     records = await conn.fetch(ACTIVE_SLOT_RECOVERY_SQL)
                     if type(records) not in (tuple, list):
