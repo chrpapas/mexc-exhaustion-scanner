@@ -53,7 +53,7 @@ SELECT
         OR c.state<>'POST_POSSIBLE_UNRESOLVED'
         OR (s.state='PROTECTED' AND i.state<>'ACK')
         OR (s.state='RELEASED' AND i.state<>'CLOSED')
-    ))
+    )
         AS dispatch_claim_provenance_mismatches,
     (SELECT count(*) FROM public.t100_live_v40_slot_reservations
      WHERE state='PROTECTED')
