@@ -20,7 +20,9 @@ from app.t100_live_four_slot_attempt_outcome import (
     ProtectedAttemptObservation, observe_staged_protected_attempts,
 )
 from app.t100_live_four_slot_protected_get_evidence import (
-    ProtectedGetPreparation, observe_and_prepare_staged_protection_get_only,
+    ProtectedGetPreparation, ProtectedClaimReader,
+    observe_and_prepare_staged_protection_get_only,
+    observe_claimed_staged_protection_get_only,
 )
 from app.t100_live_four_slot_snapshot_coordinator import (
     FourSlotSnapshotCoordinator, FourSlotSnapshotResult,
@@ -147,5 +149,25 @@ async def inspect_staged_four_slot_prepared_get_only(
     return await observe_and_prepare_staged_protection_get_only(
         stages=stages, intents=intents,
         pre_attempt_witness=pre_attempt_witness,
+        venue=venue, completeness=completeness,
+    )
+
+async def inspect_claimed_four_slot_prepared_get_only(
+    *, stages: Sequence[DurableAttemptStage],
+    intents: Sequence[EntryIntent],
+    pre_attempt_witness: FourSlotSnapshotResult,
+    claim_reader: ProtectedClaimReader,
+    client: PrivateGet,
+) -> ProtectedGetPreparation:
+    """Restricted SQL claim witness -> signed GETs -> offline protected bundle.
+
+    No venue POST, DB write, stop mutation, or execution permit. Missing or
+    mismatched claims prevent all exchange GETs, not just finalization.
+    """
+    venue, completeness = _components(client)
+    return await observe_claimed_staged_protection_get_only(
+        stages=stages, intents=intents,
+        pre_attempt_witness=pre_attempt_witness,
+        claim_reader=claim_reader,
         venue=venue, completeness=completeness,
     )
