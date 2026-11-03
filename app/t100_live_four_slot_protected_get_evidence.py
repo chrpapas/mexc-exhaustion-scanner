@@ -8,9 +8,12 @@ An unknown outcome NEVER permits order resubmission.
 from __future__ import annotations
 
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Protocol, Sequence
 
+from app.t100_live_four_slot_dispatch_claim_reader import (
+    DispatchClaimRecovery,
+)
 from app.t100_live_execution import EntryIntent
 from app.t100_live_four_slot_attempt_journal import DurableAttemptStage
 from app.t100_live_four_slot_snapshot_coordinator import (
@@ -28,6 +31,7 @@ class ProtectedGetPreparation:
     orders_observed: int = 0
     deal_histories_observed: int = 0
     two_bookends_equal: bool = False
+    dispatch_claims_verified: bool = False
     durable_ack_persisted: bool = False
     durable_checkpoint_persisted: bool = False
     exchange_atomicity_verified: bool = False
@@ -178,3 +182,56 @@ async def observe_and_prepare_staged_protection_get_only(
         deal_histories_observed=len(deals),
         two_bookends_equal=True,
     )
+
+class ProtectedClaimReader(Protocol):
+    async def inspect(
+        self, stages: Sequence[DurableAttemptStage],
+    ) -> DispatchClaimRecovery: ...
+
+
+async def observe_claimed_staged_protection_get_only(
+    *, stages: Sequence[DurableAttemptStage],
+    intents: Sequence[EntryIntent],
+    pre_attempt_witness: FourSlotSnapshotResult,
+    claim_reader: ProtectedClaimReader,
+    venue: ProtectedGetVenue,
+    completeness: ProtectedGetCompleteness,
+) -> ProtectedGetPreparation:
+    """Require a verified durable POST-possibility claim before venue GETs.
+
+    Even a valid claim is NOT order permission or proof an order was sent.
+    This procedure only prepares an offline checkpoint from independently
+    bookended order/fill/stop observations. No DB writes or exchange POSTs.
+    Missing/uncertain claims fail closed without touching the exchange.
+    """
+    try:
+        claim = await claim_reader.inspect(stages)
+    except Exception:
+        return ProtectedGetPreparation(
+            status="PROTECTED_GET_DISPATCH_CLAIM_READ_FAILED_NO_RETRY",
+        )
+    if (
+        type(claim) is not DispatchClaimRecovery
+        or claim.status != "DISPATCH_CLAIMS_PRESENT_RECONCILE_ONLY"
+        or claim.all_claims_exact_and_durable is not True
+        or claim.claimed_attempts != len(stages)
+        or claim.reconciliation_required is not True
+        or claim.resubmission_allowed is not False
+        or claim.entry_allowed is not False
+        or claim.live_authorization is not False
+        or claim.mexc_orders_sent is not False
+    ):
+        return ProtectedGetPreparation(
+            status="PROTECTED_GET_DISPATCH_CLAIM_NOT_VERIFIED_NO_RETRY",
+        )
+    prepared = await observe_and_prepare_staged_protection_get_only(
+        stages=stages, intents=intents,
+        pre_attempt_witness=pre_attempt_witness,
+        venue=venue, completeness=completeness,
+    )
+    if (
+        prepared.status != "PROTECTED_GET_BATCH_PREPARED_NONAUTHORIZING"
+        or prepared.prepared_batch is None
+    ):
+        return prepared
+    return replace(prepared, dispatch_claims_verified=True)
