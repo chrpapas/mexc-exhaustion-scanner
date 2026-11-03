@@ -233,7 +233,7 @@ async def _main(
             blocked = await inspect_restart_db_gate(
                 triage=triage, env=env,
             )
-            if blocked is not None:
+            if type(blocked) is dict:
                 return blocked
         from app.mexc_trade import MexcTradeClient
         mexc = MexcTradeClient(
