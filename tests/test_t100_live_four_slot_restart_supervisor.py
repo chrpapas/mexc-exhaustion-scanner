@@ -156,6 +156,48 @@ class FourSlotReadOnlySupervisorTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(pool.conn.calls, [])
                 self.assertEqual(client.calls, [])
 
+    async def test_db_slot_changed_during_get_invalidates_clean_restart(self):
+        snap, orders, positions, stops = prepare_rows(1)
+        pool = FakePool([])
+        # Initially clean, then an unresolved V40 attempt is staged while
+        # the synthetic exchange GET observation is in flight.
+        pool.conn.fetch = AsyncMock(side_effect=[[], [sample()]])
+        client = MockMexcGetOnly(orders, positions, stops)
+        r = await run_four_slot_restart_readonly_cycle(
+            triage=PostgresFourSlotRestartTriage(pool),
+            ledger=Ledger(snap), client=client, env=PAPER_KILLED,
+            shared_manual_observation=False,
+        )
+        self.assertEqual(
+            r["status"], "RESTART_DB_CHANGED_DURING_GET_NO_RETRY",
+        )
+        self.assertEqual(pool.conn.fetch.await_count, 2)
+        self.assertGreater(len(client.calls), 0)
+        self.assertFalse(r["entry_allowed"])
+        self.assertFalse(r["live_authorization"])
+        self.assertFalse(r["mexc_orders_sent"])
+        self.assertFalse(r["order_retry_allowed"])
+        self.assertNotIn("EXAMPLE_USDT", str(r))
+
+    async def test_db_post_get_read_failure_never_reports_stable_restart(self):
+        snap, orders, positions, stops = prepare_rows(1)
+        pool = FakePool([])
+        pool.conn.fetch = AsyncMock(
+            side_effect=[[], ConnectionError("secret DB URI")],
+        )
+        client = MockMexcGetOnly(orders, positions, stops)
+        r = await run_four_slot_restart_readonly_cycle(
+            triage=PostgresFourSlotRestartTriage(pool),
+            ledger=Ledger(snap), client=client, env=PAPER_KILLED,
+            shared_manual_observation=False,
+        )
+        self.assertEqual(
+            r["status"], "RESTART_DB_CHANGED_DURING_GET_NO_RETRY",
+        )
+        self.assertEqual(pool.conn.fetch.await_count, 2)
+        self.assertNotIn("secret DB URI", str(r))
+        self.assertFalse(r["live_authorization"])
+
     async def test_unprotected_position_cannot_look_ready(self):
         snap, orders, positions, stops = prepare_rows(1)
         client = MockMexcGetOnly(orders, positions, [])
