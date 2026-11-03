@@ -150,6 +150,26 @@ class ProtectedOutcomeTests(unittest.IsolatedAsyncioTestCase):
                         "positionType": 2, "state": 1,
                     }[attr]
 
+    async def test_new_limit_or_unknown_native_stop_never_marks_filled_position_protected(self):
+        for field, value in (
+            ("stopLossType", 1), ("stopLossType", None),
+            ("stopLossReverse", 1), ("lossTrend", 2),
+            ("volType", 3), ("profitLossVolType", "UNRECOGNIZED"),
+        ):
+            with self.subTest(field=field, value=value):
+                await self.asyncSetUp()
+                self.venue.first_stops[-1][field] = value
+                self.venue.last_stops[-1][field] = value
+                result = await self.observe()
+                self.assertEqual(
+                    result.status,
+                    "ATTEMPT_NATIVE_MARKET_STOP_SEMANTICS_UNVERIFIED",
+                )
+                self.assertFalse(result.native_stop_witness_observed)
+                self.assertFalse(result.all_staged_attempts_fully_filled_and_protected)
+                self.assertFalse(result.live_authorization)
+                self.assertFalse(result.mexc_orders_sent)
+
     async def test_exact_get_missing_must_not_trigger_retry(self):
         self.venue.orders.clear()
         r = await self.observe()
