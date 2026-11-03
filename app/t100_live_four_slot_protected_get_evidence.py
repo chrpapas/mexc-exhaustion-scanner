@@ -215,6 +215,9 @@ async def observe_claimed_staged_protection_get_only(
         or claim.status != "DISPATCH_CLAIMS_PRESENT_RECONCILE_ONLY"
         or claim.all_claims_exact_and_durable is not True
         or claim.claimed_attempts != len(stages)
+        or type(claim.claim_snapshot_sha256) is not str
+        or len(claim.claim_snapshot_sha256) != 64
+        or any(ch not in "0123456789abcdef" for ch in claim.claim_snapshot_sha256)
         or claim.reconciliation_required is not True
         or claim.resubmission_allowed is not False
         or claim.entry_allowed is not False
@@ -234,4 +237,18 @@ async def observe_claimed_staged_protection_get_only(
         or prepared.prepared_batch is None
     ):
         return prepared
+    # A fresh restricted SQL SELECT *after* the venue GETs is needed:
+    # apparently clean exchange bookends cannot certify a journal that
+    # changed from SUBMITTING to UNKNOWN/ACK during observation. The SHA
+    # captures fields that the aggregate claim counters would conceal.
+    try:
+        post_get_claim = await claim_reader.inspect(stages)
+    except Exception:
+        return ProtectedGetPreparation(
+            status="PROTECTED_GET_DISPATCH_CLAIM_POSTGET_READ_FAILED_NO_RETRY",
+        )
+    if type(post_get_claim) is not DispatchClaimRecovery or post_get_claim != claim:
+        return ProtectedGetPreparation(
+            status="PROTECTED_GET_DISPATCH_CLAIM_CHANGED_DURING_GET_NO_RETRY",
+        )
     return replace(prepared, dispatch_claims_verified=True)
