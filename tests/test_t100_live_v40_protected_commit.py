@@ -176,7 +176,7 @@ class ProtectedCommitTests(unittest.IsolatedAsyncioTestCase):
         )
 
     async def commit(self):
-        return await self.store.persist(
+        return await self.store.persist_offline_unclaimed(
             batch=self.batch,
             pre_attempt_witness=self.prior.before,
             lease=lease(),
