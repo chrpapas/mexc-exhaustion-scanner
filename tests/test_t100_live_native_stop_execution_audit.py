@@ -17,6 +17,9 @@ def row(**overrides):
         "state": 1,
         "isFinished": 0,
         "positionType": 2,
+        "orderId": 0,
+        "triggerSide": 0,
+        "errorCode": 0,
         "vol": "250",
         "profitLossVolType": "SAME",
         "volType": 1,
@@ -66,6 +69,29 @@ class NativeMarketStopContractTests(unittest.TestCase):
             stopLossVol="250", vol="250",
         ))
         self.assertTrue(r.active_native_full_volume_market_sl_observed)
+
+    def test_only_position_origin_untriggered_normal_stop_row_qualifies(self):
+        for origin in (None, 1, "1", -1, "", False, "00"):
+            with self.subTest(orderId=origin):
+                r = audit(row(orderId=origin))
+                self.assertEqual(
+                    r.status, "NATIVE_SL_POSITION_ORDER_ORIGIN_UNVERIFIED",
+                )
+                self.assertFalse(r.active_native_full_volume_market_sl_observed)
+                self.assertFalse(r.live_authorization)
+        for field, bad_values in (
+            ("triggerSide", (None, 1, 2, 3, False, "0")),
+            ("errorCode", (None, 1, -1, True, "0")),
+        ):
+            for bad in bad_values:
+                with self.subTest(field=field, value=bad):
+                    r = audit(row(**{field: bad}))
+                    self.assertEqual(
+                        r.status,
+                        "NATIVE_SL_TRIGGER_OR_EXECUTION_ERROR_UNVERIFIED",
+                    )
+                    self.assertFalse(r.active_native_full_volume_market_sl_observed)
+                    self.assertFalse(r.stop_execution_certified)
 
     def test_limit_stop_reverse_or_wrong_trigger_never_qualifies(self):
         for k,v in (
