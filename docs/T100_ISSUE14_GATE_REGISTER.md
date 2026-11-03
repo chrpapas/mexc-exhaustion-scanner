@@ -850,3 +850,46 @@ NOT a complete four-slot live order executor, real MEXC native-stop
 certificate, current cross-collateral/risk-tier certificate, validated
 protected Render soak, independently reviewed release or operator-approved
 tiny live pilot. All these gates remain BLOCKED.
+
+### 2026-11-03 — Two-phase restart SQL preflight and released-claim ambiguity
+
+Opt-in V40 read-only CLI now performs an **initial** restricted
+PostgreSQL triage BEFORE importing/constructing the general MEXC
+client. An ambiguous or invalid durable order state returns a redacted
+blocker with NO exchange client created and NO exchange GET. On clean
+evidence the client may be constructed, but the supervisor performs a
+SECOND independent restricted SQL triage immediately before GET to
+detect a newly staged attempt. Both checks require paper mode,
+live-order API disabled and kill switch engaged, and neither writes DB
+or modifies the venue.
+
+The restart supervisor now verifies its triage object contract:
+zero to four slots, coherent counts/statuses, unique immutable
+reconciliation-only actions, absent POST/DB mutations and false
+manual-adoption and authorization flags. Fabricated/contradictory
+triage records block before GET.
+
+The restricted read-only RR snapshot now additionally inspects
+RELEASED reservations: if an order intent remains unresolved or a
+one-shot claim is inconsistent (origin, holder, fencing or lifecycle),
+the restart is blocked instead of quietly treating the released slot
+as nonexistent. This is a safety refusal, NOT an authorization or
+proof of exchange settlement. Real disposable PostgreSQL tests verify
+both a released unfinished order and an intentionally wrong-origin
+claim are detected.
+
+**Verified code SHA**:
+`8054b576c874f93c625f55d188d273634db24ba1`.
+5/5 GitHub checks PASSED:
+[safety](https://github.com/chrpapas/mexc-exhaustion-scanner/actions/runs/41661435766),
+[PostgreSQL](https://github.com/chrpapas/mexc-exhaustion-scanner/actions/runs/41661435869),
+[scanner/trader split](https://github.com/chrpapas/mexc-exhaustion-scanner/actions/runs/41661435801),
+[promotion](https://github.com/chrpapas/mexc-exhaustion-scanner/actions/runs/41661435912),
+[dashboard](https://github.com/chrpapas/mexc-exhaustion-scanner/actions/runs/41661435821).
+
+No production deployment/DB migration/grant, live MEXC POST/stop
+action, credential change, manual-position adoption or BOXWAVE changes.
+Full four-slot live executor, current MEXC native-stop behavior,
+collateral and margin-tier certification, Render current-code soak,
+independent release review and separately approved limited pilot
+remain BLOCKED.
