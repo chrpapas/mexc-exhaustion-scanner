@@ -290,6 +290,8 @@ class RealPostgresProtectedV40Tests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertTrue(found.all_claims_exact_and_durable)
         self.assertEqual(found.claimed_attempts, 1)
+        self.assertRegex(found.claim_snapshot_sha256, r"^[0-9a-f]{64}$")
+        prior_claim_digest = found.claim_snapshot_sha256
         self.assertFalse(found.resubmission_allowed)
         self.assertFalse(found.mexc_orders_sent)
 
@@ -314,6 +316,16 @@ class RealPostgresProtectedV40Tests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(
                     witnessed.status, "DISPATCH_CLAIMS_PRESENT_RECONCILE_ONLY"
                 )
+                # The summary counts remain identical for these valid
+                # journal transitions, but the exact read-only SQL digest
+                # must change so a post-GET bookend cannot miss the drift.
+                self.assertRegex(
+                    witnessed.claim_snapshot_sha256, r"^[0-9a-f]{64}$",
+                )
+                self.assertNotEqual(
+                    witnessed.claim_snapshot_sha256, prior_claim_digest,
+                )
+                prior_claim_digest = witnessed.claim_snapshot_sha256
                 self.assertFalse(witnessed.resubmission_allowed)
 
     async def test_restricted_claim_reader_rejects_privileged_and_mismatched_rows(self):
