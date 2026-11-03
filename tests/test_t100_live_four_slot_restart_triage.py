@@ -6,6 +6,7 @@ import unittest
 
 from app.t100_live_four_slot_restart_triage import (
     PostgresFourSlotRestartTriage, ACTIVE_SLOT_RECOVERY_SQL,
+    RELEASED_STATE_DRIFT_SQL,
 )
 
 
@@ -36,6 +37,7 @@ class FakeConn:
         self.readonly = "on"
         self.isolation = "repeatable read"
         self.fail = False
+        self.released_drift = 0
 
     @asynccontextmanager
     async def transaction(self, *, isolation, readonly):
@@ -54,6 +56,8 @@ class FakeConn:
             return self.db
         if "current_user" in query:
             return self.role
+        if query == RELEASED_STATE_DRIFT_SQL:
+            return self.released_drift
         raise AssertionError(query)
 
     async def fetch(self, query):
@@ -182,6 +186,29 @@ class FourSlotRestartTriageTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(r.attempts, ())
                 self.assertFalse(r.live_authorization)
                 self.assertFalse(r.retry_allowed)
+
+    async def test_released_unresolved_order_blocks_before_active_slot_get(self):
+        for drift in (1, 2):
+            with self.subTest(drift=drift):
+                p = FakePool([])
+                p.conn.released_drift = drift
+                report = await PostgresFourSlotRestartTriage(p).inspect()
+                self.assertEqual(
+                    report.status, "RESTART_TRIAGE_RELEASED_ATTEMPT_UNRESOLVED",
+                )
+                self.assertNotIn(ACTIVE_SLOT_RECOVERY_SQL, p.conn.calls)
+                self.assertEqual(report.attempts, ())
+                self.assertFalse(report.entry_allowed)
+                self.assertFalse(report.retry_allowed)
+        for invalid in (None, True, -1, "0", 0.0):
+            with self.subTest(invalid=invalid):
+                p = FakePool([])
+                p.conn.released_drift = invalid
+                report = await PostgresFourSlotRestartTriage(p).inspect()
+                self.assertEqual(
+                    report.status, "RESTART_TRIAGE_RELEASED_STATE_READ_UNVERIFIED",
+                )
+                self.assertNotIn(ACTIVE_SLOT_RECOVERY_SQL, p.conn.calls)
 
     async def test_too_many_and_duplicate_slots_block(self):
         too_many = [
