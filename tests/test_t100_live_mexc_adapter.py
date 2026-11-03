@@ -89,6 +89,14 @@ class LiveMexcAdapterContractTests(unittest.IsolatedAsyncioTestCase):
         )
         self._certified_mock.start()
         self.addCleanup(self._certified_mock.stop)
+        # Fixture-only: current venue documentation has NOT certified
+        # legacy change_plan_price. Production constant remains blocked.
+        self._stop_contract_mock = patch(
+            "app.t100_live_guards.LIVE_NATIVE_STOP_AMENDMENT_STATUS",
+            "CERTIFIED",
+        )
+        self._stop_contract_mock.start()
+        self.addCleanup(self._stop_contract_mock.stop)
         self.client = FakeClient()
         self.adapter = LiveMexcAdapter(self.client)
 
@@ -163,6 +171,10 @@ class LiveMexcAdapterContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(path, "/api/v1/private/order/create")
         self.assertEqual(body["symbol"], "SIREN_USDT")
         self.assertEqual(body["side"], 3)
+        # MEXC documentation changed on 2026-10-23: sideType is
+        # required and positionType now explicitly declares direction.
+        self.assertEqual(body["sideType"], "sell")
+        self.assertEqual(body["positionType"], "short")
         self.assertEqual(body["type"], 5)
         self.assertEqual(body["openType"], 2)  # mandatory CROSS pilot
         self.assertEqual(body["positionMode"], 1)
@@ -185,6 +197,39 @@ class LiveMexcAdapterContractTests(unittest.IsolatedAsyncioTestCase):
                     await self.adapter.submit_short_with_stop(
                         intent(), permit=permit()
                     )
+
+    async def test_current_native_stop_endpoint_unverified_never_posts(self):
+        # Current MEXC public stop-change docs cover limit-order
+        # change_price; the old change_plan_price contract must not be
+        # considered certified merely because an adapter permit exists.
+        with patch(
+            "app.t100_live_guards.LIVE_NATIVE_STOP_AMENDMENT_STATUS",
+            "UNVERIFIED_CURRENT_DOCS",
+        ):
+            with self.assertRaisesRegex(
+                LiveAuthorizationHalted,
+                "MEXC_NATIVE_STOP_AMENDMENT_CONTRACT_UNVERIFIED",
+            ):
+                await self.adapter.submit_native_short_stop_tightening(
+                    stop_order_id=99,
+                    previous_stop_price="175",
+                    new_stop_price="90",
+                    permit=permit(),
+                )
+        self.assertEqual(self.client.posts, [])
+
+    async def test_entry_payload_side_type_sell_is_required(self):
+        self.client.post_result = {"orderId": "101"}
+        await self.adapter.submit_short_with_stop(
+            intent(), permit=permit(),
+        )
+        path, body = self.client.posts[0]
+        self.assertEqual(path, "/api/v1/private/order/create")
+        self.assertEqual(body["sideType"], "sell")
+        self.assertEqual(body["positionType"], "short")
+        self.assertEqual(body["side"], 3)
+        self.assertEqual(body["openType"], 2)
+        self.assertEqual(body["externalOid"], intent().external_oid)
 
     async def test_one_shot_stop_tightening_contract(self):
         await self.adapter.submit_native_short_stop_tightening(
