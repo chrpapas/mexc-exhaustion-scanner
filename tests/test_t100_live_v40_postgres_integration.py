@@ -609,6 +609,49 @@ class RealPostgresProtectedV40Tests(unittest.IsolatedAsyncioTestCase):
                 SELECT count(*) FROM public.t100_live_v40_dispatch_claims
             """), 0)
 
+    async def test_claim_bound_commit_rejects_missing_or_wrong_dispatch_origin(self):
+        """The final SQL writer itself refuses a non-claimed bundle.
+
+        No venue client is involved; a prepared bundle supplied by a caller
+        must never override the database's immutable claim ownership.
+        """
+        from app.t100_live_leader_fencing import LeaderLease
+
+        entry = self.batch.entries[0]
+        leader = LeaderLease("t100-live-executor", "worker-A", 11, 45)
+        before = await self.state()
+
+        with self.assertRaisesRegex(
+            ProtectedCommitHalted, "DISPATCH_CLAIM_UNVERIFIED",
+        ):
+            await self.executor.persist_claimed(
+                batch=self.batch,
+                pre_attempt_witness=self.witness, lease=leader,
+                observed_at=self.observed_at,
+            )
+        self.assertEqual(await self.state(), before)
+
+        # Exact signal, wrong origin: even privileged direct CI SQL
+        # cannot manufacture a claim matching the observed fill.
+        async with self.pool.acquire() as db:
+            await db.execute("""
+                INSERT INTO public.t100_live_v40_dispatch_claims
+                (signal_id, external_oid, holder_id, fencing_token)
+                VALUES($1, 'foreign-origin', 'worker-A', 11)
+            """, entry.intent.signal_id)
+        with self.assertRaisesRegex(
+            ProtectedCommitHalted, "DISPATCH_CLAIM_UNVERIFIED",
+        ):
+            await self.executor.persist_claimed(
+                batch=self.batch, pre_attempt_witness=self.witness,
+                lease=leader, observed_at=self.observed_at,
+            )
+        self.assertEqual(await self.state(), before)
+        async with self.pool.acquire() as db:
+            self.assertEqual(await db.fetchval("""
+                SELECT count(*) FROM public.t100_live_order_fills
+            """), 0)
+
     async def test_claim_bound_restart_reconciles_private_get_then_real_postgres_commit(self):
         """True restricted-SQL claim + mock GET + actual DB atomic commit.
 
@@ -673,7 +716,7 @@ class RealPostgresProtectedV40Tests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(prepared.entry_allowed)
         self.assertFalse(prepared.live_authorization)
 
-        saved = await self.executor.persist(
+        saved = await self.executor.persist_claimed(
             batch=prepared.prepared_batch,
             pre_attempt_witness=self.witness,
             lease=leader,
