@@ -170,7 +170,8 @@ class LiveTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(result, "98765")
         self.assertEqual(self.mexc.posts, 1)
-        self.assertIn(small.external_oid, self.ledger.values)
+        self.assertEqual(self.ledger.values[small.external_oid], "SUBMITTING")
+        self.assertNotIn("SUBMITTING->ACK", self.ledger.history)
 
     async def test_prospective_loss_plus_existing_loss_must_fit_cap(self):
         small = EntryIntent.build(
@@ -213,6 +214,8 @@ class LiveTests(unittest.IsolatedAsyncioTestCase):
     async def test_persist_before_post(self):
         self.assertEqual(await self.send(), "98765")
         self.assertEqual(self.ledger.history[:2], ["persist", "PREPARED->SUBMITTING"])
+        self.assertEqual(self.ledger.values[self.intent.external_oid], "SUBMITTING")
+        self.assertNotIn("SUBMITTING->ACK", self.ledger.history)
     async def test_duplicate_no_retry(self):
         await self.send()
         with self.assertRaises(ExecutionHalted):
@@ -238,7 +241,10 @@ class LiveTests(unittest.IsolatedAsyncioTestCase):
                                state=3, dealVol="250", positionId="199")
         with self.assertRaisesRegex(ExecutionHalted, "UNPROTECTED"):
             await self.gateway.reconcile(self.intent)
-        self.mexc.stops = [dict(positionId="199", state=1, stopLossPrice="3.5", vol="250")]
+        self.mexc.stops = [dict(
+            positionId="199", symbol=self.intent.symbol, positionType=2,
+            state=1, isFinished=0, stopLossPrice="3.5", vol="250",
+        )]
         self.assertEqual(await self.gateway.reconcile(self.intent), "VERIFIED_PROTECTED")
 
     async def test_entire_position_same_stop_reconciles_without_explicit_volume(self):
@@ -253,17 +259,91 @@ class LiveTests(unittest.IsolatedAsyncioTestCase):
             positionId="199",
         )
         self.mexc.stops = [dict(
-            positionId="199",
-            state=1,
-            stopLossPrice="3.5",
-            vol="0",
-            volType=2,
-            profitLossVolType="SAME",
+            positionId="199", symbol=self.intent.symbol, positionType=2,
+            state=1, isFinished=0, stopLossPrice="3.5",
+            vol="0", volType=2, profitLossVolType="SAME",
         )]
         self.assertEqual(
             await self.gateway.reconcile(self.intent),
             "VERIFIED_PROTECTED",
         )
+    async def test_filled_order_without_stop_cannot_durably_ack(self):
+        self.ledger.values[self.intent.external_oid] = "SUBMITTING"
+        self.mexc.order = dict(
+            orderId="98765", symbol=self.intent.symbol,
+            externalOid=self.intent.external_oid, side=3,
+            state=3, dealVol="250", positionId="199",
+        )
+        with self.assertRaisesRegex(ExecutionHalted, "UNPROTECTED_REAL_POSITION"):
+            await self.gateway.reconcile(self.intent)
+        self.assertEqual(self.ledger.values[self.intent.external_oid], "SUBMITTING")
+        self.assertNotIn("SUBMITTING->ACK", self.ledger.history)
+        self.assertEqual(self.mexc.posts, 0)
+
+    async def test_unknown_filled_entry_can_only_ack_after_full_stop_evidence(self):
+        self.ledger.values[self.intent.external_oid] = "UNKNOWN"
+        self.mexc.order = dict(
+            orderId="98765", symbol=self.intent.symbol,
+            externalOid=self.intent.external_oid, side=3,
+            state=3, dealVol="250", positionId="199",
+        )
+        candidate = dict(
+            positionId="199", symbol=self.intent.symbol, positionType=2,
+            state=1, isFinished=0, stopLossPrice="3.5", vol="250",
+        )
+        invalid = [
+            dict(candidate, vol="249"),
+            dict(candidate, positionType=1),
+            dict(candidate, isFinished=1),
+            dict(candidate, state=2),
+            dict(candidate, stopLossPrice="NaN"),
+            dict(candidate, stopLossPrice="3.501"),
+            dict(candidate, symbol="OTHER_USDT"),
+            dict(candidate, positionId="200"),
+        ]
+        for row in invalid:
+            with self.subTest(row=row):
+                self.mexc.stops = [row]
+                with self.assertRaises(ExecutionHalted):
+                    await self.gateway.reconcile(self.intent)
+                self.assertEqual(self.ledger.values[self.intent.external_oid], "UNKNOWN")
+        self.mexc.stops = [candidate, dict(candidate, stopLossPrice="3.4")]
+        with self.assertRaises(ExecutionHalted):
+            await self.gateway.reconcile(self.intent)
+        self.assertEqual(self.ledger.values[self.intent.external_oid], "UNKNOWN")
+        self.mexc.stops = [candidate]
+        self.assertEqual(await self.gateway.reconcile(self.intent), "VERIFIED_PROTECTED")
+        self.assertEqual(self.ledger.values[self.intent.external_oid], "ACK")
+        self.assertEqual(self.ledger.history.count("UNKNOWN->ACK"), 1)
+        self.assertEqual(self.mexc.posts, 0)
+
+    async def test_bad_exchange_order_metadata_never_acknowledges(self):
+        self.ledger.values[self.intent.external_oid] = "UNKNOWN"
+        base = dict(
+            orderId="98765", symbol=self.intent.symbol,
+            externalOid=self.intent.external_oid, side=3,
+            state=3, dealVol="250", positionId="199",
+        )
+        for broken in (
+            dict(base, orderId=True),
+            dict(base, orderId=""),
+            dict(base, side=True),
+            dict(base, side=2),
+            dict(base, dealVol="NaN"),
+            dict(base, dealVol="Infinity"),
+            dict(base, dealVol="abc"),
+            dict(base, dealVol="251"),
+            dict(base, dealVol="100"),
+            dict(base, state=2),
+        ):
+            with self.subTest(broken=broken):
+                self.mexc.order = broken
+                with self.assertRaises(ExecutionHalted):
+                    await self.gateway.reconcile(self.intent)
+                self.assertEqual(self.ledger.values[self.intent.external_oid], "UNKNOWN")
+        self.assertNotIn("UNKNOWN->ACK", self.ledger.history)
+        self.assertEqual(self.mexc.posts, 0)
+
     async def test_gates_reject_before_order(self):
         for kw in (dict(book_age_ms=1501), dict(signal_age_seconds=901),
                    dict(today_loss_usdt=Decimal("500")),
