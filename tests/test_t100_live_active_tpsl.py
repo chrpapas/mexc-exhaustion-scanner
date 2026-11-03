@@ -26,6 +26,7 @@ def stop(**extra):
         "isFinished": 0,
         "stopLossPrice": 175.0,
         "vol": 5,
+        "volType": 1,
         "profitLossVolType": "SAME",
     }
     row.update(extra)
@@ -138,6 +139,21 @@ class ActiveTpslTests(unittest.TestCase):
         r = assess_active_tpsl_semantics([pos(holdVol=5)], [stop(vol=4)])
         self.assertFalse(r["observed_stop_loss_volume_covers_positions"])
         self.assertFalse(r["active_tpsl_row_semantics_verified"])
+
+    def test_unknown_volume_modes_fail_closed_even_with_full_vol(self):
+        for change in (
+            {"volType": None}, {"volType": 0}, {"volType": 3},
+            {"profitLossVolType": None},
+            {"profitLossVolType": "UNKNOWN"},
+            {"profitLossVolType": ["SAME"]},
+        ):
+            with self.subTest(change=change):
+                r = assess_active_tpsl_semantics(
+                    [pos(holdVol=5)], [stop(vol=5, **change)],
+                )
+                self.assertFalse(r["all_rows_effective_protective_quantity_verified"])
+                self.assertFalse(r["observed_stop_loss_volume_covers_positions"])
+                self.assertFalse(r["active_tpsl_row_semantics_verified"])
 
     def test_multiple_rows_can_cover_position(self):
         r = assess_active_tpsl_semantics(
