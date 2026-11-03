@@ -608,11 +608,17 @@ class RealPostgresProtectedV40Tests(unittest.IsolatedAsyncioTestCase):
             lease=leader, observed_at=self.observed_at,
         )
         self.assertTrue(committed.db_atomic_commit_observed)
+        from decimal import Decimal as D
         _, old_orders, _, _ = prepare_rows(3)
+        positions = [dict(p) for p in self.position_rows]
+        for position in positions:
+            position.update({"im": D("10"), "unRealizedPnl": D("0")})
+        new_order = dict(self.new_order)
+        new_order["externalOid"] = entry.intent.external_oid
+        new_order["feeCurrency"] = "USDT"
         client = MockMexcGetOnly(
-            [*old_orders, dict(self.new_order)],
-            [dict(p) for p in self.position_rows],
-            [dict(p) for p in self.stop_rows],
+            [*old_orders, new_order],
+            positions, [dict(p) for p in self.stop_rows],
         )
         before = await self.state()
         report = await run_four_slot_restart_readonly_cycle(
@@ -623,7 +629,8 @@ class RealPostgresProtectedV40Tests(unittest.IsolatedAsyncioTestCase):
             shared_manual_observation=False,
         )
         self.assertEqual(
-            report["status"], "RESTART_OBSERVED_NONAUTHORIZING"
+            report["status"], "RESTART_OBSERVED_NONAUTHORIZING",
+            msg=report.get("inventory_status"),
         )
         self.assertEqual(
             report["inventory_status"],
