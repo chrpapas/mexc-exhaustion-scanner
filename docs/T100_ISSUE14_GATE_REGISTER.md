@@ -754,3 +754,41 @@ role is not certified for V40. The new permission audit is a future
 safety gate, not license to apply grants now. Actual MEXC native
 protection and execution, 4-slot runner, cross collateral and tiers,
 Render protected soak and independent release review remain blocked.
+
+### 2026-11-03 — Disable non-claim-bound protected DB commit entry point
+
+**Public legacy bypass closed in development branch:** 
+`PostgresProtectedV40Commit.persist` now unconditionally raises
+`V40_UNCLAIMED_PROTECTED_COMMIT_API_FORBIDDEN`. The only development
+claim-bound public commit method is `persist_claimed`, which rechecks
+the exact durable one-shot dispatch claim inside the same SQL transaction
+as ACK/fills/position checkpoint/revision/protected slot writes.
+
+Historical simulation and disposable CI tests use the explicitly named
+`persist_offline_unclaimed` fixture method; it fails closed if
+`T100_EXECUTION_MODE` is not paper, the live-order API flag is enabled,
+or `DATABASE_URL` / `MEXC_API_KEY` / `MEXC_API_SECRET` are present.
+A mandatory offline regression test scans application modules to
+prevent new `app/t100_live_*.py` callsites from using that fixture method,
+and tests the public forbidden API leaves journal/DB unchanged.
+
+The first CI run found a historical shared reservation test still using
+the now-blocked public method. That test was migrated to the explicit
+offline-only fixture path, **without** weakening the refusal guard.
+
+**Verified code SHA**:
+`5a78846d647886b176722d84657749a84c158394`.
+All FIVE GitHub Actions checks passed:
+[offline safety](https://github.com/chrpapas/mexc-exhaustion-scanner/actions/runs/41647951064),
+[isolated PostgreSQL](https://github.com/chrpapas/mexc-exhaustion-scanner/actions/runs/41647950882),
+[scanner/trader separation](https://github.com/chrpapas/mexc-exhaustion-scanner/actions/runs/41647951093),
+[promotion](https://github.com/chrpapas/mexc-exhaustion-scanner/actions/runs/41647951132),
+[dashboard](https://github.com/chrpapas/mexc-exhaustion-scanner/actions/runs/41647950873).
+
+**Limitations**: Python's internal `_persist` is not a cryptographic
+capability and remains callable by intentionally malicious code.
+Source review, pinned build provenance, runtime DB privileges and CI
+enforcement still matter. Passing tests do NOT approve a real exchange
+POST, grant collateral certification, deploy migrations 031/032, prove
+native-stop behavior or allow live trading. BOXWAVE and existing manual
+positions untouched.
