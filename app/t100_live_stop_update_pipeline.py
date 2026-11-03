@@ -16,7 +16,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from app.t100_live_active_tpsl import effective_protective_quantity
+from app.t100_live_native_stop_execution_audit import assess_native_short_market_stop_row
 from app.t100_live_checkpoint_coordinator import (
     CheckpointCoordinatorHalted,
     CheckpointPersistenceCoordinator,
@@ -97,17 +97,17 @@ class StopUpdatePersistencePipeline:
         ]
         if len(matching) != 1:
             raise StopUpdatePipelineHalted("STOP_PROTECTION_NOT_UNIQUE")
-        stop = matching[0]
+        report = assess_native_short_market_stop_row(
+            stop=matching[0], symbol=previous.symbol,
+            position_id=previous.position_id,
+            position_quantity=previous.contracts,
+            maximum_short_stop_price=previous.stop_price,
+        )
         if (
-            type(stop.get("state")) is not int
-            or stop["state"] != 1
-            or type(stop.get("positionType")) is not int
-            or stop["positionType"] != 2
-            or type(stop.get("isFinished")) is not int
-            or stop["isFinished"] != 0
-            or effective_protective_quantity(
-                stop, position_quantity=previous.contracts,
-            ) != previous.contracts
+            report.status
+            != "NATIVE_MARKET_SHORT_SL_ROW_OBSERVED_NONAUTHORIZING"
+            or report.active_native_full_volume_market_sl_observed is not True
+            or report.stop_execution_certified is not False
         ):
             raise StopUpdatePipelineHalted(
                 "STOP_NATIVE_FULL_VOLUME_PROTECTION_UNVERIFIED"
