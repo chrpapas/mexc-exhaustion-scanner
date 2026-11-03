@@ -114,3 +114,27 @@ a separate release blocker. No real endpoint was invoked.
 
 - https://www.mexc.io/api-docs/futures/account-and-trading-endpoints/get-current-take-profitstop-loss-order-list
 - https://www.mexc.io/api-docs/futures/account-and-trading-endpoints/place-order
+
+
+## 2026-11-04 — Separate position-placement review lifecycle
+
+Current official `stoporder/place` documentation was re-read. Its prose allows
+same-price stop-ID reuse with asynchronous volume updates, and its success
+prose differs from the example. Limit-price fields are marked required despite
+market-stop selection. These remain unresolved wire-contract questions.
+The new separate offline pilot refuses existing-stop placement, requires exact
+signed GET reconciliation, and has no POST transport. Review artifacts omit
+ambiguous limit-price fields rather than claiming an accepted market payload.
+See [position pilot design](T100_POSITION_STOP_PILOT.md) for evidence boundaries
+and a future explicitly approved supervised verification. Production gates,
+credentials, accounts, Render and BOXWAVE are unchanged.
+
+November 4 follow-up: the placement quantity prose says combined TP/SL volume
+must be strictly less than closable quantity, leaving full-volume equality
+unresolved. `volType=1` and explicit full volume remain an unverified proposal,
+not an accepted wire contract. Placement is documented at 5 requests/2 seconds;
+planned-price amendment at 4/2 seconds. Amendment accepts the planned-stop ID,
+price, trend and reversal flags, and its acknowledgement provides no proof that
+an active full-volume market SL survived. Exact signed GET reconciliation is
+required. Entry-to-stop protection is non-atomic and currently unacceptable for
+automated live use; see the design's explicit protection-gap blocker.

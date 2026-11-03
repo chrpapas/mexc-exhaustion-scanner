@@ -1,6 +1,6 @@
 # T100/V40 release gate register — issue #14
 
-Owner: Codex engineering. Updated: 2026-11-02 (Europe/Zurich).
+Owner: Codex engineering. Updated: 2026-11-04 (Europe/Zurich).
 Initial checkpoint code tested: `ff40c29064385b552912d35954f711a6c5550e24`.
 GitHub code commit: `270c3174da14d267881ab3edbfaba231322ef5b4`.
 Its tree equals the tested local code tree exactly:
@@ -1456,3 +1456,78 @@ https://www.mexc.io/api-docs/futures/account-and-trading-endpoints/modify-tpsl-p
 financially limited end-to-end verification; maintain strict
 failure-on-missing-field policy and separate main-account/BOXWAVE
 identities.
+
+
+## 2026-11-04 — Separate position-origin stop pilot review candidate
+
+Recovered the requested remote branch at fdd59146, including API delta and
+operator-reported BTC pilot/forensics. Older local branches were retained;
+untracked virtualenv/package metadata preserved. No credentials accessed.
+
+Implemented `app/t100_live_position_stop_pilot.py`: a separate non-production,
+GET-only reconciliation and durable review-request lifecycle. It proposes the
+position placement endpoint, strict native identity/type/quantity verification,
+journaled tighter amendment, exact close-fill/flatness reconciliation and
+owned-stop cancellation/terminal history. Unknown attempts survive process
+restart, cannot be resubmitted, and block ambiguous progress. Per-request review
+scope/expiry and SQLite transactional serialization are tested. Dispatch always
+raises; neither production authorization gate was changed. This is an offline
+review candidate, NOT an operational or venue-certified execution adapter.
+
+Official documents were rechecked on November 4. Placement response shape,
+market-order limit-price fields, same-price asynchronous updates, amendment
+mapping and actual lifecycle behavior remain unverified. The embedded entry
+stop's ORDER_ATTACHED / MISSING market type / CANCELED evidence is retained as
+negative protection evidence, never silently promoted to position protection.
+
+See `T100_POSITION_STOP_PILOT.md` for architecture, limitations and the exact
+next separately approved supervised experiment. Tests exercise full simulated
+placement/amend/close/cancel, automatic cancellation, crashes, concurrent staging,
+GET redaction, wrong account, missing native type, partial closes, stale snapshots
+and tighter-only amendments. G5/G9 remain BLOCKED for actual venue verification;
+G4/G6 gain only offline pilot mechanics, not production readiness.
+
+
+Validation review found an inherited test defect: `ProtectedEntryTests.run`
+was an async helper overriding unittest's runner, producing unawaited-coroutine
+warnings instead of executing those tests. Renamed the helper to `reconcile`,
+then corrected its stale happy-path stop fixture to include the strict native
+market fields required by the current checkpoint code. All ten reconciliation
+tests now actually execute; production validation was not relaxed.
+
+Final local validation for this candidate: **2,190 passed, 912 subtests passed,
+no warnings**, excluding only the two explicitly CI-only PostgreSQL modules.
+See `evidence/issue-14/position-stop-pilot-tests-20261104.txt`. New pilot static
+checks, project verification and diff checks pass. GitHub CI is required on the
+published commit; no local result is substituted for its PostgreSQL checks.
+
+Final offline checkpoint (November 4): **2,189 passed, 912 subtests passed**.
+Command: `.t100-venv/bin/python -m pytest -q
+--ignore=tests/test_t100_live_shared_postgres_integration.py
+--ignore=tests/test_t100_live_v40_postgres_integration.py`.
+Evidence: `evidence/issue-14/position-stop-pilot-offline-tests.txt`.
+The exact focused safety workflow unittest command passed **1,790 tests**.
+Ruff for the new pilot/tests, project verification and diff whitespace checks
+passed. A blanket pytest invocation also attempted the two CI-only PostgreSQL
+modules: all 40 database cases failed at their explicit isolated-CI guard; these
+are NOT counted as passing database evidence. No guard was bypassed and no
+production database was contacted. GitHub CI for this local commit is pending
+publication; workflow now triggers on the requested development branch.
+
+Follow-up review added durable redacted ACK/rejection/ambiguous outcome events,
+request hashes/timestamps, emergency-close planning before the first stop,
+preservation of superseded unknown stop attempts, stale-revision rejection
+inside the reconciliation transaction, and rejection of ephemeral journals.
+Regression tests cover rejected and malformed POST responses, old-price amendment
+observations, no duplicate close, restart recovery and concurrent staging.
+
+**Protection-gap decision: BLOCKED.** The full-quantity placement prose is
+ambiguous (strictly less than closable quantity), market limit-price fields are
+unresolved, and no bounded loss/time guarantee exists between entry fill and
+verified position stop. Emergency close is only a proposed recovery action and
+may fail. No automated live entry is acceptable on present evidence. Independent
+review, venue contract clarification, pre-entry journaling/watchdog/deadline,
+approved loss budget, separately reviewed executor and explicit operator approval
+are required before a supervised experiment. See the design's recovery limits;
+stop execution and partial-fill recovery remain unverified. G5/G9 stay BLOCKED.
+No real exchange POST, Keychain access, production change or merge occurred.
