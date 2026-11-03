@@ -950,3 +950,33 @@ lifecycle, account collateral/margin-tier risk, complete four-slot
 order executor, independent review and protected Render soak remain
 BLOCKED. No MEXC POST, real order, stop modification, production DB
 write, Render redeploy, credential change, or BOXWAVE modification.
+
+### 2026-11-03 — Settled four-slot GET restart also needs final SQL bookend
+
+The existing `run_four_slot_restart_readonly_cycle` now checks the
+restricted PostgreSQL triage BOTH before and after the owned-position,
+native-stop and account GET observations. It rejects mismatched,
+unreadable or changed SQL snapshots as
+`RESTART_DB_CHANGED_DURING_GET_NO_RETRY` (redacted, nonauthorizing).
+The pre-client database gate and second pre-GET gate remain; this
+third read also catches journal drift occurring *during* venue GETs.
+
+Offline regression tests inject a new pending slot after the pre-GET
+SQL snapshot and a DB outage on post-GET read. The real disposable
+PostgreSQL 16 test commits an exact claim-bound PROTECTED fourth slot,
+changes the durable slot and intent to UNKNOWN during a synthetic
+GET window, and confirms that the supervisor does NOT report a clean
+restart. All outputs remain `entry_allowed=false`,
+`live_authorization=false`, no order retry or DB/venue mutation.
+
+**Code SHA tested:** `bda38851866f3e906df1d0bc3f550f0fa87d8154`.
+All 5 workflows PASS:
+[offline safety](https://github.com/chrpapas/mexc-exhaustion-scanner/actions/runs/41681561124),
+[isolated PostgreSQL](https://github.com/chrpapas/mexc-exhaustion-scanner/actions/runs/41681560496),
+[scanner/trader separation](https://github.com/chrpapas/mexc-exhaustion-scanner/actions/runs/41681560546),
+[promotion](https://github.com/chrpapas/mexc-exhaustion-scanner/actions/runs/41681560685),
+[daily dashboard](https://github.com/chrpapas/mexc-exhaustion-scanner/actions/runs/41681561039).
+
+No Render deployment or live exchange activity occurred. This is
+read-only observability hardening, NOT native stop/exchange atomicity
+certification; real-money gates remain BLOCKED.
