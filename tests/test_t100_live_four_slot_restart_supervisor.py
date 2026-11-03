@@ -2,12 +2,15 @@
 from __future__ import annotations
 
 import unittest
+from dataclasses import replace
+from unittest.mock import AsyncMock, patch
 
 from app.t100_live_four_slot_restart_supervisor import (
     run_four_slot_restart_readonly_cycle,
 )
 from app.t100_live_four_slot_restart_triage import (
-    PostgresFourSlotRestartTriage,
+    FourSlotRestartTriage, PostgresFourSlotRestartTriage,
+    RecoveryAttempt,
 )
 from tests.test_t100_live_four_slot_restart_triage import (
     FakePool, sample,
@@ -65,6 +68,55 @@ class FourSlotReadOnlySupervisorTests(unittest.IsolatedAsyncioTestCase):
                 )
                 self.assertEqual(r["pending_v40_attempts"], 1)
                 self.assertEqual(r["durable_v40_dispatch_claims"], int(claimed))
+                self.assertEqual(client.calls, [])
+                self.assertFalse(r["order_retry_allowed"])
+
+    async def test_contradictory_or_privileged_triage_never_reaches_venue(self):
+        snap, orders, positions, stops = prepare_rows(1)
+        base = FourSlotRestartTriage(
+            status="RESTART_TRIAGE_NO_PENDING_NONAUTHORIZING",
+            active_slots=1, pending_attempts=0, durable_claims=1,
+            attempts=(RecoveryAttempt(
+                signal_id=42, symbol="EXAMPLE_USDT",
+                external_oid="opaque-origin", slot_state="PROTECTED",
+                intent_state="ACK", claim_present=True,
+            ),),
+        )
+        invalids = (
+            replace(base, status="RESTART_TRIAGE_UNRESOLVED_RECONCILE_ONLY"),
+            replace(base, pending_attempts=1),
+            replace(base, durable_claims=0),
+            replace(base, active_slots=True),
+            replace(base, active_slots=2),
+            replace(base, read_only=False),
+            replace(base, mexc_orders_sent=True),
+            replace(base, database_writes_sent=True),
+            replace(base, manual_position_adopted=True),
+            replace(base, account_inventory_verified=True),
+            replace(base, native_stop_protection_verified=True),
+            replace(base, attempts=(replace(
+                base.attempts[0], action="RETRY_EXCHANGE_POST",
+            ),)),
+            replace(base, attempts=(replace(
+                base.attempts[0], claim_present=False,
+            ),)),
+        )
+        for bad in invalids:
+            with self.subTest(bad=bad):
+                client = MockMexcGetOnly(orders, positions, stops)
+                triage = PostgresFourSlotRestartTriage(FakePool([]))
+                with patch.object(
+                    PostgresFourSlotRestartTriage, "inspect",
+                    new=AsyncMock(return_value=bad),
+                ):
+                    r = await run_four_slot_restart_readonly_cycle(
+                        triage=triage, ledger=Ledger(snap),
+                        client=client, env=PAPER_KILLED,
+                    )
+                self.assertEqual(
+                    r["status"],
+                    "RESTART_READONLY_TRIAGE_CONTRACT_UNVERIFIED",
+                )
                 self.assertEqual(client.calls, [])
                 self.assertFalse(r["order_retry_allowed"])
 
