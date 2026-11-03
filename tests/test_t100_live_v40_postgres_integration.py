@@ -39,6 +39,7 @@ MIGRATIONS = (
     "029_t100_live_durable_state.sql",
     "030_t100_live_executor_lease.sql",
     "031_t100_live_v40_four_slot_reservations.sql",
+    "032_t100_live_v40_dispatch_claims.sql",
 )
 ROOT = Path(__file__).resolve().parents[1]
 TEST_PASSWORD = "t100-ci-only-local-postgres"
