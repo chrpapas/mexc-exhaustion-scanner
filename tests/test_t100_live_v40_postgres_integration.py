@@ -331,6 +331,63 @@ class RealPostgresProtectedV40Tests(unittest.IsolatedAsyncioTestCase):
             """), 1)
         self.assertEqual((await self.state())["new_intent"], "SUBMITTING")
 
+    async def test_backend_termination_mid_dispatch_claim_rolls_back_and_never_posts(self):
+        """Kill only the disposable DB backend AFTER INSERT, before COMMIT."""
+        from app.t100_live_four_slot_dispatch_claims import (
+            PostgresFourSlotDispatchClaims, FourSlotDispatchClaimHalted,
+        )
+        from app.t100_live_leader_fencing import LeaderLease
+
+        require_isolated_ci()
+        store = PostgresFourSlotDispatchClaims(self.pool)
+        stage = self.batch.entries[0].stage
+        leader = LeaderLease("t100-live-executor", "worker-A", 11, 45)
+        async with self.pool.acquire() as db:
+            await db.execute("""
+                CREATE FUNCTION public.t100_ci_kill_dispatch_claim()
+                RETURNS trigger LANGUAGE plpgsql AS $claimci$
+                BEGIN
+                    PERFORM pg_terminate_backend(pg_backend_pid());
+                    RETURN NEW;
+                END
+                $claimci$
+            """)
+            await db.execute("""
+                CREATE TRIGGER t100_ci_kill_claim_after_insert
+                AFTER INSERT ON public.t100_live_v40_dispatch_claims
+                FOR EACH ROW EXECUTE FUNCTION public.t100_ci_kill_dispatch_claim()
+            """)
+        try:
+            with self.assertRaisesRegex(
+                FourSlotDispatchClaimHalted, "DB_FAILURE_RECONCILE_ONLY",
+            ):
+                await store.claim(stage=stage, lease=leader)
+            async with self.pool.acquire() as db:
+                self.assertEqual(await db.fetchval("""
+                    SELECT count(*) FROM public.t100_live_v40_dispatch_claims
+                """), 0)
+            self.assertEqual((await self.state())["new_intent"], "SUBMITTING")
+        finally:
+            async with self.pool.acquire() as db:
+                await db.execute("""
+                    DROP TRIGGER IF EXISTS t100_ci_kill_claim_after_insert
+                    ON public.t100_live_v40_dispatch_claims
+                """)
+                await db.execute("""
+                    DROP FUNCTION IF EXISTS public.t100_ci_kill_dispatch_claim()
+                """)
+
+        # The previous failed DB transaction cannot have sent an order:
+        # this module is exclusively SQL. A new claim is now permissible
+        # only because the old INSERT demonstrably rolled back entirely.
+        result = await store.claim(stage=stage, lease=leader)
+        self.assertFalse(result.mexc_orders_sent)
+        self.assertEqual(result.state, "POST_POSSIBLE_UNRESOLVED")
+        async with self.pool.acquire() as db:
+            self.assertEqual(await db.fetchval("""
+                SELECT count(*) FROM public.t100_live_v40_dispatch_claims
+            """), 1)
+
     async def test_dispatch_claim_rejects_stale_leader_unknown_intent_and_bad_id(self):
         from dataclasses import replace
         from app.t100_live_four_slot_dispatch_claims import (
