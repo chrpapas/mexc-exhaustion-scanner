@@ -91,14 +91,14 @@ async def assess_v40_unresolved_dispatch_state(pool: Any) -> dict[str, Any]:
         return result
     try:
         schema = await pool.fetchrow(SCHEMA_SQL)
-        if type(schema) is not dict:
+        if schema is None:
             result["status"] = "V40_DB_STATE_SCHEMA_READ_UNVERIFIED"
             return result
         result["v40_slot_table_observed"] = (
-            schema.get("slots_present") is True
+            schema["slots_present"] is True
         )
         result["v40_dispatch_claim_table_observed"] = (
-            schema.get("claims_present") is True
+            schema["claims_present"] is True
         )
         if not (
             result["v40_slot_table_observed"]
@@ -107,10 +107,10 @@ async def assess_v40_unresolved_dispatch_state(pool: Any) -> dict[str, Any]:
             result["status"] = "V40_DB_STATE_MIGRATIONS_NOT_OBSERVED"
             return result
         row = await pool.fetchrow(COUNTS_SQL)
-        if type(row) is not dict:
+        if row is None:
             result["status"] = "V40_DB_STATE_COUNTS_MISSING"
             return result
-        if any(type(row.get(field)) is not int or row[field] < 0
+        if any(type(row[field]) is not int or row[field] < 0
                for field in FIELDS):
             result["status"] = "V40_DB_STATE_COUNTS_INVALID"
             return result
