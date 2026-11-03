@@ -1348,3 +1348,58 @@ closure execution has been proved by this failed request.
 
 Official reference:
 https://www.mexc.io/api-docs/futures/error-code
+
+
+### 2026-11-03 — Isolated $50 T100 BTC one-contract live pilot: accepted entry, closed, stop type UNVERIFIED
+
+Operator-provided terminal output for v3 (local one-shot pilot):
+- Operator entered the exact real-funds authorization phrase.
+- The actual MEXC `POST /api/v1/private/order/create` **acknowledged** opening
+  one BTC_USDT isolated 1x short (the previous 2030 externalOid problem fixed).
+- Subsequent signed `GET /api/v1/private/stoporder/open_orders` returned
+  a stop row for which the pilot's strict
+  `stop_report` test `stopLossType == 0` **did not pass**:
+  `PILOT CHECK FAILED: TP/SL field stopLossType is not in required state`.
+  Because the original v3 diagnostic printed no private row values,
+  whether this field was **missing, null, 1 (limit) or another value
+  is NOT KNOWN**. Do not infer it was a harmless absent default,
+  and do not downgrade `stopLossType` validation to accept null.
+- Fail-closed cleanup sent **one close-short market POST**, accepted
+  by MEXC; signed GET subsequently showed **0 positions**.
+- Final signed GET inventory: 0 positions, 0 current TP/SL, 0
+  other open orders. This is **observed flat** only, not
+  complete order/deal history reconciliation.
+- `STOP ACTIVATION VERIFICATION: NOT VERIFIED`.
+  `STOP AMENDMENT VERIFICATION: NOT VERIFIED`.
+  The stop modification POST was NOT reached. No safe T100 live
+  authorization is implied by successful entry/close.
+- The v3 one-shot local journal remains in
+  `FLAT_BUT_STOP_LIFECYCLE_NOT_VERIFIED`; **DO NOT rearm or retry
+  `--live`** until read-only history forensics have been reviewed.
+
+A new standalone **GET-only local forensic** artifact
+`t100_pilot_stop_forensics_readonly.py` was prepared (not deployed):
+it looks up the exact accepted entry by the local one-shot
+`externalOid`, reconciles `positionId` with paginated
+`GET /api/v1/private/stoporder/list/orders` (`is_finished=1`),
+prints only redacted field-state categories for matching TP/SL rows,
+and rechecks flat account inventory before/after. It has no POST
+capability; five isolated local unit tests passed. In particular,
+`stopLossType` is reported as `0`, `1`, `MISSING`, `NULL`,
+or invalid **without assuming missing means market**.
+
+MEXC current GET response documentation lists
+`stopLossType=0` market / `=1` limit, but its published
+example omits this field even though it is in the schema.
+This possible response-shape gap needs actual signed history evidence
+before code-level safety classification changes. Historical terminal
+rows alone cannot prove preceding stop activation, execution or
+amendment identity.
+
+Official docs:
+- https://www.mexc.io/api-docs/futures/account-and-trading-endpoints/get-current-take-profitstop-loss-order-list
+- https://www.mexc.io/api-docs/futures/account-and-trading-endpoints/get-order-by-external-id
+- https://www.mexc.io/api-docs/futures/account-and-trading-endpoints/get-take-profitstop-loss-order-list
+
+The production T100 runtime, other accounts and BOXWAVE were not
+touched. **No additional live order is authorized**.
