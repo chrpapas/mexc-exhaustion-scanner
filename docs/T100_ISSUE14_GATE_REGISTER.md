@@ -1117,3 +1117,43 @@ https://www.mexc.io/api-docs/futures/account-and-trading-endpoints/place-tpsl-or
 No real order, stop modification, production DB mutation, credential
 change, Render deployment or BOXWAVE modification. The engineering
 estimate remains approximately 70%; live trading remains blocked.
+
+### 2026-11-03 — Exact SQL dispatch-claim bookend around protected GET
+
+The claim-bound staged protected-GET observer previously inspected
+the restricted, immutable V40 dispatch claim only **before** its two
+venue GET bookends. A valid slot/intent journal state could change
+during the exchange read window, yet the aggregate claim result
+(count=1, status=PRESENT) would remain identical. That observation
+must not result in even an offline prepared checkpoint.
+
+`PostgresFourSlotDispatchClaimReader.inspect` now returns only a
+SHA-256 fingerprint of exact validated claim/slot/intent SELECT fields
+in addition to its nonauthorizing status and counts. No raw IDs,
+symbols, holder IDs, exchange data or credentials are logged.
+`observe_claimed_staged_protection_get_only` requires a valid 64-char
+fingerprint before GET, and repeats the restricted SQL SELECT **after**
+both venue GET rounds and protected bundle preparation. Missing,
+changed or unreadable post-GET SQL evidence discards the entire
+prepared bundle and reports a redacted NO_RETRY blocker.
+
+Offline tests inject same-summary SQL digest drift, post-GET reader
+outage and missing first fingerprint. Real disposable PostgreSQL
+integration verifies that SUBMITTING -> UNKNOWN/ACK/PROTECTED journal
+changes alter the digest even while counts/status remain compatible.
+No database writes occur in the read-only observer. These SQL
+bookends are not atomic with MEXC; they only detect observed drift,
+not ABA or unobserved changes.
+
+**CI-tested code SHA:** `4155c93c6f56a1ccadda7e3b48859035301b9b23`.
+All five checks PASS:
+[offline safety](https://github.com/chrpapas/mexc-exhaustion-scanner/actions/runs/41692809243),
+[isolated PostgreSQL](https://github.com/chrpapas/mexc-exhaustion-scanner/actions/runs/41692809640),
+[scanner/trader separation](https://github.com/chrpapas/mexc-exhaustion-scanner/actions/runs/41692809652),
+[promotion](https://github.com/chrpapas/mexc-exhaustion-scanner/actions/runs/41692809480),
+[daily dashboard](https://github.com/chrpapas/mexc-exhaustion-scanner/actions/runs/41692809316).
+
+No exchange POST, native stop amendment, production DB update, Render
+deployment, credential changes or BOXWAVE changes. Live execution,
+native stop lifecycle, account collateral/liquidation evidence and
+independent production release review remain **BLOCKED**.
