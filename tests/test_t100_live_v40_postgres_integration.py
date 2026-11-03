@@ -223,6 +223,138 @@ class RealPostgresProtectedV40Tests(unittest.IsolatedAsyncioTestCase):
                 ),
             }
 
+    async def restricted_dispatch_claim_reader(self):
+        """Disposable SELECT-only runtime account, never production credentials."""
+        from app.t100_live_four_slot_dispatch_claim_reader import (
+            PostgresFourSlotDispatchClaimReader,
+        )
+        from app.t100_live_role_preflight import TARGET_ROLE
+
+        require_isolated_ci()
+        async with self.pool.acquire() as db:
+            await db.execute("""
+                DO $claimroleci$
+                BEGIN
+                    IF NOT EXISTS (
+                        SELECT 1 FROM pg_roles
+                        WHERE rolname='t100_live_executor_runtime'
+                    ) THEN
+                        CREATE ROLE t100_live_executor_runtime
+                        LOGIN PASSWORD 't100-ci-only-local-postgres'
+                        NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION;
+                    END IF;
+                END $claimroleci$
+            """)
+            await db.execute(
+                "GRANT CONNECT ON DATABASE mexc_exhaustion TO t100_live_executor_runtime"
+            )
+            await db.execute(
+                "GRANT USAGE ON SCHEMA public TO t100_live_executor_runtime"
+            )
+            await db.execute("""
+                GRANT SELECT ON
+                    public.t100_live_v40_dispatch_claims,
+                    public.t100_live_v40_slot_reservations,
+                    public.t100_live_order_intents
+                TO t100_live_executor_runtime
+            """)
+        self.read_pool = await asyncpg.create_pool(
+            host="127.0.0.1", port=5432, user=TARGET_ROLE,
+            password=TEST_PASSWORD, database=EXPECTED_DATABASE,
+            min_size=1, max_size=1, timeout=5,
+            server_settings={"default_transaction_read_only": "on"},
+        )
+        return PostgresFourSlotDispatchClaimReader(self.read_pool)
+
+    async def test_restricted_reader_requires_exact_claim_after_restart(self):
+        from app.t100_live_four_slot_dispatch_claims import (
+            PostgresFourSlotDispatchClaims,
+        )
+        from app.t100_live_leader_fencing import LeaderLease
+
+        stage = self.batch.entries[0].stage
+        reader = await self.restricted_dispatch_claim_reader()
+        absent = await reader.inspect([stage])
+        self.assertEqual(absent.status, "DISPATCH_CLAIMS_MISSING_NO_RETRY")
+        self.assertFalse(absent.all_claims_exact_and_durable)
+        self.assertFalse(absent.resubmission_allowed)
+        self.assertFalse(absent.live_authorization)
+
+        await PostgresFourSlotDispatchClaims(self.pool).claim(
+            stage=stage,
+            lease=LeaderLease("t100-live-executor", "worker-A", 11, 45),
+        )
+        found = await reader.inspect([stage])
+        self.assertEqual(
+            found.status, "DISPATCH_CLAIMS_PRESENT_RECONCILE_ONLY"
+        )
+        self.assertTrue(found.all_claims_exact_and_durable)
+        self.assertEqual(found.claimed_attempts, 1)
+        self.assertFalse(found.resubmission_allowed)
+        self.assertFalse(found.mexc_orders_sent)
+
+        # Crash recovery may find a prior UNKNOWN or finalized ACK. Neither
+        # state can justify another order POST for this immutable claim.
+        for target_slot, target_intent in (
+            ("UNKNOWN", "UNKNOWN"), ("ACK", "ACK"),
+            ("PROTECTED", "ACK"),
+        ):
+            with self.subTest(target_slot=target_slot):
+                async with self.pool.acquire() as db:
+                    await db.execute("""
+                        UPDATE public.t100_live_v40_slot_reservations
+                        SET state=$1 WHERE signal_id=$2
+                    """, target_slot, stage.signal_id)
+                    await db.execute("""
+                        UPDATE public.t100_live_order_intents
+                        SET state=$1 WHERE signal_id=$2
+                    """, target_intent, stage.signal_id)
+                witnessed = await reader.inspect([stage])
+                self.assertTrue(witnessed.all_claims_exact_and_durable)
+                self.assertEqual(
+                    witnessed.status, "DISPATCH_CLAIMS_PRESENT_RECONCILE_ONLY"
+                )
+                self.assertFalse(witnessed.resubmission_allowed)
+
+    async def test_restricted_claim_reader_rejects_privileged_and_mismatched_rows(self):
+        from app.t100_live_four_slot_dispatch_claim_reader import (
+            PostgresFourSlotDispatchClaimReader,
+            DispatchClaimRecoveryHalted,
+        )
+        from dataclasses import replace
+
+        stage = self.batch.entries[0].stage
+        with self.assertRaisesRegex(
+            DispatchClaimRecoveryHalted, "RESTRICTED_CONTEXT_REQUIRED",
+        ):
+            await PostgresFourSlotDispatchClaimReader(self.pool).inspect(
+                [stage],
+            )
+        reader = await self.restricted_dispatch_claim_reader()
+        for bad in (
+            [replace(stage, signal_id=-1)],
+            [stage, stage],
+            [replace(stage, state="UNKNOWN")],
+        ):
+            with self.assertRaisesRegex(
+                DispatchClaimRecoveryHalted,
+                "STAGED_IDENTITIES_INVALID",
+            ):
+                await reader.inspect(bad)
+
+        # CI-only seed an inconsistent immutable claim. A row's existence
+        # is not enough: exact origin and slot ownership must also match.
+        async with self.pool.acquire() as db:
+            await db.execute("""
+                INSERT INTO public.t100_live_v40_dispatch_claims
+                (signal_id,external_oid,holder_id,fencing_token)
+                VALUES($1, 'wrong-origin', 'worker-A', 11)
+            """, stage.signal_id)
+        result = await reader.inspect([stage])
+        self.assertEqual(result.status, "DISPATCH_CLAIM_JOURNAL_DRIFT_NO_RETRY")
+        self.assertFalse(result.resubmission_allowed)
+        self.assertFalse(result.all_claims_exact_and_durable)
+
     async def test_real_postgres_atomic_commit_and_restart_recovery(self):
         before = await self.state()
         self.assertEqual(before, {
