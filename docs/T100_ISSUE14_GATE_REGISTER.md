@@ -562,3 +562,61 @@ snapshot. G4/G5/G6/G7/G8/G9 remain OPEN. Migration 031 and 032 are
 NOT approved for production deployment or runtime privileges. No real
 orders, stop changes, Render deployment, production DB mutation,
 credential change or BOXWAVE change.
+
+### 2026-11-03 — Immutable dispatch claim + restricted restart proof bound to protected GET
+
+**Development only.** The CREATE-ONLY V40 dispatch-claim migration 032
+now includes a PostgreSQL BEFORE UPDATE OR DELETE trigger that rejects
+ordinary record mutation with `T100_DISPATCH_CLAIM_IMMUTABLE`. A
+committed `POST_POSSIBLE_UNRESOLVED` claim cannot accidentally be
+revised/deleted by SQL DML, including privileged CI UPDATE/DELETE.
+Database DDL/TRUNCATE permissions remain security-critical and must not
+be granted to runtime roles. Migration 032 is still **UNAPPLIED** in
+production.
+
+New `PostgresFourSlotDispatchClaimReader` (SELECT-only; verified
+`t100_live_executor_runtime` account, READ ONLY REPEATABLE READ, exact
+database) checks the full immutable claim, order-intent/slot identity,
+holder and original fencing token after restart. A missing, divergent
+or unreadable claim gives NO POST authorization. A matched claim means
+**RECONCILE ONLY**, never new order submission, including after UNKNOWN,
+ACK or PROTECTED transitions. CI also rejects privileged/admin reader
+context and mismatched claims.
+
+New `observe_claimed_staged_protection_get_only` and signed-client
+wrapper `inspect_claimed_four_slot_prepared_get_only` require the
+restricted SQL claim evidence **before any venue GETs**. If no exact
+committed claim exists, no exchange reads, checkpoint preparation,
+durable ACK or POST occurs along this entry point. An exact claim
+permits only *read-only* externalOid / order deals / position / native
+stop bookends and an offline-only prepared bundle, never exchange
+mutation or live authorization.
+
+The complete integrated CI case now demonstrates:
+- no claim -> zero MEXC-mock GETs and zero SQL ACK writes;
+- durable SQL-only claim -> restricted PostgreSQL reader verifies
+  immutable ownership -> mock PRIVATE GETs independently verify exact
+  completed fill and protective stop -> `PreparedProtectedBatch`;
+- the preexisting atomic protected DB writer persists the exact
+  observed bundle, with committed claim still present;
+- all outputs explicitly keep `entry_allowed=false`,
+  `live_authorization=false`, and `mexc_orders_sent=false`.
+
+**Exact tested source SHA**:
+`7db1dbaf23c67d6d85857c90dadbc5c1136049fe`;
+all 5 GitHub workflows PASS:
+[isolated PostgreSQL](https://github.com/chrpapas/mexc-exhaustion-scanner/actions/runs/41599437208),
+[offline safety](https://github.com/chrpapas/mexc-exhaustion-scanner/actions/runs/41599437230),
+[scanner/trader split](https://github.com/chrpapas/mexc-exhaustion-scanner/actions/runs/41599437192),
+[promotion](https://github.com/chrpapas/mexc-exhaustion-scanner/actions/runs/41599437246),
+[dashboard](https://github.com/chrpapas/mexc-exhaustion-scanner/actions/runs/41599437389).
+
+**Still NOT RELEASE-CERTIFIED:** old non-claim-bound offline
+`PostgresProtectedV40Commit.persist` callsites exist and are not yet
+enforced to use the immutable claim in the *same* DB transaction;
+exchange venue POST/native stop semantics, 4-slot runner, margin tiers,
+account collateral, crash/restart on Render and sustained protected
+soak, independent reviewer approval and separately authorized live
+pilot are all missing. This work must NOT be interpreted as exchange
+atomicity or a real execution certificate. The manual position remains
+unmanaged, and G4/G5/G6/G7/G8/G9 stay OPEN.
