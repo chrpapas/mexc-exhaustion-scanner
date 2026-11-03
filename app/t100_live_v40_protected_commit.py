@@ -16,6 +16,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
+import os
 from typing import Any
 
 from app.t100_live_checkpoint_journal import (
@@ -368,7 +369,7 @@ class PostgresProtectedV40Commit:
         as ACK/fill/checkpoint writes. Still nonauthorizing and disconnected
         from real venue transport and production database.
         """
-        return await self.persist(
+        return await self._persist(
             batch=batch, pre_attempt_witness=pre_attempt_witness,
             lease=lease, observed_at=observed_at,
             shared_pre_positions=shared_pre_positions,
@@ -376,7 +377,52 @@ class PostgresProtectedV40Commit:
             _require_dispatch_claims=True,
         )
 
-    async def persist(
+    async def persist(self, **_kwargs: Any) -> ProtectedCommitResult:
+        """Disabled legacy public commit API; never silently skip claim."""
+        raise ProtectedCommitHalted(
+            "V40_UNCLAIMED_PROTECTED_COMMIT_API_FORBIDDEN"
+        )
+
+    async def persist_offline_unclaimed(
+        self, *,
+        batch: PreparedProtectedBatch,
+        pre_attempt_witness: FourSlotSnapshotResult,
+        lease: LeaderLease,
+        observed_at: datetime,
+        shared_pre_positions: list[dict[str, Any]] | None = None,
+        shared_pre_stops: list[dict[str, Any]] | None = None,
+    ) -> ProtectedCommitResult:
+        """ONLY for offline fixtures: never run on a connected live account.
+
+        This intentionally named bypass preserves existing simulated/CI
+        historical tests. It is prohibited when a production DB URL,
+        exchange credentials, live mode or live-order switch is present.
+        Future release code must use persist_claimed with exact durable
+        claims, not this fixture path.
+        """
+        mode = os.getenv("T100_EXECUTION_MODE", "paper").strip().lower()
+        live_flag = os.getenv(
+            "T100_LIVE_ORDER_API_ENABLED", "false"
+        ).strip().lower()
+        if (
+            mode != "paper"
+            or live_flag not in ("", "0", "false", "no", "off")
+            or os.getenv("DATABASE_URL")
+            or os.getenv("MEXC_API_KEY")
+            or os.getenv("MEXC_API_SECRET")
+        ):
+            raise ProtectedCommitHalted(
+                "V40_OFFLINE_UNCLAIMED_COMMIT_ENVIRONMENT_UNSAFE"
+            )
+        return await self._persist(
+            batch=batch, pre_attempt_witness=pre_attempt_witness,
+            lease=lease, observed_at=observed_at,
+            shared_pre_positions=shared_pre_positions,
+            shared_pre_stops=shared_pre_stops,
+            _require_dispatch_claims=False,
+        )
+
+    async def _persist(
         self, *,
         batch: PreparedProtectedBatch,
         pre_attempt_witness: FourSlotSnapshotResult,
