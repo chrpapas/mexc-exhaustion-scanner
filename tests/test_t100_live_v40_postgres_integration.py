@@ -704,6 +704,61 @@ class RealPostgresProtectedV40Tests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(again["live_authorization"])
         self.assertEqual(await self.state(), initial)
 
+    async def test_released_v40_slot_cannot_hide_unresolved_post_from_restart(self):
+        """Actual restricted PostgreSQL detects hidden released ambiguity."""
+        from app.t100_live_four_slot_restart_triage import (
+            PostgresFourSlotRestartTriage,
+        )
+
+        await self.restricted_dispatch_claim_reader()
+        entry = self.batch.entries[0]
+        async with self.pool.acquire() as db:
+            await db.execute("""
+                UPDATE public.t100_live_v40_slot_reservations
+                SET state='RELEASED' WHERE signal_id=$1
+            """, entry.intent.signal_id)
+        report = await PostgresFourSlotRestartTriage(
+            self.read_pool,
+        ).inspect()
+        self.assertEqual(
+            report.status, "RESTART_TRIAGE_RELEASED_ATTEMPT_UNRESOLVED",
+        )
+        self.assertEqual(report.attempts, ())
+        self.assertFalse(report.entry_allowed)
+        self.assertFalse(report.retry_allowed)
+        self.assertFalse(report.mexc_orders_sent)
+
+    async def test_released_v40_claim_with_wrong_origin_fails_same_snapshot(self):
+        """CI-only inconsistent immutable claim must never be hidden."""
+        from app.t100_live_four_slot_restart_triage import (
+            PostgresFourSlotRestartTriage,
+        )
+
+        await self.restricted_dispatch_claim_reader()
+        entry = self.batch.entries[0]
+        async with self.pool.acquire() as db:
+            await db.execute("""
+                INSERT INTO public.t100_live_v40_dispatch_claims
+                (signal_id, external_oid, holder_id, fencing_token)
+                VALUES($1, 'wrong-origin', 'worker-A', 11)
+            """, entry.intent.signal_id)
+            await db.execute("""
+                UPDATE public.t100_live_order_intents
+                SET state='CLOSED' WHERE signal_id=$1
+            """, entry.intent.signal_id)
+            await db.execute("""
+                UPDATE public.t100_live_v40_slot_reservations
+                SET state='RELEASED' WHERE signal_id=$1
+            """, entry.intent.signal_id)
+        report = await PostgresFourSlotRestartTriage(
+            self.read_pool,
+        ).inspect()
+        self.assertEqual(
+            report.status, "RESTART_TRIAGE_RELEASED_ATTEMPT_UNRESOLVED",
+        )
+        self.assertEqual(report.attempts, ())
+        self.assertFalse(report.live_authorization)
+
     async def test_real_postgres_restricted_restart_triage_is_reconcile_only(self):
         """Database recovery triage cannot retry even before dispatch claim.
 
