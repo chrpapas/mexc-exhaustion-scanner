@@ -468,3 +468,48 @@ https://github.com/chrpapas/mexc-exhaustion-scanner/actions/runs/41544066209 .
 This is still simulated/pure-Python journal verification: current venue
 stop amendment shape, actual MEXC execution, multi-worker deployed fencing,
 cross collateral and live authorization remain unverified and BLOCKED.
+
+### 2026-11-03 — Legacy entry ACK must be backed by a full native stop
+
+During a source audit, the old single-position `LiveOrderGateway` was
+observed transitioning a newly HTTP-accepted order from SUBMITTING to ACK
+*without independent native-stop verification*. This pathway is LEGACY
+(one-position, not V40-parity) and remains blocked for production; hardening
+its accounting boundary is nevertheless important before any release.
+
+The development branch now:
+- Retains `SUBMITTING` after an HTTP successful entry submission.
+  The received order ID is **not** durable proof of a protected position.
+- Keeps an accepted-but-unfilled order in its unresolved journal state;
+  future fills must be checked, not mistaken for a protected ACK.
+- Rejects invalid order IDs, non-short side, malformed/nonfinite and
+  partial/nonfinal deal volumes, and nonpositive/malformed position IDs
+  **before** persisting an ACK.
+- For filled positions, requires exactly one native short-side, active,
+  unfinished stop with matching symbol, position ID, **positive native
+  stop ID**, bounded stop price and full effective contract quantity.
+  Missing, duplicate, wrong-side, inactive, finished, undercovered, or
+  nonnumeric stop records leave the intent SUBMITTING/UNKNOWN; a lookup
+  alone never permits exchange POST retry.
+- Only after the entire stop witness is accepted may a conditional
+  durable SUBMITTING/UNKNOWN -> ACK CAS occur. This gateway still cannot
+  certify account-wide completeness or exchange atomicity.
+
+Safety/regression tests cover successful mock reconciliation, accepted
+unfilled orders, invalid order metadata, missing stop identity, duplicate
+stops, partial/wrong-side native SL and no retry across ambiguous states.
+
+**Exact tested source** `0f378c9d0223a38467246e7e1ff6de7f8bad4fb3`:
+5/5 workflows PASSED:
+[offline safety](https://github.com/chrpapas/mexc-exhaustion-scanner/actions/runs/41596810170),
+[isolated PostgreSQL](https://github.com/chrpapas/mexc-exhaustion-scanner/actions/runs/41596810265),
+[scanner/trader separation](https://github.com/chrpapas/mexc-exhaustion-scanner/actions/runs/41596810159),
+[promotion](https://github.com/chrpapas/mexc-exhaustion-scanner/actions/runs/41596810164),
+[dashboard](https://github.com/chrpapas/mexc-exhaustion-scanner/actions/runs/41596810218).
+
+**No live approval inferred.** The legacy gateway remains NONPARITY,
+and successful unit tests do not authorize sending orders. Full four-slot
+venue transport, native stop creation/amend/close, cash/collateral
+verification, Render restart and protected soak, and independent release
+review remain BLOCKED. Manual position untouched. No real MEXC POST,
+production DB change, Render deployment, credentials or BOXWAVE changes.
