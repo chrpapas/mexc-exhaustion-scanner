@@ -393,6 +393,54 @@ class RealPostgresProtectedV40Tests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(recovered.live_authorization)
 
 
+    async def test_legacy_durable_readiness_gate_flags_review_and_orphan_ack(self):
+        """Actual disposable PostgreSQL recognizes intervention states."""
+        from app.t100_live_db_state_gate import assess_unresolved_live_state
+
+        entry = self.batch.entries[0]
+        initial = await assess_unresolved_live_state(self.pool)
+        self.assertEqual(initial["submitting_order_intents"], 1)
+        self.assertFalse(initial["unresolved_mutations_absent"])
+        self.assertEqual(initial["review_order_intents"], 0)
+
+        async with self.pool.acquire() as db:
+            await db.execute("""
+                UPDATE public.t100_live_order_intents SET state='REVIEW'
+                WHERE signal_id=$1
+            """, entry.intent.signal_id)
+        review = await assess_unresolved_live_state(self.pool)
+        self.assertEqual(review["review_order_intents"], 1)
+        self.assertFalse(review["unresolved_mutations_absent"])
+        self.assertEqual(review["unprotected_ack_intents"], 0)
+
+        # ACK before the protected checkpoint is an intervention-required
+        # inconsistent journal, even if the external order ID is present.
+        async with self.pool.acquire() as db:
+            await db.execute("""
+                UPDATE public.t100_live_order_intents
+                SET state='ACK', exchange_order_id=$2
+                WHERE signal_id=$1
+            """, entry.intent.signal_id, entry.order_id)
+        orphan = await assess_unresolved_live_state(self.pool)
+        self.assertEqual(orphan["unprotected_ack_intents"], 1)
+        self.assertFalse(orphan["unresolved_mutations_absent"])
+
+        # The actual atomic protected writer persists ACK and the OPEN
+        # checkpoint together; this clears only the legacy journal gate.
+        async with self.pool.acquire() as db:
+            await db.execute("""
+                UPDATE public.t100_live_order_intents
+                SET state='SUBMITTING', exchange_order_id=NULL
+                WHERE signal_id=$1
+            """, entry.intent.signal_id)
+        committed = await self.finalize()
+        self.assertTrue(committed.db_atomic_commit_observed)
+        healed = await assess_unresolved_live_state(self.pool)
+        self.assertEqual(healed["unprotected_ack_intents"], 0)
+        self.assertEqual(healed["review_order_intents"], 0)
+        self.assertTrue(healed["unresolved_mutations_absent"])
+        self.assertFalse(healed["live_authorization"])
+
     async def test_v40_dispatch_readiness_gate_tracks_real_sql_stage_claim_and_ack(self):
         """Read-only gate sees unresolved states and a protected claim outcome."""
         from app.t100_live_v40_state_gate import (
