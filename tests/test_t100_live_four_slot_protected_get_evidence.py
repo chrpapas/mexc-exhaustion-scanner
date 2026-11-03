@@ -116,6 +116,7 @@ class ProtectedGetBridgeTests(unittest.IsolatedAsyncioTestCase):
                     status="DISPATCH_CLAIMS_PRESENT_RECONCILE_ONLY",
                     claimed_attempts=1,
                     all_claims_exact_and_durable=True,
+                    claim_snapshot_sha256="a" * 64,
                 )
 
         result = await observe_claimed_staged_protection_get_only(
@@ -134,6 +135,81 @@ class ProtectedGetBridgeTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(result.durable_ack_persisted)
         self.assertFalse(result.live_authorization)
         self.assertFalse(result.mexc_orders_sent)
+
+    async def test_claim_journal_changes_during_get_rejects_prepared_bundle(self):
+        class Claims:
+            def __init__(self):
+                self.calls = 0
+            async def inspect(self, stages):
+                self.calls += 1
+                return DispatchClaimRecovery(
+                    status="DISPATCH_CLAIMS_PRESENT_RECONCILE_ONLY",
+                    claimed_attempts=1,
+                    all_claims_exact_and_durable=True,
+                    claim_snapshot_sha256=("a" if self.calls == 1 else "b") * 64,
+                )
+
+        claims = Claims()
+        r = await observe_claimed_staged_protection_get_only(
+            stages=[self.stage], intents=[self.intent],
+            pre_attempt_witness=self.before, claim_reader=claims,
+            venue=self.venue, completeness=self.complete,
+        )
+        self.assertEqual(claims.calls, 2)
+        self.assertEqual(
+            r.status, "PROTECTED_GET_DISPATCH_CLAIM_CHANGED_DURING_GET_NO_RETRY",
+        )
+        self.assertIsNone(r.prepared_batch)
+        self.assertFalse(r.dispatch_claims_verified)
+        self.assertFalse(r.live_authorization)
+        self.assertFalse(r.mexc_orders_sent)
+
+    async def test_claim_postget_database_failure_discards_prepared_bundle(self):
+        class Claims:
+            def __init__(self):
+                self.calls = 0
+            async def inspect(self, stages):
+                self.calls += 1
+                if self.calls == 2:
+                    raise ConnectionError("post GET database unavailable")
+                return DispatchClaimRecovery(
+                    status="DISPATCH_CLAIMS_PRESENT_RECONCILE_ONLY",
+                    claimed_attempts=1,
+                    all_claims_exact_and_durable=True,
+                    claim_snapshot_sha256="a" * 64,
+                )
+
+        claims = Claims()
+        r = await observe_claimed_staged_protection_get_only(
+            stages=[self.stage], intents=[self.intent],
+            pre_attempt_witness=self.before, claim_reader=claims,
+            venue=self.venue, completeness=self.complete,
+        )
+        self.assertEqual(claims.calls, 2)
+        self.assertEqual(
+            r.status, "PROTECTED_GET_DISPATCH_CLAIM_POSTGET_READ_FAILED_NO_RETRY",
+        )
+        self.assertIsNone(r.prepared_batch)
+        self.assertFalse(r.live_authorization)
+        self.assertFalse(r.mexc_orders_sent)
+
+    async def test_claim_positive_result_requires_snapshot_fingerprint_before_get(self):
+        class Claims:
+            async def inspect(self, stages):
+                return DispatchClaimRecovery(
+                    status="DISPATCH_CLAIMS_PRESENT_RECONCILE_ONLY",
+                    claimed_attempts=1, all_claims_exact_and_durable=True,
+                )
+        r = await observe_claimed_staged_protection_get_only(
+            stages=[self.stage], intents=[self.intent],
+            pre_attempt_witness=self.before, claim_reader=Claims(),
+            venue=self.venue, completeness=self.complete,
+        )
+        self.assertEqual(
+            r.status, "PROTECTED_GET_DISPATCH_CLAIM_NOT_VERIFIED_NO_RETRY",
+        )
+        self.assertEqual(self.venue.positions_reads, 0)
+        self.assertIsNone(r.prepared_batch)
 
     async def test_claim_bound_bridge_fails_closed_if_claim_reader_crashes(self):
         class Claims:
