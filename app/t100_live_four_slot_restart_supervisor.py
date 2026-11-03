@@ -165,6 +165,20 @@ async def run_four_slot_restart_readonly_cycle(
     except Exception:
         return _blocked("RESTART_READONLY_INVENTORY_READ_FAILED", **fields)
 
+    # The account GETs and SQL records are NOT an atomic cross-system
+    # snapshot. A fresh restricted SQL bookend at least detects observed
+    # journal drift during the venue GET window; never label such a
+    # read-only cycle as a stable ownership observation.
+    try:
+        post_get = await triage.inspect()
+    except Exception:
+        return _blocked("RESTART_DB_CHANGED_DURING_GET_NO_RETRY", **fields)
+    if (
+        not _triage_contract_verified(post_get)
+        or post_get != result
+    ):
+        return _blocked("RESTART_DB_CHANGED_DURING_GET_NO_RETRY", **fields)
+
     if (
         type(inventory) is not dict
         or inventory.get("entry_allowed") is not False
