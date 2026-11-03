@@ -266,63 +266,128 @@ class LiveOrderGateway:
             raise ExecutionHalted(
                 "SUBMISSION_UNKNOWN: reconcile by externalOid; NEVER blindly retry"
             ) from exc
-        if not await self.ledger.transition(intent.external_oid, "SUBMITTING", "ACK",
-                                            order_id=order_id):
-            raise ExecutionHalted("ORDER_ACK_LEDGER_FAILURE_REQUIRES_MANUAL_RECONCILIATION")
+        # A successful HTTP response proves only an accepted submission.
+        # It does NOT certify the fill, native stop or full account inventory.
+        # Keep the durable journal SUBMITTING until an independent GET
+        # verifies a fully protected position. A restart reconciles by
+        # externalOid, and NEVER blindly submits a second order.
         return order_id
 
     async def reconcile(self, intent: EntryIntent) -> str:
-        """Read external order and native stop: missing order is NOT retry permission."""
+        """Read-only venue witness then conditional durable ACK, never a POST.
+
+        This is the LEGACY single-position gateway, not the V40 coordinator.
+        A correctly formed order alone is never a protected-position ACK.
+        The V40 four-slot protected-commit pipeline separately requires
+        signed full-account bookends, exact immutable fills and DB fencing.
+        """
         state = await self.ledger.state(intent.external_oid)
         if state not in {"SUBMITTING", "UNKNOWN", "ACK", "REVIEW"}:
             raise ExecutionHalted("UNEXPECTED_LEDGER_STATE")
         try:
-            order = await self.exchange.order_by_external_oid(intent.symbol, intent.external_oid)
+            order = await self.exchange.order_by_external_oid(
+                intent.symbol, intent.external_oid,
+            )
         except Exception as exc:
             raise ExecutionHalted("ORDER_LOOKUP_FAILED") from exc
         if not order:
             if state == "SUBMITTING":
-                await self.ledger.transition(intent.external_oid, "SUBMITTING", "UNKNOWN",
-                                             reason="external_oid_unresolved")
+                await self.ledger.transition(
+                    intent.external_oid, "SUBMITTING", "UNKNOWN",
+                    reason="external_oid_unresolved",
+                )
             raise ExecutionHalted("NO_ORDER_FOUND_BUT_POST_MAY_HAVE_SUCCEEDED")
-        if str(order.get("symbol")) != intent.symbol or str(order.get("externalOid")) != intent.external_oid:
-            raise ExecutionHalted("ORDER_IDENTITY_MISMATCH")
-        if int(order.get("side", -1)) != 3:
-            raise ExecutionHalted("ORDER_SIDE_MISMATCH")
-        dealt = Decimal(str(order.get("dealVol") or 0))
-        if dealt < 0 or dealt > intent.volume_contracts:
+        if type(order) is not dict:
+            raise ExecutionHalted("ORDER_RESPONSE_INVALID")
+        if (
+            order.get("symbol") != intent.symbol
+            or order.get("externalOid") != intent.external_oid
+            or type(order.get("side")) is not int
+            or order["side"] != 3
+            or type(order.get("orderId")) not in (int, str)
+            or isinstance(order["orderId"], bool)
+            or not str(order["orderId"]).isdigit()
+            or int(str(order["orderId"])) <= 0
+        ):
+            raise ExecutionHalted("ORDER_IDENTITY_OR_SIDE_UNVERIFIED")
+        try:
+            dealt = Decimal(str(order.get("dealVol") or 0))
+        except Exception as exc:
+            raise ExecutionHalted("ORDER_FILL_VOLUME_UNVERIFIED") from exc
+        if (
+            not dealt.is_finite() or dealt < 0
+            or dealt > intent.volume_contracts
+        ):
             raise ExecutionHalted("ORDER_FILL_VOLUME_MISMATCH")
-        if state in {"SUBMITTING", "UNKNOWN"}:
-            await self.ledger.transition(intent.external_oid, state, "ACK",
-                                         order_id=str(order["orderId"]))
+
         if dealt > 0:
-            if int(order.get("state", 0)) != 3 or dealt != intent.volume_contracts:
-                raise ExecutionHalted("PARTIAL_OR_NONFINAL_FILL_REQUIRES_MANUAL_INTERVENTION")
+            if (
+                type(order.get("state")) is not int
+                or order["state"] != 3
+                or dealt != intent.volume_contracts
+            ):
+                raise ExecutionHalted(
+                    "PARTIAL_OR_NONFINAL_FILL_REQUIRES_MANUAL_INTERVENTION"
+                )
             position_id = str(order.get("positionId") or "")
-            if not position_id:
+            if not position_id or position_id == "0":
                 raise ExecutionHalted("FILL_WITHOUT_POSITION_ID")
             try:
                 stops = await self.exchange.open_stop_orders(intent.symbol)
             except Exception as exc:
                 raise ExecutionHalted("STOP_QUERY_FAILED") from exc
-            protected = any(
-                str(s.get("positionId")) == position_id
-                and int(s.get("state", 0)) == 1
-                and Decimal(str(s.get("stopLossPrice") or "0")) > 0
-                and Decimal(str(s.get("stopLossPrice") or "0")) <= intent.stop_price
-                and (
-                    effective_protective_quantity(
-                        s,
-                        position_quantity=dealt,
-                    )
-                    is not None
+            if (
+                type(stops) is not list
+                or any(type(row) is not dict for row in stops)
+            ):
+                raise ExecutionHalted("STOP_INVENTORY_SHAPE_UNVERIFIED")
+            # Exactly one native active full-volume SL for THIS short
+            # position. A wrong-side, finished, duplicate or partially
+            # covered stop never becomes an ACK or a protected witness.
+            candidates = [
+                row for row in stops
+                if str(row.get("positionId") or "") == position_id
+                and row.get("symbol") == intent.symbol
+            ]
+            if len(candidates) != 1:
+                raise ExecutionHalted(
+                    "UNPROTECTED_REAL_POSITION_MANUAL_INTERVENTION_REQUIRED"
                 )
-                and effective_protective_quantity(
-                    s,
-                    position_quantity=dealt,
-                ) >= dealt
-                for s in stops
-            )
-            if not protected:
-                raise ExecutionHalted("UNPROTECTED_REAL_POSITION_MANUAL_INTERVENTION_REQUIRED")
+            stop = candidates[0]
+            try:
+                actual_price = Decimal(str(stop.get("stopLossPrice") or 0))
+                protected_qty = effective_protective_quantity(
+                    stop, position_quantity=dealt,
+                )
+            except Exception as exc:
+                raise ExecutionHalted(
+                    "STOP_PROTECTIVE_QUANTITY_OR_PRICE_UNVERIFIED"
+                ) from exc
+            if (
+                type(stop.get("state")) is not int
+                or stop["state"] != 1
+                or type(stop.get("isFinished")) is not int
+                or stop["isFinished"] != 0
+                or type(stop.get("positionType")) is not int
+                or stop["positionType"] != 2
+                or not actual_price.is_finite()
+                or actual_price <= 0
+                or actual_price > intent.stop_price
+                or protected_qty != dealt
+            ):
+                raise ExecutionHalted(
+                    "UNPROTECTED_REAL_POSITION_MANUAL_INTERVENTION_REQUIRED"
+                )
+
+        # Only AFTER the full-fill native stop witness do we persist ACK.
+        # An accepted but unfilled exchange order can be ACKed as unfilled;
+        # this must never be treated as an owned/protected open position.
+        if state in {"SUBMITTING", "UNKNOWN"}:
+            if not await self.ledger.transition(
+                intent.external_oid, state, "ACK",
+                order_id=str(order["orderId"]),
+            ):
+                raise ExecutionHalted(
+                    "ORDER_ACK_LEDGER_CAS_FAILED_RECONCILIATION_REQUIRED"
+                )
         return "VERIFIED_PROTECTED" if dealt > 0 else "ACK_UNFILLED"
