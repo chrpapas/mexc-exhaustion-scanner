@@ -572,6 +572,122 @@ class RealPostgresProtectedV40Tests(unittest.IsolatedAsyncioTestCase):
                     FROM t100_live_executor_runtime
                 """)
 
+    async def test_real_postgres_restricted_restart_triage_is_reconcile_only(self):
+        """Database recovery triage cannot retry even before dispatch claim.
+
+        SQL SELECT-only under the actual restricted runtime CI role.
+        Exchange remains entirely uncontacted and no DB write is made by
+        the triage inspector.
+        """
+        from app.t100_live_four_slot_restart_triage import (
+            PostgresFourSlotRestartTriage,
+        )
+        from app.t100_live_four_slot_dispatch_claims import (
+            PostgresFourSlotDispatchClaims,
+        )
+        from app.t100_live_leader_fencing import LeaderLease
+
+        entry = self.batch.entries[0]
+        await self.restricted_dispatch_claim_reader()
+        triage = PostgresFourSlotRestartTriage(self.read_pool)
+        before = await self.state()
+        pending = await triage.inspect()
+        self.assertEqual(
+            pending.status, "RESTART_TRIAGE_UNRESOLVED_RECONCILE_ONLY",
+        )
+        self.assertEqual(pending.active_slots, 1)
+        self.assertEqual(pending.pending_attempts, 1)
+        self.assertEqual(pending.durable_claims, 0)
+        self.assertFalse(pending.retry_allowed)
+        self.assertFalse(pending.native_stop_protection_verified)
+        self.assertFalse(pending.manual_position_adopted)
+        self.assertFalse(pending.mexc_orders_sent)
+        self.assertEqual(await self.state(), before)
+        summary = pending.safe_summary()
+        self.assertNotIn(entry.intent.external_oid, str(summary))
+        self.assertNotIn(entry.intent.symbol, str(summary))
+
+        leader = LeaderLease("t100-live-executor", "worker-A", 11, 45)
+        await PostgresFourSlotDispatchClaims(self.pool).claim(
+            stage=entry.stage, lease=leader,
+        )
+        claimed = await triage.inspect()
+        self.assertEqual(claimed.pending_attempts, 1)
+        self.assertEqual(claimed.durable_claims, 1)
+        self.assertTrue(claimed.attempts[0].claim_present)
+        self.assertFalse(claimed.retry_allowed)
+        self.assertEqual((await self.state())["new_intent"], "SUBMITTING")
+
+        finalized = await self.executor.persist_claimed(
+            batch=self.batch, pre_attempt_witness=self.witness,
+            lease=leader, observed_at=self.observed_at,
+        )
+        self.assertTrue(finalized.db_atomic_commit_observed)
+        protected = await triage.inspect()
+        self.assertEqual(
+            protected.status, "RESTART_TRIAGE_NO_PENDING_NONAUTHORIZING",
+        )
+        self.assertEqual(protected.active_slots, 1)
+        self.assertEqual(protected.pending_attempts, 0)
+        self.assertEqual(protected.durable_claims, 1)
+        self.assertFalse(protected.entry_allowed)
+        self.assertFalse(protected.live_authorization)
+
+    async def test_restart_triage_detects_unknown_state_and_claim_drift(self):
+        from app.t100_live_four_slot_restart_triage import (
+            PostgresFourSlotRestartTriage,
+        )
+
+        await self.restricted_dispatch_claim_reader()
+        entry = self.batch.entries[0]
+        triage = PostgresFourSlotRestartTriage(self.read_pool)
+
+        # An UNKNOWN attempt without a claim still forbids retry: the
+        # venue may have received a POST before a process crash.
+        async with self.pool.acquire() as db:
+            await db.execute("""
+                UPDATE public.t100_live_v40_slot_reservations
+                SET state='UNKNOWN' WHERE signal_id=$1
+            """, entry.intent.signal_id)
+            await db.execute("""
+                UPDATE public.t100_live_order_intents
+                SET state='UNKNOWN' WHERE signal_id=$1
+            """, entry.intent.signal_id)
+        ambiguous = await triage.inspect()
+        self.assertEqual(
+            ambiguous.status, "RESTART_TRIAGE_UNRESOLVED_RECONCILE_ONLY",
+        )
+        self.assertEqual(ambiguous.attempts[0].slot_state, "UNKNOWN")
+        self.assertFalse(ambiguous.retry_allowed)
+
+        # CI-only intentionally inserts a mismatched immutable origin.
+        # Reader must not use the claim as an authoritative ownership fact.
+        async with self.pool.acquire() as db:
+            await db.execute("""
+                INSERT INTO public.t100_live_v40_dispatch_claims
+                (signal_id, external_oid, holder_id, fencing_token)
+                VALUES ($1, 'incorrect-origin', 'worker-A', 11)
+            """, entry.intent.signal_id)
+        inconsistent = await triage.inspect()
+        self.assertEqual(
+            inconsistent.status, "RESTART_TRIAGE_CLAIM_PROVENANCE_DRIFT",
+        )
+        self.assertEqual(inconsistent.attempts, ())
+        self.assertFalse(inconsistent.entry_allowed)
+        self.assertFalse(inconsistent.retry_allowed)
+
+    async def test_restart_triage_rejects_admin_context(self):
+        from app.t100_live_four_slot_restart_triage import (
+            PostgresFourSlotRestartTriage,
+        )
+
+        refused = await PostgresFourSlotRestartTriage(self.pool).inspect()
+        self.assertEqual(
+            refused.status, "RESTART_TRIAGE_RESTRICTED_CONTEXT_UNVERIFIED",
+        )
+        self.assertFalse(refused.entry_allowed)
+        self.assertEqual(refused.attempts, ())
+
     async def test_one_shot_dispatch_claim_is_durable_and_never_reclaimed(self):
         """Claim is NOT order permission; no code in this test sends a POST."""
         from app.t100_live_four_slot_dispatch_claims import (
