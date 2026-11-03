@@ -792,3 +792,61 @@ enforcement still matter. Passing tests do NOT approve a real exchange
 POST, grant collateral certification, deploy migrations 031/032, prove
 native-stop behavior or allow live trading. BOXWAVE and existing manual
 positions untouched.
+
+### 2026-11-03 — Non-authorizing four-slot restart supervisor and opt-in CLI
+
+**New modules:** `app/t100_live_four_slot_restart_triage.py` and
+`app/t100_live_four_slot_restart_supervisor.py`. A single restricted
+PostgreSQL read-only REPEATABLE READ join inventories active V40 slot
+reservations, corresponding intent states and immutable dispatch-claim
+provenance (zero to four slots, no claim ownership drift). It refuses
+missing or malformed DB evidence, wrong role/database, duplicate symbols
+and excess active slots. A pending RESERVED/SUBMITTING/UNKNOWN/ACK/HALTED
+attempt is **RECONCILE ONLY** with no MEXC GET by this supervisor and
+no order retry—even when a durable claim is absent.
+
+Only when all attempts are settled may the supervisor invoke the
+existing signed PRIVATE GET-only complete-inventory/native-stop/owned
+checkpoint audit. A missing native stop, unsupported inventory shape,
+external manual position or inconsistent durable ownership remains a
+non-authorizing blocker. Returned public summaries exclude order IDs,
+origin strings, symbols, margin, balances and secrets. Every result
+continues to assert no order, DB mutation, permit or authorization.
+
+Added explicit opt-in `--restart-preflight` to existing local
+`app.t100_live_four_slot_readonly_cli`. It reuses paper-mode, live-order
+disabled and kill-engaged guards and restricted DB credentials. The
+default CLI behavior is unchanged. Nothing starts automatically on
+Render; migrations 031/032 and runtime role/grants are still NOT
+production-authorized or applied.
+
+Offline tests cover pending claimed/unclaimed/UNKNOWN, manual positions,
+missing native stops, wrong role, invalid controls and sanitized output.
+Real disposable PostgreSQL 16 tests cover a claimed and unclaimed
+SUBMITTING attempt blocking all normal GETs, plus a fully
+claim-bound-protected ACK transition followed by a four-position GET-only
+restart audit. The first settled-path integration fixture omitted required
+position completeness fields; the test was corrected to the already
+verified synthetic MEXC shapes **without weakening any guard**.
+
+**Exact tested source SHA:** `429ec1a8fccea8edf8ae716feb218d9555140b4f`,
+5/5 GitHub checks PASSED:
+[offline safety](https://github.com/chrpapas/mexc-exhaustion-scanner/actions/runs/41658258081),
+[isolated PostgreSQL](https://github.com/chrpapas/mexc-exhaustion-scanner/actions/runs/41658258149),
+[scanner/trader split](https://github.com/chrpapas/mexc-exhaustion-scanner/actions/runs/41658258157),
+[promotion](https://github.com/chrpapas/mexc-exhaustion-scanner/actions/runs/41658258155),
+[dashboard](https://github.com/chrpapas/mexc-exhaustion-scanner/actions/runs/41658258074).
+
+Detailed requirements, safe output and external observed status:
+`docs/T100_V40_RESTART_READONLY_CANDIDATE.md`.
+Latest old Render shadow 2026-11-03 14:54:38 UTC was still
+`OBSERVING_KILL_LATCHED` / `NATIVE_PROTECTION_LOST`, with position
+observed and no TP/SL row. No new deployment, real exchange order,
+stop or manual-position modification, production DB/role grants,
+credential changes or BOXWAVE modifications.
+
+**This advances only G4/G6 read-only recovery preparation.** It is
+NOT a complete four-slot live order executor, real MEXC native-stop
+certificate, current cross-collateral/risk-tier certificate, validated
+protected Render soak, independently reviewed release or operator-approved
+tiny live pilot. All these gates remain BLOCKED.
