@@ -572,6 +572,75 @@ class RealPostgresProtectedV40Tests(unittest.IsolatedAsyncioTestCase):
                     FROM t100_live_executor_runtime
                 """)
 
+    async def test_real_postgres_settled_restart_supervisor_runs_get_only_four_slot_audit(self):
+        """A settled SQL attempt can only initiate GET-only inventory audit.
+
+        Uses the exact real persisted checkpoint and three already-owned
+        historical test positions; simulated MEXC GET orders and native
+        stops match the committed four-slot ledger. Still NONAUTHORIZING.
+        """
+        from app.t100_live_four_slot_restart_triage import (
+            PostgresFourSlotRestartTriage,
+        )
+        from app.t100_live_four_slot_restart_supervisor import (
+            run_four_slot_restart_readonly_cycle,
+        )
+        from app.t100_live_four_slot_ledger_reader import (
+            PostgresFourSlotLedgerReader,
+        )
+        from app.t100_live_four_slot_dispatch_claims import (
+            PostgresFourSlotDispatchClaims,
+        )
+        from app.t100_live_leader_fencing import LeaderLease
+        from tests.test_t100_live_four_slot_readonly_cli import PAPER_KILLED
+        from tests.test_t100_live_four_slot_mexc_readonly import (
+            MockMexcGetOnly, prepare_rows,
+        )
+
+        await self.restricted_dispatch_claim_reader()
+        entry = self.batch.entries[0]
+        leader = LeaderLease("t100-live-executor", "worker-A", 11, 45)
+        await PostgresFourSlotDispatchClaims(self.pool).claim(
+            stage=entry.stage, lease=leader,
+        )
+        committed = await self.executor.persist_claimed(
+            batch=self.batch, pre_attempt_witness=self.witness,
+            lease=leader, observed_at=self.observed_at,
+        )
+        self.assertTrue(committed.db_atomic_commit_observed)
+        _, old_orders, _, _ = prepare_rows(3)
+        client = MockMexcGetOnly(
+            [*old_orders, dict(self.new_order)],
+            [dict(p) for p in self.position_rows],
+            [dict(p) for p in self.stop_rows],
+        )
+        before = await self.state()
+        report = await run_four_slot_restart_readonly_cycle(
+            triage=PostgresFourSlotRestartTriage(self.read_pool),
+            ledger=PostgresFourSlotLedgerReader(self.read_pool),
+            client=client,
+            env=PAPER_KILLED,
+            shared_manual_observation=False,
+        )
+        self.assertEqual(
+            report["status"], "RESTART_OBSERVED_NONAUTHORIZING"
+        )
+        self.assertEqual(
+            report["inventory_status"],
+            "NONFLAT_PROVENANCE_MATCHED_NONAUTHORIZING",
+        )
+        self.assertGreater(len(client.calls), 0)
+        self.assertTrue(
+            all("/private/" in path for path, _ in client.calls)
+        )
+        self.assertEqual(await self.state(), before)
+        self.assertFalse(report["manual_position_adopted"])
+        self.assertFalse(report["order_retry_allowed"])
+        self.assertFalse(report["entry_allowed"])
+        self.assertFalse(report["live_authorization"])
+        self.assertFalse(report["mexc_orders_sent"])
+        self.assertFalse(report["database_writes_sent"])
+
     async def test_real_postgres_restart_supervisor_never_gets_before_pending_attempt_recovery(self):
         """End-to-end restricted SQL triage -> no GET while POST ambiguous."""
         from app.t100_live_four_slot_restart_triage import (
