@@ -65,6 +65,14 @@ def current_stop(**extra):
         "state": 1,
         "isFinished": 0,
         "positionType": 2,
+        "orderId": 0,
+        "triggerSide": 0,
+        "errorCode": 0,
+        "volType": 1,
+        "profitLossVolType": "SAME",
+        "stopLossType": 0,
+        "stopLossReverse": 2,
+        "lossTrend": 1,
         "vol": D("20"),
         "stopLossPrice": "175",
     }
@@ -298,6 +306,51 @@ class StopAmendmentCoordinatorTests(unittest.IsolatedAsyncioTestCase):
                     "UNKNOWN",
                 )
         self.assertEqual(self.journal.verified, {})
+
+    async def test_no_limit_or_order_attached_stop_marked_amendment_verified(self):
+        await self.coordinator.mark_submitting(self.amendment)
+        for field, value in (
+            ("stopLossType", 1),
+            ("orderId", "123"),
+            ("triggerSide", 2),
+            ("errorCode", 7),
+            ("lossTrend", 2),
+            ("stopLossReverse", 1),
+            ("volType", None),
+        ):
+            with self.subTest(field=field, value=value):
+                with self.assertRaisesRegex(
+                    StopAmendmentCoordinatorHalted,
+                    "NATIVE_FULL_COVERAGE_UNVERIFIED",
+                ):
+                    await self.coordinator.reconcile_observed_transition(
+                        self.amendment,
+                        position_quantity=D("20"),
+                        before_stops=[current_stop()],
+                        after_stops=[current_stop(
+                            stopLossPrice="90", **{field: value},
+                        )],
+                    )
+                self.assertEqual(
+                    self.journal.states[self.amendment.external_id],
+                    "SUBMITTING",
+                )
+                self.assertEqual(self.journal.verified, {})
+
+    async def test_restart_wrong_market_stop_semantics_remains_unknown(self):
+        await self.coordinator.mark_submitting(self.amendment)
+        await self.coordinator.mark_unknown(self.amendment)
+        with self.assertRaisesRegex(
+            StopAmendmentCoordinatorHalted, "NATIVE_FULL_COVERAGE_UNVERIFIED",
+        ):
+            await self.coordinator.reconcile_current_outcome(
+                self.amendment,
+                position_quantity=D("20"),
+                current_stops=[current_stop(
+                    stopLossPrice="90", stopLossType=1,
+                )],
+            )
+        self.assertEqual(self.journal.states[self.amendment.external_id], "UNKNOWN")
 
     async def test_unknown_requires_submitting(self):
         with self.assertRaisesRegex(
