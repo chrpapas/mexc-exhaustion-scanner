@@ -1205,3 +1205,44 @@ position stop.
 No order, native stop edit, production DB or Render mutation,
 key change or BOXWAVE change. Approximately 70% subjective
 engineering progress remains; **LIVE_AUTHORIZATION = FALSE**.
+
+### 2026-11-03 — Direct durable checkpoint writer independently requires native MARKET stop
+
+A remaining bypass was identified after tightening the V40
+staged-outcome and legacy amendment reconciliation paths:
+`CheckpointPersistenceCoordinator.persist_initial_protected` and
+`persist_verified_stop` directly accepted their legacy checkpoint
+journal's volume/state shape without independently verifying MEXC
+position-origin and MARKET SL semantics. A caller could otherwise
+persist a checkpoint from a normal order-attached or LIMIT SL row.
+
+The **final checkpoint writer boundary** now runs the strict GET-only
+`assess_native_short_market_stop_row` using the normalized checkpoint
+position ID, quantity, symbol and stop price **before either writer
+mutation**. Limit SL, nonzero/missing orderId, wrong trigger, abnormal
+error/status, wrong reversal, missing volume mode and undercovered stop
+all fail closed with no checkpoint write. Regression tests exercise
+both initial and amended checkpoint persistence; the legacy simulated
+entry-recovery fixture was normalized to documented current venue
+stop fields.
+
+**CI-tested code SHA:** `6675e554527852faaa599dce9e06e228923a868e`.
+All five workflows PASS:
+[offline safety](https://github.com/chrpapas/mexc-exhaustion-scanner/actions/runs/41696775504),
+[isolated PostgreSQL](https://github.com/chrpapas/mexc-exhaustion-scanner/actions/runs/41696775522),
+[scanner/trader separation](https://github.com/chrpapas/mexc-exhaustion-scanner/actions/runs/41696775533),
+[promotion](https://github.com/chrpapas/mexc-exhaustion-scanner/actions/runs/41696775491),
+[daily dashboard](https://github.com/chrpapas/mexc-exhaustion-scanner/actions/runs/41696775469).
+
+This does NOT prove exchange stop activation, trigger fill, no exposure
+gap, cross-margin account safety, or venue/SQL atomicity. Real order
+placement, current position-stop amendment ID mapping, full
+four-slot mutation and recovery executor, independent signed private
+GET position/stop lifecycle, production privileges/soak and reviewer
+signoff remain BLOCKED.
+
+All changes are branch-only. No MEXC POST/stop change, no production
+DB write, no Render deployment, no credential change, no BOXWAVE change.
+Engineering completion estimate remains ~70% (subjective);
+`LIVE_ADAPTER_STATUS=NOT_IMPLEMENTED`,
+`LIVE_NATIVE_STOP_AMENDMENT_STATUS=UNVERIFIED_CURRENT_DOCS`.
