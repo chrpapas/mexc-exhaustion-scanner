@@ -106,6 +106,15 @@ class LiveMexcAdapter:
             raise ValueError(
                 "non-tightening or invalid short stop modification"
             )
+        from app import t100_live_guards
+        from app.t100_live_authorization import LiveAuthorizationHalted
+        if (
+            t100_live_guards.LIVE_NATIVE_STOP_AMENDMENT_STATUS
+            != "CERTIFIED"
+        ):
+            raise LiveAuthorizationHalted(
+                "MEXC_NATIVE_STOP_AMENDMENT_CONTRACT_UNVERIFIED"
+            )
         await self.client._private_post(
             "/api/v1/private/stoporder/change_plan_price",
             {
