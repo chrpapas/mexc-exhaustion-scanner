@@ -261,6 +261,126 @@ class RealPostgresProtectedV40Tests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(recovered.live_authorization)
 
 
+    async def test_one_shot_dispatch_claim_is_durable_and_never_reclaimed(self):
+        """Claim is NOT order permission; no code in this test sends a POST."""
+        from app.t100_live_four_slot_dispatch_claims import (
+            PostgresFourSlotDispatchClaims, FourSlotDispatchClaimHalted,
+        )
+        from app.t100_live_leader_fencing import LeaderLease
+
+        entry = self.batch.entries[0]
+        leader = LeaderLease("t100-live-executor", "worker-A", 11, 45)
+        store = PostgresFourSlotDispatchClaims(self.pool)
+        result = await store.claim(stage=entry.stage, lease=leader)
+        self.assertEqual(result.state, "POST_POSSIBLE_UNRESOLVED")
+        self.assertTrue(result.reconciliation_required)
+        self.assertFalse(result.post_attempted)
+        self.assertFalse(result.exchange_post_authorized)
+        self.assertFalse(result.live_authorization)
+        self.assertFalse(result.mexc_orders_sent)
+        self.assertEqual((await self.state())["new_intent"], "SUBMITTING")
+        self.assertEqual((await self.state())["slot"], "SUBMITTING")
+
+        async with self.pool.acquire() as db:
+            saved = await db.fetchrow("""
+                SELECT signal_id, external_oid, holder_id, fencing_token, state
+                FROM public.t100_live_v40_dispatch_claims
+            """)
+            self.assertEqual(saved["signal_id"], entry.intent.signal_id)
+            self.assertEqual(saved["external_oid"], entry.intent.external_oid)
+            self.assertEqual(saved["holder_id"], "worker-A")
+            self.assertEqual(saved["fencing_token"], 11)
+            self.assertEqual(saved["state"], "POST_POSSIBLE_UNRESOLVED")
+
+        # Simulate restart: even the SAME leader can never regain permission.
+        restarted = PostgresFourSlotDispatchClaims(self.pool)
+        with self.assertRaisesRegex(
+            FourSlotDispatchClaimHalted, "ALREADY_CLAIMED_RECONCILE_ONLY",
+        ):
+            await restarted.claim(stage=entry.stage, lease=leader)
+        async with self.pool.acquire() as db:
+            self.assertEqual(
+                await db.fetchval(
+                    "SELECT count(*) FROM public.t100_live_v40_dispatch_claims"
+                ), 1,
+            )
+
+    async def test_two_competing_dispatch_claims_have_exactly_one_winner(self):
+        from app.t100_live_four_slot_dispatch_claims import (
+            PostgresFourSlotDispatchClaims, FourSlotDispatchClaimHalted,
+        )
+        from app.t100_live_leader_fencing import LeaderLease
+
+        stage = self.batch.entries[0].stage
+        leader = LeaderLease("t100-live-executor", "worker-A", 11, 45)
+        store = PostgresFourSlotDispatchClaims(self.pool)
+        answers = await asyncio.gather(
+            store.claim(stage=stage, lease=leader),
+            store.claim(stage=stage, lease=leader),
+            return_exceptions=True,
+        )
+        self.assertEqual(
+            sum(not isinstance(v, Exception) for v in answers), 1
+        )
+        self.assertEqual(
+            sum(isinstance(v, FourSlotDispatchClaimHalted) for v in answers), 1
+        )
+        async with self.pool.acquire() as db:
+            self.assertEqual(await db.fetchval("""
+                SELECT count(*) FROM public.t100_live_v40_dispatch_claims
+            """), 1)
+        self.assertEqual((await self.state())["new_intent"], "SUBMITTING")
+
+    async def test_dispatch_claim_rejects_stale_leader_unknown_intent_and_bad_id(self):
+        from dataclasses import replace
+        from app.t100_live_four_slot_dispatch_claims import (
+            PostgresFourSlotDispatchClaims, FourSlotDispatchClaimHalted,
+        )
+        from app.t100_live_leader_fencing import LeaderLease
+
+        stage = self.batch.entries[0].stage
+        leader = LeaderLease("t100-live-executor", "worker-A", 11, 45)
+        store = PostgresFourSlotDispatchClaims(self.pool)
+        with self.assertRaisesRegex(
+            FourSlotDispatchClaimHalted, "STAGE_OR_FENCE_INVALID",
+        ):
+            await store.claim(stage=replace(stage, state="UNKNOWN"), lease=leader)
+        with self.assertRaisesRegex(
+            FourSlotDispatchClaimHalted, "DURABLE_STAGE_MISMATCH",
+        ):
+            await store.claim(
+                stage=replace(stage, external_oid="altered-origin"),
+                lease=leader,
+            )
+        async with self.pool.acquire() as db:
+            await db.execute("""
+                UPDATE public.t100_live_order_intents
+                SET state='UNKNOWN'
+                WHERE signal_id=$1
+            """, stage.signal_id)
+        with self.assertRaisesRegex(
+            FourSlotDispatchClaimHalted, "DURABLE_STAGE_MISMATCH",
+        ):
+            await store.claim(stage=stage, lease=leader)
+        async with self.pool.acquire() as db:
+            await db.execute("""
+                UPDATE public.t100_live_order_intents
+                SET state='SUBMITTING' WHERE signal_id=$1
+            """, stage.signal_id)
+            await db.execute("""
+                UPDATE public.t100_live_executor_leases
+                SET fencing_token=12
+                WHERE lease_name='t100-live-executor'
+            """)
+        with self.assertRaisesRegex(
+            FourSlotDispatchClaimHalted, "LEASE_STALE",
+        ):
+            await store.claim(stage=stage, lease=leader)
+        async with self.pool.acquire() as db:
+            self.assertEqual(await db.fetchval("""
+                SELECT count(*) FROM public.t100_live_v40_dispatch_claims
+            """), 0)
+
     async def test_real_postgres_commit_requires_fresh_two_bookend_private_get_fill_evidence(self):
         """One test crosses mocked PRIVATE GETs into REAL disposable PostgreSQL.
 
