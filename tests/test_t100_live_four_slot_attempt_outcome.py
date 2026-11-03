@@ -55,6 +55,7 @@ class ProtectedOutcomeTests(unittest.IsolatedAsyncioTestCase):
             "id": "999", "state": 1, "isFinished": 0,
             "positionType": 2, "stopLossPrice": D("3.5"),
             "vol": D("250"),
+            "orderId": 0, "triggerSide": 0, "errorCode": 0,
             "volType": 1, "profitLossVolType": "SAME",
             "stopLossType": 0, "stopLossReverse": 2, "lossTrend": 1,
         })
@@ -169,6 +170,26 @@ class ProtectedOutcomeTests(unittest.IsolatedAsyncioTestCase):
                 self.assertFalse(result.all_staged_attempts_fully_filled_and_protected)
                 self.assertFalse(result.live_authorization)
                 self.assertFalse(result.mexc_orders_sent)
+
+    async def test_order_attached_or_triggered_sl_is_not_position_native(self):
+        for field, value in (
+            ("orderId", "990"),
+            ("orderId", None),
+            ("triggerSide", 2),
+            ("errorCode", 1),
+        ):
+            with self.subTest(field=field, value=value):
+                await self.asyncSetUp()
+                self.venue.first_stops[-1][field] = value
+                self.venue.last_stops[-1][field] = value
+                result = await self.observe()
+                self.assertEqual(
+                    result.status,
+                    "ATTEMPT_NATIVE_MARKET_STOP_SEMANTICS_UNVERIFIED",
+                )
+                self.assertFalse(result.all_staged_attempts_fully_filled_and_protected)
+                self.assertFalse(result.native_stop_witness_observed)
+                self.assertFalse(result.live_authorization)
 
     async def test_exact_get_missing_must_not_trigger_retry(self):
         self.venue.orders.clear()
