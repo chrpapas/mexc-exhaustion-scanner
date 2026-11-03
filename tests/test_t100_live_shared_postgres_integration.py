@@ -258,7 +258,7 @@ class RealPostgresSharedManualV40Tests(unittest.IsolatedAsyncioTestCase):
                  fill_sets=0, fills=0, checkpoints=0, revisions=0),
         )
         batch, order = self.prepared(intent, stage)
-        committed = await self.commit_store.persist(
+        committed = await self.commit_store.persist_offline_unclaimed(
             batch=batch, pre_attempt_witness=self.pre,
             lease=lease(), observed_at=self.observed_at,
             shared_pre_positions=self.manual_positions,
@@ -400,7 +400,7 @@ class RealPostgresSharedManualV40Tests(unittest.IsolatedAsyncioTestCase):
         before = await self.snapshot_state(reserve.external_oid)
         try:
             with self.assertRaises(ProtectedCommitHalted):
-                await self.commit_store.persist(
+                await self.commit_store.persist_offline_unclaimed(
                     batch=batch, pre_attempt_witness=self.pre,
                     lease=lease(), observed_at=self.observed_at,
                     shared_pre_positions=self.manual_positions,
@@ -441,7 +441,7 @@ class RealPostgresSharedManualV40Tests(unittest.IsolatedAsyncioTestCase):
         reservation = await self.reserve()
         intent, stage = await self.stage(reservation)
         batch, order = self.prepared(intent, stage)
-        await self.commit_store.persist(
+        await self.commit_store.persist_offline_unclaimed(
             batch=batch, pre_attempt_witness=self.pre,
             lease=lease(), observed_at=self.observed_at,
             shared_pre_positions=self.manual_positions,
@@ -665,7 +665,7 @@ class RealPostgresSharedManualV40Tests(unittest.IsolatedAsyncioTestCase):
             await self.stage(reserve)
         batch, _ = self.prepared(intent, stage)
         with self.assertRaises(ProtectedCommitHalted):
-            await self.commit_store.persist(
+            await self.commit_store.persist_offline_unclaimed(
                 batch=batch, pre_attempt_witness=self.pre,
                 lease=lease(), observed_at=self.observed_at,
                 shared_pre_positions=self.manual_positions,
