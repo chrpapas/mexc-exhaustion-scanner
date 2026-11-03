@@ -759,6 +759,71 @@ class RealPostgresProtectedV40Tests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(report.attempts, ())
         self.assertFalse(report.live_authorization)
 
+    async def test_real_pg_pending_origin_get_only_never_recovers_or_retries(self):
+        """Actual restricted SQL triage -> synthetic exact MEXC GET twice.
+
+        This test cannot certify native protection, order submission
+        permissions, venue settlement or account-wide risk. It performs
+        ZERO SQL writes after the observer starts.
+        """
+        from app.t100_live_four_slot_restart_triage import (
+            PostgresFourSlotRestartTriage,
+        )
+        from app.t100_live_four_slot_pending_origin_get import (
+            observe_pending_origins_get_only,
+        )
+        from app.t100_live_four_slot_dispatch_claims import (
+            PostgresFourSlotDispatchClaims,
+        )
+        from app.t100_live_leader_fencing import LeaderLease
+        from tests.test_t100_live_four_slot_mexc_readonly import MockMexcGetOnly
+
+        await self.restricted_dispatch_claim_reader()
+        triage = PostgresFourSlotRestartTriage(self.read_pool)
+        source = await triage.inspect()
+        self.assertEqual(source.pending_attempts, 1)
+        self.assertEqual(source.durable_claims, 0)
+        entry = self.batch.entries[0]
+        client = MockMexcGetOnly([self.new_order], [], [])
+        before = await self.state()
+        present = await observe_pending_origins_get_only(
+            triage=source, client=client,
+        )
+        self.assertEqual(
+            present.status,
+            "PENDING_ORIGIN_ORDERS_SEEN_UNPROTECTED_NONAUTHORIZING",
+        )
+        self.assertEqual(present.origins_checked, 1)
+        self.assertEqual(present.origin_orders_seen, 1)
+        self.assertEqual(len(client.calls), 2)
+        self.assertEqual(await self.state(), before)
+        self.assertFalse(present.order_fill_verified)
+        self.assertFalse(present.native_stop_protection_verified)
+        self.assertFalse(present.mexc_orders_sent)
+
+        # After a one-shot claim is committed, the exact same origin can
+        # only be observed, never submitted/retried by this module.
+        lease = LeaderLease("t100-live-executor", "worker-A", 11, 45)
+        await PostgresFourSlotDispatchClaims(self.pool).claim(
+            stage=entry.stage, lease=lease,
+        )
+        claimed = await triage.inspect()
+        self.assertEqual(claimed.durable_claims, 1)
+        missing = MockMexcGetOnly([], [], [])
+        after_claim = await self.state()
+        absent = await observe_pending_origins_get_only(
+            triage=claimed, client=missing,
+        )
+        self.assertEqual(
+            absent.status,
+            "PENDING_ORIGIN_ALL_ABSENT_STILL_UNKNOWN_NO_RETRY",
+        )
+        self.assertEqual(len(missing.calls), 2)
+        self.assertEqual(await self.state(), after_claim)
+        self.assertFalse(absent.retry_allowed)
+        self.assertFalse(absent.entry_allowed)
+        self.assertFalse(absent.live_authorization)
+
     async def test_real_postgres_restricted_restart_triage_is_reconcile_only(self):
         """Database recovery triage cannot retry even before dispatch claim.
 
