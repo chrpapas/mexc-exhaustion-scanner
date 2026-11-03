@@ -102,6 +102,14 @@ def stop(**kw):
         "state": 1,
         "positionType": 2,
         "isFinished": 0,
+        "orderId": 0,
+        "triggerSide": 0,
+        "errorCode": 0,
+        "volType": 1,
+        "profitLossVolType": "SAME",
+        "stopLossType": 0,
+        "stopLossReverse": 2,
+        "lossTrend": 1,
         "stopLossPrice": D("175"),
         "vol": D("20"),
     }
@@ -243,6 +251,33 @@ class StopUpdatePipelineTests(unittest.IsolatedAsyncioTestCase):
                         before_stops=[stop()], after_stops=[bad],
                         best_profit_pct=D("14"), armed=True,
                         **gates(),
+                    )
+                self.assertEqual(
+                    self.journal.states[self.amendment.external_id],
+                    "SUBMITTING",
+                )
+                self.assertEqual(self.writer.calls, [])
+
+    async def test_invalid_market_stop_semantics_cannot_persist_checkpoint(self):
+        for field, value in (
+            ("stopLossType", 1), ("orderId", 55),
+            ("triggerSide", 2), ("errorCode", 9),
+            ("stopLossReverse", 1), ("lossTrend", 2),
+            ("profitLossVolType", "UNKNOWN"),
+        ):
+            with self.subTest(field=field, value=value):
+                await self.asyncSetUp()
+                with self.assertRaisesRegex(
+                    StopUpdatePipelineHalted,
+                    "STOP_NATIVE_FULL_VOLUME_PROTECTION_UNVERIFIED",
+                ):
+                    await self.pipeline.reconcile_observed_and_persist(
+                        cp(), self.amendment,
+                        before_stops=[stop()],
+                        after_stops=[stop(
+                            stopLossPrice=D("90"), **{field: value},
+                        )],
+                        best_profit_pct=D("14"), armed=True, **gates(),
                     )
                 self.assertEqual(
                     self.journal.states[self.amendment.external_id],
