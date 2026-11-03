@@ -214,6 +214,128 @@ class FourSlotOperatorCliTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(result["entry_allowed"])
         self.assertFalse(result["mexc_orders_sent"])
 
+    async def test_pending_origin_audit_cli_double_get_only_never_posts(self):
+        """Explicit opt-in may query unresolved origins, never open a trade."""
+        from tests.test_t100_live_four_slot_restart_triage import (
+            FakePool, sample,
+        )
+
+        pool = FakePool([sample()])
+        pool.close = AsyncMock()
+        order = {
+            "symbol": "EXAMPLE_USDT", "externalOid": "opaque-order-origin",
+            "orderId": "901", "side": 3, "state": 3, "dealVol": "1",
+        }
+        client = MockMexcGetOnly([order], [], [])
+        client.close = AsyncMock()
+        asyncpg_module = ModuleType("asyncpg")
+        asyncpg_module.create_pool = AsyncMock(return_value=pool)
+        mexc_module = ModuleType("app.mexc_trade")
+        mexc_module.MexcTradeClient = MagicMock(return_value=client)
+        env = {
+            **PAPER_KILLED, "MEXC_API_KEY": "fictional-test-key",
+            "MEXC_API_SECRET": "fictional-test-secret",
+        }
+        with patch.dict(
+            "sys.modules",
+            {"asyncpg": asyncpg_module, "app.mexc_trade": mexc_module},
+        ), patch(
+            "app.t100_live_four_slot_readonly_cli.getpass.getpass",
+            side_effect=["fictional-password", "postgres://dummy-host"],
+        ):
+            result = await _main(env, pending_origin_audit=True)
+        self.assertEqual(
+            result["status"],
+            "PENDING_ORIGIN_ORDERS_SEEN_UNPROTECTED_NONAUTHORIZING",
+        )
+        self.assertEqual(result["origins_checked"], 1)
+        self.assertEqual(result["origin_orders_seen"], 1)
+        self.assertEqual(len(client.calls), 2)
+        self.assertTrue(
+            all("/api/v1/private/order/external/" in path
+                for path, _ in client.calls)
+        )
+        mexc_module.MexcTradeClient.assert_called_once()
+        client.close.assert_awaited_once()
+        pool.close.assert_awaited_once()
+        self.assertFalse(result["entry_allowed"])
+        self.assertFalse(result["live_authorization"])
+        self.assertFalse(result["retry_allowed"])
+        self.assertFalse(result["database_writes_sent"])
+        self.assertNotIn(order["externalOid"], str(result))
+        self.assertNotIn("fictional-test-secret", str(result))
+
+    async def test_pending_origin_audit_sql_drift_aborts_before_venue_get(self):
+        from tests.test_t100_live_four_slot_restart_triage import (
+            FakePool, sample,
+        )
+        pool = FakePool([sample()])
+        pool.conn.fetch = AsyncMock(side_effect=[[sample()], []])
+        pool.close = AsyncMock()
+        client = MockMexcGetOnly([], [], [])
+        client.close = AsyncMock()
+        asyncpg_module = ModuleType("asyncpg")
+        asyncpg_module.create_pool = AsyncMock(return_value=pool)
+        mexc_module = ModuleType("app.mexc_trade")
+        mexc_module.MexcTradeClient = MagicMock(return_value=client)
+        env = {
+            **PAPER_KILLED, "MEXC_API_KEY": "fixture-key",
+            "MEXC_API_SECRET": "fixture-secret",
+        }
+        with patch.dict(
+            "sys.modules",
+            {"asyncpg": asyncpg_module, "app.mexc_trade": mexc_module},
+        ), patch(
+            "app.t100_live_four_slot_readonly_cli.getpass.getpass",
+            side_effect=["fixture-password", "postgres://dummy-host"],
+        ):
+            result = await _main(env, pending_origin_audit=True)
+        self.assertEqual(
+            result["status"], "PENDING_ORIGIN_SQL_CHANGED_NO_RETRY",
+        )
+        self.assertEqual(pool.conn.fetch.await_count, 2)
+        self.assertEqual(client.calls, [])
+        self.assertFalse(result["mexc_orders_sent"])
+        client.close.assert_awaited_once()
+
+    async def test_pending_origin_audit_requires_pending_before_client_creation(self):
+        from tests.test_t100_live_four_slot_restart_triage import FakePool
+        pool = FakePool([])
+        pool.close = AsyncMock()
+        asyncpg_module = ModuleType("asyncpg")
+        asyncpg_module.create_pool = AsyncMock(return_value=pool)
+        mexc_module = ModuleType("app.mexc_trade")
+        mexc_module.MexcTradeClient = MagicMock(
+            side_effect=AssertionError("no client if no pending order")
+        )
+        env = {
+            **PAPER_KILLED, "MEXC_API_KEY": "fixture-key",
+            "MEXC_API_SECRET": "fixture-secret",
+        }
+        with patch.dict(
+            "sys.modules",
+            {"asyncpg": asyncpg_module, "app.mexc_trade": mexc_module},
+        ), patch(
+            "app.t100_live_four_slot_readonly_cli.getpass.getpass",
+            side_effect=["fixture-password", "postgres://dummy-host"],
+        ):
+            result = await _main(env, pending_origin_audit=True)
+        self.assertEqual(result["status"], "PENDING_ORIGIN_SQL_TRIAGE_REQUIRED")
+        mexc_module.MexcTradeClient.assert_not_called()
+        pool.close.assert_awaited_once()
+
+    async def test_pending_origin_and_restart_flags_are_mutually_exclusive(self):
+        with patch(
+            "app.t100_live_four_slot_readonly_cli.getpass.getpass",
+            side_effect=AssertionError("no credential prompts allowed"),
+        ):
+            r = await _main(
+                PAPER_KILLED, pending_origin_audit=True,
+                restart_preflight=True,
+            )
+        self.assertEqual(r["status"], "FOUR_SLOT_READONLY_MODE_CONFLICT")
+        self.assertFalse(r["live_authorization"])
+
     async def test_restart_preflight_refuses_before_any_credential_prompt(self):
         with patch(
             "app.t100_live_four_slot_readonly_cli.getpass.getpass",
