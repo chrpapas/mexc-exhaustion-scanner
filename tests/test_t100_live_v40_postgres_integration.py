@@ -648,6 +648,77 @@ class RealPostgresProtectedV40Tests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(report["mexc_orders_sent"])
         self.assertFalse(report["database_writes_sent"])
 
+    async def test_real_pg_restart_rejects_slot_change_during_get_window(self):
+        """Actual restricted SQL bookends expose concurrent journal drift.
+
+        The synthetic account-audit callback represents a venue GET window;
+        it only mutates the disposable CI database to simulate another
+        worker changing a slot. The read-only supervisor itself has no
+        database mutation and never sends exchange orders.
+        """
+        from unittest.mock import patch
+        from app.t100_live_four_slot_restart_triage import (
+            PostgresFourSlotRestartTriage,
+        )
+        from app.t100_live_four_slot_restart_supervisor import (
+            run_four_slot_restart_readonly_cycle,
+        )
+        from app.t100_live_four_slot_dispatch_claims import (
+            PostgresFourSlotDispatchClaims,
+        )
+        from app.t100_live_leader_fencing import LeaderLease
+        from tests.test_t100_live_four_slot_readonly_cli import PAPER_KILLED
+
+        await self.restricted_dispatch_claim_reader()
+        entry = self.batch.entries[0]
+        leader = LeaderLease("t100-live-executor", "worker-A", 11, 45)
+        await PostgresFourSlotDispatchClaims(self.pool).claim(
+            stage=entry.stage, lease=leader,
+        )
+        committed = await self.executor.persist_claimed(
+            batch=self.batch,
+            pre_attempt_witness=self.witness,
+            lease=leader, observed_at=self.observed_at,
+        )
+        self.assertTrue(committed.db_atomic_commit_observed)
+
+        async def synthetic_get_window(**kwargs):
+            # This is a simulated competing writer against EPHEMERAL
+            # Postgres, never an operation on MEXC or production DB.
+            async with self.pool.acquire() as db:
+                await db.execute("""
+                    UPDATE public.t100_live_v40_slot_reservations
+                    SET state='UNKNOWN' WHERE signal_id=$1
+                """, entry.intent.signal_id)
+                await db.execute("""
+                    UPDATE public.t100_live_order_intents
+                    SET state='UNKNOWN' WHERE signal_id=$1
+                """, entry.intent.signal_id)
+            return {
+                "status": "NONFLAT_PROVENANCE_MATCHED_NONAUTHORIZING",
+                "entry_allowed": False, "live_authorization": False,
+                "mexc_orders_sent": False,
+                "database_writes_sent": False,
+            }
+
+        with patch(
+            "app.t100_live_four_slot_restart_supervisor.run_readonly_four_slot_audit",
+            new=synthetic_get_window,
+        ):
+            result = await run_four_slot_restart_readonly_cycle(
+                triage=PostgresFourSlotRestartTriage(self.read_pool),
+                ledger=object(), client=object(), env=PAPER_KILLED,
+            )
+        self.assertEqual(
+            result["status"], "RESTART_DB_CHANGED_DURING_GET_NO_RETRY",
+        )
+        self.assertFalse(result["entry_allowed"])
+        self.assertFalse(result["live_authorization"])
+        self.assertFalse(result["order_retry_allowed"])
+        self.assertFalse(result["mexc_orders_sent"])
+        self.assertFalse(result["database_writes_sent"])
+        self.assertEqual((await self.state())["slot"], "UNKNOWN")
+
     async def test_real_postgres_restart_supervisor_never_gets_before_pending_attempt_recovery(self):
         """End-to-end restricted SQL triage -> no GET while POST ambiguous."""
         from app.t100_live_four_slot_restart_triage import (
