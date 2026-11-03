@@ -609,6 +609,89 @@ class RealPostgresProtectedV40Tests(unittest.IsolatedAsyncioTestCase):
                 SELECT count(*) FROM public.t100_live_v40_dispatch_claims
             """), 0)
 
+    async def test_claim_bound_restart_reconciles_private_get_then_real_postgres_commit(self):
+        """True restricted-SQL claim + mock GET + actual DB atomic commit.
+
+        The mock exchange positions/stops/fills are NOT a live venue test.
+        No future real transport is connected to this procedure.
+        """
+        from decimal import Decimal
+        from app.t100_live_four_slot_mexc_readonly import (
+            inspect_claimed_four_slot_prepared_get_only,
+        )
+        from app.t100_live_four_slot_dispatch_claims import (
+            PostgresFourSlotDispatchClaims,
+        )
+        from app.t100_live_leader_fencing import LeaderLease
+        from tests.test_t100_live_four_slot_mexc_readonly import MockMexcGetOnly
+        from tests.test_t100_live_v40_protected_finalization import deal
+
+        entry = self.batch.entries[0]
+        positions = [dict(x) for x in self.position_rows]
+        stops = [dict(x) for x in self.stop_rows]
+        for row in positions:
+            row.update({"im": Decimal("10"), "unRealizedPnl": Decimal("0")})
+        client = MockMexcGetOnly([self.new_order], positions, stops)
+        client.deals[entry.order_id] = [deal()]
+        before = await self.state()
+        reader = await self.restricted_dispatch_claim_reader()
+
+        # No durable POST-possibility claim = no exchange read, no bundle
+        # and no database write, even if the mock venue contains a fill.
+        rejected = await inspect_claimed_four_slot_prepared_get_only(
+            stages=[entry.stage], intents=[entry.intent],
+            pre_attempt_witness=self.witness, claim_reader=reader,
+            client=client,
+        )
+        self.assertEqual(
+            rejected.status, "PROTECTED_GET_DISPATCH_CLAIM_NOT_VERIFIED_NO_RETRY",
+        )
+        self.assertIsNone(rejected.prepared_batch)
+        self.assertEqual(client.calls, [])
+        self.assertEqual(await self.state(), before)
+
+        leader = LeaderLease("t100-live-executor", "worker-A", 11, 45)
+        claimed = await PostgresFourSlotDispatchClaims(self.pool).claim(
+            stage=entry.stage, lease=leader,
+        )
+        self.assertFalse(claimed.exchange_post_authorized)
+        self.assertFalse(claimed.mexc_orders_sent)
+
+        prepared = await inspect_claimed_four_slot_prepared_get_only(
+            stages=[entry.stage], intents=[entry.intent],
+            pre_attempt_witness=self.witness, claim_reader=reader,
+            client=client,
+        )
+        self.assertTrue(prepared.dispatch_claims_verified)
+        self.assertEqual(
+            prepared.status, "PROTECTED_GET_BATCH_PREPARED_NONAUTHORIZING",
+        )
+        self.assertEqual(prepared.deal_histories_observed, 1)
+        self.assertIsNotNone(prepared.prepared_batch)
+        self.assertEqual(await self.state(), before)
+        self.assertTrue(all("/private/" in path for path, _ in client.calls))
+        self.assertFalse(prepared.entry_allowed)
+        self.assertFalse(prepared.live_authorization)
+
+        saved = await self.executor.persist(
+            batch=prepared.prepared_batch,
+            pre_attempt_witness=self.witness,
+            lease=leader,
+            observed_at=self.observed_at,
+        )
+        self.assertTrue(saved.db_atomic_commit_observed)
+        self.assertFalse(saved.mexc_orders_sent)
+        self.assertEqual(await self.state(), {
+            "new_intent": "ACK", "slot": "PROTECTED",
+            "fills": 1, "fill_sets": 1, "checkpoints": 4,
+            "revisions": 4,
+        })
+        async with self.pool.acquire() as db:
+            self.assertEqual(await db.fetchval("""
+                SELECT count(*) FROM public.t100_live_v40_dispatch_claims
+                WHERE signal_id=$1 AND external_oid=$2
+            """, entry.intent.signal_id, entry.intent.external_oid), 1)
+
     async def test_real_postgres_commit_requires_fresh_two_bookend_private_get_fill_evidence(self):
         """One test crosses mocked PRIVATE GETs into REAL disposable PostgreSQL.
 
