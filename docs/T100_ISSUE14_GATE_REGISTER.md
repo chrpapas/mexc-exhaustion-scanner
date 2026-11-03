@@ -1309,3 +1309,42 @@ https://www.mexc.com/mexc-api .
 **Progress remains NOT LIVE READY.** Do not equate GET evidence
 with live order/cancel/stop execution certification. BOXWAVE
 and main trading workers were not changed.
+
+
+### 2026-11-03 — T100 isolated $50 subaccount live pilot POST rejected: code 2030
+
+Operator-reported local signed API evidence:
+- Prior local read-only GET gates: USDT equity/available 50/50;
+  positions=0, current TP/SL=0, open orders=0; hedge mode and
+  minimum BTC_USDT isolated 1x plumbing candidate passed.
+- One explicitly operator-authorized real `order/create` POST
+  returned `success=false`, `code=2030`.
+- Official current MEXC Futures error-code reference identifies
+  **2030 = external order ID too long, maximum 32 characters**.
+  Inspection of the actual local `t100_first_live_pilot_v2.py`
+  confirmed the open ID prefix plus 20 hex characters was
+  **35 characters**; the close ID generator would have been
+  **36 characters**. This is a local order-payload bug,
+  NOT evidence of revoked API trading permission.
+- Script's post-rejection signed GET inventory showed 0 positions,
+  0 active TP/SL and 0 other open orders. No close POST was sent.
+  Native stop placement and amendment remain **NOT VERIFIED**.
+- Corrected `t100_first_live_pilot_v3.py` (local operator artifact,
+  not deployed) uses **26-character** external IDs for both
+  opening and closing; validates ID ASCII/length before ANY
+  `order/create` HTTP request; adds a strictly read-only,
+  human-confirmed `--reconcile-2030` flow to archive the old
+  crash-safety journal only after two fresh empty inventory
+  bookends and a final post-confirmation GET. **10 offline
+  isolated tests pass.** No new real order has been sent.
+- Neither T100 production, existing main-account shadow creds,
+  Render trading worker, nor BOXWAVE were modified in this
+  corrective local-workflow step.
+
+Do NOT automatically retry a rejected trade or clear the one-shot
+marker without authenticated fresh inventory and operator review.
+No API permission, stop placement, stop amendment, or position
+closure execution has been proved by this failed request.
+
+Official reference:
+https://www.mexc.io/api-docs/futures/error-code
