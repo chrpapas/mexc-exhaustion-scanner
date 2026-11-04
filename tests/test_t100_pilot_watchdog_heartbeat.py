@@ -2,6 +2,9 @@
 from __future__ import annotations
 
 import asyncio
+import sqlite3
+import subprocess
+import sys
 import tempfile
 import time
 import unittest
@@ -95,6 +98,23 @@ class ExternalHeartbeatTests(unittest.TestCase):
             self.assertEqual(result.status, "WATCH_HEARTBEAT_SCOPE_MISMATCH")
             result = self.check(now_ms=int(time.time()*1000)-15000)
             self.assertEqual(result.status, "WATCH_HEARTBEAT_CLOCK_SKEW")
+
+    def test_independent_subprocess_exit_codes_without_secret_output(self):
+        with self.create() as runner:
+            asyncio.run(runner.poll_once())
+            cmd = [sys.executable, "-m", "app.t100_pilot_watchdog_heartbeat",
+                   "--journal", str(self.path),
+                   "--expected-scope-sha256", SCOPE,
+                   "--stale-after-ms", "30000"]
+            healthy = subprocess.run(cmd, capture_output=True, text=True, timeout=8)
+            self.assertEqual(healthy.returncode, 0, healthy.stderr)
+            self.assertIn("WATCH_HEARTBEAT_RECENT_NONAUTHORIZING", healthy.stdout)
+            with sqlite3.connect(self.path) as db:
+                db.execute("UPDATE state SET last_ms=last_ms-60000 WHERE id=1")
+            stale = subprocess.run(cmd, capture_output=True, text=True, timeout=8)
+            self.assertEqual(stale.returncode, 2, stale.stderr)
+            self.assertIn("WATCH_HEARTBEAT_STALE", stale.stdout)
+            self.assertNotIn(SCOPE, stale.stdout)
 
     def test_symlink_and_invalid_scope_fail_closed(self):
         with self.create():
