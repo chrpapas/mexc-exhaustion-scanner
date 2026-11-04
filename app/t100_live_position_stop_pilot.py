@@ -166,6 +166,9 @@ class PositionStopPilot:
         updated = origin.get("updateTime") if type(origin) is dict else None
         if type(updated) is not int or updated <= 0:
             raise PilotHalted("ENTRY_FILL_TIMESTAMP_UNVERIFIED")
+        now_ms = int(time.time() * 1000)
+        if updated > now_ms + MAX_EXCHANGE_CLOCK_LEAD_MS:
+            raise PilotHalted("ENTRY_FILL_CLOCK_SKEW_UNVERIFIED")
         order_id = identity(origin.get("orderId"))
         deals = snapshot.get("origin_deals")
         if type(deals) is not list or not 1 <= len(deals) <= 100:
@@ -192,6 +195,8 @@ class PositionStopPilot:
             deal_at = deal.get("timestamp")
             if type(deal_at) is not int or deal_at <= 0:
                 raise PilotHalted("ENTRY_FILL_TIMESTAMP_UNVERIFIED")
+            if deal_at > now_ms + MAX_EXCHANGE_CLOCK_LEAD_MS:
+                raise PilotHalted("ENTRY_FILL_CLOCK_SKEW_UNVERIFIED")
             first_fill_ms = min(first_fill_ms, deal_at)
         if total != Decimal(1):
             raise PilotHalted("ENTRY_FILL_VOLUME_UNVERIFIED")
