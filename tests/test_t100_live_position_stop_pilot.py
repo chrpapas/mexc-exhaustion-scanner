@@ -66,6 +66,17 @@ def stop(price="110"):
     }
 
 
+def close_deals(order_id="101", volume="1"):
+    return [{
+        "id": "200",
+        "orderId": order_id,
+        "symbol": "BTC_USDT",
+        "side": 2,
+        "vol": volume,
+        "price": "100",
+    }]
+
+
 class PilotTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -105,7 +116,7 @@ class PilotTests(unittest.TestCase):
             "side": 2,
             "dealVol": "1",
         }
-        self.p.observe(snapshot([stop("108")], flat=True), close_order=close)
+        self.p.observe(snapshot([stop("108")], flat=True), close_order=close, close_deals=close_deals())
         self.stage("CANCEL", snapshot([stop("108")], flat=True))
         terminal = dict(stop("108"), state=2, isFinished=1)
         self.p.observe(snapshot(flat=True), canceled_stop=terminal)
@@ -195,7 +206,7 @@ class PilotTests(unittest.TestCase):
             },
         ]:
             with self.assertRaises(PilotHalted):
-                self.p.observe(snapshot(flat=True), close_order=o)
+                self.p.observe(snapshot(flat=True), close_order=o, close_deals=close_deals())
         self.assertEqual(self.p.diagnostics()["state"], "CLOSE_UNKNOWN")
 
     def test_two_processes_cannot_stage_same_request(self):
@@ -262,7 +273,7 @@ class PilotTests(unittest.TestCase):
             "side": 2,
             "dealVol": "1",
         }
-        self.p.observe(snapshot(flat=True), close_order=close)
+        self.p.observe(snapshot(flat=True), close_order=close, close_deals=close_deals())
         with self.assertRaises(PilotHalted):
             self.p.observe(snapshot(flat=True), canceled_stop=None)
         self.p.observe(snapshot(flat=True), canceled_stop=dict(stop(), state=2, isFinished=1))
@@ -350,7 +361,7 @@ class PilotTests(unittest.TestCase):
             "side": 2,
             "dealVol": "1",
         }
-        self.p.observe(snapshot([stop()], flat=True), close_order=close)
+        self.p.observe(snapshot([stop()], flat=True), close_order=close, close_deals=close_deals())
 
     def test_cancel_rejects_identity_and_terminal_state_drift(self):
         self.flat_after_close()
@@ -447,10 +458,10 @@ class PilotTests(unittest.TestCase):
             "dealVol": "1",
         }
         with self.assertRaisesRegex(PilotHalted, "CLOSE_ACK_GET_IDENTITY_MISMATCH"):
-            self.p.observe(snapshot([stop()], flat=True), close_order=order)
+            self.p.observe(snapshot([stop()], flat=True), close_order=order, close_deals=close_deals())
         self.assertEqual(self.p.diagnostics()["state"], "CLOSE_UNKNOWN")
         order["orderId"] = "101"
-        self.p.observe(snapshot([stop()], flat=True), close_order=order)
+        self.p.observe(snapshot([stop()], flat=True), close_order=order, close_deals=close_deals())
         self.assertEqual(self.p.diagnostics()["state"], "FLAT_OBSERVED")
 
     def test_conflicting_close_post_ack_ids_cannot_certify_flat(self):
@@ -472,7 +483,7 @@ class PilotTests(unittest.TestCase):
             "dealVol": "1",
         }
         with self.assertRaisesRegex(PilotHalted, "CLOSE_ACK_IDENTITY_CONFLICT"):
-            self.p.observe(snapshot([stop()], flat=True), close_order=order)
+            self.p.observe(snapshot([stop()], flat=True), close_order=order, close_deals=close_deals())
         self.assertEqual(self.p.diagnostics()["state"], "CLOSE_UNKNOWN")
         self.assertFalse(self.p.diagnostics()["live_authorization"])
 
@@ -491,6 +502,98 @@ class PilotTests(unittest.TestCase):
             self.assertNotIn("acknowledged_close_order_id", row)
             self.assertNotIn("PRIVATE_VALUE", str(row))
         self.assertEqual(self.p.diagnostics()["state"], "CLOSE_UNKNOWN")
+
+
+    def test_close_requires_exact_trade_deal_history_and_keeps_unknown(self):
+        self.protected()
+        request = self.stage("CLOSE", snapshot([stop()]))
+        order = {
+            "orderId": "101", "positionId": "900",
+            "externalOid": request["payload"]["externalOid"],
+            "symbol": "BTC_USDT", "state": 3, "side": 2, "dealVol": "1",
+        }
+        bad = [
+            None, [], [dict(close_deals()[0], orderId="102")],
+            [dict(close_deals()[0], symbol="ETH_USDT")],
+            [dict(close_deals()[0], side=3)],
+            [dict(close_deals()[0], vol="0.5")],
+            [dict(close_deals()[0], price=0)],
+            [dict(close_deals()[0], id=True)],
+            close_deals() + close_deals(),
+        ]
+        for evidence in bad:
+            with self.subTest(evidence=evidence), self.assertRaises(PilotHalted):
+                self.p.observe(snapshot([stop()], flat=True), close_order=order, close_deals=evidence)
+            self.assertEqual(self.p.diagnostics()["state"], "CLOSE_UNKNOWN")
+        self.p.observe(snapshot([stop()], flat=True), close_order=order, close_deals=close_deals())
+        self.assertEqual(self.p.diagnostics()["state"], "FLAT_OBSERVED")
+
+    def test_get_close_requires_two_matching_signed_trade_detail_reads(self):
+        import asyncio
+        from app.t100_live_readonly_probe import ReadOnlyMexcProbe
+        self.protected()
+        request = self.stage("CLOSE", snapshot([stop()]))
+        seen = {"deals": 0}
+        current = snapshot([stop()], flat=True)
+        closing = {
+            "orderId": "101", "positionId": "900",
+            "externalOid": request["payload"]["externalOid"],
+            "symbol": "BTC_USDT", "state": 3, "side": 2, "dealVol": "1",
+        }
+
+        class SignedGet:
+            async def _private_get(self, path, params=None):
+                if path.endswith("/position/open_positions"):
+                    return current["positions"]
+                if path.endswith("/stoporder/open_orders"):
+                    return current["stops"]
+                if path.endswith("/open_order_total_count"):
+                    return current["counts"]
+                if "/order/external/" in path:
+                    return closing if request["payload"]["externalOid"] in path else current["origin"]
+                if "/order/deal_details/" in path:
+                    seen["deals"] += 1
+                    return close_deals()
+                raise AssertionError("unexpected signed GET endpoint")
+
+        asyncio.run(self.p.observe_get(ReadOnlyMexcProbe(SignedGet())))
+        self.assertEqual(seen["deals"], 2)
+        self.assertEqual(self.p.diagnostics()["state"], "FLAT_OBSERVED")
+
+    def test_get_close_deal_history_drift_fails_closed_without_post(self):
+        import asyncio
+        from app.t100_live_readonly_probe import ReadOnlyMexcProbe
+        self.protected()
+        request = self.stage("CLOSE", snapshot([stop()]))
+        current = snapshot([stop()], flat=True)
+        closing = {
+            "orderId": "101", "positionId": "900",
+            "externalOid": request["payload"]["externalOid"],
+            "symbol": "BTC_USDT", "state": 3, "side": 2, "dealVol": "1",
+        }
+        reads = {"n": 0}
+
+        class SignedGet:
+            async def _private_get(self, path, params=None):
+                if path.endswith("/position/open_positions"):
+                    return current["positions"]
+                if path.endswith("/stoporder/open_orders"):
+                    return current["stops"]
+                if path.endswith("/open_order_total_count"):
+                    return current["counts"]
+                if "/order/external/" in path:
+                    return closing if request["payload"]["externalOid"] in path else current["origin"]
+                if "/order/deal_details/" in path:
+                    reads["n"] += 1
+                    return close_deals(volume="1" if reads["n"] == 1 else "0.5")
+                raise AssertionError("unexpected signed GET endpoint")
+
+        with self.assertRaisesRegex(PilotHalted, "^SIGNED_GET_RECONCILIATION_UNVERIFIED$"):
+            asyncio.run(self.p.observe_get(ReadOnlyMexcProbe(SignedGet())))
+        self.assertEqual(reads["n"], 2)
+        self.assertEqual(self.p.diagnostics()["state"], "CLOSE_UNKNOWN")
+        self.assertFalse(self.p.diagnostics()["post_transport_available"])
+
 
     def test_acknowledged_placement_id_binds_get_after_restart(self):
         request = self.stage("PLACE", snapshot(), "110")
