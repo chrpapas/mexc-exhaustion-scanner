@@ -44,7 +44,7 @@ def inspect_watchdog_heartbeat(
         or re.fullmatch(r"[a-f0-9]{64}", expected_scope_sha256) is None
         or type(now_ms) is not int or now_ms < 1_500_000_000_000
         or type(stale_after_ms) is not int or not 1000 <= stale_after_ms <= 300000
-        or type(path) not in (str, Path) or not str(path) or str(path) == ":memory:"
+        or not isinstance(path, (str, Path)) or not str(path) or str(path) == ":memory:"
     ):
         return warn("WATCH_HEARTBEAT_CHECK_CONFIG_INVALID")
     p = Path(path)
