@@ -18,6 +18,8 @@ from app.t100_render_shadow_witness import (
     RenderShadowWitness, ShadowWitnessFailure,
 )
 from app.t100_render_shadow_sentinel import inspect_witness
+from app.t100_render_shadow_alert_outbox import RenderShadowAlertOutbox, RenderAlertOutboxFailure
+from app.t100_render_shadow_sentinel_durable import run as run_durable_sentinel
 
 
 LOCAL_DSN = "postgresql://postgres:postgres@127.0.0.1:5432/postgres"
@@ -25,6 +27,7 @@ MIGRATION = (
     Path(__file__).resolve().parents[1]
     / "migrations" / "031_t100_render_shadow_witness.sql"
 )
+OUTBOX_MIGRATION = Path(__file__).resolve().parents[1] / "migrations" / "032_t100_render_shadow_sentinel_outbox.sql"
 
 
 async def _connect():
@@ -43,6 +46,7 @@ class IsolatedPostgresWitnessTests(unittest.IsolatedAsyncioTestCase):
                 # Running the DDL here is safe ONLY because the DSN is
                 # hardcoded to a disposable GitHub Actions localhost DB.
                 await conn.execute(MIGRATION.read_text())
+                await conn.execute(OUTBOX_MIGRATION.read_text())
             finally:
                 await conn.close()
         asyncio.run(init())
@@ -150,6 +154,113 @@ class IsolatedPostgresWitnessTests(unittest.IsolatedAsyncioTestCase):
         stale = await inspect_witness(self.conn,stale_scope,stale_seconds=240)
         self.assertEqual(stale.status,"SHADOW_WITNESS_STALE")
         self.assertTrue(stale.alert)
+
+
+    async def test_real_postgres_durable_alarm_after_restart_and_ack(self):
+        outbox = RenderShadowAlertOutbox(self.conn, scope_sha256=self.scope)
+        await outbox.acquire_singleton()
+        self.assertEqual(await outbox.observe(code="SHADOW_WITNESS_MISSING",alert=True),1)
+        self.assertEqual(await outbox.observe(code="SHADOW_WITNESS_MISSING",alert=True),2)
+        first = await outbox.pending()
+        self.assertEqual(len(first),1)
+        self.assertEqual(first[0].code,"SHADOW_WITNESS_MISSING")
+        await outbox.mark_attempt(first[0].seq)
+        await self.conn.close()
+        self.conn=await _connect()
+        restarted = RenderShadowAlertOutbox(self.conn, scope_sha256=self.scope)
+        await restarted.acquire_singleton()
+        self.assertEqual(len(await restarted.pending()),1)
+        await restarted.observe(code="SHADOW_WITNESS_MISSING", alert=True)
+        self.assertEqual(len(await restarted.pending()),1)
+        await restarted.mark_attempt(first[0].seq)
+        await restarted.mark_delivered(first[0].seq)
+        self.assertEqual(await restarted.count_pending(),0)
+        await restarted.observe(code="SHADOW_WITNESS_RECENT_NONAUTHORIZING",alert=False)
+        await restarted.observe(code="SHADOW_WITNESS_STALE",alert=True)
+        new_events = await restarted.pending()
+        self.assertEqual(len(new_events),1)
+        self.assertEqual(new_events[0].code,"SHADOW_WITNESS_STALE")
+        self.assertNotEqual(new_events[0].seq,first[0].seq)
+        attempts = await self.conn.fetchval(
+            "SELECT attempts FROM public.t100_shadow_sentinel_outbox WHERE seq=$1",
+            first[0].seq,
+        )
+        self.assertEqual(attempts,2)
+
+    async def test_durable_alert_trigger_is_atomic_and_revision_is_monotonic(self):
+        outbox = RenderShadowAlertOutbox(self.conn,scope_sha256=self.scope)
+        await outbox.acquire_singleton()
+        await outbox.observe(code="SHADOW_WITNESS_MISSING",alert=True)
+        import asyncpg
+        with self.assertRaises(asyncpg.PostgresError):
+            await self.conn.execute(
+                "UPDATE public.t100_shadow_sentinel_state "
+                "SET revision=revision-1 WHERE scope_sha256=$1",self.scope,
+            )
+        self.assertEqual(len(await outbox.pending()),1)
+        # Removing alarm rows is not permitted to the restricted role:
+        # the separate least-privilege test below verifies that denial.
+
+    async def test_role_permissions_denied_on_trading_tables_and_witness_mutation(self):
+        """Role-only grants are tested on disposable CI Postgres, not Render."""
+        await self.conn.execute(
+            "CREATE ROLE t100_ci_render_sentinel NOLOGIN NOINHERIT"
+        )
+        await self.conn.execute(
+            "CREATE ROLE t100_ci_render_writer NOLOGIN NOINHERIT"
+        )
+        await self.conn.execute(
+            "CREATE TABLE public.t100_ci_trade_secret(dummy int)"
+        )
+        await self.conn.execute(
+            "GRANT USAGE ON SCHEMA public TO t100_ci_render_sentinel,t100_ci_render_writer"
+        )
+        await self.conn.execute(
+            "GRANT SELECT ON public.t100_shadow_witness "
+            "TO t100_ci_render_sentinel"
+        )
+        await self.conn.execute(
+            "GRANT SELECT,INSERT,UPDATE ON public.t100_shadow_sentinel_state, "
+            "public.t100_shadow_sentinel_outbox TO t100_ci_render_sentinel"
+        )
+        await self.conn.execute(
+            "GRANT USAGE ON SEQUENCE "
+            "public.t100_shadow_sentinel_outbox_seq_seq "
+            "TO t100_ci_render_sentinel"
+        )
+        await self.conn.execute(
+            "GRANT SELECT,INSERT,UPDATE ON public.t100_shadow_witness "
+            "TO t100_ci_render_writer"
+        )
+        import asyncpg
+        await self.conn.execute("SET ROLE t100_ci_render_sentinel")
+        try:
+            for sql in (
+                "SELECT * FROM public.t100_ci_trade_secret",
+                "UPDATE public.t100_shadow_witness SET revision=revision+1",
+                "DELETE FROM public.t100_shadow_sentinel_outbox",
+            ):
+                with self.subTest(sql=sql):
+                    with self.assertRaises(asyncpg.PostgresError):
+                        await self.conn.fetch(sql)
+            outbox = RenderShadowAlertOutbox(self.conn,scope_sha256=self.scope)
+            await outbox.acquire_singleton()
+            await outbox.observe(code="SHADOW_WITNESS_MISSING",alert=True)
+            pending=await outbox.pending()
+            self.assertEqual(len(pending),1)
+            await outbox.mark_attempt(pending[0].seq)
+            await outbox.mark_delivered(pending[0].seq)
+        finally:
+            await self.conn.execute("RESET ROLE")
+
+        await self.conn.execute("SET ROLE t100_ci_render_writer")
+        try:
+            with self.assertRaises(asyncpg.PostgresError):
+                await self.conn.fetch("SELECT * FROM public.t100_shadow_sentinel_outbox")
+            with self.assertRaises(asyncpg.PostgresError):
+                await self.conn.fetch("SELECT * FROM public.t100_ci_trade_secret")
+        finally:
+            await self.conn.execute("RESET ROLE")
 
     async def test_database_rejects_any_true_trade_authorization(self):
         import asyncpg
