@@ -1942,3 +1942,37 @@ venue-real drill, remote durable alarm delivery, or emergency-close transport
 exists. **G5/G9 remain BLOCKED**: native stop amendment and market-trigger
 fills are unverified. No production authorization, API permission changes,
 exchange POST, main account/Render/database/BOXWAVE modifications were made.
+
+
+## 2026-11-04 independent watchdog liveness sentinel checkpoint
+
+The *primary* GET-only pilot watchdog already has an offline-tested durable
+alarm journal and process entrypoint. The new **independent liveness sentinel**
+adds a second (opt-in) process that reads that primary journal in SQLite
+query-only mode and raises redacted alerts for missing/stale/invalid heartbeat
+records, previous alarm latches and scope mismatch. It has an **entirely
+separate SQLite outbox**, local single-instance lock, binding to the precise
+watched-journal path and SHA-256 scope, and at-least-once notification retry
+after failure/restart. Discord delivery is configured using a sentinel-only
+webhook; no MEXC credentials or order methods are imported. Both the primary
+watchdog and sentinel are still **not deployed**.
+
+Code:
+- `app/t100_pilot_watchdog_sentinel.py`
+- `app/t100_pilot_watchdog_sentinel_cli.py`
+- `tests/test_t100_pilot_watchdog_sentinel.py`
+- `tests/test_t100_pilot_watchdog_sentinel_cli.py`
+- `docs/T100_PILOT_LIVENESS_SENTINEL_20261104.md`
+
+Focused pure-Python unittest and full offline pytest workflows passed on
+`7e5ca552806c7b931be2ff0c744945ef951b01a4` code checkpoint, including
+the new sentinel tests. The sentinel's alarm outbox uses a second SQLite
+file and no cross-host locking. Successful offline tests are not a substitute
+for externally supervised continuous runtime, verified Discord delivery,
+exchange real-world tests or independent release review.
+
+**G6 stays NOT CERTIFIED**: the sentinel itself lacks an external liveness
+supervisor; no running service, actual Discord delivery or emergency-close
+recovery drill has been observed. G5/G9 remain BLOCKED: stop amendment,
+native stop execution and cross/4-slot futures lifecycle are unverified.
+No live entry authorization or production deployment was granted.
