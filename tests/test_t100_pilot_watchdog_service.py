@@ -165,7 +165,11 @@ class ServiceTests(unittest.TestCase):
                 patch("app.t100_pilot_watchdog_service.SignedGetOnlyMexc", FakeMexc),
                 patch("app.t100_pilot_watchdog_service.T100LiveOpsNotifier", FakeNotifier),
             ):
-                await run_service(environ=self.env, cycles=1)
+                result = await run_service(environ=self.env, cycles=1)
+                self.assertEqual(result.status, "WATCH_UNPROTECTED_EXPOSURE_NOW")
+                self.assertTrue(result.alarm_latched)
+                self.assertFalse(result.live_authorization)
+                self.assertFalse(result.mexc_orders_sent)
         asyncio.run(scenario())
         self.assertEqual(len(paths), 10)
         self.assertTrue(all(x.startswith("/api/v1/private/") for x in paths))
