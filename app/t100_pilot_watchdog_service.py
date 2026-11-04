@@ -192,7 +192,19 @@ def main():
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--cycles", type=int, default=1)
     mode.add_argument("--continuous", action="store_true")
+    mode.add_argument("--print-sentinel-scope", action="store_true")
     args = parser.parse_args()
+    if args.print_sentinel_scope:
+        try:
+            config = build_config(os.environ, cycles=1)
+        except ServiceHalted as exc:
+            print("PILOT WATCHDOG HALTED:", str(exc))
+            sys.exit(2)
+        # A hash of the precommitted scope, never a key or account ID.
+        # This is local setup metadata; do not publish it in repository logs.
+        print("PILOT_SENTINEL_SCOPE_SHA256=" + config[5])
+        print("NO NETWORK OR JOURNAL OPERATIONS. NO MEXC ORDERS.")
+        return
     requested_cycles = None if args.continuous else args.cycles
     try:
         outcome = asyncio.run(run_service(cycles=requested_cycles))
