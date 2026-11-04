@@ -1,8 +1,9 @@
 -- T100 Render shadow observation witness: reviewed, CREATE-ONLY schema.
 -- NOT part of 027-030 trade-table migrations; NEVER auto-applied by workers.
+-- Deliberately non-idempotent: any preexisting object stops migration for review.
 -- Run only after backing up/reviewing existing Render Postgres and granting
 -- separate minimal roles. Does not authorize execution or create orders.
-CREATE TABLE IF NOT EXISTS public.t100_shadow_witness (
+CREATE TABLE public.t100_shadow_witness (
     scope_sha256 char(64) PRIMARY KEY
         CHECK (scope_sha256 ~ '^[a-f0-9]{64}$'),
     revision bigint NOT NULL CHECK (revision > 0),
@@ -24,7 +25,7 @@ CREATE TABLE IF NOT EXISTS public.t100_shadow_witness (
 -- Guard against a forgotten WHERE clause or ad-hoc update silently clearing
 -- the observed protection-loss latch. Only operator-reviewed separate
 -- migrations can change a historical alarm state.
-CREATE OR REPLACE FUNCTION public.t100_shadow_keep_kill_latched()
+CREATE FUNCTION public.t100_shadow_keep_kill_latched()
 RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
   IF OLD.kill_latched AND
@@ -41,8 +42,6 @@ BEGIN
 END;
 $$;
 
-DROP TRIGGER IF EXISTS t100_shadow_witness_immutability
-ON public.t100_shadow_witness;
 CREATE TRIGGER t100_shadow_witness_immutability
 BEFORE UPDATE ON public.t100_shadow_witness
 FOR EACH ROW EXECUTE FUNCTION public.t100_shadow_keep_kill_latched();
