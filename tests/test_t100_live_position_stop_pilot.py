@@ -808,3 +808,56 @@ class PilotTests(unittest.TestCase):
             self.assertEqual(self.p._read()["events"][-1]["kind"], "AMBIGUOUS")
         with self.assertRaises(PilotHalted):
             self.p.observe(snapshot([stop()]))
+
+
+    def test_get_close_rejects_entry_deal_drift_across_inventory_bookends(self):
+        """An individually stable signed entry ledger may still change between bookends."""
+        import asyncio
+
+        from app.t100_live_readonly_probe import ReadOnlyMexcProbe
+
+        self.protected()
+        request = self.stage("CLOSE", snapshot([stop()]))
+        current = snapshot([stop()], flat=True)
+        closing = {
+            "orderId": "101",
+            "positionId": "900",
+            "externalOid": request["payload"]["externalOid"],
+            "symbol": "BTC_USDT",
+            "state": 3,
+            "side": 2,
+            "dealVol": "1",
+        }
+        entry_deal_reads = {"count": 0}
+
+        class SignedGet:
+            async def _private_get(self, path, params=None):
+                if path.endswith("/position/open_positions"):
+                    return current["positions"]
+                if path.endswith("/stoporder/open_orders"):
+                    return current["stops"]
+                if path.endswith("/open_order_total_count"):
+                    return current["counts"]
+                if "/order/external/" in path:
+                    if request["payload"]["externalOid"] in path:
+                        return closing
+                    return current["origin"]
+                if "/order/deal_details/100" in path:
+                    entry_deal_reads["count"] += 1
+                    # Same ledger within each two-read snapshot, changed
+                    # only across outer reconciliation bookends.
+                    trade = dict(current["origin_deals"][0])
+                    if entry_deal_reads["count"] > 2:
+                        trade["price"] = "101"
+                    return [trade]
+                if "/order/deal_details/101" in path:
+                    return close_deals()
+                raise AssertionError("unexpected signed GET endpoint")
+
+        with self.assertRaisesRegex(
+            PilotHalted, "^SIGNED_GET_RECONCILIATION_UNVERIFIED$"
+        ):
+            asyncio.run(self.p.observe_get(ReadOnlyMexcProbe(SignedGet())))
+        self.assertEqual(entry_deal_reads["count"], 4)
+        self.assertEqual(self.p.diagnostics()["state"], "CLOSE_UNKNOWN")
+        self.assertFalse(self.p.diagnostics()["live_authorization"])
