@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import signal
 import sqlite3
 import subprocess
 import sys
@@ -152,6 +153,30 @@ class IndependentProcessFailureDrill(unittest.TestCase):
         if not self.receiver.exists():
             return []
         return self.receiver.read_text().splitlines()
+
+    @unittest.skipUnless(hasattr(signal, "SIGSTOP"), "POSIX process suspension only")
+    def test_alive_but_frozen_watchdog_still_triggers_independent_alarm(self):
+        primary = self.start_primary()
+        os.kill(primary.pid, signal.SIGSTOP)
+        try:
+            # A running PID is NOT a heartbeat: freeze the actual worker.
+            time.sleep(1.3)
+            self.assertIsNone(primary.poll())
+            rc, frozen = self.one_sentinel_process("deliver")
+            self.assertEqual(rc, 2)
+            self.assertEqual(frozen["status"], "WATCH_HEARTBEAT_STALE")
+            self.assertTrue(frozen["alarm_latched"])
+            self.assertEqual(self.delivered_events(), ["WATCH_HEARTBEAT_STALE"])
+        finally:
+            # Resume before teardown; if the test fails, avoid a stuck child.
+            if primary.poll() is None:
+                os.kill(primary.pid, signal.SIGCONT)
+        time.sleep(0.2)
+        rc, resumed = self.one_sentinel_process("deliver")
+        self.assertEqual(rc, 2)
+        self.assertEqual(resumed["status"], "WATCH_HEARTBEAT_RECENT_NONAUTHORIZING")
+        self.assertTrue(resumed["alarm_latched"])
+        self.assertEqual(self.delivered_events(), ["WATCH_HEARTBEAT_STALE"])
 
     def test_real_process_death_durable_retry_restart_and_no_duplicate_alarm(self):
         primary = self.start_primary()
