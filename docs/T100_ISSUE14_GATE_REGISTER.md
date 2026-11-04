@@ -2116,3 +2116,53 @@ process recovery, not an installed primary-watchdog failure recovery,
 outage of whole host, verified real emergency close, non-flat native
 stop watchdog or redundant external monitor/channel. G5/G9 remain
 blocked. No new MEXC orders, Render, or BOXWAVE actions.
+
+
+## 2026-11-04 Render durable shadow/independent witness architecture checkpoint
+
+The required production host is **Render**, not the Mac. The existing
+Frankfurt Render background worker `mexc-t100-live-shadow` is running
+the **older read-only** `python -m app.t100_live_shadow_runtime`
+from branch `feature/t100-live-readiness-gates-20261023`, auto-deploy
+OFF. Its latest inspected operational report remains
+`OBSERVING_KILL_LATCHED`, with a position observed, no current TP/SL
+observed and `NATIVE_PROTECTION_LOST`. This must **not** be reset
+by an unreviewed deployment.
+
+On the separate readiness branch, new files provide the next Render
+safety infrastructure without altering that running worker:
+
+- `migrations/031_t100_render_shadow_witness.sql`: **not applied**
+  PostgreSQL witness table, irreversible kill trigger, nonauthorizing
+  schema constraints.
+- `app/t100_render_shadow_witness.py`: strictly bounded Postgres
+  writer/reader, sticky kill, session-wide singleton advisory lock.
+- `app/t100_render_shadow_witness_runtime.py`: optional wrapper
+  restores prior kill *before* first signed MEXC GET and commits each
+  witness heartbeat before treating observation as completed.
+- `app/t100_render_shadow_sentinel.py`: independent Render worker
+  candidate, only SELECTs the witness with a separate least-privilege
+  DB role; redacted Discord alarms, **no MEXC API keys** or order calls.
+- `tests/test_t100_render_shadow_witness.py`: offline fail-closed
+  policy tests. Dedicated witness policy CI passed.
+- `tests/test_t100_render_shadow_postgres_integration.py`:
+  **real PostgreSQL 17 isolated GitHub Actions integration PASS** at
+  `fa483df70f762f63f0874507a0dcfba81b776c76`, workflow
+  `41904292339`. Real DDL, database immutable kill trigger,
+  concurrent-connection advisory locking, stale DB-clock witness, and
+  false authorization constraints were checked against a disposable
+  localhost database (never the user's Render database).
+- `docs/T100_RENDER_SHADOW_DURABLE_WITNESS_PLAN_20261104.md` and
+  `docs/t100-render-shadow-witness-blueprint.example.yaml`: manual-only
+  rollout plan with both workers `autoDeployTrigger: off`.
+
+Read-only Render database inspection via connector was blocked by
+remote IP/TLS allowlist restrictions; **no database mutation was
+attempted** and the network policy was not weakened.
+
+**G6 remains NOT CERTIFIED**: schema not installed, least-privilege
+DB roles not provisioned, no actual Render durable wrapper/sentinel
+running, no verified Render alert receipt/fault drill, no independent
+host or durable sentinel outbox, no emergency close. G5/G9 also blocked;
+none of this authorizes live order entry or changes the existing
+Render shadow worker, trader, Discord settings or BOXWAVE.
