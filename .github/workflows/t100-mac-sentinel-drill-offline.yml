@@ -1,0 +1,32 @@
+name: T100 Mac sentinel drill offline checks
+
+on:
+  pull_request:
+    paths:
+      - 'scripts/t100_pilot_mac_sentinel_restart_drill.py'
+      - 'tests/test_t100_pilot_mac_sentinel_restart_drill.py'
+      - '.github/workflows/t100-mac-sentinel-drill-offline.yml'
+  push:
+    branches:
+      - codex/t100-readiness-issue-14
+
+permissions:
+  contents: read
+
+jobs:
+  test-sentinel-drill:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      T100_EXECUTION_MODE: paper
+      T100_LIVE_ORDER_API_ENABLED: 'false'
+      T100_LIVE_KILL_SWITCH: 'true'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Compile monitor drill (no network)
+        run: python -m py_compile scripts/t100_pilot_mac_sentinel_restart_drill.py
+      - name: Exercise fail-closed policy with simulated launchd calls
+        run: python -m unittest -v tests.test_t100_pilot_mac_sentinel_restart_drill
