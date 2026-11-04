@@ -81,10 +81,22 @@ async def collect_get_snapshot(probe: ReadOnlyMexcProbe, account: str, origin_oi
 
         before = await inventory()
         origin = await probe.raw_order_by_external_oid("BTC_USDT", origin_oid)
+        if type(origin) is not dict:
+            raise PilotHalted("ENTRY_ORIGIN_GET_UNVERIFIED")
+        order_id = identity(origin.get("orderId"))
+        origin_deals = await probe.raw_order_deal_details(order_id)
         after = await inventory()
-        if before != after:
-            raise PilotHalted("INVENTORY_CHANGED")
-        return dict(after, origin=origin, account=account, observed_at=started)
+        origin_bookend = await probe.raw_order_by_external_oid("BTC_USDT", origin_oid)
+        origin_deals_bookend = await probe.raw_order_deal_details(order_id)
+        if (
+            before != after or origin != origin_bookend
+            or origin_deals != origin_deals_bookend
+        ):
+            raise PilotHalted("ENTRY_OR_INVENTORY_CHANGED")
+        return dict(
+            after, origin=origin, origin_deals=origin_deals,
+            account=account, observed_at=started,
+        )
     except Exception:  # noqa: BLE001 - redact all transport exception bodies
         raise PilotHalted("SIGNED_GET_SNAPSHOT_UNVERIFIED") from None
 
@@ -143,22 +155,52 @@ class PositionStopPilot:
 
     @staticmethod
     def _require_recent_entry_fill_for_place(snapshot):
-        """Refuse stale/missing signed order fill time; CLOSE remains available.
+        """Conservative EARLIEST signed fill deadline, not order updateTime alone.
 
-        MEXC order/external updateTime is Unix milliseconds. This is a
-        conservative review gate, not proof of a bounded unprotected interval
-        from the moment of exchange fill to protection activation.
+        MEXC order/deal_details/{orderId} documents per-fill timestamp in
+        Unix milliseconds. A later order update is NOT proof of a fresh fill.
+        No inferred fill time, incomplete volume, duplicated fill or stale
+        timestamp can make the request eligible for position-stop review.
         """
         origin = snapshot.get("origin")
-        timestamp = origin.get("updateTime") if type(origin) is dict else None
-        if type(timestamp) is not int or timestamp <= 0:
+        updated = origin.get("updateTime") if type(origin) is dict else None
+        if type(updated) is not int or updated <= 0:
             raise PilotHalted("ENTRY_FILL_TIMESTAMP_UNVERIFIED")
-        age_ms = int(time.time() * 1000) - timestamp
-        if age_ms < -MAX_EXCHANGE_CLOCK_LEAD_MS:
+        order_id = identity(origin.get("orderId"))
+        deals = snapshot.get("origin_deals")
+        if type(deals) is not list or not 1 <= len(deals) <= 100:
+            raise PilotHalted("ENTRY_FILL_DEALS_UNVERIFIED")
+        seen = set()
+        total = Decimal(0)
+        first_fill_ms = updated
+        for deal in deals:
+            if type(deal) is not dict:
+                raise PilotHalted("ENTRY_FILL_DEAL_SHAPE_UNVERIFIED")
+            deal_id = identity(deal.get("id"))
+            if deal_id in seen:
+                raise PilotHalted("ENTRY_FILL_DUPLICATE_TRADE")
+            seen.add(deal_id)
+            if (
+                identity(deal.get("orderId")) != order_id
+                or deal.get("symbol") != "BTC_USDT"
+                or type(deal.get("side")) is not int
+                or deal["side"] != 3
+            ):
+                raise PilotHalted("ENTRY_FILL_DEAL_IDENTITY_MISMATCH")
+            total += number(deal.get("vol"))
+            number(deal.get("price"))
+            deal_at = deal.get("timestamp")
+            if type(deal_at) is not int or deal_at <= 0:
+                raise PilotHalted("ENTRY_FILL_TIMESTAMP_UNVERIFIED")
+            first_fill_ms = min(first_fill_ms, deal_at)
+        if total != Decimal(1):
+            raise PilotHalted("ENTRY_FILL_VOLUME_UNVERIFIED")
+        now_ms = int(time.time() * 1000)
+        if first_fill_ms > now_ms + MAX_EXCHANGE_CLOCK_LEAD_MS:
             raise PilotHalted("ENTRY_FILL_CLOCK_SKEW_UNVERIFIED")
-        if age_ms > MAX_ENTRY_FILL_AGE_FOR_PLACE_REVIEW_MS:
+        if now_ms - first_fill_ms > MAX_ENTRY_FILL_AGE_FOR_PLACE_REVIEW_MS:
             raise PilotHalted("ENTRY_FILL_TOO_OLD_FOR_NATIVE_PLACE_REVIEW")
-        return timestamp
+        return first_fill_ms
 
     def _read(self):
         return json.loads(self.db.execute("SELECT body FROM pilot WHERE id=1").fetchone()[0])
@@ -383,7 +425,7 @@ class PositionStopPilot:
                 # Diagnostic evidence only. Does NOT authorize a real entry,
                 # and the eventual venue POST/GET may exceed this deadline.
                 recorded_fill_ms = self._require_recent_entry_fill_for_place(snapshot)
-                row["entry_fill_update_ms"] = recorded_fill_ms
+                row["entry_first_fill_ms"] = recorded_fill_ms
                 row["place_review_deadline_ms"] = (
                     recorded_fill_ms + MAX_ENTRY_FILL_AGE_FOR_PLACE_REVIEW_MS
                 )
@@ -501,6 +543,15 @@ class PositionStopPilot:
             if action in ("PLACE_UNKNOWN", "AMEND_UNKNOWN"):
                 stops = self._inventory(snapshot)
                 if action == "PLACE_UNKNOWN":
+                    # Even a perfectly shaped stop observed too late cannot
+                    # certify that this experiment met its review window.
+                    # Preserve UNKNOWN and allow supervised emergency CLOSE.
+                    deadline_ms = row.get("place_review_deadline_ms")
+                    if (
+                        type(deadline_ms) is not int
+                        or int(time.time() * 1000) > deadline_ms
+                    ):
+                        raise PilotHalted("NATIVE_STOP_PROTECTION_GAP_DEADLINE_EXCEEDED")
                     if row.get("placement_identity_conflict"):
                         raise PilotHalted("PLACEMENT_IDENTITY_CONFLICT_REQUIRES_INVESTIGATION")
                     acknowledged_id = row.get("acknowledged_stop_id")
