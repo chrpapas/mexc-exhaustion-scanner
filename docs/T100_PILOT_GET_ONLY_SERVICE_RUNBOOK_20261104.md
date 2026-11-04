@@ -61,6 +61,9 @@ From the repository root, after the reviewed dependencies and private config
 are available:
 
 ```bash
+# Produce pinned sentinel scope hash locally; does not make any network call:
+python3 -m app.t100_pilot_watchdog_service --print-sentinel-scope
+# One explicit GET-only observation with durable alarm journal:
 python3 -m app.t100_pilot_watchdog_service --cycles 1
 # For a separate operator-supervised process only:
 python3 -m app.t100_pilot_watchdog_service --continuous
@@ -73,9 +76,11 @@ python3 -m app.t100_pilot_watchdog_heartbeat \
 
 The account-scope fingerprint and the **journal scope hash** are different:
 the latter binds key-hash, entry-origin, stop ID, reviewed max stop price,
-symbol and one-contract scope. It is computed internally and is not printed.
-A reviewed deployment must provide the exact independently calculated
-journal scope hash to the heartbeat sentinel; do not skip or guess it.
+symbol and one-contract scope. It is computed internally and is printed **only on explicit invocation**
+of the local-only `--print-sentinel-scope` diagnostic. That command makes
+no network request, creates no journal, and prints no raw credentials.
+A reviewed deployment must pin the exact returned journal scope hash
+independently to the heartbeat sentinel; do not skip or guess it.
 
 `--cycles 1` exits **2** if a latched alarm or undelivered notification
 exists; it exits 0 otherwise. It does not clear historical alarms. The
