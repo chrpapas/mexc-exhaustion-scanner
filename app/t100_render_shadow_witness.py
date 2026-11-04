@@ -112,6 +112,21 @@ class RenderShadowWitness:
         self._conn = conn
         self._scope = scope_sha256
 
+    async def acquire_singleton(self) -> None:
+        """Hold a PostgreSQL *session* advisory lock until conn.close().
+
+        Fail closed instead of having two Render instances interleave
+        healthy heartbeats under one scope. It is DB-global for T100.
+        """
+        try:
+            result = await self._conn.fetchval(
+                "SELECT pg_try_advisory_lock(110031, 100225)"
+            )
+        except Exception:
+            raise ShadowWitnessFailure("SHADOW_WITNESS_LEASE_FAILED") from None
+        if result is not True:
+            raise ShadowWitnessFailure("SHADOW_WITNESS_WRITER_ALREADY_RUNNING")
+
     async def restore(self) -> ShadowWitnessRecord | None:
         try:
             row = await self._conn.fetchrow(_WITNESS_READ, self._scope)
