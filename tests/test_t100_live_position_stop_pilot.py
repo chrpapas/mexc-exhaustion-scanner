@@ -403,3 +403,26 @@ class PilotTests(unittest.TestCase):
         self.p.db.execute("DROP TRIGGER fail_write")
         self.p.observe(snapshot([stop()]), stop_id="99")
         self.assertEqual(self.p.diagnostics()["state"], "PROTECTED_OBSERVED")
+
+    def test_missing_existing_journal_record_cannot_rearm(self):
+        self.stage("PLACE", snapshot(), "110")
+        self.p.db.execute("DELETE FROM pilot")
+        with self.assertRaisesRegex(PilotHalted, "NO_REARM"):
+            self.open()
+        self.assertEqual(self.p.db.execute("SELECT count(*) FROM pilot").fetchone()[0], 0)
+
+    def test_existing_empty_file_is_not_a_new_experiment(self):
+        empty = Path(self.temp.name) / "empty.sqlite"
+        empty.touch()
+        with self.assertRaisesRegex(PilotHalted, "NO_REARM"):
+            PositionStopPilot(
+                empty, account=ACCOUNT, origin_oid="pilot-origin", position_id="900", quantity="1"
+            )
+
+    def test_symlink_cannot_redirect_journal(self):
+        link = Path(self.temp.name) / "link.sqlite"
+        link.symlink_to(self.path)
+        with self.assertRaisesRegex(PilotHalted, "SYMLINK"):
+            PositionStopPilot(
+                link, account=ACCOUNT, origin_oid="pilot-origin", position_id="900", quantity="1"
+            )

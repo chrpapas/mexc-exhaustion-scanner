@@ -1621,3 +1621,36 @@ Ruff, project verification and diff checks passed. GitHub CI for this local
 checkpoint is unverified. No exchange POST, journal reset, production change
 or new credential access occurred. Contract, gap and hard-notional blockers
 remain open; first-POST approval remains required.
+
+## Published development checkpoint — verified GitHub CI 2026-11-04
+
+Published `9f2c184da6db36d861d417ec8d637885db0e6ef0` through the connected
+GitHub integration after terminal push lacked HTTPS authentication. Its tree
+`62932097de6b37a738a9e6e527f1909f5d9d0bcd` exactly equals local `a835a9a9`.
+Publication used a non-force branch-head lease; no main merge or deploy occurred.
+
+All seven workflow runs completed successfully:
+- Isolated PostgreSQL PR: https://github.com/chrpapas/mexc-exhaustion-scanner/actions/runs/41793723502
+- Isolated PostgreSQL push: https://github.com/chrpapas/mexc-exhaustion-scanner/actions/runs/41793716547
+- Offline safety/full suite PR: https://github.com/chrpapas/mexc-exhaustion-scanner/actions/runs/41793723458
+- Offline safety/full suite push: https://github.com/chrpapas/mexc-exhaustion-scanner/actions/runs/41793716470
+- Service split: https://github.com/chrpapas/mexc-exhaustion-scanner/actions/runs/41793723435
+- Promotion: https://github.com/chrpapas/mexc-exhaustion-scanner/actions/runs/41793723475
+- Dashboard: https://github.com/chrpapas/mexc-exhaustion-scanner/actions/runs/41793723423
+
+The development branch now runs full offline pytest and disposable PostgreSQL
+integration on pushes. This supersedes the prior unverified CI status for the
+published tree, not native-stop venue certification or full-strategy approval.
+
+## Journal rearm review — 2026-11-04
+
+Found and fixed implicit reinitialization of an existing SQLite journal with
+its singleton state row missing. Existing empty/damaged-state journals now
+halt with NO_REARM instead of inserting NEW. Symlink journal paths are rejected.
+Three regressions cover deleted state after staging, an existing empty file and
+a symlink. Whole-file deletion/replacement remains outside the local trusted
+journal threat model and is not made safe by these checks.
+
+Validation: 2,199 offline tests and 920 subtests passed; two guarded PostgreSQL
+modules excluded. Focused pilot: 23 tests and 21 subtests passed. Ruff and diff
+checks passed. No exchange mutation or production change occurred.

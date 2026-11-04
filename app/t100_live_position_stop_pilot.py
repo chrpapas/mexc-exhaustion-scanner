@@ -13,6 +13,7 @@ import sqlite3
 import time
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
+from pathlib import Path
 
 from app.t100_live_native_stop_execution_audit import assess_native_short_market_stop_row
 from app.t100_live_readonly_probe import ReadOnlyMexcProbe
@@ -93,6 +94,10 @@ class PositionStopPilot:
     def __init__(self, path, *, account, origin_oid, position_id, quantity):
         if str(path) in ("", ":memory:"):
             raise PilotHalted("DURABLE_JOURNAL_REQUIRED")
+        journal_path = Path(path)
+        if journal_path.is_symlink():
+            raise PilotHalted("JOURNAL_SYMLINK_REJECTED")
+        existing_journal = journal_path.exists()
         if not re.fullmatch(r"[a-f0-9]{64}", account) or not re.fullmatch(r"[A-Za-z0-9_-]{1,32}", origin_oid):
             raise PilotHalted("PILOT_SCOPE_INVALID")
         if number(quantity) != Decimal(1):
@@ -113,6 +118,8 @@ class PositionStopPilot:
         try:
             row = self.db.execute("SELECT scope FROM pilot WHERE id=1").fetchone()
             if row is None:
+                if existing_journal:
+                    raise PilotHalted("EXISTING_JOURNAL_STATE_MISSING_NO_REARM")
                 self.db.execute(
                     "INSERT INTO pilot VALUES(1,?,?)",
                     (digest(self.scope), json.dumps({"state": "NEW", "revision": 0, "events": []})),
