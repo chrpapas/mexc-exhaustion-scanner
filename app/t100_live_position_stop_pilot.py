@@ -368,6 +368,37 @@ class PositionStopPilot:
             ):
                 raise PilotHalted("TERMINAL_STOP_VOLUME_DRIFT")
 
+    @staticmethod
+    def _require_nontriggering_amendment_market(snapshot, price):
+        """Review-only market cushion, not a venue guarantee or live permit.
+
+        This checks caller-supplied last-price evidence for the configured
+        latest-price trigger. A future production adapter must independently
+        acquire, bind and repeat public price/spec observations; this model
+        cannot authenticate the supplied market witness.
+        """
+        witness = snapshot.get("market")
+        if type(witness) is not dict or witness.get("symbol") != "BTC_USDT":
+            raise PilotHalted("AMEND_MARKET_WITNESS_MISSING")
+        at_ms = witness.get("observed_at_ms")
+        now_ms = int(time.time() * 1000)
+        if (
+            type(at_ms) is not int
+            or not 0 <= now_ms - at_ms <= 2000
+        ):
+            raise PilotHalted("AMEND_MARKET_WITNESS_STALE_OR_FUTURE")
+        last_price = number(witness.get("lastPrice"))
+        tick = number(witness.get("tickSize"))
+        new_price = number(price)
+        if (new_price / tick) != (new_price / tick).to_integral_value():
+            raise PilotHalted("AMEND_STOP_NOT_ON_TICK")
+        # Conservative review-only threshold. 50 bps OR 5 ticks,
+        # whichever is larger. Neither threshold is a venue execution
+        # guarantee, and this MUST NOT be promoted to live permission.
+        minimum_distance = max(last_price * Decimal("0.005"), tick * 5)
+        if new_price <= last_price + minimum_distance:
+            raise PilotHalted("AMEND_STOP_TOO_CLOSE_TO_LATEST_TRIGGER")
+
     def proposal(self, action, snapshot, *, price=None):
         row = self._read()
         stops = self._inventory(snapshot, flat=action == "CANCEL")
@@ -393,6 +424,7 @@ class PositionStopPilot:
             self._stop(stops, row, row["price"])
             if number(price) >= number(row["price"]):
                 raise PilotHalted("STOP_NOT_TIGHTER")
+            self._require_nontriggering_amendment_market(snapshot, price)
             payload = {
                 "stopPlanOrderId": row["stop_id"],
                 "stopLossPrice": str(number(price)),
