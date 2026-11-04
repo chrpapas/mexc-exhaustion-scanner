@@ -2087,3 +2087,32 @@ but **G6 is still NOT CERTIFIED**: no real installed-agent fault injection,
 no independent-host liveness or notification redundancy, no emergency
 close or nonflat native-stop protection demonstration. G5/G9 remain
 blocked. No new exchange orders or deployment change.
+
+
+## 2026-11-04 real Mac sentinel SIGKILL restart checkpoint
+
+Operator supplied a real Mac launchd failure drill from
+`scripts/t100_pilot_mac_sentinel_restart_drill.py`. A scoped
+`launchctl kill SIGKILL` targeted **only the sentinel LaunchAgent**,
+with preflight flat/healthy statuses and exact installed service checks.
+macOS automatically relaunched it with a new process and fresh journal:
+
+- Pre-drill watcher revision **390**, sentinel revision **1245**.
+- After sentinel termination and automatic recovery: watcher **390**,
+  sentinel **1246**, with `ALARM_LATCHES=NONE_BEFORE_OR_AFTER`.
+- Follow-up status: `WATCH_AGENT=LOADED`,
+  `WATCH_STATE=PILOT_FLAT_CONFIRMED`, age **14 seconds**;
+  `SENTINEL_AGENT=LOADED`,
+  `SENTINEL_STATE=WATCHER_RECENT_FLAT_NONAUTHORIZING`, age **7 seconds**.
+  No undelivered notifications.
+- `MEXC_REQUESTS_BY_DRILL=ZERO`, `MEXC_MUTATIONS=ZERO`,
+  `LIVE_AUTHORIZATION=FALSE`.
+
+Operator report recorded in
+`docs/T100_MAC_SENTINEL_RESTART_DRILL_20261104.md`.
+
+**G6 strengthened but NOT CERTIFIED:** this is actual Mac sentinel-only
+process recovery, not an installed primary-watchdog failure recovery,
+outage of whole host, verified real emergency close, non-flat native
+stop watchdog or redundant external monitor/channel. G5/G9 remain
+blocked. No new MEXC orders, Render, or BOXWAVE actions.
