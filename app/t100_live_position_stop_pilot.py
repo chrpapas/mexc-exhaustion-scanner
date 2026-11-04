@@ -662,7 +662,10 @@ class PositionStopPilot:
                     raise PilotHalted("STOP_HISTORY_IDENTITY_UNVERIFIED")
                 terminal = matches[0]
             last = await collect_get_snapshot(probe, self.scope["account"], self.scope["origin_oid"])
-            if any(first[k] != last[k] for k in ("positions", "stops", "counts", "origin")):
+            if any(
+                first[k] != last[k]
+                for k in ("positions", "stops", "counts", "origin", "origin_deals")
+            ):
                 raise PilotHalted("RECONCILIATION_INVENTORY_CHANGED")
             if row["state"] == "CLOSE_UNKNOWN":
                 # Independent second signed GET: both the order and its
