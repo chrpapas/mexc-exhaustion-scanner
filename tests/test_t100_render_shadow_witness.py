@@ -113,9 +113,18 @@ def writer_env(**kwargs):
         T100_RENDER_SHADOW_WITNESS_ENABLED="true",
         T100_RENDER_SHADOW_SCOPE_SHA256=SCOPE,
         T100_RENDER_SHADOW_WITNESS_DATABASE_URL="postgres://not-connected-example",
+        T100_RENDER_SHADOW_EXPECTED_HISTORICAL_KILL_REASON="NONE",
     )
     env.update(kwargs)
     return env
+
+
+def healthy_witness():
+    return dict(
+        scope_sha256=SCOPE, revision=12, run_id=RUN2,
+        cycle_index=4, state="OBSERVING_NON_AUTHORIZING",
+        kill_latched=False, kill_reason=None, age_seconds=2.0,
+    )
 
 
 def sentinel_env(**kwargs):
@@ -222,7 +231,7 @@ class WitnessRuntimeTests(unittest.IsolatedAsyncioTestCase):
                     runtime_config(env)
 
     async def test_healthy_one_cycle_commit_non_authorizing(self):
-        db=FakeConn()
+        db=FakeConn(existing=healthy_witness())
         rt=FakeRuntime()
         out=await run_witness(
             environ=writer_env(),max_cycles=1,
@@ -243,7 +252,7 @@ class WitnessRuntimeTests(unittest.IsolatedAsyncioTestCase):
         ))
         rt=FakeRuntime(run_id=RUN2)
         saved=await run_witness(
-            environ=writer_env(),max_cycles=1,
+            environ=writer_env(T100_RENDER_SHADOW_EXPECTED_HISTORICAL_KILL_REASON="NATIVE_PROTECTION_LOST"),max_cycles=1,
             runtime_factory=lambda:rt,connect=lambda dsn:_return(db),
         )
         self.assertEqual(rt.cycles,1)
@@ -254,7 +263,7 @@ class WitnessRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(rt.notified,1)
 
     async def test_cycle_exception_durably_trips_first(self):
-        db=FakeConn()
+        db=FakeConn(existing=healthy_witness())
         rt=FakeRuntime(fail=True)
         with self.assertRaisesRegex(WitnessRuntimeHalted,"RENDER_SHADOW_OBSERVATION_FAILED"):
             await run_witness(
@@ -298,6 +307,51 @@ class WitnessRuntimeTests(unittest.IsolatedAsyncioTestCase):
             )
         self.assertEqual(rt.cycles,0)
         self.assertTrue(db.closed)
+
+    async def test_missing_database_history_refuses_first_exchange_cycle(self):
+        db=FakeConn()
+        rt=FakeRuntime()
+        with self.assertRaisesRegex(WitnessRuntimeHalted,"PRIOR_WITNESS_REQUIRED"):
+            await run_witness(
+                environ=writer_env(),max_cycles=1,
+                runtime_factory=lambda:rt,connect=lambda dsn:_return(db),
+            )
+        self.assertEqual(rt.cycles,0)
+        self.assertTrue(db.closed)
+
+    async def test_preexisting_kill_mismatch_blocks_before_exchange(self):
+        previous=healthy_witness()
+        previous.update(
+            state="OBSERVING_KILL_LATCHED",
+            kill_latched=True,kill_reason="READ_FAILURE",
+        )
+        db=FakeConn(existing=previous)
+        rt=FakeRuntime()
+        with self.assertRaisesRegex(WitnessRuntimeHalted,"HISTORICAL_KILL_MISMATCH"):
+            await run_witness(
+                environ=writer_env(T100_RENDER_SHADOW_EXPECTED_HISTORICAL_KILL_REASON="NATIVE_PROTECTION_LOST"),
+                max_cycles=1,runtime_factory=lambda:rt,
+                connect=lambda dsn:_return(db),
+            )
+        self.assertEqual(rt.cycles,0)
+        self.assertTrue(db.closed)
+
+    async def test_expected_active_kill_cannot_be_seeded_as_healthy(self):
+        db=FakeConn(existing=healthy_witness())
+        rt=FakeRuntime()
+        with self.assertRaisesRegex(WitnessRuntimeHalted,"HISTORICAL_KILL_MISMATCH"):
+            await run_witness(
+                environ=writer_env(T100_RENDER_SHADOW_EXPECTED_HISTORICAL_KILL_REASON="NATIVE_PROTECTION_LOST"),
+                max_cycles=1,runtime_factory=lambda:rt,
+                connect=lambda dsn:_return(db),
+            )
+        self.assertEqual(rt.cycles,0)
+
+    async def test_missing_historical_reason_pin_prevents_connect(self):
+        env=writer_env()
+        env.pop("T100_RENDER_SHADOW_EXPECTED_HISTORICAL_KILL_REASON")
+        with self.assertRaisesRegex(WitnessRuntimeHalted,"HISTORICAL_KILL_PIN_REQUIRED"):
+            runtime_config(env)
 
     async def test_old_run_id_reuse_is_rejected_before_cycle(self):
         db=FakeConn(existing=dict(
