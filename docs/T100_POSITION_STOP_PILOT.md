@@ -7,22 +7,29 @@ unchanged. Its request proposals are review artifacts, not executable permits.
 
 ## Evidence boundary
 
-The operator-reported $50 subaccount experiment established authenticated access,
-one accepted minimum BTC isolated 1x short and its close, followed by observed
-flat inventory. Its embedded stop was order-attached, missing `stopLossType`,
-and eventually canceled without triggering. None certifies position-native
-placement, market-stop execution, amendment or complete deal-history recovery.
-The new code rejects this shape as protection. No new venue evidence was obtained.
+An EARLIER experiment returned an order-attached stop without explicit
+`stopLossType`; the offline pilot correctly rejects that as position-native
+market protection. A SUBSEQUENT real BTC_USDT isolated-1x, one-contract test
+on 2026-11-04 used `volType=2` and observed a live, position-native,
+whole-position MARKET SL by signed GET. Entry and close orders each filled;
+two GET snapshots found the account flat. A finished-stop history read later
+found one matching canceled, untriggered whole-position stop, with createTime
+one second after the first fill. The active protection timestamp, actual
+stop-trigger execution, amendment, and bounded recovery remain UNVERIFIED.
+See `docs/T100_REAL_MEXC_PILOT_EVIDENCE_20261104.md` for redacted
+operator-reported details and evidence limitations.
 
 The latest offline candidate now selects `volType=2` (MEXC's documented
 entire-position TP/SL) with an explicit one-contract request and requires
 that same mode plus `SAME` in current authenticated GET. The earlier
 `volType=1` represented a *partial* position TP/SL. This fixes the mode
-mismatch but **does not certify exchange acceptance**: the documented
-strict-less-than quantity phrase conflicts with error 5004's
-greater-than rejection, and the market stop limit-price parameters
-are still inconsistent. A real one-shot experiment is required to
-learn MEXC's accepted payload and response. Never reduce the stop
+mismatch; **the subsequent one-contract pilot observed successful exchange
+acceptance and signed GET evidence of the full-position native MARKET stop**.
+This is a scoped venue observation, not general exchange contract certification.
+The documented strict-less-than quantity phrase conflicts with error 5004's
+greater-than rejection, and the market stop limit-price parameters remain
+inconsistent in the written API specification. Do not extrapolate the pilot
+to different contracts, volumes, margin modes or times. Never reduce the stop
 below full position size or interpret a rejection as protection.
 
 ## Implemented lifecycle
@@ -34,6 +41,10 @@ coherent account-wide order counts and fresh timestamps. They cannot adopt an
 unrelated manual position. The GET-only adapter consumes `ReadOnlyMexcProbe`
 using the caller's already authenticated client; it never accesses credentials.
 Inventory is bookended around origin, close-order and bounded history reads.
+Cancellation proposal and final terminal-history reconciliation also recheck
+that the owned stop remained a whole-position, non-reversing, latest-trigger
+MARKET SL at the expected stop price. Semantic drift blocks clean cancellation.
+
 Bookends are non-atomic observations, not exchange atomicity certification.
 
 Placement proposes `/api/v1/private/stoporder/place` with position identity,
@@ -86,7 +97,7 @@ time-to-protection guarantee or an automatic close watchdog.
 
 ## Official contract research and unresolved points
 
-- [Position placement](https://www.mexc.com/api-docs/futures/account-and-trading-endpoints/place-tpsl-order-by-position): documents market SL and positional quantity; may reuse an existing same-price ID and asynchronously change volume. The response prose and example differ. Limit-price fields are marked required despite market types. The candidate deliberately leaves those ambiguous fields unresolved; payload acceptance is unverified.
+- [Position placement](https://www.mexc.com/api-docs/futures/account-and-trading-endpoints/place-tpsl-order-by-position): documents market SL and positional quantity; may reuse an existing same-price ID and asynchronously change volume. The response prose and example differ. Limit-price fields are marked required despite market types. The one-contract isolated BTC pilot did observe placement acceptance; written parameter/response ambiguities and broader compatibility remain unresolved.
 - [Current stop rows](https://www.mexc.com/api-docs/futures/account-and-trading-endpoints/get-current-take-profitstop-loss-order-list): distinguishes position origin, quantity modes, trigger/state and SL type. Missing fields remain blockers; the sample is not a default-value guarantee.
 - [Planned stop amendment](https://www.mexc.com/api-docs/futures/account-and-trading-endpoints/modify-tpsl-prices-on-a-tpsl-planned-order): documents `stopPlanOrderId`; actual position-stop ID mapping and retained market semantics need venue observation.
 - [Stop cancellation](https://www.mexc.com/api-docs/futures/account-and-trading-endpoints/cancel-tpsl-planned-orders): documents a list of stop IDs; exact accepted wire envelope and cleanup timing remain unverified.
@@ -175,15 +186,16 @@ observed one-contract position, zero, or omit `vol`; a nonzero mismatched,
 negative or malformed volume fails closed. Position identity, SHORT side,
 market-stop type and current state remain mandatory.
 
-**This resolves the mode mismatch in our request; it does NOT establish
-acceptance by the venue.** The placement page still says total stop quantity
-must be strictly less than closable quantity while the 5004 exchange error
-description rejects quantity *greater than* closable quantity. Equality
-remains undocumented/untested; never reduce stop quantity to work around
-a rejection. The mandatory limit-order price fields even for market type
-are also unresolved. This candidate has no POST transport and is
-review-only; actual MEXC acceptance and effective protection remain
-unverified, as does the uncovered entry-to-native-stop interval.
+**This resolves the mode mismatch, and one real one-contract isolated BTC
+pilot observed acceptance and active GET semantics.** It does NOT certify
+future orders, all contracts, exchange stop fills or a protection-time bound.
+The placement documentation still says total stop quantity must be strictly
+less than closable quantity, while error 5004 rejects quantities greater
+than closable quantity; the tested equality was accepted but the written
+specification remains contradictory. Market-stop limit-price documentation
+also remains ambiguous. This particular offline candidate has no POST
+transport and remains review-only. The unprotected entry-to-active-stop
+interval, market-trigger execution, amendment and recovery remain unverified.
 
 References:
 https://www.mexc.io/api-docs/futures/account-and-trading-endpoints/place-order
