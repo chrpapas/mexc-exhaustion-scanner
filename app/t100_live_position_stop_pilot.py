@@ -246,12 +246,13 @@ class PositionStopPilot:
         if len(stops) != 1:
             raise PilotHalted("NATIVE_STOP_NOT_UNIQUE")
         stop = stops[0]
-        # This experiment requested fixed quantity/SAME semantics. Do not
-        # silently accept a different volume mode after placement or amendment,
-        # even if the generic audit currently computes equal coverage.
+        # MEXC documents volType=2 as ENTIRE POSITION; volType=1 is
+        # partial-position TP/SL. Require position mode on every subsequent
+        # GET, including after an amendment. NEVER silently downgrade to a
+        # partial 1-contract stop even if it currently matches holdVol=1.
         if (
             type(stop.get("volType")) is not int
-            or stop["volType"] != 1
+            or stop["volType"] != 2
             or stop.get("profitLossVolType") != "SAME"
         ):
             raise PilotHalted("STOP_QUANTITY_MODE_CHANGED")
@@ -266,8 +267,24 @@ class PositionStopPilot:
         )
         if not audit.active_native_full_volume_market_sl_observed:
             raise PilotHalted(audit.status)
-        if number(stop.get("vol")) != number(self.scope["quantity"]):
-            raise PilotHalted("EXPLICIT_QUANTITY_REQUIRED")
+        # The shared interpreter permits a whole-position TP/SL GET to
+        # report zero/omitted vol. An explicit positive reported volume,
+        # however, must agree with the owned position size. Reject negative,
+        # non-finite, boolean, and oversized values.
+        reported = stop.get("vol")
+        if reported is not None:
+            if type(reported) is bool:
+                raise PilotHalted("WHOLE_STOP_REPORTED_VOLUME_INVALID")
+            try:
+                reported_qty = Decimal(str(reported))
+            except (InvalidOperation, TypeError, ValueError):
+                raise PilotHalted("WHOLE_STOP_REPORTED_VOLUME_INVALID") from None
+            if (
+                not reported_qty.is_finite()
+                or reported_qty < 0
+                or (reported_qty > 0 and reported_qty != number(self.scope["quantity"]))
+            ):
+                raise PilotHalted("WHOLE_STOP_REPORTED_VOLUME_CONFLICT")
         return stop
 
     def proposal(self, action, snapshot, *, price=None):
@@ -283,7 +300,7 @@ class PositionStopPilot:
                 "stopLossPrice": str(number(price)),
                 "lossTrend": 1,
                 "profitTrend": 1,
-                "volType": 1,
+                "volType": 2,
                 "profitLossVolType": "SAME",
                 "stopLossReverse": 2,
                 "stopLossType": 0,
