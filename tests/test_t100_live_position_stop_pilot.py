@@ -13,6 +13,12 @@ def snapshot(stops=None, flat=False):
     return {
         "account": ACCOUNT,
         "observed_at": time.time(),
+        "market": {
+            "symbol": "BTC_USDT",
+            "lastPrice": "100",
+            "tickSize": "0.1",
+            "observed_at_ms": int(time.time() * 1000),
+        },
         "positions": []
         if flat
         else [
@@ -965,3 +971,46 @@ class PilotTests(unittest.TestCase):
             self.assertEqual(self.p.diagnostics()["state"], "FLAT_OBSERVED")
             self.assertFalse(self.p.diagnostics()["stop_execution_certified"])
             self.assertFalse(self.p.diagnostics()["live_authorization"])
+
+
+    def test_amendment_requires_fresh_nontriggering_tick_aligned_market(self):
+        """A tighter stop must still be above latest trigger by a cushion."""
+        self.protected()
+        base = snapshot([stop()])
+        valid = self.p.proposal("AMEND", base, price="108")
+        self.assertEqual(valid["action"], "AMEND")
+        cases = [
+            ("missing", None, "AMEND_MARKET_WITNESS_MISSING"),
+            ("wrong_symbol", dict(base["market"], symbol="ETH_USDT"), "AMEND_MARKET_WITNESS_MISSING"),
+            ("stale", dict(base["market"], observed_at_ms=int(time.time()*1000)-5000), "AMEND_MARKET_WITNESS_STALE"),
+            ("future", dict(base["market"], observed_at_ms=int(time.time()*1000)+5000), "AMEND_MARKET_WITNESS_STALE"),
+            ("bool_timestamp", dict(base["market"], observed_at_ms=True), "AMEND_MARKET_WITNESS_STALE"),
+            ("at_market", dict(base["market"], lastPrice="108"), "AMEND_STOP_TOO_CLOSE"),
+            ("near_market", dict(base["market"], lastPrice="107.8"), "AMEND_STOP_TOO_CLOSE"),
+            ("bad_tick", dict(base["market"], tickSize="0"), "INVALID_NUMBER"),
+            ("bad_last", dict(base["market"], lastPrice="NaN"), "INVALID_NUMBER"),
+        ]
+        for label, witness, expected in cases:
+            case = snapshot([stop()])
+            if witness is None:
+                case.pop("market")
+            else:
+                case["market"] = witness
+            with self.subTest(label=label), self.assertRaisesRegex(PilotHalted, expected):
+                self.p.proposal("AMEND", case, price="108")
+        with self.assertRaisesRegex(PilotHalted, "AMEND_STOP_NOT_ON_TICK"):
+            self.p.proposal("AMEND", snapshot([stop()]), price="108.03")
+        self.assertEqual(self.p.diagnostics()["state"], "PROTECTED_OBSERVED")
+        self.assertFalse(self.p.diagnostics()["live_authorization"])
+
+    def test_amendment_stage_rechecks_market_instead_of_relying_on_proposal(self):
+        self.protected()
+        old = snapshot([stop()])
+        request = self.p.proposal("AMEND", old, price="108")
+        changed = snapshot([stop()])
+        changed["market"]["lastPrice"] = "108"
+        approval = Approval(ACCOUNT, digest(request), time.time() + 30,
+                            "REVIEW_ONLY_POSITION_STOP_PILOT")
+        with self.assertRaisesRegex(PilotHalted, "AMEND_STOP_TOO_CLOSE"):
+            self.p.stage(request, changed, approval)
+        self.assertEqual(self.p.diagnostics()["state"], "PROTECTED_OBSERVED")
