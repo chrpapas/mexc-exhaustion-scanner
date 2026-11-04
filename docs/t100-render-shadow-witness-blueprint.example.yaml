@@ -1,4 +1,7 @@
 # REVIEW-ONLY example; NOT the root render.yaml; DO NOT auto-sync.
+# Requires migration 031 AND 032 plus a separate sentinel DB account
+# with SELECT on witness and narrow SELECT/INSERT/UPDATE on sentinel outbox.
+# No auto-deploy, no live orders, never reuse live-trader DB credentials.
 # New independent workers are deliberately disabled for auto-deploy.
 # The live-shadow worker currently deployed on Render stays unchanged.
 services:
@@ -43,7 +46,7 @@ services:
     repo: https://github.com/chrpapas/mexc-exhaustion-scanner
     branch: codex/t100-readiness-issue-14
     buildCommand: pip install .
-    startCommand: python -m app.t100_render_shadow_sentinel
+    startCommand: python -m app.t100_render_shadow_sentinel_durable
     autoDeployTrigger: off
     numInstances: 1
     envVars:
@@ -56,6 +59,8 @@ services:
       - key: T100_LIVE_KILL_SWITCH
         value: "true"
       - key: T100_RENDER_SENTINEL_ENABLED
+        value: "true"
+      - key: T100_RENDER_SENTINEL_DURABLE_OUTBOX_ENABLED
         value: "true"
       - key: T100_RENDER_SHADOW_SCOPE_SHA256
         sync: false
