@@ -1671,3 +1671,30 @@ freed storage, a temporary-file write succeeded with about 6 GiB available.
 Fresh full offline run: 2,202 passed, 920 subtests passed, excluding the two
 guarded PostgreSQL CI modules. Focused pilot: 26 tests, 21 subtests passed.
 Ruff, project verification and diff checks passed. No exchange POST was sent.
+
+### 2026-11-04 — Bind market CLOSE acknowledgement identity to signed GET
+
+After placement-ack identity hardening in `7eab6dc`, independent review
+found that `CLOSE_UNKNOWN` was still willing to reconcile a GET order
+with an ID different from an already acknowledged `order/create` ID,
+provided externalOid and other fields matched.
+
+The offline-only `PositionStopPilot` now persists a valid positive
+`data.orderId` from a close-order `success=true, code=0`
+acknowledgement (MEXC current `/private/order/create` response shape).
+It never stores raw response bodies, timestamp or exchange messages.
+A conflicting second acknowledgement latches investigation across restart.
+An exact externalOid/filled-volume GET cannot mark `FLAT_OBSERVED`
+if its order ID differs from the persisted close ACK; malformed ACK
+data stays ambiguous and is not guessed.
+
+Added regressions for wrong GET order after restart, conflicting
+close acknowledgements and malformed/private response objects.
+This is **offline request/GET reconciliation only**:
+no transport, live order or stop execution authorization,
+no Keychain access, no account mutations, no Render deployment.
+The broader unprotected entry-to-native-SL gap and the documented
+full-stop quantity constraint remain unresolved.
+
+Official close-entry envelope:
+https://www.mexc.com/api-docs/futures/account-and-trading-endpoints/place-order
