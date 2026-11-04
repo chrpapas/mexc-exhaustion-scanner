@@ -9,6 +9,7 @@ Render's ephemeral files. A successful write is NOT trade authorization.
 from __future__ import annotations
 
 import re
+import ssl
 from dataclasses import dataclass
 from typing import Any
 
@@ -122,7 +123,7 @@ class RenderShadowWitness:
             result = await self._conn.fetchval(
                 "SELECT pg_try_advisory_lock(110031, 100225)"
             )
-        except Exception:
+        except Exception:  # noqa: BLE001 - redact database connection and query details
             raise ShadowWitnessFailure("SHADOW_WITNESS_LEASE_FAILED") from None
         if result is not True:
             raise ShadowWitnessFailure("SHADOW_WITNESS_WRITER_ALREADY_RUNNING")
@@ -130,7 +131,7 @@ class RenderShadowWitness:
     async def restore(self) -> ShadowWitnessRecord | None:
         try:
             row = await self._conn.fetchrow(_WITNESS_READ, self._scope)
-        except Exception:
+        except Exception:  # noqa: BLE001 - redact database connection and query details
             raise ShadowWitnessFailure("SHADOW_WITNESS_READ_FAILED") from None
         if row is None:
             return None  # never promotes this to a healthy observation
@@ -157,7 +158,7 @@ class RenderShadowWitness:
                 _WITNESS_WRITE, self._scope, run_id, cycle_index,
                 state, kill_latched, kill_reason,
             )
-        except Exception:
+        except Exception:  # noqa: BLE001 - redact database connection and query details
             raise ShadowWitnessFailure("SHADOW_WITNESS_WRITE_FAILED") from None
         if row is None:
             raise ShadowWitnessFailure("SHADOW_WITNESS_WRITE_NOT_ACKNOWLEDGED")
@@ -167,11 +168,13 @@ class RenderShadowWitness:
 async def connect_render_witness(dsn: str):
     """A single bounded connection. No pool of unnecessary open DB sessions."""
     if type(dsn) is not str or not dsn or not (
-        dsn.startswith("postgresql://") or dsn.startswith("postgres://")
+        dsn.startswith(("postgresql://", "postgres://"))
     ):
         raise ShadowWitnessFailure("SHADOW_WITNESS_DSN_REQUIRED")
     import asyncpg
     try:
-        return await asyncpg.connect(dsn=dsn, timeout=5, command_timeout=6)
-    except Exception:
+        return await asyncpg.connect(
+            dsn=dsn, ssl=ssl.create_default_context(), timeout=5, command_timeout=6
+        )
+    except Exception:  # noqa: BLE001 - redact database connection and query details
         raise ShadowWitnessFailure("SHADOW_WITNESS_CONNECT_FAILED") from None

@@ -2209,3 +2209,29 @@ independent host outage, and emergency close remain unverified.
 **G5/G9 remain BLOCKED**, including real native stop amendment/trigger,
 CROSS and four-slot risk certification. Existing Render shadow, its
 kill latch, production DB, MEXC account, trading, and BOXWAVE untouched.
+
+## Render deployment preflight — 2026-11-04
+
+Confirmed Trading bots workspace with operator. Fresh Render metadata and logs
+verify existing shadow srv-dbf5798m7kps73fqcuog remains live at a9692afb /
+dep-dbl2tk61egvs739d9qqg, auto-deploy off, and retains NATIVE_PROTECTION_LOST
+with a position observed and no TP/SL. This is not the flat Mac pilot account.
+Database dpg-d9kb9djm8hqs73c3c39g-a is available PostgreSQL 17. Existing backup
+and schema remain unverified: connector SQL fails on TLS/network access;
+Dashboard fallback blocked by missing macOS Computer Use permission. No
+allowlist change, DB mutation, role creation, worker change or notification sent.
+
+Reviewed and pinned only the shadow-specific 031/032 migration hashes in
+T100_RENDER_DEPLOYMENT_PREFLIGHT_20261104.md. That document records required
+object/role conflict checks, effective PUBLIC privilege checks, truthful
+historical seed, approval stages and rollback constraints. Production mutation
+approval is premature until target backup/connectivity/schema evidence exists.
+
+Hardened shared witness/sentinel connector to require certificate-verified TLS,
+including when a supplied DSN requests sslmode=disable; no plaintext fallback.
+Added regression tests and witness CI coverage. Local validation: 2,324 passed,
+7 skipped, 1,045 subtests passed, excluding the two legacy guarded PostgreSQL
+modules; new shadow PG cases skip without isolated CI opt-in. Focused witness,
+outbox and TLS suite: 34 passed, 25 subtests. Ruff/diff checks pass. All 15
+GitHub runs at 887a4cf2 passed; TLS-change CI not yet run. Deployment remains
+BLOCKED pending backup/access evidence and explicit mutation/resource approvals.
