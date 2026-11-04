@@ -1846,3 +1846,35 @@ Sources:
 https://www.mexc.com/api-docs/futures/account-and-trading-endpoints/place-tpsl-order-by-position
 https://www.mexc.com/api-docs/futures/error-code
 https://www.mexc.com/api-docs/futures/account-and-trading-endpoints/get-trade-records-by-order-id
+
+
+## 2026-11-04 real venue pilot and read-only observer checkpoint
+
+This checkpoint **supersedes the older G9 'No orders sent' description as
+a factual description of the operator's dedicated subaccount**, but does not
+change the release gate's BLOCKED status. No order was sent by this repository
+or by the connected GitHub tools. Operator-provided terminal logs from a
+separate local script report one real BTC_USDT isolated-1x short, native
+whole-position MARKET SL observed via current signed GET, filled close,
+flatness and a finished stop history row canceled without triggering.
+See `docs/T100_REAL_MEXC_PILOT_EVIDENCE_20261104.md`.
+
+- G5 **BLOCKED**: Scoped creation and canceled history improved; actual stop
+  execution, amendment, bounded time-to-active protection, unknown POST
+  recovery and multi-slot behavior remain uncertified.
+- G6 **FAIL / NOT CERTIFIED**: Added GET-only pilot exposure observer and
+  offline failure matrix (`app/t100_pilot_watchdog_observer.py`,
+  `tests/test_t100_pilot_watchdog_observer.py`). This detects missing or
+  drifted account/stop state without adopting unrelated positions, but it
+  is NOT a running independent emergency watchdog, close executor or recovery
+  service. See `docs/T100_PILOT_WATCHDOG_OBSERVER_20261104.md`.
+- G9 **BLOCKED**: One operator-reported single-contract real lifecycle
+  experiment is complete; four-slot CROSS production lifecycle and a
+  reviewed supervised amendment/trigger experiment are not.
+- **Release policy unchanged**: `entry_allowed=false`,
+  `live_authorization=false`, POST disabled in production. No main account,
+  production DB, Render, credentials or BOXWAVE changes.
+
+The watchdog observer and its explicit offline unittest are included in the
+focused safety workflow; a green CI result does not certify a running
+independent emergency-close service.
