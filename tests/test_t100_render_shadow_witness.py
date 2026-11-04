@@ -33,6 +33,14 @@ class FakeConn:
         self.calls = []
         self.closed = False
 
+    async def fetchval(self, sql, *params):
+        self.calls.append((sql, params))
+        if self.fail == "lease":
+            raise RuntimeError("HIDDEN_DB_CONNECTION")
+        if self.fail == "busy":
+            return False
+        return True
+
     async def fetchrow(self, sql, *params):
         self.calls.append((sql, params))
         if self.fail:
@@ -262,6 +270,28 @@ class WitnessRuntimeTests(unittest.IsolatedAsyncioTestCase):
         db=FakeConn(fail=True)
         rt=FakeRuntime()
         with self.assertRaisesRegex(ShadowWitnessFailure,"READ_FAILED"):
+            await run_witness(
+                environ=writer_env(),max_cycles=1,
+                runtime_factory=lambda:rt,connect=lambda dsn:_return(db),
+            )
+        self.assertEqual(rt.cycles,0)
+        self.assertTrue(db.closed)
+
+    async def test_duplicate_render_worker_lease_refuses_all_observations(self):
+        db=FakeConn(fail="busy")
+        rt=FakeRuntime()
+        with self.assertRaisesRegex(ShadowWitnessFailure,"WRITER_ALREADY_RUNNING"):
+            await run_witness(
+                environ=writer_env(),max_cycles=1,
+                runtime_factory=lambda:rt,connect=lambda dsn:_return(db),
+            )
+        self.assertEqual(rt.cycles,0)
+        self.assertTrue(db.closed)
+
+    async def test_lease_database_failure_refuses_all_observations(self):
+        db=FakeConn(fail="lease")
+        rt=FakeRuntime()
+        with self.assertRaisesRegex(ShadowWitnessFailure,"LEASE_FAILED"):
             await run_witness(
                 environ=writer_env(),max_cycles=1,
                 runtime_factory=lambda:rt,connect=lambda dsn:_return(db),
