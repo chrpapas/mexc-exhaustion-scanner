@@ -2032,3 +2032,32 @@ G6 therefore remains NOT CERTIFIED. G5/G9 remain blocked; no new
 live orders or exchange mutation were sent by this check. Do not
 merge the existing Render shadow account's protection-loss kill
 state with the flat dedicated pilot account.
+
+
+## 2026-11-04 dedicated pilot macOS LaunchAgents first live-cycle checkpoint
+
+The operator installed the corrected local `t100_pilot_mac_monitor_ready.py`
+and confirmed the first **actual running** macOS user-level LaunchAgent cycles.
+Installation reported the dedicated pilot Keychain accessible, Discord
+installation POST accepted, both agents' startup requests accepted and
+`DISCORD_NOTIFICATION_CHANNELS=ONE_SHARED_WEBHOOK`.
+
+First post-install `status` reported:
+- `WATCH_AGENT=LOADED`, `WATCH_STATE=PILOT_FLAT_CONFIRMED`,
+  `WATCH_REVISION=1`, age 6 seconds, no latch and no undelivered alarms.
+- `SENTINEL_AGENT=LOADED`,
+  `SENTINEL_STATE=WATCHER_RECENT_FLAT_NONAUTHORIZING`,
+  `SENTINEL_REVISION=1`, age 5 seconds, no latch and no undelivered alarms.
+- `MEXC_MUTATIONS=ZERO`, `LIVE_AUTHORIZATION=FALSE`.
+
+Evidence and limitations: `docs/T100_MAC_PILOT_MONITOR_INITIAL_LIVE_20261104.md`.
+This is a **flat-account anomaly observer** with a local liveness sentinel,
+not a certified one-contract position-native stop watchdog. The single
+successful iteration is not a soak; real unattended alert receipt, another
+failure drill on this Mac, independent host/channel and actual safe emergency
+close still require evidence. Shared Discord webhook and same-Mac host can
+fail together.
+
+**G6 remains NOT CERTIFIED** despite new genuine local operational evidence;
+G5/G9 remain BLOCKED. Existing Render shadow protection-loss kill latch
+is not reset. No live orders/permission changes or Render/BOXWAVE deployment.
