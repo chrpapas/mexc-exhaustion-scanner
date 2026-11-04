@@ -334,6 +334,40 @@ class PositionStopPilot:
                 raise PilotHalted("WHOLE_STOP_REPORTED_VOLUME_CONFLICT")
         return stop
 
+    def _require_terminal_stop_contract(self, stop, row):
+        """Check canceled stop history preserves native whole-position market SL."""
+        if (
+            type(stop.get("volType")) is not int
+            or stop["volType"] != 2
+            or stop.get("profitLossVolType") != "SAME"
+            or type(stop.get("stopLossType")) is not int
+            or stop["stopLossType"] != 0
+            or type(stop.get("stopLossReverse")) is not int
+            or stop["stopLossReverse"] != 2
+            or type(stop.get("positionType")) is not int
+            or stop["positionType"] != 2
+            or type(stop.get("lossTrend")) is not int
+            or stop["lossTrend"] != 1
+            or type(stop.get("errorCode")) is not int
+            or stop["errorCode"] != 0
+            or number(stop.get("stopLossPrice")) != number(row.get("price"))
+        ):
+            raise PilotHalted("TERMINAL_STOP_CONTRACT_DRIFT")
+        reported = stop.get("vol")
+        if reported is not None:
+            if type(reported) is bool:
+                raise PilotHalted("TERMINAL_STOP_VOLUME_INVALID")
+            try:
+                qty = Decimal(str(reported))
+            except (InvalidOperation, TypeError, ValueError):
+                raise PilotHalted("TERMINAL_STOP_VOLUME_INVALID") from None
+            if (
+                not qty.is_finite()
+                or qty < 0
+                or (qty > 0 and qty != number(self.scope["quantity"]))
+            ):
+                raise PilotHalted("TERMINAL_STOP_VOLUME_DRIFT")
+
     def proposal(self, action, snapshot, *, price=None):
         row = self._read()
         stops = self._inventory(snapshot, flat=action == "CANCEL")
@@ -398,6 +432,7 @@ class PositionStopPilot:
                 )
             ):
                 raise PilotHalted("CANCEL_REQUIRES_FLAT_OWNED_STOP")
+            self._require_terminal_stop_contract(stops[0], row)
             payload = [{"stopPlanOrderId": row["stop_id"]}]
             path = "/api/v1/private/stoporder/cancel"
         else:
@@ -608,6 +643,7 @@ class PositionStopPilot:
                     )
                 ):
                     raise PilotHalted("CANCEL_TERMINAL_NOT_RECONCILED")
+                self._require_terminal_stop_contract(s, row)
                 row["state"] = "FLAT_STOP_CANCELED_OBSERVED"
             else:
                 raise PilotHalted("NO_PENDING_RECONCILIATION")
