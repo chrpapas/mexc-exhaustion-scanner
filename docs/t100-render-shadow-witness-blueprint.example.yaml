@@ -27,6 +27,10 @@ services:
         value: "true"
       - key: T100_RENDER_SHADOW_WITNESS_ENABLED
         value: "true"
+      # Current observed Render worker is kill-latched for native stop loss.
+      # This is a PIN, not a reset. A matching pre-existing DB row is mandatory.
+      - key: T100_RENDER_SHADOW_EXPECTED_HISTORICAL_KILL_REASON
+        value: NATIVE_PROTECTION_LOST
       - key: T100_RENDER_SHADOW_SCOPE_SHA256
         sync: false
       - key: T100_RENDER_SHADOW_WITNESS_DATABASE_URL
