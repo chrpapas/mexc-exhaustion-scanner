@@ -62,6 +62,7 @@ async def run(*, environ=None, max_cycles: int | None = None,
     runtime = None
     try:
         witness = RenderShadowWitness(conn, scope_sha256=scope)
+        await witness.acquire_singleton()
         previous = await witness.restore()
         runtime = runtime_factory()
         # Preserve the historical first kill reason across process restarts.
