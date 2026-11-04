@@ -2007,3 +2007,28 @@ MEXC polling, real Discord delivery, deployed supervised processes or an
 approved emergency close. The sentinel itself lacks third-party supervision.
 **G5/G9 stay BLOCKED**. No live order, account exposure, Render change, or
 production authorization occurred.
+
+
+## 2026-11-04 dedicated pilot real signed-GET and Discord-receipt checkpoint
+
+A separate operator-run macOS Keychain smoke check now demonstrates
+**six real signed private MEXC GETs** (two agreeing, account-wide
+`positions + stops + open_order_total_count` snapshots) on the dedicated
+pilot key. Reported state was `FLAT_NO_OPEN_ORDERS_OBSERVED`,
+`MEXC_MUTATIONS=ZERO`, and `PILOT_LIVE_AUTHORIZATION=FALSE`.
+
+The same local script posted a dedicated Discord webhook message. The
+operator explicitly confirmed seeing the exact message in the Discord
+channel, so one-shot **Discord receipt**, not merely HTTP acceptance,
+is evidenced. See
+`docs/T100_REAL_PILOT_SIGNED_GET_DISCORD_SMOKE_20261104.md`.
+
+**G6 progress:** Real independent operator-confirmed one-shot GET and
+Discord transport milestone passed on the Mac. This does *not* prove
+unattended real-world watchdog polling, separate exchange-side
+READ-ONLY key permissions, actual service/sentinel deployment,
+automatic emergency-close, or real protection-loss alert escalation.
+G6 therefore remains NOT CERTIFIED. G5/G9 remain blocked; no new
+live orders or exchange mutation were sent by this check. Do not
+merge the existing Render shadow account's protection-loss kill
+state with the flat dedicated pilot account.
