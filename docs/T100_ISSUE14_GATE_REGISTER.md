@@ -1976,3 +1976,34 @@ supervisor; no running service, actual Discord delivery or emergency-close
 recovery drill has been observed. G5/G9 remain BLOCKED: stop amendment,
 native stop execution and cross/4-slot futures lifecycle are unverified.
 No live entry authorization or production deployment was granted.
+
+
+## 2026-11-04 OS-process watchdog failure drill checkpoint
+
+`tests/test_t100_pilot_watchdog_process_failure_drill.py` now verifies the
+GET-only watchdog and separate sentinel **across real OS process boundaries**
+with only a **simulated flat-account verdict and local mock notification
+receiver** (no MEXC/Discord credentials or traffic):
+
+- Actual SIGKILL of the primary process causes a stale heartbeat, sentinel
+  alert and durably pending outbox when mocked delivery fails.
+- New sentinel process retries and records delivery after restart without
+  creating duplicate event rows from repeated identical failures.
+- New primary process resumes heartbeat publication to the old journal;
+  historical sentinel alert stays latched.
+- Actual SIGSTOP of a still-running primary process also produces a stale
+  heartbeat and external alert; SIGCONT resumes new heartbeat observations
+  without automatically clearing the historical latch.
+- The focused pure-Python tests and full offline suite pass on commit
+  `e0ce4a20419190a6d90d856382e83eac53663b23`; all five
+  GitHub workflows completed successfully at that code checkpoint.
+- Reproduce via
+  `python3 -m unittest -v tests.test_t100_pilot_watchdog_process_failure_drill`.
+  See `docs/T100_PILOT_PROCESS_FAILURE_DRILL_20261104.md` for scenarios
+  and precise limitations.
+
+**G6 remains NOT CERTIFIED**: test uses simulation, not real authenticated
+MEXC polling, real Discord delivery, deployed supervised processes or an
+approved emergency close. The sentinel itself lacks third-party supervision.
+**G5/G9 stay BLOCKED**. No live order, account exposure, Render change, or
+production authorization occurred.
