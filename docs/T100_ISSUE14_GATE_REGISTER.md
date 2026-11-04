@@ -2166,3 +2166,46 @@ running, no verified Render alert receipt/fault drill, no independent
 host or durable sentinel outbox, no emergency close. G5/G9 also blocked;
 none of this authorizes live order entry or changes the existing
 Render shadow worker, trader, Discord settings or BOXWAVE.
+
+
+## 2026-11-04 Render durable notification and cutover latch checkpoint
+
+The Render-targeted development branch now includes **migration 032**
+(`migrations/032_t100_render_shadow_sentinel_outbox.sql`) with atomic
+PostgreSQL-triggered alarm insertion; a restart-safe outbox adapter
+(`app/t100_render_shadow_alert_outbox.py`); and an opt-in separate
+`app/t100_render_shadow_sentinel_durable.py` worker. Its SQL-backed
+notification state survives crashes/redeploys and retries unacknowledged
+alerts before claiming success, with at-least-once (not exactly-once)
+webhook semantics. The sentinel uses a separate PostgreSQL singleton
+session lock and no MEXC API credentials or order transport.
+
+Real isolated PostgreSQL 17 integration tests also exercise migration
+032, trigger deduplication, restart/retry and a least-privilege sentinel
+role denied unrelated trading-table access, witness mutation, and
+outbox DELETE. The witness writer and sentinel DB roles must be
+separately provisioned; the sentinel needs narrow outbox writes and
+is not strictly SELECT-only overall.
+
+**Critical cutover correction:** `app/t100_render_shadow_witness_runtime.py`
+now refuses a missing historical PostgreSQL witness row and requires an
+explicit `T100_RENDER_SHADOW_EXPECTED_HISTORICAL_KILL_REASON` pin.
+For the currently running Render shadow, that pin must match
+`NATIVE_PROTECTION_LOST`. Before any exchange read, the new process
+requires that exact *already-persisted* historical kill state; it may
+not start with a blank or newly healthy witness and silently discard
+the previously observed protection-loss latch.
+
+All **9 CI workflows passed** on code checkpoint
+`4e3dee2aa112a056a0b69c1f80a02a2c82896d29`.
+Detailed runbook:
+`docs/T100_RENDER_SENTINEL_DURABLE_OUTBOX_20261104.md` and
+`docs/T100_RENDER_SHADOW_DURABLE_WITNESS_PLAN_20261104.md`.
+
+**G6 remains NOT CERTIFIED**: both DB migrations are unapplied to the
+actual Render database, least-privilege credentials are not provisioned,
+neither new worker is deployed, and real Render alert delivery,
+independent host outage, and emergency close remain unverified.
+**G5/G9 remain BLOCKED**, including real native stop amendment/trigger,
+CROSS and four-slot risk certification. Existing Render shadow, its
+kill latch, production DB, MEXC account, trading, and BOXWAVE untouched.
