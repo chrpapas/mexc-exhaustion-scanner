@@ -156,3 +156,73 @@ verified:
 
 **This is offline, isolated database evidence, not proof the shared
 Render database schema has been migrated or its user permissions reviewed.**
+
+
+## 2026-11-04 follow-up — durable sentinel and fail-closed Render cutover
+
+The earlier candidate `app/t100_render_shadow_sentinel.py` lacked a durable
+notification outbox. A **new, opt-in, replacement entrypoint** has been
+created: `app/t100_render_shadow_sentinel_durable.py`. It requires both
+migration 031 (witness) and migration 032 (sentinel alert state/outbox);
+it will refuse startup without
+`T100_RENDER_SENTINEL_DURABLE_OUTBOX_ENABLED=true`.
+
+Outbox alarm insertion is performed by a PostgreSQL trigger in the same
+transaction as each status update. Repeated identical alarm observations
+don't add duplicate events. Failed Discord responses leave alarms pending;
+attempt count is durable and replay occurs across service restarts.
+Accepted Discord responses are subsequently marked delivered. Delivery
+is **at-least-once**, not exactly-once: a crash after webhook acceptance
+but before DB acknowledgment can duplicate a message.
+
+The sentinel database credential is **not SELECT-only overall** anymore.
+It must be strictly restricted to:
+`SELECT` on `public.t100_shadow_witness`; and
+`SELECT,INSERT,UPDATE` on the two new `t100_shadow_sentinel_*`
+tables with only `USAGE` on their identity sequence and the public
+schema. It must not have `DELETE`, `TRUNCATE`, CREATE, exchange
+credentials or access to trading tables. The independent sentinel and
+witness writer must have **different** DB credentials.
+
+Important cutover hardening: the opt-in witness-backed shadow runtime
+will **not** start against a missing witness row. It additionally
+requires `T100_RENDER_SHADOW_EXPECTED_HISTORICAL_KILL_REASON` to be
+explicitly set to `NATIVE_PROTECTION_LOST` for the currently observed
+Render worker. It then refuses to perform even a read-only exchange
+cycle unless the previously committed witness row has the matching
+latched first reason. An initially clean account can only use the
+separate explicit `NONE` expectation after independent audit of that
+specific account; **do not use NONE to bypass the current Render kill.**
+This guards against a cutover/restart accidentally erasing the existing
+protection-loss incident. The witness row must be manually preseeded
+with reviewed historical evidence after the separate schema/role
+approval; this was **NOT** done in the live database.
+
+Tests:
+- `tests/test_t100_render_shadow_sentinel_outbox.py` exercises the
+  durable retry/ACK/restart and rejected live credentials paths.
+- `tests/test_t100_render_shadow_postgres_integration.py` now applies
+  *both* migrations to an isolated PostgreSQL 17 GitHub Actions
+  container; exercises real trigger insertion/deduplication, replay
+  after reconnection, row immutability and a restricted role that can
+  insert/update the sentinel journal while being denied SELECT or
+  mutation access to unrelated trading or witness tables.
+- `tests/test_t100_render_shadow_witness.py` now verifies no exchange
+  observation on empty witness DB or mismatched historical kill reason.
+- All 9 CI workflows completed successfully on
+  `4e3dee2aa112a056a0b69c1f80a02a2c82896d29`.
+
+**Operational status unchanged:** neither migration has been applied
+to the shared Render database; no worker, environment variable,
+database role, Discord setting, user account or exchange order was
+changed. The database connector still cannot inspect the production
+Postgres under current network restrictions. Do not weaken networking
+restrictions or replace the existing Render shadow worker without
+explicit review of the historical protection-loss latch.
+
+Further limitations: a down shared PostgreSQL instance can stop both
+the shadow witness writer and sentinel outbox; separate host/vendor
+heartbeat supervision is still required. Live protective stop
+amendment/execution, emergency close, funded CROSS and four-slot risk
+remain outstanding. This code is a **read-only monitoring candidate**
+and does not certify G5/G6/G9 or authorize live trading.
