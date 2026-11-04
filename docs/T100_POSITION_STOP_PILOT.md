@@ -137,12 +137,25 @@ volUnit=1, priceUnit=0.1, state=0; last/bid=78254.8 and ask=78254.9 USDT.
 One-contract reference notional was 7.82548 USDT. This is transient public
 market evidence, not a fill guarantee or private account permission.
 
-The position-stop candidate deliberately retains volType=1/SAME with explicit
-full volume pending clarification. volType=2 is documented as position TP/SL,
-but changing the proposal to that mode does not resolve the contradictory vol
-constraint or prove accepted full-volume placement. Reconciliation now rejects
-volume-mode drift after placement/amendment even if effective quantity happens
-to match. No alternate-mode guess is used to bypass an unknown outcome.
+The offline request is now aligned with MEXC's documented **entire-position**
+mode: `volType=2`, `profitLossVolType=SAME`, explicit request `vol=1`,
+and `stopLossType=0` (market). Earlier `volType=1` was the documented
+*partial* TP/SL mode and is now rejected during GET placement/amendment
+reconciliation even if its amount happens to equal the current position.
+A whole-position GET may report positive explicit quantity equal to the
+observed one-contract position, zero, or omit `vol`; a nonzero mismatched,
+negative or malformed volume fails closed. Position identity, SHORT side,
+market-stop type and current state remain mandatory.
+
+**This resolves the mode mismatch in our request; it does NOT establish
+acceptance by the venue.** The placement page still says total stop quantity
+must be strictly less than closable quantity while the 5004 exchange error
+description rejects quantity *greater than* closable quantity. Equality
+remains undocumented/untested; never reduce stop quantity to work around
+a rejection. The mandatory limit-order price fields even for market type
+are also unresolved. This candidate has no POST transport and is
+review-only; actual MEXC acceptance and effective protection remain
+unverified, as does the uncovered entry-to-native-stop interval.
 
 References:
 https://www.mexc.io/api-docs/futures/account-and-trading-endpoints/place-order
