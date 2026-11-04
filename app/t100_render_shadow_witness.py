@@ -20,7 +20,7 @@ _RUN = re.compile(r"[a-f0-9]{12,32}\Z")
 _WITNESS_READ = """
 SELECT scope_sha256, revision, run_id, cycle_index, state, kill_latched,
        kill_reason,
-       extract(epoch from (clock_timestamp() - observed_at)) AS age_seconds
+       (extract(epoch from (clock_timestamp() - observed_at)))::double precision AS age_seconds
 FROM public.t100_shadow_witness WHERE scope_sha256=$1
 """
 # This upsert cannot clear an older latched reason. The database trigger
@@ -46,7 +46,7 @@ ON CONFLICT (scope_sha256) DO UPDATE SET
     ELSE EXCLUDED.state END
 RETURNING scope_sha256, revision, run_id, cycle_index, state, kill_latched,
           kill_reason,
-          extract(epoch from (clock_timestamp() - observed_at)) AS age_seconds
+          (extract(epoch from (clock_timestamp() - observed_at)))::double precision AS age_seconds
 """
 
 
