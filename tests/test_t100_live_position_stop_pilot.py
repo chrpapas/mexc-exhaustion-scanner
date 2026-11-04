@@ -35,6 +35,15 @@ def snapshot(stops=None, flat=False):
             "dealVol": "1",
             "updateTime": int(time.time() * 1000),
         },
+        "origin_deals": [{
+            "id": "201",
+            "orderId": "100",
+            "symbol": "BTC_USDT",
+            "side": 3,
+            "vol": "1",
+            "price": "100",
+            "timestamp": int(time.time() * 1000),
+        }],
         "stops": stops,
         "counts": {
             "sumCount": len(stops),
@@ -250,6 +259,8 @@ class PilotTests(unittest.TestCase):
                     return snap["counts"]
                 if "/order/external/" in path:
                     return snap["origin"]
+                if "/order/deal_details/" in path:
+                    return snap["origin_deals"]
                 raise AssertionError(path)
 
         client = GetOnly()
@@ -552,7 +563,9 @@ class PilotTests(unittest.TestCase):
                     return current["counts"]
                 if "/order/external/" in path:
                     return closing if request["payload"]["externalOid"] in path else current["origin"]
-                if "/order/deal_details/" in path:
+                if "/order/deal_details/100" in path:
+                    return current["origin_deals"]
+                if "/order/deal_details/101" in path:
                     seen["deals"] += 1
                     return close_deals()
                 raise AssertionError("unexpected signed GET endpoint")
@@ -584,7 +597,9 @@ class PilotTests(unittest.TestCase):
                     return current["counts"]
                 if "/order/external/" in path:
                     return closing if request["payload"]["externalOid"] in path else current["origin"]
-                if "/order/deal_details/" in path:
+                if "/order/deal_details/100" in path:
+                    return current["origin_deals"]
+                if "/order/deal_details/101" in path:
                     reads["n"] += 1
                     return close_deals(volume="1" if reads["n"] == 1 else "0.5")
                 raise AssertionError("unexpected signed GET endpoint")
@@ -628,7 +643,7 @@ class PilotTests(unittest.TestCase):
         )
         data = self.p._read()
         self.assertEqual(
-            data["place_review_deadline_ms"] - data["entry_fill_update_ms"],
+            data["place_review_deadline_ms"] - data["entry_first_fill_ms"],
             15_000,
         )
         self.assertEqual(self.p.diagnostics()["place_review_deadline_expired"], False)
@@ -693,6 +708,75 @@ class PilotTests(unittest.TestCase):
             with self.subTest(reported=reported), self.assertRaises(PilotHalted):
                 self.p.observe(snapshot([row]), stop_id="99")
             self.assertEqual(self.p.diagnostics()["state"], "PLACE_UNKNOWN")
+
+
+    def test_place_refuses_late_first_fill_despite_recent_order_update(self):
+        latest = snapshot()
+        latest["origin"]["updateTime"] = int(time.time() * 1000)
+        latest["origin_deals"][0]["timestamp"] -= 60_000
+        with self.assertRaisesRegex(PilotHalted, "TOO_OLD"):
+            self.p.proposal("PLACE", latest, price="110")
+        self.assertEqual(self.p.proposal("CLOSE", latest)["action"], "CLOSE")
+        self.assertEqual(self.p.diagnostics()["state"], "NEW")
+
+    def test_place_requires_matching_unique_complete_signed_trade_details(self):
+        wrong = [
+            [],
+            [dict(snapshot()["origin_deals"][0], orderId="999")],
+            [dict(snapshot()["origin_deals"][0], side=2)],
+            [dict(snapshot()["origin_deals"][0], vol="0.5")],
+            [dict(snapshot()["origin_deals"][0], price=0)],
+            [dict(snapshot()["origin_deals"][0], timestamp=None)],
+            snapshot()["origin_deals"] * 2,
+        ]
+        for trades in wrong:
+            candidate = snapshot()
+            candidate["origin_deals"] = trades
+            with self.subTest(trades=trades), self.assertRaises(PilotHalted):
+                self.p.proposal("PLACE", candidate, price="110")
+            self.assertEqual(self.p.diagnostics()["state"], "NEW")
+
+    def test_native_stop_arriving_after_deadline_cannot_mark_protected(self):
+        proposal = self.stage("PLACE", snapshot(), "110")
+        row = self.p._read()
+        row["place_review_deadline_ms"] = 1
+        self.p.db.execute(
+            "UPDATE pilot SET body=? WHERE id=1", (__import__("json").dumps(row),)
+        )
+        with self.assertRaisesRegex(PilotHalted, "PROTECTION_GAP_DEADLINE_EXCEEDED"):
+            self.p.observe(snapshot([stop()]), stop_id="99")
+        self.assertEqual(self.p.diagnostics()["state"], "PLACE_UNKNOWN")
+        self.assertEqual(self.p.diagnostics()["place_review_deadline_expired"], True)
+        self.assertEqual(self.p.proposal("CLOSE", snapshot([stop()]))["action"], "CLOSE")
+        self.assertFalse(self.p.diagnostics()["live_authorization"])
+
+    def test_preflight_snapshot_requires_two_stable_entry_trade_reads(self):
+        import asyncio
+        from app.t100_live_readonly_probe import ReadOnlyMexcProbe
+        from app.t100_live_position_stop_pilot import collect_get_snapshot
+        reference = snapshot()
+        reads = {"n": 0}
+
+        class GetOnly:
+            async def _private_get(self, path, params=None):
+                if path.endswith("/position/open_positions"):
+                    return reference["positions"]
+                if path.endswith("/stoporder/open_orders"):
+                    return reference["stops"]
+                if path.endswith("/open_order_total_count"):
+                    return reference["counts"]
+                if "/order/external/" in path:
+                    return reference["origin"]
+                if "/order/deal_details/" in path:
+                    reads["n"] += 1
+                    if reads["n"] == 2:
+                        return [dict(reference["origin_deals"][0], vol="0.5")]
+                    return reference["origin_deals"]
+                raise AssertionError("unexpected GET route")
+
+        with self.assertRaisesRegex(PilotHalted, "SIGNED_GET_SNAPSHOT_UNVERIFIED"):
+            asyncio.run(collect_get_snapshot(ReadOnlyMexcProbe(GetOnly()), ACCOUNT, "pilot-origin"))
+        self.assertEqual(reads["n"], 2)
 
     def test_acknowledged_placement_id_binds_get_after_restart(self):
         request = self.stage("PLACE", snapshot(), "110")
