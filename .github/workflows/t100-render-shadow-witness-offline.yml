@@ -1,0 +1,40 @@
+name: T100 Render shadow witness offline safety
+
+on:
+  pull_request:
+    paths:
+      - 'app/t100_render_shadow_witness.py'
+      - 'app/t100_render_shadow_witness_runtime.py'
+      - 'app/t100_render_shadow_sentinel.py'
+      - 'tests/test_t100_render_shadow_witness.py'
+      - 'migrations/031_t100_render_shadow_witness.sql'
+      - '.github/workflows/t100-render-shadow-witness-offline.yml'
+  push:
+    branches:
+      - codex/t100-readiness-issue-14
+
+permissions:
+  contents: read
+
+jobs:
+  durable-shadow-policy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    env:
+      T100_EXECUTION_MODE: paper
+      T100_LIVE_ORDER_API_ENABLED: 'false'
+      T100_LIVE_KILL_SWITCH: 'true'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install only project runtime/test dependencies
+        run: python -m pip install '.[dev]'
+      - name: Compile non-executing Render witness modules
+        run: |
+          python -m py_compile app/t100_render_shadow_witness.py
+          python -m py_compile app/t100_render_shadow_witness_runtime.py
+          python -m py_compile app/t100_render_shadow_sentinel.py
+      - name: Durable kill never resets; sentinel cannot execute exchange orders
+        run: python -m unittest -v tests.test_t100_render_shadow_witness
