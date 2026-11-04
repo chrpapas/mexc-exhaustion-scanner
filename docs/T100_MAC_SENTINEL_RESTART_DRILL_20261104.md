@@ -75,3 +75,51 @@ G6 is not certified: real installed primary watcher fault-injection,
 loss-of-host coverage, second host/channel redundancy, emergency close
 and nonflat stop-loss monitoring remain unverified. G5/G9 remain blocked.
 No update here permits live orders, Render changes, or BOXWAVE changes.
+
+
+## Operator-run result — actual macOS LaunchAgent
+
+**2026-11-04: PASSED, based on operator-supplied terminal output.** This
+updates the earlier pending-only status above. The user downloaded the
+script from the exact GitHub branch, ran it on the Mac, and reported:
+
+```text
+PRECHECK=FLAT_BOTH_AGENTS_HEALTHY
+BEFORE_REVISIONS=WATCH_390_SENTINEL_1245
+TARGET=ONLY_SENTINEL_LAUNCHAGENT
+SENTINEL_SIGNAL=SIGKILL_ACCEPTED
+SENTINEL_AUTO_RESTART=PASS_NEW_PROCESS_AND_FRESH_JOURNAL
+AFTER_REVISIONS=WATCH_390_SENTINEL_1246
+ALARM_LATCHES=NONE_BEFORE_OR_AFTER
+INSTALLED_JOURNALS=READ_ONLY_BY_DRILL
+MEXC_REQUESTS_BY_DRILL=ZERO MEXC_MUTATIONS=ZERO LIVE_AUTHORIZATION=FALSE
+```
+
+Independent immediate post-drill status command:
+
+```text
+WATCH_AGENT=LOADED
+WATCH_STATE=PILOT_FLAT_CONFIRMED
+WATCH_REVISION=390 AGE_SECONDS=14 ALARM_LATCHED=FALSE UNDELIVERED=0
+SENTINEL_AGENT=LOADED
+SENTINEL_STATE=WATCHER_RECENT_FLAT_NONAUTHORIZING
+SENTINEL_REVISION=1246 AGE_SECONDS=7 ALARM_LATCHED=FALSE UNDELIVERED=0
+MEXC_MUTATIONS=ZERO LIVE_AUTHORIZATION=FALSE
+```
+
+The watchdog revision remaining 390 during the short restart check is
+compatible with its slower, separate polling cadence: its healthy state
+and 14-second age were explicitly reported afterward. The sentinel
+revision advanced once in a newly launched process and had a healthy,
+7-second-old journal entry. The script reported no sticky alarm, no
+journal modification by the drill, and no MEXC traffic by this drill.
+
+**Validated scope**: a bounded, manual, real sentinel-only SIGKILL and
+automatic launchd restart on the operator's Mac, with a retained flat
+watcher and no unexpected sentinel alarm.
+
+**Not validated**: automatic restart after host sleep/logout/reboot;
+Mac network/Keychain outage; a failure of the primary watcher itself;
+actual anomaly alarm observed in Discord; independently hosted
+monitoring; native stop triggering/amendment; emergency close; or
+four-slot CROSS risks. This result does not authorize any live trade.
