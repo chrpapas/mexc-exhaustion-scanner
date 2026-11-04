@@ -1782,3 +1782,67 @@ or BOXWAVE change was made.
 
 Official order GET timestamp reference:
 https://www.mexc.com/api-docs/futures/account-and-trading-endpoints/get-order-by-external-id
+
+### 2026-11-04 — Concrete STOP full-position mode and true fill-age repair
+
+MEXC official `POST /api/v1/private/stoporder/place` names
+`volType=1` **partial** and `volType=2` **position** TP/SL.
+The development-only position-stop pilot previously selected 1 for
+an entire-position market SL. Now it explicitly proposes
+`volType=2, profitLossVolType=SAME, vol=1, stopLossType=0`.
+Authenticated GET reconciliation strictly requires position origin,
+whole-position mode, same quantity semantics, matching ownership and
+native MARKET stop. A returned `vol` may be omitted/zero for
+whole-position semantics, or positive and **exactly equal** to the
+observed one-contract position; malformed/negative/mismatched
+volumes are rejected. Other protections (active state, trigger,
+no reverse, price, explicit stop type) stay mandatory.
+
+The MEXC docs still say total TP/SL quantity must be *less than*
+closable quantity, while code 5004 describes rejection when
+*greater than* closable. Full-volume equality is NOT certified
+without an actual authorized venue experiment. No forced partial
+stop, double placement, unsupported fallback, or order POST was
+introduced. Limit-price parameter prose also conflicts with
+the stated market-stop type and remains unresolved.
+
+A second real safety issue was corrected: review age based on
+`order/external.updateTime` could be falsely fresh after a late
+order update. The pilot's signed GET snapshot now includes
+two matching copies of entry `order/deal_details/{orderId}`
+and validates unique trade IDs, exact order/symbol/side, positive
+price, exact volume=1, and *each* millisecond timestamp.
+It computes the earliest signed actual fill time (and fails
+conservatively if the order update is earlier). Missing/partial,
+duplicate, mismatched, stale or future timestamps reject STOP
+placement review. The durable journal retains the earliest
+fill/deadline and refuses to classify protection after that
+15-second review deadline. A separately authorized emergency
+CLOSE proposal remains available. This does **not**
+automatically close the position or prove a bounded exchange
+fill-to-stop activation gap; the pilot has **no POST transport**.
+
+Exact code and tests: `0a300e275036d7508ea3da581c5e50d80f8a51e1`,
+`3511506c74afd4dcac4b557098c8c40255f08960`,
+`9f61272ac424b55d8fcfb7bf85113d07c7bb77fd`,
+`def2860dee78a0aa3a771bfd792b5af0d2af3ea0`,
+`43e167305ed6811bc6f28b549862f15d2f146730`.
+At the final executable-code SHA `43e1673`, **all 7 CI workflows
+passed**; full offline suite **2,218 tests plus 953 subtests**.
+No credentials were accessed here, no live orders were placed,
+and main-account production/Render/BOXWAVE were unchanged.
+
+Exact next unresolved real decision: authorize one supervised
+single-contract $50-subaccount venue trial (with an approved
+finite exposure budget, independently reviewed immediate-close
+and watchdog path) to observe actual `stoporder/place` acceptance
+of full quantity, current `orderId=0, volType=2,
+stopLossType=0` stop, followed by `change_plan_price`
+identity+quantity verification. At every failure/unknown outcome,
+do not retry blindly; reconcile GET and invoke the separately
+approved close. This is a proposal, not current trade authorization.
+
+Sources:
+https://www.mexc.com/api-docs/futures/account-and-trading-endpoints/place-tpsl-order-by-position
+https://www.mexc.com/api-docs/futures/error-code
+https://www.mexc.com/api-docs/futures/account-and-trading-endpoints/get-trade-records-by-order-id
