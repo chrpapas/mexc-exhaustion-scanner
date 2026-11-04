@@ -21,6 +21,7 @@ from app.t100_live_ops_notifier import OpsNotice
 from app.t100_render_shadow_witness import (
     RenderShadowWitness, ShadowWitnessFailure, connect_render_witness,
 )
+from app.t100_live_kill import ALLOWED_REASONS
 
 LOGGER = logging.getLogger(__name__)
 
@@ -43,7 +44,13 @@ def runtime_config(env):
     dsn = env.get("T100_RENDER_SHADOW_WITNESS_DATABASE_URL", "")
     if not (dsn.startswith("postgresql://") or dsn.startswith("postgres://")):
         raise WitnessRuntimeHalted("RENDER_SHADOW_WITNESS_DSN_REQUIRED")
-    return scope, dsn
+    # A fresh empty DB row is NOT evidence the existing Render worker's
+    # protection-loss kill was cleared. Explicitly pin the previous
+    # audited kill reason for a controlled cutover.
+    expected_history = env.get("T100_RENDER_SHADOW_EXPECTED_HISTORICAL_KILL_REASON", "")
+    if expected_history not in ALLOWED_REASONS and expected_history != "NONE":
+        raise WitnessRuntimeHalted("RENDER_SHADOW_HISTORICAL_KILL_PIN_REQUIRED")
+    return scope, dsn, expected_history
 
 
 async def run(*, environ=None, max_cycles: int | None = None,
@@ -55,7 +62,7 @@ async def run(*, environ=None, max_cycles: int | None = None,
     A new process restores a previously latched kill BEFORE any MEXC GET.
     """
     env = os.environ if environ is None else environ
-    scope, dsn = runtime_config(env)
+    scope, dsn, historical_kill = runtime_config(env)
     if max_cycles is not None and (type(max_cycles) is not int or max_cycles < 1):
         raise WitnessRuntimeHalted("RENDER_SHADOW_INVALID_CYCLE_LIMIT")
     conn = await connect(dsn)
@@ -64,6 +71,16 @@ async def run(*, environ=None, max_cycles: int | None = None,
         witness = RenderShadowWitness(conn, scope_sha256=scope)
         await witness.acquire_singleton()
         previous = await witness.restore()
+        if previous is None:
+            raise WitnessRuntimeHalted("RENDER_SHADOW_PRIOR_WITNESS_REQUIRED")
+        # The currently running Render shadow already latched
+        # NATIVE_PROTECTION_LOST. A new witness without that exact
+        # historical state must fail before accessing the exchange.
+        if historical_kill == "NONE":
+            if previous.kill_latched:
+                raise WitnessRuntimeHalted("RENDER_SHADOW_UNEXPECTED_HISTORICAL_KILL")
+        elif not previous.kill_latched or previous.kill_reason != historical_kill:
+            raise WitnessRuntimeHalted("RENDER_SHADOW_HISTORICAL_KILL_MISMATCH")
         runtime = runtime_factory()
         # Preserve the historical first kill reason across process restarts.
         if previous is not None and previous.kill_latched:
