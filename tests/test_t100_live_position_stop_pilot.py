@@ -58,7 +58,7 @@ def stop(price="110"):
         "errorCode": 0,
         "positionType": 2,
         "vol": "1",
-        "volType": 1,
+        "volType": 2,
         "profitLossVolType": "SAME",
         "stopLossPrice": price,
         "stopLossType": 0,
@@ -344,7 +344,7 @@ class PilotTests(unittest.TestCase):
     def test_amendment_cannot_silently_change_quantity_mode(self):
         self.protected()
         self.stage("AMEND", snapshot([stop()]), "108")
-        for changes in ({"volType": 2}, {"profitLossVolType": "SEPARATE", "stopLossVol": "1"}):
+        for changes in ({"volType": 1}, {"profitLossVolType": "SEPARATE", "stopLossVol": "1"}):
             changed = dict(stop("108"), **changes)
             with self.subTest(changes=changes), self.assertRaises(PilotHalted):
                 self.p.observe(snapshot([changed]))
@@ -637,6 +637,62 @@ class PilotTests(unittest.TestCase):
         self.assertEqual(self.p.diagnostics()["state"], "PLACE_UNKNOWN")
         with self.assertRaises(PilotHalted):
             self.stage("PLACE", snapshot(), "110")
+
+
+    def test_place_requests_documented_whole_position_stop_mode(self):
+        request = self.p.proposal("PLACE", snapshot(), price="110")
+        self.assertEqual(request["path"], "/api/v1/private/stoporder/place")
+        self.assertEqual(request["payload"]["volType"], 2)
+        self.assertEqual(request["payload"]["profitLossVolType"], "SAME")
+        self.assertEqual(request["payload"]["vol"], "1")
+        self.assertEqual(request["payload"]["stopLossType"], 0)
+        self.assertEqual(request["payload"]["stopLossReverse"], 2)
+        self.assertFalse(self.p.diagnostics()["live_authorization"])
+
+    def test_partial_mode_never_counts_as_entire_position_protection(self):
+        self.stage("PLACE", snapshot(), "110")
+        row = stop()
+        row["volType"] = 1
+        with self.assertRaisesRegex(PilotHalted, "STOP_QUANTITY_MODE_CHANGED"):
+            self.p.observe(snapshot([row]), stop_id="99")
+        self.assertEqual(self.p.diagnostics()["state"], "PLACE_UNKNOWN")
+
+    def test_whole_position_get_zero_or_omitted_volume_still_requires_native_fields(self):
+        for reported in (None, "0", 0, "1"):
+            with self.subTest(reported=reported):
+                from tempfile import TemporaryDirectory
+                with TemporaryDirectory() as tmp:
+                    pilot = PositionStopPilot(
+                        Path(tmp) / "scope.sqlite", account=ACCOUNT,
+                        origin_oid="pilot-origin", position_id="900", quantity="1",
+                    )
+                    try:
+                        snap = snapshot()
+                        request = pilot.proposal("PLACE", snap, price="110")
+                        pilot.stage(
+                            request, snap,
+                            Approval(ACCOUNT, digest(request), time.time() + 30,
+                                     "REVIEW_ONLY_POSITION_STOP_PILOT"),
+                        )
+                        row = stop()
+                        if reported is None:
+                            row.pop("vol")
+                        else:
+                            row["vol"] = reported
+                        pilot.observe(snapshot([row]), stop_id="99")
+                        self.assertEqual(pilot.diagnostics()["state"], "PROTECTED_OBSERVED")
+                        self.assertFalse(pilot.diagnostics()["stop_execution_certified"])
+                    finally:
+                        pilot.close()
+
+    def test_whole_position_get_inconsistent_volume_rejected(self):
+        self.stage("PLACE", snapshot(), "110")
+        for reported in (False, "-1", "NaN", "2", "0.5", [], {}):
+            row = stop()
+            row["vol"] = reported
+            with self.subTest(reported=reported), self.assertRaises(PilotHalted):
+                self.p.observe(snapshot([row]), stop_id="99")
+            self.assertEqual(self.p.diagnostics()["state"], "PLACE_UNKNOWN")
 
     def test_acknowledged_placement_id_binds_get_after_restart(self):
         request = self.stage("PLACE", snapshot(), "110")
