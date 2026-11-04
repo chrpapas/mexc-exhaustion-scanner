@@ -57,7 +57,7 @@ async def local_mock_notifier(code):
     # Record only a redacted WATCH_* event in a local mock receiver.
     # This MUST NOT be confused with a real Discord webhook delivery.
     with open(sys.argv[5], "a", encoding="utf-8") as stream:
-        stream.write(code + "\\n")
+        stream.write(code + "\n")
         stream.flush()
     return True
 
