@@ -642,7 +642,8 @@ class PositionStopPilot:
                     raise PilotHalted("CLOSE_GET_ORDER_UNVERIFIED")
                 close_id = identity(close_order.get("orderId"))
                 close_deals = await probe.raw_order_deal_details(close_id)
-            if row["state"] in ("CANCEL_UNKNOWN", "FLAT_OBSERVED"):
+            async def read_owned_terminal_stop():
+                """Repeat the bounded finished-stop scan; no single transient row suffices."""
                 matches = []
                 seen = set()
                 for page in range(1, 11):
@@ -660,7 +661,10 @@ class PositionStopPilot:
                     raise PilotHalted("STOP_HISTORY_SCAN_BOUND")
                 if len(matches) != 1:
                     raise PilotHalted("STOP_HISTORY_IDENTITY_UNVERIFIED")
-                terminal = matches[0]
+                return matches[0]
+
+            if row["state"] in ("CANCEL_UNKNOWN", "FLAT_OBSERVED"):
+                terminal = await read_owned_terminal_stop()
             last = await collect_get_snapshot(probe, self.scope["account"], self.scope["origin_oid"])
             if any(
                 first[k] != last[k]
@@ -674,6 +678,11 @@ class PositionStopPilot:
                 second_deals = await probe.raw_order_deal_details(close_id)
                 if close_order != second_order or close_deals != second_deals:
                     raise PilotHalted("CLOSE_ORDER_OR_DEALS_DRIFT")
+            if row["state"] in ("CANCEL_UNKNOWN", "FLAT_OBSERVED"):
+                # An unrelated inventory can stay flat while terminal stop
+                # history changes. Never certify cancellation on one read.
+                if terminal != await read_owned_terminal_stop():
+                    raise PilotHalted("STOP_TERMINAL_HISTORY_DRIFT")
             last["observed_at"] = first["observed_at"]
             if self._read()["revision"] != row["revision"]:
                 raise PilotHalted("JOURNAL_CHANGED_DURING_GET")
