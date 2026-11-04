@@ -1698,3 +1698,44 @@ full-stop quantity constraint remain unresolved.
 
 Official close-entry envelope:
 https://www.mexc.com/api-docs/futures/account-and-trading-endpoints/place-order
+
+
+### 2026-11-04 — Independent signed CLOSE deal-history witness (offline; NO live orders)
+
+The position-stop pilot's `CLOSE_UNKNOWN -> FLAT_OBSERVED` transition
+now requires independently authenticated
+`GET /api/v1/private/order/deal_details/{orderId}` trade rows,
+not merely filled `order/external` state and an empty inventory.
+
+- Every deal row must have a positive unique trade `id`, match the
+  exact close `orderId`, `BTC_USDT`, `side=2` (close short), a
+  finite positive price and quantity. Aggregate deal volume must equal
+  exactly the one-contract close. Empty, partial, duplicated, foreign,
+  invalid or excessive rows fail closed.
+- The GET-only recovery bridge now reads the **same close order and
+  deal history twice** across independent position/stop/order
+  inventory bookends; any drift keeps `CLOSE_UNKNOWN`.
+- If an acknowledged close POST ID exists, the prior durable
+  `CLOSE_ACK_GET_IDENTITY_MISMATCH` gate remains binding; matching
+  trade details cannot replace that requirement.
+- No assertion of exchange-side deal-page completeness, crash recovery
+  from a partially settled close, timing guarantees or atomicity is made.
+- Three dedicated regressions cover bad/partial/duplicate deals,
+  matching two-read execution and second-read drift. Existing
+  close-reconciliation fixtures now supply explicit trade records.
+  No new MEXC POST, Keychain access, Render deployment, or BOXWAVE change.
+
+Exact code and tests: `8e6c99fe55eb2a0f8d47b580e0c3586f7b44d749`,
+`50e2ca4d728e2ededdfcf2ca5bc8dc2c1284290d`.
+At exact test SHA `50e2ca4`, GitHub Actions passed
+all seven branch/PR workflows including real disposable PostgreSQL;
+full offline suite: **2,208 tests plus 929 subtests passed**.
+Source:
+https://www.mexc.com/api-docs/futures/account-and-trading-endpoints/get-trade-records-by-order-id
+
+**Still blocked:** actual position-origin STOP POST/GET acceptance, market SL
+trigger+fill, ambiguity in `stoporder/place` full-volume contract
+("less than closable quantity"), entry-to-native-stop uncovered gap,
+timed emergency close, venue POST uncertain outcomes and real protected
+runtime. There is deliberately no executable post transport or
+production release permission; do NOT construe green CI as certification.
