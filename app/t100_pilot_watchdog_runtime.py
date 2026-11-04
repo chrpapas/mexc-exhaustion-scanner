@@ -77,7 +77,7 @@ class PilotWatchdogRunner:
         ):
             raise WatchdogHalted("WATCHDOG_CONFIG_INVALID")
         if (
-            type(journal_path) not in (str, Path)
+            not isinstance(journal_path, (str, Path))
             or not str(journal_path)
             or str(journal_path) == ":memory:"
         ):
@@ -85,6 +85,7 @@ class PilotWatchdogRunner:
         path = Path(journal_path)
         if path.is_symlink() or path.parent.is_symlink():
             raise WatchdogHalted("WATCHDOG_JOURNAL_PATH_UNSAFE")
+        existing_journal = path.exists()
         self._observer = observer
         self._notifier = notifier
         self._clock = clock_ms or (lambda: int(time.time() * 1000))
@@ -143,8 +144,8 @@ class PilotWatchdogRunner:
                 ).fetchone()
                 if existing is None:
                     # A malformed preexisting database must never be rearmed.
-                    if not path.exists():
-                        raise WatchdogHalted("WATCHDOG_JOURNAL_PATH_UNSAFE")
+                    if existing_journal:
+                        raise WatchdogHalted("WATCHDOG_JOURNAL_MISSING_SCOPE_STATE")
                     self._db.execute(
                         "INSERT INTO state VALUES (1, ?, ?, 0, 0, 0)",
                         (scope_sha256, "WATCH_NOT_STARTED"),
@@ -202,6 +203,8 @@ class PilotWatchdogRunner:
             or verdict.entry_allowed is not False
             or verdict.live_authorization is not False
             or verdict.emergency_close_executed is not False
+            or verdict.stop_execution_certified is not False
+            or verdict.continuous_protection_certified is not False
             or verdict.mexc_orders_sent is not False
         ):
             return "WATCH_RUNTIME_VERDICT_INVALID", True
