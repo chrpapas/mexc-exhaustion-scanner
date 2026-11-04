@@ -861,3 +861,43 @@ class PilotTests(unittest.TestCase):
         self.assertEqual(entry_deal_reads["count"], 4)
         self.assertEqual(self.p.diagnostics()["state"], "CLOSE_UNKNOWN")
         self.assertFalse(self.p.diagnostics()["live_authorization"])
+
+
+    def test_cancel_get_rejects_terminal_stop_history_drift_between_reads(self):
+        """A single terminal-row witness cannot establish settled cancellation."""
+        import asyncio
+
+        from app.t100_live_readonly_probe import ReadOnlyMexcProbe
+
+        self.flat_after_close()
+        self.stage("CANCEL", snapshot([stop()], flat=True))
+        current = snapshot(flat=True)
+        history_reads = {"n": 0}
+
+        class SignedGet:
+            async def _private_get(self, path, params=None):
+                if path.endswith("/position/open_positions"):
+                    return current["positions"]
+                if path.endswith("/stoporder/open_orders"):
+                    return current["stops"]
+                if path.endswith("/open_order_total_count"):
+                    return current["counts"]
+                if "/order/external/" in path:
+                    return current["origin"]
+                if "/order/deal_details/100" in path:
+                    return current["origin_deals"]
+                if path.endswith("/stoporder/list/orders"):
+                    history_reads["n"] += 1
+                    terminal = dict(stop(), state=2, isFinished=1)
+                    if history_reads["n"] == 2:
+                        terminal["triggerSide"] = 1
+                    return [terminal]
+                raise AssertionError("unexpected signed GET endpoint")
+
+        with self.assertRaisesRegex(
+            PilotHalted, "^SIGNED_GET_RECONCILIATION_UNVERIFIED$"
+        ):
+            asyncio.run(self.p.observe_get(ReadOnlyMexcProbe(SignedGet())))
+        self.assertEqual(history_reads["n"], 2)
+        self.assertEqual(self.p.diagnostics()["state"], "CANCEL_UNKNOWN")
+        self.assertFalse(self.p.diagnostics()["post_transport_available"])
