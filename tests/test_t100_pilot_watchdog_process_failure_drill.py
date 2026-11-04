@@ -109,6 +109,14 @@ class IndependentProcessFailureDrill(unittest.TestCase):
         return [sys.executable, "-c", textwrap.dedent(source), *map(str, args)]
 
     def start_primary(self):
+        # An old journal already has revisions from the previous process.
+        # Require TWO new ticks from this newly launched child.
+        baseline = 0
+        if self.watched.is_file():
+            with sqlite3.connect(self.watched, timeout=1) as db:
+                old = db.execute("SELECT revision FROM state WHERE id=1").fetchone()
+            if old is not None:
+                baseline = int(old[0])
         child = subprocess.Popen(
             self.command(WATCH_PROCESS, self.watched, SCOPE),
             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
@@ -125,7 +133,7 @@ class IndependentProcessFailureDrill(unittest.TestCase):
                         rev = db.execute(
                             "SELECT revision FROM state WHERE id=1"
                         ).fetchone()
-                    if rev and rev[0] >= 2:
+                    if rev and rev[0] >= baseline + 2:
                         return child
                 except sqlite3.Error:
                     pass
