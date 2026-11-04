@@ -130,9 +130,10 @@ path. Until independently reviewed and explicitly approved, stop at this blocker
 
 The official placement page literally says total stop volume must be **less than**
 closable volume. That conflicts with this experiment's required full protective
-quantity. Obtain venue clarification/evidence for equality and the chosen
-`volType=1` full-sized partial-stop request; do not reduce quantity merely to get
-acceptance. Required limit-price fields and the contradictory response example
+quantity. Obtain venue clarification/evidence for full-position equality and the
+`volType=2` whole-position request (`profitLossVolType=SAME`, `vol=1`);
+do not substitute `volType=1` partial protection or reduce quantity merely
+to get acceptance. Required limit-price fields and the contradictory response example
 also need resolution before a request becomes executable.
 
 Supplied POST outcomes are journaled only as ACK/REJECTED/AMBIGUOUS; none clears
