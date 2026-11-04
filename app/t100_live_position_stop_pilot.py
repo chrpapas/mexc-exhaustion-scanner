@@ -23,6 +23,12 @@ class PilotHalted(RuntimeError):
     pass
 
 
+# Review-age ceiling, NOT an execution protection deadline or a loss cap.
+# A later real executor needs its own independent watchdog/fill timestamp.
+MAX_ENTRY_FILL_AGE_FOR_PLACE_REVIEW_MS = 15_000
+MAX_EXCHANGE_CLOCK_LEAD_MS = 2_000
+
+
 def number(value):
     try:
         if type(value) is bool:
@@ -135,6 +141,25 @@ class PositionStopPilot:
     def close(self):
         self.db.close()
 
+    @staticmethod
+    def _require_recent_entry_fill_for_place(snapshot):
+        """Refuse stale/missing signed order fill time; CLOSE remains available.
+
+        MEXC order/external updateTime is Unix milliseconds. This is a
+        conservative review gate, not proof of a bounded unprotected interval
+        from the moment of exchange fill to protection activation.
+        """
+        origin = snapshot.get("origin")
+        timestamp = origin.get("updateTime") if type(origin) is dict else None
+        if type(timestamp) is not int or timestamp <= 0:
+            raise PilotHalted("ENTRY_FILL_TIMESTAMP_UNVERIFIED")
+        age_ms = int(time.time() * 1000) - timestamp
+        if age_ms < -MAX_EXCHANGE_CLOCK_LEAD_MS:
+            raise PilotHalted("ENTRY_FILL_CLOCK_SKEW_UNVERIFIED")
+        if age_ms > MAX_ENTRY_FILL_AGE_FOR_PLACE_REVIEW_MS:
+            raise PilotHalted("ENTRY_FILL_TOO_OLD_FOR_NATIVE_PLACE_REVIEW")
+        return timestamp
+
     def _read(self):
         return json.loads(self.db.execute("SELECT body FROM pilot WHERE id=1").fetchone()[0])
 
@@ -148,6 +173,11 @@ class PositionStopPilot:
             "post_transport_available": False,
             "entry_allowed": False,
             "protection_gap_acceptable": False,
+            "place_review_deadline_expired": (
+                int(time.time() * 1000) > row["place_review_deadline_ms"]
+                if type(row.get("place_review_deadline_ms")) is int
+                else None
+            ),
             "reconciliation_required": row["state"].endswith("UNKNOWN"),
         }
 
@@ -246,6 +276,7 @@ class PositionStopPilot:
         if action == "PLACE":
             if row["state"] != "NEW" or stops:
                 raise PilotHalted("PLACE_REQUIRES_EMPTY_STOP_INVENTORY")
+            self._require_recent_entry_fill_for_place(snapshot)
             payload = {
                 "positionId": self.scope["position_id"],
                 "vol": self.scope["quantity"],
@@ -331,6 +362,14 @@ class PositionStopPilot:
             ):
                 raise PilotHalted("SCOPED_OPERATOR_REVIEW_REQUIRED")
             row = self._read()
+            if request["action"] == "PLACE":
+                # Diagnostic evidence only. Does NOT authorize a real entry,
+                # and the eventual venue POST/GET may exceed this deadline.
+                recorded_fill_ms = self._require_recent_entry_fill_for_place(snapshot)
+                row["entry_fill_update_ms"] = recorded_fill_ms
+                row["place_review_deadline_ms"] = (
+                    recorded_fill_ms + MAX_ENTRY_FILL_AGE_FOR_PLACE_REVIEW_MS
+                )
             if row.get("pending"):
                 row["events"].append({"kind": "SUPERSEDED_PENDING", "request": row["pending"]})
             row.update(state=request["action"] + "_UNKNOWN", pending=request)
