@@ -1,6 +1,9 @@
 name: T100 V40 isolated PostgreSQL transaction integration
 
 on:
+  push:
+    branches:
+      - codex/t100-readiness-issue-14
   pull_request:
     paths:
       - 'pyproject.toml'

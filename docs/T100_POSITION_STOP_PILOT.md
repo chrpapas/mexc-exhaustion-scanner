@@ -119,3 +119,31 @@ using multiple journal files defeats local idempotency and is forbidden by the
 operating procedure; this prototype does not provide account-wide distributed
 fencing or exactly-once venue delivery. GET evidence is caller-bound, not signed
 or tamper-proof inside this offline harness.
+
+## Further contract and hard-limit review
+
+The official order endpoint exposes market, IOC and FOK order types, but does
+not provide an upper execution-price cap for a sell opening order in its request
+schema. A sell limit constrains the minimum sale price, not its maximum; switching
+to IOC/FOK alone therefore does not prove a strict maximum opening notional.
+The previous v3 market-entry precheck compares quoted notional only. A subsequent
+fill-price check detects a breach after exposure exists; it cannot prevent it.
+Do not silently reinterpret the operator's 12.50 USDT hard ceiling as a quote
+estimate. A documented enforceable price envelope or explicit operator revision
+of that constraint is required before executable entry approval.
+
+Public GET during this review returned BTC_USDT contractSize=0.0001, minVol=1,
+volUnit=1, priceUnit=0.1, state=0; last/bid=78254.8 and ask=78254.9 USDT.
+One-contract reference notional was 7.82548 USDT. This is transient public
+market evidence, not a fill guarantee or private account permission.
+
+The position-stop candidate deliberately retains volType=1/SAME with explicit
+full volume pending clarification. volType=2 is documented as position TP/SL,
+but changing the proposal to that mode does not resolve the contradictory vol
+constraint or prove accepted full-volume placement. Reconciliation now rejects
+volume-mode drift after placement/amendment even if effective quantity happens
+to match. No alternate-mode guess is used to bypass an unknown outcome.
+
+References:
+https://www.mexc.io/api-docs/futures/account-and-trading-endpoints/place-order
+https://www.mexc.io/api-docs/futures/account-and-trading-endpoints/place-tpsl-order-by-position

@@ -19,6 +19,21 @@ permissions:
   contents: read
 
 jobs:
+  full-offline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      T100_EXECUTION_MODE: paper
+      T100_LIVE_ORDER_API_ENABLED: 'false'
+      T100_LIVE_KILL_SWITCH: 'true'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install '.[dev]'
+      - name: Full offline suite (PostgreSQL runs in isolated workflow)
+        run: python -m pytest -q --ignore=tests/test_t100_live_shared_postgres_integration.py --ignore=tests/test_t100_live_v40_postgres_integration.py
   pure-python-offline:
     runs-on: ubuntu-latest
     timeout-minutes: 8

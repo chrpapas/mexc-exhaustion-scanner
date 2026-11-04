@@ -209,6 +209,15 @@ class PositionStopPilot:
         if len(stops) != 1:
             raise PilotHalted("NATIVE_STOP_NOT_UNIQUE")
         stop = stops[0]
+        # This experiment requested fixed quantity/SAME semantics. Do not
+        # silently accept a different volume mode after placement or amendment,
+        # even if the generic audit currently computes equal coverage.
+        if (
+            type(stop.get("volType")) is not int
+            or stop["volType"] != 1
+            or stop.get("profitLossVolType") != "SAME"
+        ):
+            raise PilotHalted("STOP_QUANTITY_MODE_CHANGED")
         if identity(stop.get("id")) != row["stop_id"] or number(stop.get("stopLossPrice")) != number(price):
             raise PilotHalted("STOP_ID_OR_EXACT_PRICE_MISMATCH")
         audit = assess_native_short_market_stop_row(
@@ -278,6 +287,13 @@ class PositionStopPilot:
                 or len(stops) != 1
                 or identity(stops[0].get("id")) != row.get("stop_id")
                 or identity(stops[0].get("positionId")) != self.scope["position_id"]
+                or stops[0].get("symbol") != self.scope["symbol"]
+                or type(stops[0].get("orderId")) not in (int, str)
+                or str(stops[0]["orderId"]) != "0"
+                or any(
+                    type(stops[0].get(k)) is not int or stops[0][k] != v
+                    for k, v in (("state", 1), ("isFinished", 0), ("triggerSide", 0))
+                )
             ):
                 raise PilotHalted("CANCEL_REQUIRES_FLAT_OWNED_STOP")
             payload = [{"stopPlanOrderId": row["stop_id"]}]
@@ -392,6 +408,8 @@ class PositionStopPilot:
                     or identity(s.get("id")) != row.get("stop_id")
                     or identity(s.get("positionId")) != self.scope["position_id"]
                     or s.get("symbol") != "BTC_USDT"
+                    or type(s.get("orderId")) not in (int, str)
+                    or str(s["orderId"]) != "0"
                     or any(
                         type(s.get(k)) is not int or s[k] != v
                         for k, v in [("state", 2), ("isFinished", 1), ("triggerSide", 0)]

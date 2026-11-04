@@ -1531,3 +1531,93 @@ approved loss budget, separately reviewed executor and explicit operator approva
 are required before a supervised experiment. See the design's recovery limits;
 stop execution and partial-fill recovery remain unverified. G5/G9 stay BLOCKED.
 No real exchange POST, Keychain access, production change or merge occurred.
+
+## Dedicated Keychain GET preflight — 2026-11-04 follow-up
+
+Fetched development branch; local checkpoint was two commits ahead of fetched
+remote. Inspected Downloads v3 pilot and GET-only forensics code without running
+the old live pilot or changing its journal. Rechecked official placement,
+current-stop-list and amendment documentation. Full-quantity equality, required
+market limit-price fields and safe attached/native stop coexistence remain
+unresolved. A separate entry followed by native stop placement leaves exposure;
+no safe live sequence has been established. No live approval requested.
+
+Added `scripts/t100_position_pilot_preflight.py`, a dedicated GET-only runner
+with fixed Keychain service/accounts, captured subprocess output, fixed HTTPS
+host, redirects/proxy environment disabled and no mutation method. It requires
+two empty account inventories with strict counts; errors redact bodies/secrets.
+Sandbox Keychain access failed. Narrowly escalated local execution retrieved
+credentials internally, but the first signed inventory GET returned HTTP 403.
+**Current account inventory is UNVERIFIED.** No conclusion about account flatness
+or the cause of 403 is inferred. Exchange testing halted; no POST was sent.
+Previous pilot journal remains unchanged. Next prerequisite: resolve authorized
+signed GET access, then establish flat inventory and reviewed full-volume stop
+contract/protection-gap controls before presenting one concrete approval request.
+
+Offline validation: 2,191 passed, 912 subtests passed, excluding the two guarded
+CI-only PostgreSQL modules. Those integration tests were not run this follow-up;
+GitHub CI for the local change is unverified. Production remains blocked.
+
+## Corrected preflight domain and successful signed GET — 2026-11-04
+
+The new preflight incorrectly used retired `contract.mexc.com`; the previously
+working Downloads client uses `api.mexc.com`. MEXC's official domain-update
+announcement retires the former on January 19, 2026:
+https://www.mexc.com/announcements/article/futures-api-access-domain-update-17827791532974
+Corrected only the dedicated preflight host. No production configuration changed.
+The earlier 403s do not establish credential/IP/permission failure.
+
+Actual signed GET observation at Unix timestamp 1793777069: two complete passes
+of positions, current stops and account-wide outstanding counts returned empty
+positions/stops and strict integer zero counts. Status:
+EMPTY_INVENTORY_OBSERVED_TWICE. This is non-atomic observation, not future
+flatness or live authorization. Credentials stayed internal; no POST was sent.
+A mock transport regression verifies the current host, no redirects/environment
+proxies and all six GET calls. Prior journals were not modified.
+
+Read-only access blocker is resolved. Full-volume stop contract ambiguities and
+entry-to-protection gap remain unresolved; G5/G9 stay blocked. The operator's
+required first-POST approval is still outstanding and has not been bypassed.
+
+Domain-fix validation: 2,192 offline tests and 912 subtests passed, excluding
+only the two guarded PostgreSQL CI modules. Ruff and diff checks passed.
+Current-change GitHub CI is unverified; no new database integration evidence.
+
+## Continued offline review — quantity modes and hard notional ceiling
+
+Reject changed volType/profitLossVolType on position-stop reconciliation, even
+when the generic full-coverage audit would compute the same protective quantity.
+An amendment changing to whole-position or SEPARATE mode remains AMEND_UNKNOWN;
+regressions verify no state advancement. This preserves the exact requested
+semantics rather than inferring successful amendment from quantity alone.
+
+Public BTC contract/ticker GET showed 0.0001 BTC per contract and approximately
+7.82548 USDT for one contract at observation. The former market-entry runner
+checks quoted notional, not a guaranteed fill ceiling. IOC/FOK sell limits also
+do not cap the maximum sell price. The strict 12.50 opening-notional ceiling
+therefore needs a documented enforceable envelope or explicit operator revision;
+no constraint was relaxed. See the pilot design for the detailed blocker.
+No private mutation, journal reset, production edit or new live approval occurred.
+Validation: 2,193 offline tests and 914 subtests passed; the two guarded
+PostgreSQL CI modules remain excluded. Ruff and diff checks passed. Current
+GitHub CI remains unverified. Live execution remains blocked.
+
+## Cleanup ownership and SQLite fault review — 2026-11-04
+
+Cancellation proposals now revalidate symbol, position-native orderId=0 and
+strict active/untriggered/nonfinal state in addition to exact stop/position IDs.
+Terminal cancellation evidence also rejects an order-attached origin. Drift
+cannot advance the journal or produce a cleanup proposal for an unexpected row.
+
+Actual local SQLite trigger fault injection covers failed staging and failed
+GET-reconciliation writes. Staging failure rolls back to NEW/revision zero;
+a failed observation write survives reopen as PLACE_UNKNOWN and blocks retry.
+Once storage is restored, GET evidence can reconcile the existing attempt.
+These are local transaction/reopen tests, not OS power-loss or real-venue proofs.
+
+Full offline suite: 2,196 passed, 920 subtests passed, excluding the two guarded
+CI-only PostgreSQL modules. New pilot suite: 20 tests, 21 subtests passed.
+Ruff, project verification and diff checks passed. GitHub CI for this local
+checkpoint is unverified. No exchange POST, journal reset, production change
+or new credential access occurred. Contract, gap and hard-notional blockers
+remain open; first-POST approval remains required.

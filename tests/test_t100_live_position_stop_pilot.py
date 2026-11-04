@@ -328,3 +328,78 @@ class PilotTests(unittest.TestCase):
             PositionStopPilot(
                 self.path, account=ACCOUNT, origin_oid="pilot-origin", position_id="900", quantity="2"
             )
+
+    def test_amendment_cannot_silently_change_quantity_mode(self):
+        self.protected()
+        self.stage("AMEND", snapshot([stop()]), "108")
+        for changes in ({"volType": 2}, {"profitLossVolType": "SEPARATE", "stopLossVol": "1"}):
+            changed = dict(stop("108"), **changes)
+            with self.subTest(changes=changes), self.assertRaises(PilotHalted):
+                self.p.observe(snapshot([changed]))
+            self.assertEqual(self.p.diagnostics()["state"], "AMEND_UNKNOWN")
+
+    def flat_after_close(self):
+        self.protected()
+        request = self.stage("CLOSE", snapshot([stop()]))
+        close = {
+            "orderId": "101",
+            "positionId": "900",
+            "externalOid": request["payload"]["externalOid"],
+            "symbol": "BTC_USDT",
+            "state": 3,
+            "side": 2,
+            "dealVol": "1",
+        }
+        self.p.observe(snapshot([stop()], flat=True), close_order=close)
+
+    def test_cancel_rejects_identity_and_terminal_state_drift(self):
+        self.flat_after_close()
+        for key, value in [
+            ("symbol", "ETH_USDT"),
+            ("orderId", 100),
+            ("orderId", False),
+            ("state", 3),
+            ("isFinished", 1),
+            ("triggerSide", 2),
+        ]:
+            bad = dict(stop(), **{key: value})
+            with self.subTest(key=key, value=value), self.assertRaises(PilotHalted):
+                self.stage("CANCEL", snapshot([bad], flat=True))
+            self.assertEqual(self.p.diagnostics()["state"], "FLAT_OBSERVED")
+        with self.assertRaises(PilotHalted):
+            self.p.observe(
+                snapshot(flat=True), canceled_stop=dict(stop(), state=2, isFinished=1, orderId=100)
+            )
+
+    def test_durable_write_failure_cannot_return_staged_request(self):
+        self.p.db.execute(
+            "CREATE TRIGGER fail_write BEFORE UPDATE ON pilot BEGIN SELECT RAISE(ABORT, 'fault'); END"
+        )
+        import sqlite3
+
+        with self.assertRaises(sqlite3.IntegrityError):
+            self.stage("PLACE", snapshot(), "110")
+        self.assertEqual(self.p.diagnostics()["state"], "NEW")
+        self.assertEqual(self.p.diagnostics()["revision"], 0)
+        self.p.db.execute("DROP TRIGGER fail_write")
+        self.stage("PLACE", snapshot(), "110")
+        self.p.close()
+        self.p = self.open()
+        with self.assertRaises(PilotHalted):
+            self.stage("PLACE", snapshot(), "110")
+
+    def test_observation_commit_failure_retains_unknown_after_restart(self):
+        import sqlite3
+
+        self.stage("PLACE", snapshot(), "110")
+        self.p.db.execute(
+            "CREATE TRIGGER fail_write BEFORE UPDATE ON pilot BEGIN SELECT RAISE(ABORT, 'fault'); END"
+        )
+        with self.assertRaises(sqlite3.IntegrityError):
+            self.p.observe(snapshot([stop()]), stop_id="99")
+        self.p.close()
+        self.p = self.open()
+        self.assertEqual(self.p.diagnostics()["state"], "PLACE_UNKNOWN")
+        self.p.db.execute("DROP TRIGGER fail_write")
+        self.p.observe(snapshot([stop()]), stop_id="99")
+        self.assertEqual(self.p.diagnostics()["state"], "PROTECTED_OBSERVED")
