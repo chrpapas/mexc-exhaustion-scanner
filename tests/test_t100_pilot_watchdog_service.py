@@ -4,7 +4,10 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import hmac
+import os
 import sqlite3
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -67,6 +70,21 @@ class ServiceTests(unittest.TestCase):
                     build_config(e, cycles=1)
         with self.assertRaisesRegex(ServiceHalted, "PILOT_INVALID_CYCLES"):
             build_config(self.env, cycles=0)
+
+    def test_local_sentinel_scope_cli_uses_no_network_or_journal(self):
+        pinned = build_config(self.env, cycles=1)[5]
+        result = subprocess.run(
+            [sys.executable, "-m", "app.t100_pilot_watchdog_service",
+             "--print-sentinel-scope"],
+            env={**os.environ, **self.env},
+            capture_output=True, text=True, timeout=8,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("PILOT_SENTINEL_SCOPE_SHA256=" + pinned, result.stdout)
+        self.assertNotIn(self.env["T100_PILOT_READONLY_API_KEY"], result.stdout)
+        self.assertNotIn(self.env["T100_PILOT_READONLY_API_SECRET"], result.stdout)
+        self.assertIn("NO NETWORK OR JOURNAL OPERATIONS", result.stdout)
+        self.assertFalse(self.journal.exists())
 
     def test_signed_get_uses_only_exact_allowlisted_paths_and_no_post(self):
         async def scenario():
