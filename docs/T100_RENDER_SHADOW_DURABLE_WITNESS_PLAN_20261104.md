@@ -128,3 +128,31 @@ Before any deployment or migration:
 **G6 remains NOT CERTIFIED. G5/G9 remain BLOCKED.**
 This work does not change the existing running service, credentials,
 Render variables, database schema, BOXWAVE, or MEXC orders.
+
+
+## Isolated real PostgreSQL integration verification
+
+In addition to the Python behavioral tests, the development branch now has
+an isolated GitHub Actions service backed by an actual **PostgreSQL 17**
+container. Test:
+`tests/test_t100_render_shadow_postgres_integration.py`, workflow:
+`.github/workflows/t100-render-shadow-postgres-integration.yml`.
+
+The test is hard-coded to `127.0.0.1:5432/postgres` in an ephemeral CI
+container, and only runs with explicit
+`T100_RENDER_TEST_LOCAL_POSTGRES=YES`. It does **not** accept the
+user's Render DATABASE_URL. Successful run
+`41904292339` at commit
+`fa483df70f762f63f0874507a0dcfba81b776c76`
+verified:
+
+- Actual execution of migration 031 against PostgreSQL 17;
+- Real trigger rejecting an attempted direct clear of a latched kill;
+- Reconnection and a new runner retaining first kill reason;
+- Second concurrent DB connection rejected by the singleton advisory
+  session lock while the original owns it, then acquiring it after close;
+- Real DB clock ages: healthy new witness versus a stale observation;
+- Database check constraints refusing true live/entry authorization.
+
+**This is offline, isolated database evidence, not proof the shared
+Render database schema has been migrated or its user permissions reviewed.**
