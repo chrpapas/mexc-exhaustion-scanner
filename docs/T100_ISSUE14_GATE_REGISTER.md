@@ -1907,3 +1907,38 @@ process supervisor, heartbeat failure alert, actual Discord delivery,
 emergency-close transport or live incident drill has been performed.
 **G5 and G9 remain BLOCKED** for real stop amendment/trigger and reliable
 end-to-end recovery. Production entry gates remain false.
+
+
+## 2026-11-04 standalone GET-only watchdog service and heartbeat checkpoint
+
+On development branch `codex/t100-readiness-issue-14`, the previous
+GET-only observer and durable outbox now have a **standalone, opt-in runnable
+candidate** and a **separate read-only heartbeat inspection process**:
+
+- `app/t100_pilot_watchdog_service.py` implements an allowlisted,
+  signed-GET-only MEXC transport, explicit paper/kill switch, SHA-256
+  pinned scoped key, review-only BTC entry/stop scope, and a separate
+  redacted Discord-notification callback. No `MexcTradeClient` or exchange
+  POST methods are imported or called. Bounded one-shot `--cycles 1` returns
+  nonzero on latched alarm/pending delivery; `--continuous` is a separate
+  opt-in loop, **not** a deployed service. `--print-sentinel-scope`
+  returns the local-only derived journal binding hash without network.
+- `app/t100_pilot_watchdog_heartbeat.py` opens the bound SQLite journal
+  query-only from a **different process** and fails closed on missing,
+  stale, wrong scope, alarm-latched or future-clock state. It returns exit
+  2 for alarms, 0 only for a recent, nonauthorizing healthy observation.
+  A separate scheduler and external alert delivery are still absent.
+- Mocked service/HTTP signing/notifier tests, heartbeat consistency tests,
+  and an actual separate-process CLI exit-code test pass in CI.
+- The exact setup/limitations are documented in
+  `docs/T100_PILOT_GET_ONLY_SERVICE_RUNBOOK_20261104.md`.
+  This code has **not** been run with private MEXC GET credentials or real
+  Discord notifications, and has not been deployed to Render or Mac as a
+  supervised service.
+
+**G6 remains NOT CERTIFIED**: GET polling/notification liveness is not an
+operationally managed independent watcher; no third-party death alert,
+venue-real drill, remote durable alarm delivery, or emergency-close transport
+exists. **G5/G9 remain BLOCKED**: native stop amendment and market-trigger
+fills are unverified. No production authorization, API permission changes,
+exchange POST, main account/Render/database/BOXWAVE modifications were made.
