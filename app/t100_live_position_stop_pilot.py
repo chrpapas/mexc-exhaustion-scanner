@@ -377,6 +377,24 @@ class PositionStopPilot:
                                 kind = "CONFLICTING_PLACEMENT_IDENTITY"
                             else:
                                 row["acknowledged_stop_id"] = acknowledged_id
+                    elif row["state"] == "CLOSE_UNKNOWN":
+                        # MEXC order/create documents data={orderId, ts}.
+                        # Persist only the validated order ID, never a body.
+                        # A contradictory acknowledgement latches permanently.
+                        data = response.get("data")
+                        try:
+                            if type(data) is not dict:
+                                raise PilotHalted("CLOSE_ACK_SHAPE_UNVERIFIED")
+                            acknowledged_id = identity(data.get("orderId"))
+                        except PilotHalted:
+                            kind = "AMBIGUOUS"
+                        else:
+                            prior = row.get("acknowledged_close_order_id")
+                            if prior is not None and prior != acknowledged_id:
+                                row["close_identity_conflict"] = True
+                                kind = "CONFLICTING_CLOSE_IDENTITY"
+                            else:
+                                row["acknowledged_close_order_id"] = acknowledged_id
             row["events"].append({"kind": kind, "request_sha256": request_sha256, "at": time.time()})
             row["revision"] += 1
             self.db.execute("UPDATE pilot SET body=? WHERE id=1", (json.dumps(row),))
@@ -410,6 +428,8 @@ class PositionStopPilot:
                 row.update(state="PROTECTED_OBSERVED", price=price)
             elif action == "CLOSE_UNKNOWN":
                 self._inventory(snapshot, flat=True)
+                if row.get("close_identity_conflict"):
+                    raise PilotHalted("CLOSE_ACK_IDENTITY_CONFLICT_REQUIRES_INVESTIGATION")
                 o = close_order
                 if (
                     type(o) is not dict
@@ -423,7 +443,10 @@ class PositionStopPilot:
                     or number(o.get("dealVol")) != number(self.scope["quantity"])
                 ):
                     raise PilotHalted("CLOSE_FILL_NOT_RECONCILED")
-                identity(o.get("orderId"))
+                close_id = identity(o.get("orderId"))
+                acknowledged_id = row.get("acknowledged_close_order_id")
+                if acknowledged_id is not None and close_id != acknowledged_id:
+                    raise PilotHalted("CLOSE_ACK_GET_IDENTITY_MISMATCH")
                 row["state"] = "FLAT_OBSERVED"
             elif action in ("CANCEL_UNKNOWN", "FLAT_OBSERVED"):
                 stops = self._inventory(snapshot, flat=True)
