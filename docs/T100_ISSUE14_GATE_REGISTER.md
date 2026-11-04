@@ -1739,3 +1739,46 @@ trigger+fill, ambiguity in `stoporder/place` full-volume contract
 timed emergency close, venue POST uncertain outcomes and real protected
 runtime. There is deliberately no executable post transport or
 production release permission; do NOT construe green CI as certification.
+
+
+### 2026-11-04 — Reject stale native-stop placement review by exchange entry-fill updateTime
+
+The previous offline position-native pilot allowed a `PLACE` request
+proposal against any otherwise valid live short, even an entry
+filled long ago. This could normalize an indefinite uncovered
+interval in the next supervised test. Now:
+
+- `PLACE` proposal and durable stage require the MEXC signed
+  external-order `updateTime` as a strictly positive Unix
+  **millisecond integer**. Missing/string/boolean values, a clock
+  >2 seconds ahead, and filled entries older than the conservative
+  **15-second review-age ceiling** are refused.
+- A successful review stage records the signed entry update time
+  and review deadline in the private local SQLite journal. Its
+  redacted diagnostics indicate whether that deadline has passed,
+  while `protection_gap_acceptable=false`, `entry_allowed=false`,
+  `post_transport_available=false` and `live_authorization=false`
+  remain unchanged.
+- An aged/invalid entry does **not** disable `CLOSE` proposal
+  eligibility: the emergency exit remains available for separate,
+  operator-authorized execution.
+- Regressions cover missing/bool/string/zero/stale/future
+  signed entry timestamps and persisted journal deadline state.
+- This gate does **not** establish that a position was protected
+  within 15 seconds. In particular it does not measure receipt of
+  the first live fill, network delays to POST, placement success,
+  async quantity update, independent watchdog availability, or
+  actual stop activation. The position remains uncovered until
+  a native short MARKET SL is seen in authenticated GET. The
+  hard notional and full-volume TP/SL contract ambiguities remain.
+
+Code checkpoint: `dca9461d149b6630c590fb6f0f5c90c774c6da31`;
+tests: `dd3ac21d0aa2e81a1d19d16ce7671b77e57cfb81`.
+GitHub CI for exact test SHA: full offline suite
+**2,210 tests + 935 subtests passed**; offline safety, split,
+promotion, dashboard and isolated PostgreSQL branch/PR workflows
+all green. No exchange POST, production change, Keychain read,
+or BOXWAVE change was made.
+
+Official order GET timestamp reference:
+https://www.mexc.com/api-docs/futures/account-and-trading-endpoints/get-order-by-external-id
