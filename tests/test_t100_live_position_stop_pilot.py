@@ -427,6 +427,71 @@ class PilotTests(unittest.TestCase):
                 link, account=ACCOUNT, origin_oid="pilot-origin", position_id="900", quantity="1"
             )
 
+
+    def test_close_post_ack_id_must_equal_signed_get_order_after_restart(self):
+        self.protected()
+        request = self.stage("CLOSE", snapshot([stop()]))
+        self.p.record_post_outcome(
+            digest(request),
+            {"success": True, "code": 0, "data": {"orderId": "101", "ts": 1793777069000}},
+        )
+        self.p.close()
+        self.p = self.open()
+        order = {
+            "orderId": "102",
+            "positionId": "900",
+            "externalOid": request["payload"]["externalOid"],
+            "symbol": "BTC_USDT",
+            "state": 3,
+            "side": 2,
+            "dealVol": "1",
+        }
+        with self.assertRaisesRegex(PilotHalted, "CLOSE_ACK_GET_IDENTITY_MISMATCH"):
+            self.p.observe(snapshot([stop()], flat=True), close_order=order)
+        self.assertEqual(self.p.diagnostics()["state"], "CLOSE_UNKNOWN")
+        order["orderId"] = "101"
+        self.p.observe(snapshot([stop()], flat=True), close_order=order)
+        self.assertEqual(self.p.diagnostics()["state"], "FLAT_OBSERVED")
+
+    def test_conflicting_close_post_ack_ids_cannot_certify_flat(self):
+        self.protected()
+        request = self.stage("CLOSE", snapshot([stop()]))
+        for identifier in ("101", "102", "101"):
+            self.p.record_post_outcome(
+                digest(request), {"success": True, "code": 0, "data": {"orderId": identifier}}
+            )
+        self.p.close()
+        self.p = self.open()
+        order = {
+            "orderId": "101",
+            "positionId": "900",
+            "externalOid": request["payload"]["externalOid"],
+            "symbol": "BTC_USDT",
+            "state": 3,
+            "side": 2,
+            "dealVol": "1",
+        }
+        with self.assertRaisesRegex(PilotHalted, "CLOSE_ACK_IDENTITY_CONFLICT"):
+            self.p.observe(snapshot([stop()], flat=True), close_order=order)
+        self.assertEqual(self.p.diagnostics()["state"], "CLOSE_UNKNOWN")
+        self.assertFalse(self.p.diagnostics()["live_authorization"])
+
+    def test_close_post_bad_ack_shape_does_not_store_any_identifier_or_private_body(self):
+        self.protected()
+        request = self.stage("CLOSE", snapshot([stop()]))
+        for data in (
+            None, True, 101, "101", {"orderId": True},
+            {"orderId": 0}, {"other": "PRIVATE_VALUE"},
+        ):
+            self.p.record_post_outcome(
+                digest(request), {"success": True, "code": 0, "data": data}
+            )
+            row = self.p._read()
+            self.assertEqual(row["events"][-1]["kind"], "AMBIGUOUS")
+            self.assertNotIn("acknowledged_close_order_id", row)
+            self.assertNotIn("PRIVATE_VALUE", str(row))
+        self.assertEqual(self.p.diagnostics()["state"], "CLOSE_UNKNOWN")
+
     def test_acknowledged_placement_id_binds_get_after_restart(self):
         request = self.stage("PLACE", snapshot(), "110")
         self.p.record_post_outcome(digest(request), {"success": True, "code": 0, "data": "99"})
