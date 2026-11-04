@@ -403,8 +403,38 @@ class PositionStopPilot:
             self.db.execute("ROLLBACK")
             raise
 
+    def _verify_close_deals(self, deals, order_id):
+        """Independent fill-detail witness; close order.state/dealVol alone is insufficient.
+
+        MEXC /private/order/deal_details/{orderId} returns one trade per row.
+        Never treat absent, duplicated, wrong-order or partial rows as closure.
+        """
+        if type(deals) is not list or not 1 <= len(deals) <= 100:
+            raise PilotHalted("CLOSE_DEAL_HISTORY_UNVERIFIED")
+        seen = set()
+        filled = Decimal(0)
+        for deal in deals:
+            if type(deal) is not dict:
+                raise PilotHalted("CLOSE_DEAL_ROW_UNVERIFIED")
+            deal_id = identity(deal.get("id"))
+            if deal_id in seen:
+                raise PilotHalted("CLOSE_DEAL_DUPLICATE")
+            seen.add(deal_id)
+            if (
+                identity(deal.get("orderId")) != order_id
+                or deal.get("symbol") != self.scope["symbol"]
+                or type(deal.get("side")) is not int
+                or deal["side"] != 2
+            ):
+                raise PilotHalted("CLOSE_DEAL_IDENTITY_MISMATCH")
+            filled += number(deal.get("vol"))
+            number(deal.get("price"))
+        if filled != number(self.scope["quantity"]):
+            raise PilotHalted("CLOSE_DEAL_VOLUME_MISMATCH")
+
     def observe(
-        self, snapshot, *, stop_id=None, close_order=None, canceled_stop=None, expected_revision=None
+        self, snapshot, *, stop_id=None, close_order=None, close_deals=None,
+        canceled_stop=None, expected_revision=None
     ):
         self.db.execute("BEGIN IMMEDIATE")
         try:
@@ -447,6 +477,7 @@ class PositionStopPilot:
                 acknowledged_id = row.get("acknowledged_close_order_id")
                 if acknowledged_id is not None and close_id != acknowledged_id:
                     raise PilotHalted("CLOSE_ACK_GET_IDENTITY_MISMATCH")
+                self._verify_close_deals(close_deals, close_id)
                 row["state"] = "FLAT_OBSERVED"
             elif action in ("CANCEL_UNKNOWN", "FLAT_OBSERVED"):
                 stops = self._inventory(snapshot, flat=True)
@@ -488,11 +519,17 @@ class PositionStopPilot:
         try:
             first = await collect_get_snapshot(probe, self.scope["account"], self.scope["origin_oid"])
             close_order = None
+            close_deals = None
             terminal = None
             if row["state"] == "CLOSE_UNKNOWN":
+                close_oid = row["pending"]["payload"]["externalOid"]
                 close_order = await probe.raw_order_by_external_oid(
-                    "BTC_USDT", row["pending"]["payload"]["externalOid"]
+                    "BTC_USDT", close_oid
                 )
+                if type(close_order) is not dict:
+                    raise PilotHalted("CLOSE_GET_ORDER_UNVERIFIED")
+                close_id = identity(close_order.get("orderId"))
+                close_deals = await probe.raw_order_deal_details(close_id)
             if row["state"] in ("CANCEL_UNKNOWN", "FLAT_OBSERVED"):
                 matches = []
                 seen = set()
@@ -515,6 +552,13 @@ class PositionStopPilot:
             last = await collect_get_snapshot(probe, self.scope["account"], self.scope["origin_oid"])
             if any(first[k] != last[k] for k in ("positions", "stops", "counts", "origin")):
                 raise PilotHalted("RECONCILIATION_INVENTORY_CHANGED")
+            if row["state"] == "CLOSE_UNKNOWN":
+                # Independent second signed GET: both the order and its
+                # immutable trade ledger must remain stable across bookends.
+                second_order = await probe.raw_order_by_external_oid("BTC_USDT", close_oid)
+                second_deals = await probe.raw_order_deal_details(close_id)
+                if close_order != second_order or close_deals != second_deals:
+                    raise PilotHalted("CLOSE_ORDER_OR_DEALS_DRIFT")
             last["observed_at"] = first["observed_at"]
             if self._read()["revision"] != row["revision"]:
                 raise PilotHalted("JOURNAL_CHANGED_DURING_GET")
@@ -522,6 +566,7 @@ class PositionStopPilot:
                 last,
                 stop_id=stop_id,
                 close_order=close_order,
+                close_deals=close_deals,
                 canceled_stop=terminal,
                 expected_revision=row["revision"],
             )
