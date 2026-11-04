@@ -1878,3 +1878,32 @@ See `docs/T100_REAL_MEXC_PILOT_EVIDENCE_20261104.md`.
 The watchdog observer and its explicit offline unittest are included in the
 focused safety workflow; a green CI result does not certify a running
 independent emergency-close service.
+
+
+## 2026-11-04 durable watchdog alert-harness checkpoint
+
+Continued G6 engineering on the draft development branch:
+
+- `app/t100_pilot_watchdog_runtime.py` provides an injected async GET-only
+  observation loop, single-host locked SQLite FULL-sync journal, persistent
+  redacted alarm latch and durable notification outbox. On failed notification
+  or restart the undelivered alarm is retried; a later healthy snapshot does
+  not automatically erase the alarm. Unknown verdicts and clock regressions
+  fail closed. It has no Keychain, POST transport, emergency-close executor,
+  production DB, Render or Discord deployment.
+- `tests/test_t100_pilot_watchdog_runtime.py` tests crash/retry, timeout,
+  malformed success, clock rollback, scope mismatch, local concurrency,
+  redaction and bounded polling. The explicit safety CI now includes these
+  tests and compile validation.
+- A CI regression exposing the difference between a durably latched
+  clock-regression alarm and the originally returned healthy verdict was
+  corrected in commit `16115a55fd59da4ca2ea92077855f05a98b9c29b`.
+  All five PR workflows subsequently completed successfully at this SHA.
+- See `docs/T100_PILOT_WATCHDOG_RUNTIME_20261104.md` for exact scope,
+  limits and non-production claims.
+
+**G6 remains NOT CERTIFIED**: no externally running service, independent
+process supervisor, heartbeat failure alert, actual Discord delivery,
+emergency-close transport or live incident drill has been performed.
+**G5 and G9 remain BLOCKED** for real stop amendment/trigger and reliable
+end-to-end recovery. Production entry gates remain false.
