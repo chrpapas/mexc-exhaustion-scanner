@@ -140,7 +140,7 @@ def build_config(env, *, cycles):
     journal = env.get("T100_PILOT_WATCHDOG_JOURNAL", "")
     if not journal or not Path(journal).is_absolute():
         raise ServiceHalted("PILOT_ABSOLUTE_JOURNAL_REQUIRED")
-    if type(cycles) is not int or cycles < 1:
+    if cycles is not None and (type(cycles) is not int or cycles < 1):
         raise ServiceHalted("PILOT_INVALID_CYCLES")
     scope = PilotWatchScope(
         account=actual_hash, origin_oid=oid, stop_id=stop_id or None,
@@ -154,7 +154,7 @@ def build_config(env, *, cycles):
     return key, secret, webhook, journal, scope, scope_hash
 
 
-async def run_service(*, environ=None, cycles: int = 1):
+async def run_service(*, environ=None, cycles: int | None = 1):
     env = os.environ if environ is None else environ
     key, secret, webhook, journal, scope, scope_hash = build_config(env, cycles=cycles)
     client = SignedGetOnlyMexc(key, secret)
@@ -179,7 +179,7 @@ async def run_service(*, environ=None, cycles: int = 1):
             observation_timeout_seconds=8.0,
             notification_timeout_seconds=8.0,
         ) as runner:
-            await runner.run(max_cycles=cycles)
+            return await runner.run(max_cycles=cycles)
     finally:
         await notifier.close()
         await client.close()
@@ -189,16 +189,22 @@ def main():
     parser = argparse.ArgumentParser(
         description="Explicit GET-only BTC pilot monitor; NOT an order executor"
     )
-    parser.add_argument("--cycles", type=int, default=1)
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--cycles", type=int, default=1)
+    mode.add_argument("--continuous", action="store_true")
     args = parser.parse_args()
+    requested_cycles = None if args.continuous else args.cycles
     try:
-        asyncio.run(run_service(cycles=args.cycles))
+        outcome = asyncio.run(run_service(cycles=requested_cycles))
     except Exception as exc:
         print("PILOT WATCHDOG HALTED:",
               str(exc) if isinstance(exc, ServiceHalted) else "PILOT_RUNTIME_UNAVAILABLE")
         sys.exit(2)
-    print("PILOT WATCHDOG GET-ONLY CYCLES COMPLETE:", args.cycles)
+    print("PILOT WATCHDOG RESULT:", outcome.status)
     print("NO MEXC ORDERS. PRODUCTION REMAINS DISABLED.")
+    if outcome.alarm_latched or outcome.notifications_pending:
+        print("PILOT WATCHDOG ALARM LATCHED OR DELIVERY PENDING")
+        sys.exit(2)
 
 
 if __name__ == "__main__":
