@@ -225,7 +225,7 @@ class PilotWatchdogRunner:
             return "WATCH_RUNTIME_VERDICT_INVALID", True
         return verdict.status, not is_safe
 
-    def _journal_observation(self, status: str, alarm: bool, now_ms: int) -> None:
+    def _journal_observation(self, status: str, alarm: bool, now_ms: int) -> str:
         self._db.execute("BEGIN IMMEDIATE")
         try:
             old_status, old_ms, old_latch, revision = self._db.execute(
@@ -247,6 +247,7 @@ class PilotWatchdogRunner:
                 (status, now_ms, int(bool(old_latch or alarm)), revision + 1),
             )
             self._db.execute("COMMIT")
+            return status
         except BaseException:
             self._db.execute("ROLLBACK")
             raise
@@ -269,7 +270,7 @@ class PilotWatchdogRunner:
             status, alarm = "WATCH_RUNTIME_GET_TIMEOUT_OR_EXCEPTION", True
         now = self._now()
         try:
-            self._journal_observation(status, alarm, now)
+            status = self._journal_observation(status, alarm, now)
         except Exception:
             # A failed durable write is a fatal local safety failure.
             # Never run notifications as though the observation was retained.
