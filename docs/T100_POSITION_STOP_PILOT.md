@@ -14,6 +14,17 @@ and eventually canceled without triggering. None certifies position-native
 placement, market-stop execution, amendment or complete deal-history recovery.
 The new code rejects this shape as protection. No new venue evidence was obtained.
 
+The latest offline candidate now selects `volType=2` (MEXC's documented
+entire-position TP/SL) with an explicit one-contract request and requires
+that same mode plus `SAME` in current authenticated GET. The earlier
+`volType=1` represented a *partial* position TP/SL. This fixes the mode
+mismatch but **does not certify exchange acceptance**: the documented
+strict-less-than quantity phrase conflicts with error 5004's
+greater-than rejection, and the market stop limit-price parameters
+are still inconsistent. A real one-shot experiment is required to
+learn MEXC's accepted payload and response. Never reduce the stop
+below full position size or interpret a rejection as protection.
+
 ## Implemented lifecycle
 
 A journal is bound to an account fingerprint, exact entry external ID, position
@@ -56,6 +67,22 @@ multi-host production ledger.
 A review approval expires within 60 seconds and binds account plus exact request
 hash/revision. The phrase explicitly says REVIEW_ONLY. It never authorizes a
 real POST; a separately reviewed supervised executor is still required.
+
+The placement review's time anchor now requires an exact, uniquely identified
+`GET /private/order/deal_details/{orderId}` fill ledger for the
+already-owned entry, with `side=3`, `BTC_USDT`, matching order ID,
+positive prices and aggregate volume exactly equal to one contract.
+Signed GET bookends compare the entry order *and* fill ledger twice.
+The review deadline is calculated from the **earliest** validated fill
+`timestamp`, or the order `updateTime` if that is earlier.
+Every timestamp must independently be a valid Unix millisecond integer
+with at most 2 seconds of future clock skew; missing, duplicated,
+partial, invalid or older-than-15-seconds evidence blocks a placement
+proposal and durable stage. Even if a native stop is eventually
+observed after the stored deadline, the journal stays `PLACE_UNKNOWN`,
+never `PROTECTED_OBSERVED`; an independently approved CLOSE plan is
+still available. This is a short review cutoff, not an exchange-enforced
+time-to-protection guarantee or an automatic close watchdog.
 
 ## Official contract research and unresolved points
 
