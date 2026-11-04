@@ -33,6 +33,7 @@ def snapshot(stops=None, flat=False):
             "state": 3,
             "side": 3,
             "dealVol": "1",
+            "updateTime": int(time.time() * 1000),
         },
         "stops": stops,
         "counts": {
@@ -594,6 +595,48 @@ class PilotTests(unittest.TestCase):
         self.assertEqual(self.p.diagnostics()["state"], "CLOSE_UNKNOWN")
         self.assertFalse(self.p.diagnostics()["post_transport_available"])
 
+
+
+    def test_place_review_rejects_stale_or_unreliable_fill_timestamp(self):
+        snap = snapshot()
+        values = [
+            (None, "TIMESTAMP_UNVERIFIED"),
+            (True, "TIMESTAMP_UNVERIFIED"),
+            ("179", "TIMESTAMP_UNVERIFIED"),
+            (0, "TIMESTAMP_UNVERIFIED"),
+            (int(time.time() * 1000) - 60_000, "TOO_OLD"),
+            (int(time.time() * 1000) + 60_000, "CLOCK_SKEW"),
+        ]
+        for value, failure in values:
+            candidate = snapshot()
+            candidate["origin"]["updateTime"] = value
+            with self.subTest(value=value), self.assertRaisesRegex(PilotHalted, failure):
+                self.p.proposal("PLACE", candidate, price="110")
+            # Bad/aged native-placement review must NOT block a
+            # separately authorized one-shot emergency close proposal.
+            emergency = self.p.proposal("CLOSE", candidate)
+            self.assertEqual(emergency["action"], "CLOSE")
+        self.assertEqual(self.p.diagnostics()["state"], "NEW")
+
+    def test_place_journal_preserves_fill_time_without_certifying_gap(self):
+        candidate = snapshot()
+        request = self.p.proposal("PLACE", candidate, price="110")
+        self.p.stage(
+            request, candidate,
+            Approval(ACCOUNT, digest(request), time.time() + 30,
+                     "REVIEW_ONLY_POSITION_STOP_PILOT"),
+        )
+        data = self.p._read()
+        self.assertEqual(
+            data["place_review_deadline_ms"] - data["entry_fill_update_ms"],
+            15_000,
+        )
+        self.assertEqual(self.p.diagnostics()["place_review_deadline_expired"], False)
+        self.assertFalse(self.p.diagnostics()["protection_gap_acceptable"])
+        self.assertFalse(self.p.diagnostics()["entry_allowed"])
+        self.assertEqual(self.p.diagnostics()["state"], "PLACE_UNKNOWN")
+        with self.assertRaises(PilotHalted):
+            self.stage("PLACE", snapshot(), "110")
 
     def test_acknowledged_placement_id_binds_get_after_restart(self):
         request = self.stage("PLACE", snapshot(), "110")
