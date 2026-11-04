@@ -2061,3 +2061,29 @@ fail together.
 **G6 remains NOT CERTIFIED** despite new genuine local operational evidence;
 G5/G9 remain BLOCKED. Existing Render shadow protection-loss kill latch
 is not reset. No live orders/permission changes or Render/BOXWAVE deployment.
+
+
+## 2026-11-04 actual Mac alert-path continuity drill
+
+The operator ran the real Mac alert drill on both already-loaded
+LaunchAgents. It verified the watcher revision increased **350 to 351** and
+the sentinel revision increased **1118 to 1122** during the drill,
+`MONITOR_CONTINUITY=PASS_WATCH_AND_SENTINEL`. Two explicitly labeled
+non-trading drill alarms were accepted by Discord and marked acknowledged
+by separate durable, disposable alert outboxes:
+
+- `DISCORD_WATCH_ALERT=HTTP_ACCEPTED_OUTBOX_ACKED`
+- `DISCORD_SENTINEL_ALERT=HTTP_ACCEPTED_OUTBOX_ACKED`
+
+The script reported `PRODUCTION_MONITOR_JOURNALS=UNMODIFIED_BY_DRILL`,
+`MEXC_REQUESTS_BY_DRILL=ZERO`, `MEXC_MUTATIONS=ZERO`,
+`LIVE_AUTHORIZATION=FALSE`. The **operator has not yet confirmed the
+two new messages were visible in Discord**; do not represent HTTP
+acceptance as observed channel receipt.
+
+Source: `docs/T100_PILOT_MAC_ALERT_DRILL_REAL_RESULT_20261104.md`.
+These concrete live local observations advance the G6 evidence package
+but **G6 is still NOT CERTIFIED**: no real installed-agent fault injection,
+no independent-host liveness or notification redundancy, no emergency
+close or nonflat native-stop protection demonstration. G5/G9 remain
+blocked. No new exchange orders or deployment change.
