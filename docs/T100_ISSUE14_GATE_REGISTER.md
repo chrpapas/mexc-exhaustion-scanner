@@ -1654,3 +1654,20 @@ journal threat model and is not made safe by these checks.
 Validation: 2,199 offline tests and 920 subtests passed; two guarded PostgreSQL
 modules excluded. Focused pilot: 23 tests and 21 subtests passed. Ruff and diff
 checks passed. No exchange mutation or production change occurred.
+
+## Placement acknowledgement identity and disk recovery — 2026-11-04
+
+The pilot now persists a valid scalar placement-response stop ID and binds
+subsequent GET reconciliation to it across restart. A caller cannot substitute
+a different matching-looking stop. Conflicting acknowledgement IDs latch an
+investigation condition that blocks protection certification; emergency-close
+planning remains available. Missing, boolean, zero, list or object IDs remain
+ambiguous rather than guessed from the contradictory documentation example.
+No acknowledgement alone certifies protection or clears UNKNOWN.
+
+An initial full run was interrupted by local disk exhaustion (temporary-file
+creation returned ENOSPC); that run is not passing evidence. After the operator
+freed storage, a temporary-file write succeeded with about 6 GiB available.
+Fresh full offline run: 2,202 passed, 920 subtests passed, excluding the two
+guarded PostgreSQL CI modules. Focused pilot: 26 tests, 21 subtests passed.
+Ruff, project verification and diff checks passed. No exchange POST was sent.

@@ -365,6 +365,18 @@ class PositionStopPilot:
                     kind = "REJECTED_REQUIRES_GET"
                 elif response.get("success") is True and response["code"] == 0:
                     kind = "ACK_REQUIRES_GET"
+                    if row["state"] == "PLACE_UNKNOWN":
+                        try:
+                            acknowledged_id = identity(response.get("data"))
+                        except PilotHalted:
+                            kind = "AMBIGUOUS"
+                        else:
+                            prior = row.get("acknowledged_stop_id")
+                            if prior is not None and prior != acknowledged_id:
+                                row["placement_identity_conflict"] = True
+                                kind = "CONFLICTING_PLACEMENT_IDENTITY"
+                            else:
+                                row["acknowledged_stop_id"] = acknowledged_id
             row["events"].append({"kind": kind, "request_sha256": request_sha256, "at": time.time()})
             row["revision"] += 1
             self.db.execute("UPDATE pilot SET body=? WHERE id=1", (json.dumps(row),))
@@ -385,6 +397,13 @@ class PositionStopPilot:
             if action in ("PLACE_UNKNOWN", "AMEND_UNKNOWN"):
                 stops = self._inventory(snapshot)
                 if action == "PLACE_UNKNOWN":
+                    if row.get("placement_identity_conflict"):
+                        raise PilotHalted("PLACEMENT_IDENTITY_CONFLICT_REQUIRES_INVESTIGATION")
+                    acknowledged_id = row.get("acknowledged_stop_id")
+                    if acknowledged_id is not None:
+                        if stop_id is not None and identity(stop_id) != acknowledged_id:
+                            raise PilotHalted("PLACEMENT_ACK_GET_IDENTITY_MISMATCH")
+                        stop_id = acknowledged_id
                     row["stop_id"] = identity(stop_id)
                 price = row["pending"]["payload"]["stopLossPrice"]
                 self._stop(stops, row, price)

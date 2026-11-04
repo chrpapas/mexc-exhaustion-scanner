@@ -426,3 +426,34 @@ class PilotTests(unittest.TestCase):
             PositionStopPilot(
                 link, account=ACCOUNT, origin_oid="pilot-origin", position_id="900", quantity="1"
             )
+
+    def test_acknowledged_placement_id_binds_get_after_restart(self):
+        request = self.stage("PLACE", snapshot(), "110")
+        self.p.record_post_outcome(digest(request), {"success": True, "code": 0, "data": "99"})
+        self.p.close()
+        self.p = self.open()
+        with self.assertRaises(PilotHalted):
+            self.p.observe(snapshot([dict(stop(), id="100")]), stop_id="100")
+        self.assertEqual(self.p.diagnostics()["state"], "PLACE_UNKNOWN")
+        self.p.observe(snapshot([stop()]))
+        self.assertEqual(self.p.diagnostics()["state"], "PROTECTED_OBSERVED")
+
+    def test_conflicting_placement_acknowledgements_latch_investigation(self):
+        request = self.stage("PLACE", snapshot(), "110")
+        for identifier in ["99", "100", "99"]:
+            self.p.record_post_outcome(digest(request), {"success": True, "code": 0, "data": identifier})
+        self.p.close()
+        self.p = self.open()
+        with self.assertRaisesRegex(PilotHalted, "IDENTITY_CONFLICT"):
+            self.p.observe(snapshot([stop()]), stop_id="99")
+        self.stage("CLOSE", snapshot([stop()]))
+        self.assertEqual(self.p.diagnostics()["state"], "CLOSE_UNKNOWN")
+
+    def test_malformed_placement_acknowledgement_never_guesses_identity(self):
+        request = self.stage("PLACE", snapshot(), "110")
+        for value in [None, True, 0, {"id": "99"}, [{"id": "99"}]]:
+            self.p.record_post_outcome(digest(request), {"success": True, "code": 0, "data": value})
+            self.assertNotIn("acknowledged_stop_id", self.p._read())
+            self.assertEqual(self.p._read()["events"][-1]["kind"], "AMBIGUOUS")
+        with self.assertRaises(PilotHalted):
+            self.p.observe(snapshot([stop()]))
