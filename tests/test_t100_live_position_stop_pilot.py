@@ -936,3 +936,32 @@ class PilotTests(unittest.TestCase):
         self.assertEqual(self.p.diagnostics()["state"], "FLAT_STOP_CANCELED_OBSERVED")
         self.assertFalse(self.p.diagnostics()["stop_execution_certified"])
         self.assertFalse(self.p.diagnostics()["live_authorization"])
+
+
+    def test_terminal_cancellation_rejects_native_stop_semantics_drift(self):
+        """A canceled row must preserve the verified whole-position MARKET SL."""
+        self.flat_after_close()
+        changed = [
+            ("volType", 1),
+            ("profitLossVolType", "SEPARATE"),
+            ("stopLossType", 1),
+            ("stopLossReverse", 1),
+            ("positionType", 1),
+            ("lossTrend", 2),
+            ("errorCode", 2030),
+            ("stopLossPrice", "109"),
+            ("vol", "0.5"),
+            ("vol", True),
+        ]
+        for field, value in changed:
+            bad = dict(stop(), **{field: value})
+            with self.subTest(stage="cancel_proposal", field=field, value=value):
+                with self.assertRaises(PilotHalted):
+                    self.p.proposal("CANCEL", snapshot([bad], flat=True))
+            terminal = dict(bad, state=2, isFinished=1)
+            with self.subTest(stage="terminal_observation", field=field, value=value):
+                with self.assertRaises(PilotHalted):
+                    self.p.observe(snapshot(flat=True), canceled_stop=terminal)
+            self.assertEqual(self.p.diagnostics()["state"], "FLAT_OBSERVED")
+            self.assertFalse(self.p.diagnostics()["stop_execution_certified"])
+            self.assertFalse(self.p.diagnostics()["live_authorization"])
