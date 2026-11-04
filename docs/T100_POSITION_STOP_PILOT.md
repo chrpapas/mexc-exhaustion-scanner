@@ -54,7 +54,17 @@ requires exact stop ID and price, position-origin `orderId=0`, explicit full vol
 active/untriggered state and the existing strict native-market-stop audit.
 
 Amendment proposes `change_plan_price` for the observed stop ID, only tightens
-the price, and journals the old/new request. The exact new price and unchanged
+the price, and journals the old/new request. The proposal and durable stage now
+require a structured caller-provided BTC latest-price witness observed within
+2 seconds, positive tick size, exact tick-aligned stop price, and a proposed
+short stop strictly above latest price by at least max(50 bps, 5 ticks).
+Missing/stale/wrong-symbol data or a too-close stop fail closed. This is a
+**conservative review-only guard**, not an exchange guarantee: the model does
+not authenticate the caller's price witness or prevent market movement during
+a request. The current signed-private-GET collector does not fetch/publicly
+certify this market witness, so callers using it alone cannot propose AMEND.
+A future independently reviewed adapter must bind fresh public ticker/spec
+observations before a real amendment. The exact new price and unchanged
 native semantics must subsequently be observed. A POST acknowledgement alone
 has no state-transition API and cannot establish protection.
 
