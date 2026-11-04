@@ -313,7 +313,7 @@ class PilotWatchdogRunner:
             notifications_delivered_this_tick=sent,
         )
 
-    async def run(self, *, max_cycles: int | None = None) -> None:
+    async def run(self, *, max_cycles: int | None = None) -> WatchdogTick:
         """Continuous observation loop only when caller explicitly starts it.
 
         No process manager, liveness alarm, endpoint or order executor exists.
@@ -322,8 +322,8 @@ class PilotWatchdogRunner:
             raise WatchdogHalted("WATCHDOG_INVALID_CYCLE_LIMIT")
         cycles = 0
         while True:
-            await self.poll_once()
+            latest = await self.poll_once()
             cycles += 1
             if max_cycles is not None and cycles >= max_cycles:
-                return
+                return latest
             await asyncio.sleep(self._poll_seconds)
