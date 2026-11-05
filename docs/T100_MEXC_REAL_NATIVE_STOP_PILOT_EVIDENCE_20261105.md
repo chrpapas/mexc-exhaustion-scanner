@@ -55,3 +55,59 @@ existing `takeProfitPrice` and exact event with MEXC support first.
 
 Official MEXC field reference:
 https://www.mexc.io/api-docs/futures/account-and-trading-endpoints/get-take-profitstop-loss-order-list
+
+## V4 read-only verification: economic loss direction and no configured TP
+
+Further signed GET forensics on November 5, 2026 recorded:
+- Reviewed V5 source hash: POST request carried a `stopLossPrice` only,
+  with **no** `takeProfitPrice` field.
+- Finished MEXC TP/SL record: `takeProfitPrice` field **MISSING**
+  (this is *not* the same as an explicitly zero value); `stopLossPrice`
+  was positive and equal to the reviewed intended stop.
+- SHORT entry was fully filled. Configured SL was **above** the entry
+  average. Linked exchange-generated CLOSE_SHORT market order filled
+  **above** the entry average, a loss-making price move for a short.
+- Neither the original V5 journal stop branch nor the exchange records
+  indicate a separate V5 fallback close POST; flat/no-open-orders
+  independently checked twice.
+- Yet the finished TP/SL event reports `triggerSide=1` ("take-profit")
+  instead of documented `2` ("stop-loss"). **Do not equate economic
+  stop-loss consistency with venue stop-loss trigger certification.**
+- New regression explicitly records economic consistency with a
+  contradictory label, and keeps `stop_loss_trigger_proven=false`,
+  `entry_allowed=false`, `live_authorization=false`.
+
+### Support inquiry for the official MEXC Futures API channel
+
+Official MEXC technical support: https://t.me/MEXCAPIsupport
+Official documented semantics:
+https://www.mexc.io/api-docs/futures/account-and-trading-endpoints/get-current-take-profitstop-loss-order-list
+
+> **Subject: Futures API `triggerSide=1` on stop-loss-only short position order**
+>
+> On November 5, 2026 (UTC), we used
+> `POST /api/v1/private/stoporder/place` to create a position-origin
+> full-position market stop loss for a 1-contract BTC_USDT isolated short.
+> The request included `stopLossPrice` but no `takeProfitPrice`.
+> Active stop protection was verified before the position closed.
+>
+> The finished record returned by
+> `GET /api/v1/private/stoporder/list/orders` has
+> `state=3`, `isFinished=1`, `stopLossType=0`,
+> `volType=2`, `errorCode=0`, `orderId=0`,
+> and a `placeOrderId` matching a fully filled 1-contract
+> market CLOSE_SHORT. The finished record has a positive stopLossPrice
+> and **no takeProfitPrice field**. The stop price and market close
+> execution price were both above the short's average entry price.
+> Nevertheless, `triggerSide=1` (documented as take-profit), not 2
+> (documented as stop-loss).
+>
+> Please confirm whether `triggerSide=1` is a known incorrect
+> classification for a stop-loss-only order. If not, what precise
+> event triggered this position-origin TP/SL record, and what alternate
+> authenticated API evidence can independently prove that the
+> **stop-loss side** triggered and filled?
+> We can supply the exact stop ID, position ID, generated close order ID,
+> and timestamps privately through the secure support channel.
+>
+> No API credentials, headers, signatures or passwords will be shared.
