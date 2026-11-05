@@ -249,10 +249,18 @@ class ReconciliationTests(unittest.IsolatedAsyncioTestCase):
             with self.subTest(field=key):
                 bad=dict(valid,**{key:value})
                 v=Venue(order=bad)
-                r=await reconcile_close_read_only(
-                    owned=owned(),actual_scope=SCOPE,ledger=Ledger(),
-                    probe=ReadOnlyMexcProbe(v))
-                self.assertFalse(r.order_filled_verified)
+                if key in {"externalOid", "symbol", "orderId"}:
+                    # Strict GET identity mismatch is a HARD HALT, not a
+                    # soft nonverification result. No mutation can follow.
+                    with self.assertRaises(CloseReconciliationHalted):
+                        await reconcile_close_read_only(
+                            owned=owned(),actual_scope=SCOPE,ledger=Ledger(),
+                            probe=ReadOnlyMexcProbe(v))
+                else:
+                    r=await reconcile_close_read_only(
+                        owned=owned(),actual_scope=SCOPE,ledger=Ledger(),
+                        probe=ReadOnlyMexcProbe(v))
+                    self.assertFalse(r.order_filled_verified)
                 self.assertEqual(v.post_calls,[])
 
     async def test_unverified_inventory_after_filled_close_cannot_certify_flat(self):
