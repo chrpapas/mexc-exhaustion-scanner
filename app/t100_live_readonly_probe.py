@@ -104,6 +104,28 @@ class ReadOnlyMexcProbe:
             raise VenueReadHalted("POSITIONS_RESPONSE_UNVERIFIED")
         return raw
 
+    async def raw_open_position_by_id(
+        self, position_id: str,
+    ) -> list[dict[str, Any]]:
+        """Exact position-ID GET. Empty does not on its own prove closed."""
+        if (type(position_id) is not str or
+                re.fullmatch(r"[1-9][0-9]*", position_id) is None):
+            raise VenueReadHalted("INVALID_EXACT_POSITION_ID")
+        try:
+            raw = await self._client._private_get(
+                "/api/v1/private/position/open_positions",
+                {"positionId": int(position_id)},
+            )
+        except Exception:
+            raise VenueReadHalted("EXACT_OPEN_POSITION_GET_FAILED") from None
+        if type(raw) is not list or any(type(row) is not dict for row in raw):
+            raise VenueReadHalted("EXACT_OPEN_POSITION_RESPONSE_UNVERIFIED")
+        if any(str(row.get("positionId")) != position_id for row in raw):
+            raise VenueReadHalted("EXACT_OPEN_POSITION_FILTER_BROKEN")
+        if len(raw) > 1:
+            raise VenueReadHalted("EXACT_OPEN_POSITION_DUPLICATE")
+        return raw
+
     async def raw_open_order_counts(self) -> dict[str, int]:
         """Read MEXC account-level in-flight order counts via GET only."""
         try:
