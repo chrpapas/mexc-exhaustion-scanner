@@ -145,3 +145,56 @@ reconciliation and exact historical position/fill identities) and post-close
 verified-flat semantics; then wire only those independently audited
 attestations into the guardian's mutation gate. Review the restricted
 database role and separate disabled-entry service before any deployment.
+
+## Owned-position historical finality and race-safe observer (same day)
+
+Current MEXC documentation confirms:
+- `GET /api/v1/private/position/open_positions` has an exact `positionId`
+  filter but no independent account-wide position total.
+- `GET /api/v1/private/position/list/history_positions` returns paginated
+  historical position records with `totalCount`, `totalPage`,
+  `currentPage`, `state`, `holdVol`, `closeVol` and immutable `positionId`.
+- `GET /api/v1/private/stoporder/list/orders` reports terminal TP/SL
+  events, but a single page must **not** be considered exhaustive, and
+  the V5 pilot revealed a contradictory `triggerSide` label.
+
+New components:
+- `app/t100_live_readonly_probe.py` exact positionId GET and strict
+  historical position page access.
+- `app/t100_live_owned_position_finality.py` bounded, metadata-checked
+  full history pagination twice; demands exact position ID, SHORT,
+  ISOLATED, state CLOSED, holdVol ZERO, closeVol equal to owned size,
+  and twice-absent exact positionId GET. It rejects duplicate/missing
+  historical IDs, changing page totals and partial closes.
+- `app/t100_live_owned_close_reconciliation.py` now combines the
+  previously verified exact `externalOid` market close fill with
+  independently certified historical position closure. This can return
+  `EXACT_OWNED_CLOSE_AND_CLOSED_POSITION_HISTORY_VERIFIED`. This is
+  **specific owned-position finality**, not account-flatness or live
+  authorization. It performs no ledger transition without an audited
+  persistence coordinator.
+- `app/t100_live_guardian_inventory_witness.py` now verifies *actual
+  market-stop semantics* of the owned row rather than counting a matching
+  stop ID as protection. It still cannot attest account-wide completeness
+  and cannot authorize a close.
+- `app/t100_live_guardian_observer.py` is a read-only diagnostic entry
+  point (library callable, **not** a deployed Render worker). It checks
+  durable entry ownership, double GET inventory and exact stop semantics.
+  For a missing stop, it inspects the known ID in a terminal history
+  page; observed terminal execution is classified as a possible
+  in-flight transition, **not** a signal to submit a second market close.
+  No single-page negative can certify that no stop triggered.
+
+Safety limitations:
+- A historical closed-position row plus a verified filled close can
+  certify the **exact managed position** closed, even when unrelated
+  manual positions remain open. Do not use this as a four-slot or
+  account-wide risk clearance.
+- Lossy GET access, stale history, unknown pagination and trigger-side
+  mismatch remain explicit observation uncertainties.
+- A **separate, reviewed, production read-only Render service** with
+  correct narrowly scoped credentials and durable checkpoint wiring
+  is still necessary. Code alone is not a running guardian.
+- 033 is review-only and has not been applied to Render. Existing
+  shadow worker, manual positions and BOXWAVE remain untouched.
+- No live order placed, no MEXC mutation, no live-trading approval.
