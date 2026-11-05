@@ -207,5 +207,7 @@ async def connect_render_witness(dsn: str):
         return await asyncpg.connect(
             dsn=dsn, ssl=tls_setting, timeout=5, command_timeout=6
         )
+    except ShadowWitnessFailure:
+        raise  # preserve explicit fail-closed private host/mode rejections
     except Exception:  # noqa: BLE001 - redact database connection and query details
         raise ShadowWitnessFailure("SHADOW_WITNESS_CONNECT_FAILED") from None
