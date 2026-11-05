@@ -61,7 +61,9 @@ class GetOnlyMexcTransport:
         r"/api/v1/private/order/external/[A-Z0-9]+_USDT/[A-Za-z0-9_-]{1,128}"
     )
     _ORDER = re.compile(r"/api/v1/private/order/get/[1-9][0-9]*")
-    BASE_URL = "https://contract.mexc.com"
+    # Official MEXC Futures API domain since January 2026. Do not silently
+    # fall back to retired contract.mexc.com or follow credentialed redirects.
+    BASE_URL = "https://api.mexc.com"
 
     def __init__(self, client: Any, *, api_key: str, api_secret: str):
         if (type(api_key) is not str or len(api_key) < 12 or
