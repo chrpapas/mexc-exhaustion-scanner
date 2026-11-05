@@ -9,6 +9,7 @@ import asyncio
 from decimal import Decimal as D
 import hashlib
 import os
+from pathlib import Path
 import unittest
 
 from app.t100_live_guardian_checkpoint_reader import (
@@ -95,6 +96,21 @@ class GuardianReaderPostgresIntegration(unittest.IsolatedAsyncioTestCase):
             conn=await connect()
             try:
                 await conn.execute(SCHEMA)
+                enrollment_ddl = (
+                    Path(__file__).resolve().parents[1] / "migrations" /
+                    "034_t100_guardian_account_enrollments.sql"
+                )
+                await conn.execute(enrollment_ddl.read_text())
+                await conn.execute(
+                    """INSERT INTO public.t100_guardian_account_enrollments
+                       (scope_sha256,position_id,symbol,external_oid,exchange_order_id)
+                       VALUES ($1,'555','BTC_USDT',$2,'666')""",
+                    SCOPE,OID,
+                )
+                await conn.execute(
+                    """GRANT SELECT ON public.t100_guardian_account_enrollments
+                       TO t100_ci_guardian_reader,t100_ci_guardian_writer"""
+                )
             finally:
                 await conn.close()
         asyncio.run(create())
@@ -117,6 +133,46 @@ class GuardianReaderPostgresIntegration(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(result.owned.entry_order_id,"666")
                 self.assertTrue(result.checkpoint_revisions_validated)
                 self.assertFalse(result.live_authorization)
+        finally:
+            await self.conn.execute("RESET ROLE")
+
+    async def test_immutable_enrollment_denies_even_privileged_owner_edits(self):
+        import asyncpg
+        with self.assertRaises(asyncpg.PostgresError):
+            await self.conn.execute(
+                """UPDATE public.t100_guardian_account_enrollments
+                   SET external_oid='t100other_abcd1234'
+                   WHERE position_id='555'"""
+            )
+        with self.assertRaises(asyncpg.PostgresError):
+            await self.conn.execute(
+                """DELETE FROM public.t100_guardian_account_enrollments
+                   WHERE position_id='555'"""
+            )
+        row=await self.conn.fetchrow(
+            """SELECT scope_sha256, external_oid
+               FROM public.t100_guardian_account_enrollments
+               WHERE position_id='555'"""
+        )
+        self.assertEqual(row["scope_sha256"].strip(),SCOPE)
+        self.assertEqual(row["external_oid"],OID)
+
+    async def test_enrollment_role_has_no_write_and_is_readable(self):
+        await self.conn.execute("SET ROLE t100_ci_guardian_reader")
+        try:
+            async with self.conn.transaction(readonly=True):
+                ok=await read(self.conn)
+                self.assertTrue(ok.account_scope_pinned)
+                self.assertFalse(ok.live_authorization)
+            async with self.conn.transaction():
+                import asyncpg
+                with self.assertRaises(asyncpg.PostgresError):
+                    await self.conn.execute(
+                        """INSERT INTO public.t100_guardian_account_enrollments
+                           (scope_sha256,position_id,symbol,external_oid,exchange_order_id)
+                           VALUES ('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+                                   '999','BTC_USDT','t100other_abcd1234','999')"""
+                    )
         finally:
             await self.conn.execute("RESET ROLE")
 
