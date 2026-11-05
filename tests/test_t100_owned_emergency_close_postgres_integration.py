@@ -57,9 +57,12 @@ class OwnedClosePostgresIntegration(unittest.IsolatedAsyncioTestCase):
         try:
             secondary = PostgresOwnedCloseIntentLedger(other)
             self.assertFalse(await secondary.prepare_if_absent(self.oid, self.owned))
+            self.assertEqual(await ledger.read_state(self.oid,self.owned),"PREPARED")
             self.assertTrue(await ledger.transition(self.oid,"PREPARED","SUBMITTING"))
+            self.assertEqual(await ledger.read_state(self.oid,self.owned),"SUBMITTING")
             self.assertFalse(await secondary.transition(self.oid,"PREPARED","SUBMITTING"))
             self.assertTrue(await secondary.transition(self.oid,"SUBMITTING","UNKNOWN"))
+            self.assertEqual(await secondary.read_state(self.oid,self.owned),"UNKNOWN")
             self.assertFalse(await ledger.transition(self.oid,"PREPARED","SUBMITTING"))
             # Even privileged direct UPDATE cannot reset a consumed intent.
             import asyncpg
@@ -79,6 +82,7 @@ class OwnedClosePostgresIntegration(unittest.IsolatedAsyncioTestCase):
                     "SET position_id='999999999' WHERE external_oid=$1",self.oid
                 )
             self.assertTrue(await ledger.transition(self.oid,"UNKNOWN","VERIFIED"))
+            self.assertEqual(await ledger.read_state(self.oid,self.owned),"VERIFIED")
             self.assertFalse(await secondary.transition(self.oid,"UNKNOWN","VERIFIED"))
             state = await other.fetchval(
                 "SELECT state FROM public.t100_owned_emergency_close_intents "
@@ -87,6 +91,18 @@ class OwnedClosePostgresIntegration(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(state, "VERIFIED")
         finally:
             await other.close()
+
+    async def test_read_state_requires_exact_durable_ownership(self):
+        ledger = PostgresOwnedCloseIntentLedger(self.conn)
+        self.assertTrue(await ledger.prepare_if_absent(self.oid,self.owned))
+        from dataclasses import replace
+        from app.t100_live_owned_emergency_guardian import OwnedGuardianHalted
+        # Same position, wrong entry order ID must not read unrelated journal.
+        with self.assertRaises(OwnedGuardianHalted):
+            await ledger.read_state(
+                self.oid,replace(self.owned,entry_order_id="999"))
+        with self.assertRaises(OwnedGuardianHalted):
+            await ledger.read_state("t100gc_"+"f"*22,self.owned)
 
     async def test_unique_scope_position_prevents_distinct_oid_second_close(self):
         ledger = PostgresOwnedCloseIntentLedger(self.conn)
