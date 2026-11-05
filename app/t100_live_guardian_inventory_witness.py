@@ -20,6 +20,7 @@ from app.t100_live_owned_emergency_guardian import (
     _same_critical_owned_snapshot,
 )
 from app.t100_live_readonly_probe import ReadOnlyMexcProbe
+from app.t100_live_native_stop_execution_audit import assess_native_short_market_stop_row
 
 
 class GuardianWitnessHalted(RuntimeError):
@@ -37,6 +38,7 @@ class GuardianInventoryWitness:
     open_order_count: int
     critical_snapshots_consistent: bool
     stop_total_reconciled: bool
+    owned_native_stop_protection_semantics_verified: bool = False
     position_completeness_certified: bool = False
     emergency_close_authorized: bool = False
     live_authorization: bool = False
@@ -131,6 +133,26 @@ class ReadOnlyGuardianCollector:
                                str(s.get("positionId")) == owned.position_id]
         if len(same_position_stops) > 1:
             raise GuardianWitnessHalted("OWNED_STOPS_DUPLICATE")
+        matching_stop = [
+            stop for stop in same_position_stops
+            if str(stop.get("id") or stop.get("stopPlanOrderId")) == owned.stop_order_id
+        ]
+        verified_market_sl = False
+        if len(matches) == 1 and len(matching_stop) == 1:
+            row = matches[0]
+            if (type(row.get("positionType")) is int and row["positionType"] == 2 and
+                    str(row.get("state")) == "1" and
+                    str(row.get("openType")) == "1"):
+                audit = assess_native_short_market_stop_row(
+                    stop=matching_stop[0], symbol=owned.symbol,
+                    position_id=owned.position_id,
+                    position_quantity=owned.contracts,
+                    maximum_short_stop_price=owned.stop_price,
+                )
+                verified_market_sl = (
+                    audit.active_native_full_volume_market_sl_observed
+                    and str(row.get("holdVol")) == str(owned.contracts)
+                )
         return GuardianInventoryWitness(
             status="READ_ONLY_WITNESS_POSITION_COMPLETENESS_UNATTESTED",
             exact_owned_position_present=len(matches) == 1,
@@ -144,4 +166,5 @@ class ReadOnlyGuardianCollector:
             open_order_count=b["counts"]["sumCount"],
             critical_snapshots_consistent=True,
             stop_total_reconciled=True,
+            owned_native_stop_protection_semantics_verified=verified_market_sl,
         )
