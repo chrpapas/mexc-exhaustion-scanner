@@ -10,6 +10,9 @@ on:
       - 'app/t100_live_owned_close_pg_ledger.py'
       - 'tests/test_t100_live_owned_emergency_guardian.py'
       - 'tests/test_t100_owned_emergency_close_postgres_integration.py'
+      - 'tests/test_t100_guardian_reader_postgres_integration.py'
+      - 'app/t100_live_guardian_checkpoint_reader.py'
+      - 'app/t100_live_guardian_readonly_once.py'
       - 'app/t100_render_shadow_witness.py'
       - 'app/t100_render_shadow_sentinel.py'
       - 'app/t100_render_shadow_sentinel_durable.py'
@@ -58,3 +61,5 @@ jobs:
 
       - name: Actual PostgreSQL 17 owned close intent immutability and role boundaries
         run: python -m unittest -v tests.test_t100_owned_emergency_close_postgres_integration
+      - name: PostgreSQL 17 guardian SELECT-only role and readonly transaction
+        run: python -m unittest -v tests.test_t100_guardian_reader_postgres_integration
