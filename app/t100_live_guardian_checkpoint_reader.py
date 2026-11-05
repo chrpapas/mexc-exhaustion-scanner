@@ -1,7 +1,8 @@
 """SELECT-only durable T100 ownership source for a separate guardian observer.
 
-No account is automatically enrolled. Runtime must explicitly pin both the
-MEXC API-key SHA256 and position ID, and must use a transaction in READ ONLY
+No account is automatically enrolled. Require separately reviewed immutable
+database enrollment of the MEXC API key fingerprint and exact entry identity.
+Runtime must pin the same account and position in a READ ONLY
 mode with a DB role that cannot mutate T100 tables. A current checkpoint
 alone is insufficient: the full revision chain, entry intent ACK and all
 owned stop amendments must agree.
@@ -72,14 +73,28 @@ async def _require_restricted_readonly_connection(conn: Any) -> None:
                           AS intent_update,
                       has_table_privilege(current_user,
                           'public.t100_live_stop_amendments', 'UPDATE')
-                          AS stop_update"""
+                          AS stop_update,
+                      has_table_privilege(current_user,
+                          'public.t100_guardian_account_enrollments', 'SELECT')
+                          AS enrollment_select,
+                      has_table_privilege(current_user,
+                          'public.t100_guardian_account_enrollments', 'INSERT')
+                          AS enrollment_insert,
+                      has_table_privilege(current_user,
+                          'public.t100_guardian_account_enrollments', 'UPDATE')
+                          AS enrollment_update,
+                      has_table_privilege(current_user,
+                          'public.t100_guardian_account_enrollments', 'DELETE')
+                          AS enrollment_delete"""
         )
     except Exception as exc:
         raise GuardianCheckpointHalted("RESTRICTED_DB_ROLE_READ_UNVERIFIED") from exc
     if (row is None or row["read_only"] != "on" or
+            row["enrollment_select"] is not True or
             any(row[key] is not False for key in (
                 "cp_insert", "cp_update", "cp_delete",
-                "intent_update", "stop_update"
+                "intent_update", "stop_update",
+                "enrollment_insert", "enrollment_update", "enrollment_delete"
             ))):
         raise GuardianCheckpointHalted("DB_ROLE_HAS_MUTATION_PRIVILEGES")
 
@@ -113,7 +128,7 @@ async def load_pinned_owned_checkpoint(
             # No adoption from exchange list; no MEXC GET is needed.
             return GuardianCheckpointRead(
                 status="NO_DURABLE_T100_POSITION_RECORDED",
-                account_scope_pinned=True,
+                account_scope_pinned=False,
             )
         if len(checkpoints) != 1:
             raise GuardianCheckpointHalted(
@@ -123,6 +138,30 @@ async def load_pinned_owned_checkpoint(
         cp = checkpoint_from_row(raw)
         if cp.position_id != pinned_position_id:
             raise GuardianCheckpointHalted("PINNED_POSITION_ID_NOT_IN_DB")
+
+        # A config pin is not a database-linked account. Require an audited
+        # immutable enrollment before accepting any exchange observation.
+        enrollments = await conn.fetch(
+            """SELECT scope_sha256,position_id,symbol,external_oid,exchange_order_id
+               FROM public.t100_guardian_account_enrollments
+               WHERE scope_sha256=$1 AND position_id=$2""",
+            pinned_scope_sha256, pinned_position_id,
+        )
+        if type(enrollments) is not list or len(enrollments) != 1:
+            raise GuardianCheckpointHalted(
+                "DURABLE_ACCOUNT_POSITION_ENROLLMENT_ABSENT_OR_AMBIGUOUS"
+            )
+        enrolled = dict(enrollments[0])
+        if (
+            str(enrolled.get("scope_sha256") or "").strip() != pinned_scope_sha256
+            or str(enrolled.get("position_id") or "") != cp.position_id
+            or enrolled.get("symbol") != cp.symbol
+            or enrolled.get("external_oid") != cp.external_oid
+            or str(enrolled.get("exchange_order_id") or "") != cp.exchange_order_id
+        ):
+            raise GuardianCheckpointHalted(
+                "DURABLE_ACCOUNT_POSITION_ENROLLMENT_IDENTITY_DRIFT"
+            )
 
         revisions = [
             dict(r) for r in await conn.fetch(
