@@ -64,3 +64,33 @@ class PostgresOwnedCloseIntentLedger:
         except Exception:
             raise OwnedGuardianHalted("EMERGENCY_CLOSE_LEDGER_CAS_FAILED") from None
         return row == external_oid
+
+    async def read_state(self, external_oid: str, owned: OwnedShort) -> str:
+        """Check persisted original identity before considering its close."""
+        _validate_owned(owned, owned.scope_sha256)
+        if external_oid != close_intent_oid(owned):
+            raise OwnedGuardianHalted("CLOSE_RECONCILE_OID_SCOPE_MISMATCH")
+        try:
+            row = await self.connection.fetchrow(
+                """SELECT scope_sha256,symbol,position_id,entry_external_oid,
+                          entry_order_id,volume_contracts,checkpoint_version,state
+                   FROM public.t100_owned_emergency_close_intents
+                   WHERE external_oid=$1""",
+                external_oid,
+            )
+        except Exception:
+            raise OwnedGuardianHalted("CLOSE_RECONCILE_LEDGER_READ_FAILED") from None
+        if row is None:
+            raise OwnedGuardianHalted("CLOSE_RECONCILE_LEDGER_INTENT_ABSENT")
+        if (str(row["scope_sha256"]).strip() != owned.scope_sha256 or
+                row["symbol"] != owned.symbol or
+                row["position_id"] != owned.position_id or
+                row["entry_external_oid"] != owned.entry_external_oid or
+                row["entry_order_id"] != owned.entry_order_id or
+                row["volume_contracts"] != owned.contracts or
+                row["checkpoint_version"] != owned.checkpoint_version):
+            raise OwnedGuardianHalted("CLOSE_RECONCILE_LEDGER_IDENTITY_DRIFT")
+        state = row["state"]
+        if state not in {"PREPARED", "SUBMITTING", "UNKNOWN", "VERIFIED"}:
+            raise OwnedGuardianHalted("CLOSE_RECONCILE_LEDGER_STATE_INVALID")
+        return state
