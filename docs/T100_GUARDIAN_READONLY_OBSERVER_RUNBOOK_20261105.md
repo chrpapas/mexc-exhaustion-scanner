@@ -110,3 +110,61 @@ probe, audited restricted DB role and pinned account, one safe observer
 cycle with redacted output, then separate disabled-entry Render deploy
 and restart/failure alert tests. This is not four-slot or CROSS risk
 certification.
+
+## Additional hardening: durable account enrollment and live response shape
+
+**Critical safety fix:** SHA256(key) matching an environment variable does
+not establish that the database checkpoint came from that MEXC account.
+The guardian now requires a *separate, immutable* database enrollment row
+binding all of the following to that exact account: `scope_sha256`,
+`position_id`, `symbol`, `external_oid`, `exchange_order_id`.
+This binding is checked before any exchange GET.
+
+Review-only `migrations/034_t100_guardian_account_enrollments.sql` creates
+the enrollment table and immutability trigger. **It contains no rows,
+permissions, credentials or grant to an observer role. It was not applied to
+Render.** Enrollment requires independent operator verification against
+the dedicated account, then a separate privileged, controlled database
+action. Never enroll a manual position or infer ownership from a symbol.
+
+PostgreSQL 17 CI now validates both an actual immutable table trigger and
+a SELECT-only observer role. A role with write privilege to this table or
+another T100 mutation table is refused even inside a READ ONLY transaction.
+If no enrollment exists, the observer must halt on a nonempty checkpoint.
+
+**Official endpoint correction:** MEXC announced a January 2026 Futures API
+domain transition to `https://api.mexc.com` and discontinuation of
+`https://contract.mexc.com`. The observer now pins the new host. It
+never redirects a credentialed request to an unknown domain.
+
+**Real venue response research:** MEXC's official `history_positions`
+documentation lists paginated metadata (`totalCount`, `totalPage`,
+`currentPage`, `resultList`) while its example has `data` as a bare
+array. We must inspect the actual response on the dedicated pilot account
+before relying on the historical finality certificate. The metadata
+requirement is retained; it is unsafe to manufacture completeness for an
+array without total-count evidence.
+
+The code includes a **standard-library, one-request, local Mac Keychain
+shape probe**:
+
+```bash
+python3 tools/t100_mexc_history_shape_probe_local.py --diagnose
+```
+
+Run this only on the user's Mac with the separately held dedicated T100
+pilot subaccount credentials in the existing macOS Keychain service
+`t100225-mexc-pilot-subaccount`. It performs exactly one signed GET of
+`BTC_USDT` history page 1 through the new MEXC API host and prints
+only schema types, keys-present flags, and page count. It never prints
+position IDs, prices, timestamps, account details, key or secret. It
+does not check whether all history was returned, trigger a mutation,
+authorize trading, or touch manual positions.
+
+Until the user performs that local GET and the results are reconciled,
+the historical-position response format remains a measured **unknown**.
+The observer stays development-only and no Render deployment is authorized.
+
+Official MEXC notices:
+- https://www.mexc.com/announcements/article/futures-api-access-domain-update-17827791532974
+- https://www.mexc.co/api-docs/futures/account-and-trading-endpoints/get-historical-positions
