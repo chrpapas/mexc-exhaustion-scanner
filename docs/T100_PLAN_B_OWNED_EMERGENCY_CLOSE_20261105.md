@@ -84,3 +84,64 @@ for live trading. No MEXC orders or Render mutations performed by this work.**
    consider a single-position low-notional emergency-close drill.
 5. Do not promote the T100 entry executor or 4-slot live mode until all
    independent risk and recovery gates pass.
+
+## New 2026-11-05 read-only exchange integration checkpoint
+
+Committed:
+
+- `app/t100_live_guardian_inventory_witness.py`: uses
+  `ReadOnlyMexcProbe` for two serial account-wide REST inventory
+  cycles. Each cycle bookends `open_positions` and `stoporder/open_orders`
+  with two `open_order_total_count` signed GETs, validates exact count
+  categories, rejects malformed/duplicate positions and stops, and requires
+  `stopOrderCount == len(open_stops)`. It compares critical identities,
+  sides, quantities, stops and open-order counts across cycles while
+  tolerating benign unrealized-PnL drift. It reports foreign/manual
+  positions without taking ownership of them.
+- The returned `GuardianInventoryWitness` is **always nonauthorizing**:
+  `position_completeness_certified=False` and
+  `emergency_close_authorized=False`. MEXC publishes a useful open-order
+  total endpoint but **does not publish an independently reconcilable
+  complete open-position total** for the GET in this workflow.
+  Double GETs alone cannot provide that missing information. The witness
+  is not convertible to the guardian's POST gate.
+- `app/t100_live_owned_close_pg_ledger.py:read_state`: read-only
+  ownership-identity-bound recovery of `PREPARED/SUBMITTING/UNKNOWN/VERIFIED`
+  from the immutable migration 033 ledger. PostgreSQL 17 CI tests actual
+  state persistence and wrong-ownership rejection.
+- `app/t100_live_owned_close_reconciliation.py`: if journal state is
+  `SUBMITTING` or `UNKNOWN`, read **exact owned**
+  `GET /api/v1/private/order/external/{symbol}/{external_oid}`
+  and `GET /api/v1/private/order/get/{orderId}` with matching
+  externalOid, symbol, position ID, full volume, market CLOSE_SHORT,
+  isolated hedge mode, filled state and zero error. Then checks the
+  double REST inventory witness. **No POST, no ledger transition,
+  no automatic retry.** If exact owned close filled but the position is
+  absent from the responses, output
+  `MATCHED_FILLED_CLOSE_OWNED_ABSENT_UNCERTIFIED_CENSUS` instead of
+  inventing exchange account flatness. Other/manual positions are
+  observed and never selected for mutation.
+- `tests/test_t100_live_guardian_witness_reconciliation.py`: negative
+  regression cases for fake/missing OID, wrong order ID, partial fill,
+  wrong symbol/position, wrong order type, count drift, duplicate
+  inventory, unstable manual exposure and uncertain journal state.
+  Mocked GET transport asserts zero POST calls.
+
+**Validation:** GitHub T100 live safety full-offline suite passed on
+commit `1e2e90f46efaec055201ae007a916f108f34b5dc`; PostgreSQL
+integration on the prior implementation commit passed. The new
+collector/reconciler tests are offline mocks, not a test of MEXC account
+completeness in the venue itself.
+
+**Operational status unchanged:** current Render shadow service is on a
+separate branch with its existing safety latch. No new guardian service
+deployed, migration 033 not applied, no real exchange orders and no
+production credential/DB changes. This is an important *implemented
+read-only integration*, not proof of full production live readiness.
+
+**Next unresolved safety gate:** establish venue-backed independent
+position-inventory completeness (for example, account-private WS position
+reconciliation and exact historical position/fill identities) and post-close
+verified-flat semantics; then wire only those independently audited
+attestations into the guardian's mutation gate. Review the restricted
+database role and separate disabled-entry service before any deployment.
