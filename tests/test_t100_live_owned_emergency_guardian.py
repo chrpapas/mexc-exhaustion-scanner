@@ -274,6 +274,36 @@ class EmergencyCloseTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(r.status, "TWO_SNAPSHOT_CONSISTENCY_UNVERIFIED")
         self.assertEqual(ex.calls, [])
 
+    async def test_unrealized_pnl_drift_does_not_block_missing_stop_safety(self):
+        a = snap(protected=False, manual=True)
+        b = snap(protected=False, manual=True)
+        a["positions"][0]["unRealizedPnl"] = "0.123"
+        b["positions"][0]["unRealizedPnl"] = "-0.456"
+        b["positions"][1]["unRealizedPnl"] = "42.000"
+        r, _, ex = await self.run_guard(first=a, second=b)
+        self.assertEqual(r.status, "CLOSE_POST_ACK_UNVERIFIED_RECONCILE_ONLY")
+        self.assertEqual(len(ex.calls), 1)
+        self.assertEqual(ex.calls[0]["position_id"], "111")
+
+    async def test_manual_position_quantity_drift_blocks_close(self):
+        a = snap(protected=False, manual=True)
+        b = snap(protected=False, manual=True)
+        b["positions"][1]["holdVol"] = "4"
+        r, _, ex = await self.run_guard(first=a, second=b)
+        self.assertEqual(r.status, "TWO_SNAPSHOT_CONSISTENCY_UNVERIFIED")
+        self.assertEqual(ex.calls, [])
+
+    async def test_stop_count_drift_blocks_close(self):
+        a = snap(protected=False)
+        b = snap(protected=False)
+        a["counts"] = dict(sumCount=0,limitOrderCount=0,stopOrderCount=0,
+                           planOrderCount=0,trackOrderCount=0)
+        b["counts"] = dict(sumCount=1,limitOrderCount=1,stopOrderCount=0,
+                           planOrderCount=0,trackOrderCount=0)
+        r, _, ex = await self.run_guard(first=a, second=b)
+        self.assertEqual(r.status, "TWO_SNAPSHOT_CONSISTENCY_UNVERIFIED")
+        self.assertEqual(ex.calls, [])
+
     async def test_entry_order_changed_between_two_gets_blocks(self):
         r, _, ex = await self.run_guard(second_entry=entry(dealVol="0.5"))
         self.assertEqual(r.status, "OWNED_MISSING_STOP_NOT_PROVEN")
