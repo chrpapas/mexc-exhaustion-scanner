@@ -216,6 +216,23 @@ class FinalityTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(x.closed_position_verified)
         self.assertEqual(x.status,"EXACT_CLOSED_POSITION_HISTORY_NOT_FOUND")
 
+    async def test_documented_mexc_list_response_cannot_fake_pagination(self):
+        # MEXC's published sample currently shows data=[rows] even though
+        # its field table describes pageSize/totalCount/totalPage. If the
+        # live venue returns a bare list, we must NOT infer completeness
+        # from a short page and manufacture historical finality.
+        class BareListVenue(FakeVenue):
+            async def _private_get(self, path, params=None):
+                if path == "/api/v1/private/position/list/history_positions":
+                    self.calls.append((path,params))
+                    return [historical()]
+                return await super()._private_get(path,params)
+        v=BareListVenue()
+        with self.assertRaises(OwnedPositionFinalityHalted):
+            await verify_owned_position_finality(
+                owned=own(),actual_scope=SCOPE,probe=ReadOnlyMexcProbe(v))
+        self.assertEqual(v.writes,0)
+
     async def test_exact_position_filter_bug_hard_halts(self):
         v=FakeVenue(mismatched_exact=True)
         with self.assertRaises(OwnedPositionFinalityHalted):
