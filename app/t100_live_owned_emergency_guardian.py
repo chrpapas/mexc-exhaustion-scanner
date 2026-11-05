@@ -201,13 +201,62 @@ class CloseExchange(Protocol):
 
 
 def _same_critical_owned_snapshot(a: Any, b: Any, owned: OwnedShort) -> bool:
-    """Require full exact inventory equality, no unrelated position drift."""
+    """Compare safety fields, not volatile PnL/price/timestamps.
+
+    Unknown/manual inventory is never eligible for a close, but all observed
+    position identities, sides, quantities and stops must be stable. A changed
+    manual position blocks a close on this account pending another snapshot.
+    """
     if type(a) is not dict or type(b) is not dict:
         return False
-    return (a == b and
-            a.get("account_wide_complete") is True and
-            type(a.get("positions")) is list and
-            type(a.get("stops")) is list)
+
+    position_fields = (
+        "symbol", "positionId", "id", "positionType",
+        "state", "holdVol", "openType", "leverage",
+    )
+    stop_fields = (
+        "symbol", "positionId", "id", "stopPlanOrderId",
+        "orderId", "positionType", "state", "isFinished",
+        "stopLossType", "volType", "profitLossVolType",
+        "stopLossReverse", "lossTrend", "triggerSide",
+        "errorCode", "stopLossPrice", "stopLossVol", "vol",
+    )
+
+    def inventory(record: Any, key: str, fields: tuple[str, ...]):
+        rows = record.get(key)
+        if type(rows) is not list or any(type(row) is not dict for row in rows):
+            return None
+        # Sorting makes list ordering irrelevant while preserving duplicates.
+        return sorted(tuple(str(row.get(field)) for field in fields)
+                      for row in rows)
+
+    if (a.get("account_wide_complete") is not True or
+            b.get("account_wide_complete") is not True):
+        return False
+    pa = inventory(a, "positions", position_fields)
+    pb = inventory(b, "positions", position_fields)
+    sa = inventory(a, "stops", stop_fields)
+    sb = inventory(b, "stops", stop_fields)
+    if any(x is None for x in (pa, pb, sa, sb)):
+        return False
+    if pa != pb or sa != sb:
+        return False
+
+    # Optional verified order-count witnesses must also remain stable.
+    count_fields = ("sumCount", "limitOrderCount", "stopOrderCount",
+                    "planOrderCount", "trackOrderCount")
+    ca, cb = a.get("counts"), b.get("counts")
+    if (ca is None) != (cb is None):
+        return False
+    if ca is not None:
+        if type(ca) is not dict or type(cb) is not dict:
+            return False
+        if any(type(ca.get(k)) is not int or type(cb.get(k)) is not int
+               for k in count_fields):
+            return False
+        if tuple(ca[k] for k in count_fields) != tuple(cb[k] for k in count_fields):
+            return False
+    return True
 
 
 async def guarded_missing_stop_close(
