@@ -8,8 +8,10 @@ Render's ephemeral files. A successful write is NOT trade authorization.
 """
 from __future__ import annotations
 
+import os
 import re
 import ssl
+from urllib.parse import urlsplit
 from dataclasses import dataclass
 from typing import Any
 
@@ -173,8 +175,37 @@ async def connect_render_witness(dsn: str):
         raise ShadowWitnessFailure("SHADOW_WITNESS_DSN_REQUIRED")
     import asyncpg
     try:
+        tls_mode = os.environ.get("T100_RENDER_DB_TLS_MODE", "verified_external")
+        if tls_mode == "verified_external":
+            # Render external hostname uses a CA-verifiable certificate.
+            tls_setting = ssl.create_default_context()
+        elif tls_mode == "private_required":
+            # Render internal PostgreSQL uses self-signed TLS. Render's
+            # published spec does not support verify-ca/verify-full on
+            # private connections. This branch NEVER allows plaintext
+            # or connects to an arbitrary host with reduced verification.
+            try:
+                u = urlsplit(dsn)
+                private_match = (
+                    u.scheme in ("postgres", "postgresql")
+                    and u.hostname == "dpg-d9kb9djm8hqs73c3c39g-a"
+                    and (u.port is None or u.port == 5432)
+                    and u.path == "/mexc_exhaustion"
+                    and u.username in (
+                        "t100_shadow_witness_writer",
+                        "t100_shadow_sentinel_outbox",
+                    )
+                    and bool(u.password)
+                )
+            except (ValueError, TypeError):
+                private_match = False
+            if not private_match:
+                raise ShadowWitnessFailure("SHADOW_WITNESS_PRIVATE_HOST_INVALID")
+            tls_setting = "require"  # forced TLS; no plaintext fallback
+        else:
+            raise ShadowWitnessFailure("SHADOW_WITNESS_TLS_MODE_INVALID")
         return await asyncpg.connect(
-            dsn=dsn, ssl=ssl.create_default_context(), timeout=5, command_timeout=6
+            dsn=dsn, ssl=tls_setting, timeout=5, command_timeout=6
         )
     except Exception:  # noqa: BLE001 - redact database connection and query details
         raise ShadowWitnessFailure("SHADOW_WITNESS_CONNECT_FAILED") from None
