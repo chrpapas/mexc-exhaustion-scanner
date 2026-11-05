@@ -41,6 +41,13 @@ def revision(**changes):
     return r
 
 
+def enrollment(**changes):
+    r=dict(scope_sha256=SCOPE, position_id="555", symbol="BTC_USDT",
+           external_oid=OID, exchange_order_id="666")
+    r.update(changes)
+    return r
+
+
 def intent(**changes):
     r=dict(symbol="BTC_USDT",external_oid=OID,exchange_order_id="666",
            volume_contracts=D("1"),stop_price=D("74500"),state="ACK")
@@ -59,10 +66,11 @@ def amendment(**changes):
 
 class FakeDb:
     def __init__(self, *, cps=None, revs=None, intents=None, amendments=None,
-                 mode="on", bad_priv=None, raise_fetch=False):
+                 enrollments=None, mode="on", bad_priv=None, raise_fetch=False):
         self.cps = [cp()] if cps is None else cps
         self.revs = [revision()] if revs is None else revs
         self.intents = [intent()] if intents is None else intents
+        self.enrollments = [enrollment()] if enrollments is None else enrollments
         self.amendments = [] if amendments is None else amendments
         self.mode = mode
         self.bad_priv = bad_priv
@@ -73,15 +81,18 @@ class FakeDb:
         self.calls.append(("fetchrow",sql,args))
         perms = {key:False for key in (
             "cp_insert","cp_update","cp_delete",
-            "intent_update","stop_update")}
+            "intent_update","stop_update",
+            "enrollment_insert","enrollment_update","enrollment_delete")}
         if self.bad_priv:
             perms[self.bad_priv] = True
-        return dict(read_only=self.mode, **perms)
+        return dict(read_only=self.mode, enrollment_select=True, **perms)
 
     async def fetch(self, sql, *args):
         self.calls.append(("fetch",sql,args))
         if self.raise_fetch:
             raise RuntimeError("DB_DOWN")
+        if "t100_guardian_account_enrollments" in sql:
+            return self.enrollments
         if "t100_live_position_checkpoint_revisions" in sql:
             return self.revs
         if "t100_live_position_checkpoints" in sql:
@@ -153,13 +164,32 @@ class CheckpointReadTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_db_not_readonly_or_mutation_capable_role_is_blocked(self):
         for variant in ("off","cp_insert","cp_update","cp_delete",
-                        "intent_update","stop_update"):
+                        "intent_update","stop_update",
+                        "enrollment_insert","enrollment_update","enrollment_delete"):
             with self.subTest(variant=variant):
                 db=(FakeDb(mode="off") if variant=="off"
                     else FakeDb(bad_priv=variant))
                 with self.assertRaisesRegex(GuardianCheckpointHalted,"PRIVILEGES"):
                     await inspect(db)
                 self.assertEqual(len(db.calls),1)
+
+    async def test_no_durable_enrollment_refuses_unverified_account(self):
+        db=FakeDb(enrollments=[])
+        with self.assertRaisesRegex(GuardianCheckpointHalted,"ENROLLMENT"):
+            await inspect(db)
+        self.assertEqual(len(db.calls),3)
+
+    async def test_enrollment_identity_cannot_be_inferred_or_swapped(self):
+        for change in ({"scope_sha256":"b"*64},{"position_id":"999"},
+                       {"symbol":"ETH_USDT"},{"external_oid":"t100other_abcdefgh"},
+                       {"exchange_order_id":"999"}):
+            with self.subTest(change=change):
+                with self.assertRaisesRegex(GuardianCheckpointHalted,"ENROLLMENT"):
+                    await inspect(FakeDb(enrollments=[enrollment(**change)]))
+
+    async def test_duplicate_enrollment_is_an_explicit_halt(self):
+        with self.assertRaisesRegex(GuardianCheckpointHalted,"ENROLLMENT"):
+            await inspect(FakeDb(enrollments=[enrollment(),enrollment()]))
 
     async def test_corrupted_revision_chain_denied(self):
         for revs in (
