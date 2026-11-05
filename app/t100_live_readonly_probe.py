@@ -218,6 +218,43 @@ class ReadOnlyMexcProbe:
             raise VenueReadHalted("FUNDING_PAGE_ROWS_UNVERIFIED")
         return raw
 
+    async def raw_history_positions_page(
+        self, symbol: str, *, page: int, size: int,
+    ) -> dict[str, Any]:
+        """GET-only historical closed-position page with venue metadata.
+
+        Caller must exhaust every declared page; a short page alone cannot
+        establish history completeness. Never accept a wrapper without a
+        position resultList, totalCount, totalPage and currentPage.
+        """
+        if (
+            type(symbol) is not str
+            or re.fullmatch(r"[A-Z0-9]+_USDT", symbol) is None
+            or type(page) is not int or page < 1
+            or type(size) is not int or not 1 <= size <= 100
+        ):
+            raise VenueReadHalted("INVALID_HISTORY_POSITION_PAGE_ARGUMENTS")
+        try:
+            raw = await self._client._private_get(
+                "/api/v1/private/position/list/history_positions",
+                {"symbol": symbol, "page_num": page, "page_size": size},
+            )
+        except Exception:
+            raise VenueReadHalted("HISTORY_POSITIONS_GET_FAILED") from None
+        if type(raw) is not dict:
+            raise VenueReadHalted("HISTORY_POSITIONS_RESPONSE_UNVERIFIED")
+        rows = raw.get("resultList")
+        if type(rows) is not list or any(type(r) is not dict for r in rows):
+            raise VenueReadHalted("HISTORY_POSITIONS_ROWS_UNVERIFIED")
+        keys = ("pageSize", "totalCount", "totalPage", "currentPage")
+        if any(type(raw.get(key)) is not int for key in keys):
+            raise VenueReadHalted("HISTORY_POSITIONS_METADATA_UNVERIFIED")
+        if (raw["pageSize"] != size or raw["currentPage"] != page
+            or raw["totalCount"] < 0 or raw["totalPage"] < 0
+            or len(rows) > size):
+            raise VenueReadHalted("HISTORY_POSITIONS_PAGINATION_CONTRADICTION")
+        return raw
+
     async def raw_order_by_external_oid(
         self, symbol: str, external_oid: str,
     ) -> dict[str, Any] | None:
