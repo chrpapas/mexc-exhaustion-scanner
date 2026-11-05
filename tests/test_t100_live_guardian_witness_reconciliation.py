@@ -195,7 +195,7 @@ class ReconciliationTests(unittest.IsolatedAsyncioTestCase):
         r=await reconcile_close_read_only(
             owned=owned(),actual_scope=SCOPE,ledger=ledger,
             probe=ReadOnlyMexcProbe(v))
-        self.assertEqual(r.status,"MATCHED_FILLED_CLOSE_OWNED_ABSENT_UNCERTIFIED_CENSUS")
+        self.assertEqual(r.status,"MATCHED_CLOSE_FILLED_POSITION_HISTORY_UNVERIFIED")
         self.assertTrue(r.order_filled_verified)
         self.assertTrue(r.owned_position_not_seen_twice)
         self.assertEqual(r.foreign_positions_preserved_observed,1)
