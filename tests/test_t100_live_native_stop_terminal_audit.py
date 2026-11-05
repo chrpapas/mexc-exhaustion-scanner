@@ -88,6 +88,45 @@ class TerminalPilotEvidenceTests(unittest.TestCase):
             with self.subTest(change=change):
                 self.assertEqual(audit(**change).status, "TERMINAL_STOP_AUDIT_INPUT_INVALID")
 
+    def test_real_v5_economics_consistent_but_venue_tp_conflict_blocks_cert(self):
+        entry = dict(orderId="456", symbol="BTC_USDT", positionId="321",
+                     side=3, state=3, dealVol="1", dealAvgPrice="69000")
+        linked_close = close(dealAvgPrice="70100")
+        result = audit(s=stop(takeProfitPrice=None),
+                       c=linked_close, entry_order=entry,
+                       reviewed_stop_only_request=True)
+        self.assertEqual(result.status, "VENUE_TP_LABEL_CONFLICT_LOSS_DIRECTION_CLOSE")
+        self.assertTrue(result.venue_generated_close_filled)
+        self.assertTrue(result.stop_loss_economic_behavior_consistent)
+        self.assertTrue(result.venue_trigger_side_conflict)
+        self.assertFalse(result.stop_loss_trigger_proven)
+        self.assertFalse(result.live_authorization)
+        self.assertFalse(result.entry_allowed)
+
+    def test_economic_consistency_cannot_be_faked_by_tp_or_profitable_exit(self):
+        valid_entry = dict(orderId="456", symbol="BTC_USDT", positionId="321",
+                           side=3, state=3, dealVol="1", dealAvgPrice="69000")
+        for change in (
+                dict(s=stop(takeProfitPrice="80000"), c=close(dealAvgPrice="70100")),
+                dict(s=stop(), c=close(dealAvgPrice="68000")),
+                dict(s=stop(), c=close(dealAvgPrice="69000")),
+                dict(s=stop(), c=close(dealAvgPrice=None)),
+                dict(s=stop(), c=close(dealAvgPrice="NaN"))):
+            with self.subTest(case=change):
+                result = audit(entry_order=valid_entry, reviewed_stop_only_request=True, **change)
+                self.assertFalse(result.stop_loss_economic_behavior_consistent)
+                self.assertFalse(result.stop_loss_trigger_proven)
+        for entry in (dict(valid_entry, positionId="0"), dict(valid_entry, state=2),
+                      dict(valid_entry, side=1), dict(valid_entry, dealVol="0.5"),
+                      dict(valid_entry, dealAvgPrice="NaN")):
+            with self.subTest(entry=entry):
+                result = audit(entry_order=entry, reviewed_stop_only_request=True,
+                               c=close(dealAvgPrice="70100"))
+                self.assertFalse(result.stop_loss_economic_behavior_consistent)
+        result = audit(entry_order=valid_entry, reviewed_stop_only_request=False,
+                       c=close(dealAvgPrice="70100"))
+        self.assertFalse(result.stop_loss_economic_behavior_consistent)
+
     def test_redacted_result_does_not_expose_order_ids_or_price(self):
         result = audit()
         for forbidden in ("321", "789", "70000"):
