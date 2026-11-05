@@ -82,6 +82,10 @@ class ConfigTests(unittest.TestCase):
                 with self.assertRaises(Exception):
                     validate_once_config(env(**changes))
 
+    def test_active_official_mexc_futures_domain_no_retired_fallback(self):
+        self.assertEqual(GetOnlyMexcTransport.BASE_URL,"https://api.mexc.com")
+        self.assertNotIn("contract.mexc.com",GetOnlyMexcTransport.BASE_URL)
+
     def test_not_acquiring_secrets_in_trading_mode(self):
         self.assertFalse(hasattr(GetOnlyMexcTransport, "_private_post"))
 
