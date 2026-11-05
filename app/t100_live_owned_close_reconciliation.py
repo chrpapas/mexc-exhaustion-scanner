@@ -22,6 +22,9 @@ from app.t100_live_guardian_inventory_witness import (
     ReadOnlyGuardianCollector, GuardianWitnessHalted,
 )
 from app.t100_live_readonly_probe import ReadOnlyMexcProbe
+from app.t100_live_owned_position_finality import (
+    verify_owned_position_finality, OwnedPositionFinalityHalted,
+)
 
 
 class CloseReconciliationHalted(RuntimeError):
@@ -37,6 +40,7 @@ class CloseReconciliation:
     status: str
     order_filled_verified: bool = False
     owned_position_not_seen_twice: bool = False
+    owned_position_closure_certified: bool = False
     foreign_positions_preserved_observed: int = 0
     ledger_reconcile_only: bool = True
     live_authorization: bool = False
@@ -107,9 +111,30 @@ async def reconcile_close_read_only(
             order_filled_verified=True,
             foreign_positions_preserved_observed=witness.foreign_position_count,
         )
-    # The exact order finished fully, and owned position was not seen in two
-    # stable reads, but absent snapshots alone lack independent completeness.
-    # Do not transition journal to VERIFIED or authorize future entry.
+    # Independent terminal position history can establish exact owned
+    # position finality. Absence from the open-position list alone cannot.
+    try:
+        finality = await verify_owned_position_finality(
+            owned=owned, actual_scope=actual_scope, probe=probe,
+        )
+    except OwnedPositionFinalityHalted:
+        return CloseReconciliation(
+            status="MATCHED_CLOSE_FILLED_POSITION_HISTORY_UNVERIFIED",
+            order_filled_verified=True,
+            owned_position_not_seen_twice=True,
+            foreign_positions_preserved_observed=witness.foreign_position_count,
+        )
+    if finality.closed_position_verified:
+        return CloseReconciliation(
+            status="EXACT_OWNED_CLOSE_AND_CLOSED_POSITION_HISTORY_VERIFIED",
+            order_filled_verified=True,
+            owned_position_not_seen_twice=True,
+            owned_position_closure_certified=True,
+            foreign_positions_preserved_observed=witness.foreign_position_count,
+            # No journal CAS here: only a distinct audited persistence
+            # coordinator may transition UNKNOWN/SUBMITTING -> VERIFIED.
+            # Manual/foreign positions can still exist; not account-flat.
+        )
     return CloseReconciliation(
         status="MATCHED_FILLED_CLOSE_OWNED_ABSENT_UNCERTIFIED_CENSUS",
         order_filled_verified=True,
