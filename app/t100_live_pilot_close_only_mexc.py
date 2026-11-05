@@ -33,6 +33,7 @@ class PilotCloseOnlyMexcTransport:
         self.client = client
         self.owned = owned
         self.enabled = emergency_close_enabled
+        self._attempted = False
 
     async def close_short_once(self, *, external_oid: str,
                                symbol: str, position_id: str,
@@ -59,6 +60,11 @@ class PilotCloseOnlyMexcTransport:
             "positionMode": 1,       # HEDGE
             "externalOid": external_oid,
         }
+        # In-process one-shot guard is defense in depth. Across restarts,
+        # the durable PostgreSQL ledger remains the authoritative fence.
+        if self._attempted:
+            raise OwnedGuardianHalted("PILOT_CLOSE_TRANSPORT_RETRY_BLOCKED")
+        self._attempted = True  # set before the awaited network operation
         # No retries, no catch-and-rePOST. The guardian journals SUBMITTING
         # before invoking and treats any uncertain outcome as UNKNOWN.
         ack = await self.client._private_post(
