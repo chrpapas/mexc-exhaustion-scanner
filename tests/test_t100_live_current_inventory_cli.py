@@ -189,8 +189,8 @@ class CurrentInventoryCliTests(unittest.IsolatedAsyncioTestCase):
 
     def test_web_pilot_keychain_uses_distinct_fixed_service(self):
         private_pair = (
-            SimpleNamespace(returncode=0, stdout="WEB_KEY_PRIVATE\\n"),
-            SimpleNamespace(returncode=0, stdout="WEB_SECRET_PRIVATE\\n"),
+            SimpleNamespace(returncode=0, stdout="WEB_KEY_PRIVATE\n"),
+            SimpleNamespace(returncode=0, stdout="WEB_SECRET_PRIVATE\n"),
         )
         with (
             patch("app.t100_live_current_inventory_cli.platform.system",
