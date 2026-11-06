@@ -30,9 +30,9 @@ class SafeDeploymentReviewTests(unittest.TestCase):
         self.assertNotIn("  - type: cron",s)
         # Comments can mention the old service as a warning; only actual
         # service declarations could accidentally overwrite it.
-        self.assertNotRegex(s,r"(?m)^\\s+name:\\s+mexc-t100-live-shadow\\s*$")
+        self.assertNotRegex(s,r"(?m)^[ ]+name:[ ]+mexc-t100-live-shadow[ ]*$")
         self.assertRegex(
-            s,r"(?m)^\\s+name:\\s+mexc-t100-guardian-observer-review-only\\s*$"
+            s,r"(?m)^[ ]+name:[ ]+mexc-t100-guardian-observer-review-only[ ]*$"
         )
         self.assertNotIn("fromDatabase:",s)
         self.assertNotIn("fromService:",s)
