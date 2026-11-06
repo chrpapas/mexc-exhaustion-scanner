@@ -1,6 +1,7 @@
 """Manual signed GET + restricted-read CLI safe entrypoint regressions."""
 from __future__ import annotations
 
+import ssl
 import unittest
 from types import ModuleType
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -163,6 +164,14 @@ class FourSlotOperatorCliTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(client.calls, [])
         self.assertGreater(len(fake_pool.conn.calls), 0)
         fake_asyncpg.create_pool.assert_awaited_once()
+        tls = fake_asyncpg.create_pool.await_args.kwargs["ssl"]
+        self.assertIsInstance(tls, ssl.SSLContext)
+        self.assertTrue(tls.check_hostname)
+        self.assertEqual(tls.verify_mode, ssl.CERT_REQUIRED)
+        self.assertEqual(
+            fake_asyncpg.create_pool.await_args.kwargs["server_settings"],
+            {"default_transaction_read_only": "on"},
+        )
         # A pending SQL attempt now blocks BEFORE importing/creating
         # the general exchange client, even in the fake integration.
         fake_mexc.MexcTradeClient.assert_not_called()
