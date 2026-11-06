@@ -151,7 +151,7 @@ def test_manual_extra_position_blocks():
     cp = checkpoint()
     initial = book([cp])
     initial.positions.append(pos(checkpoint("ETH_USDT", "78", "812")))
-    initial.completeness = report(2)
+    initial = replace(initial, completeness=report(2))
     second = replace(initial, observed_at_ms=NOW-1000)
     assert inspect(first=initial, second=second).status == (
         "TRAILING_UNOWNED_INVENTORY_PRESENT"
