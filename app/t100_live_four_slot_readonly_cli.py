@@ -19,6 +19,7 @@ import asyncio
 import getpass
 import json
 import os
+import ssl
 from typing import Any, Mapping
 
 from app.t100_live_cross_risk_diagnostic import (
@@ -221,7 +222,7 @@ async def _main(
     try:
         pool = await asyncpg.create_pool(
             dsn=dsn, user=TARGET_ROLE, password=db_password,
-            ssl="require", timeout=10, command_timeout=12,
+            ssl=ssl.create_default_context(), timeout=10, command_timeout=12,
             min_size=1, max_size=1,
             server_settings={"default_transaction_read_only": "on"},
         )
