@@ -120,7 +120,15 @@ def propose_one_contract(
     if (ask / last) > Decimal("1.005") or (ask / last) < Decimal("0.995"):
         raise PilotDryRunHalted("QUOTE_SPREAD_OR_PRICE_DRIFT")
     notional = ask * contract_size
-    if notional > MAX_NOTIONAL or decimal(available) < MIN_AVAILABLE:
+    available_balance = decimal(available)
+    # The pilot must stay below both the absolute 12.50 USDT cap and
+    # 25% of the actually observed available Futures balance. That is
+    # deliberately more conservative than inferring total account equity.
+    if (
+        notional > MAX_NOTIONAL
+        or available_balance < MIN_AVAILABLE
+        or notional > available_balance * Decimal("0.25")
+    ):
         raise PilotDryRunHalted("PILOT_NOTIONAL_OR_AVAILABLE_CAP_FAILED")
     stop = (last * STOP_MARKUP / tick).to_integral_value(
         rounding=ROUND_CEILING
@@ -145,6 +153,7 @@ def propose_one_contract(
         "indicative_notional_usdt": str(notional.quantize(Decimal("0.0001"))),
         "notional_ceiling_usdt": str(MAX_NOTIONAL),
         "available_futures_ge_12_50": True,
+        "notional_le_25_pct_observed_available": True,
         "loss_cap_guaranteed": False,
         "entry_allowed": False,
         "live_authorization": False,
