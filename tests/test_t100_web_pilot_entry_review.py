@@ -26,6 +26,7 @@ def preview():
         "stop_reference": "LATEST_PRICE",
         "notional_ceiling_usdt": "12.50",
         "available_futures_ge_12_50": True,
+        "notional_le_25_pct_observed_available": True,
         "reference_last_price": "75875.2",
         "embedded_stop_loss": "76634.0",
         "indicative_notional_usdt": "7.5875",
