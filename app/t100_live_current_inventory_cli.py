@@ -13,6 +13,8 @@ import argparse
 import asyncio
 import json
 import os
+import platform
+import subprocess
 from typing import Any
 
 from app.t100_live_account_reconciliation import assess_account_reconciliation
@@ -21,6 +23,48 @@ from app.t100_live_inventory_completeness_probe import (
     run_current_inventory_completeness_probe,
 )
 from app.t100_live_readonly_probe import ReadOnlyMexcProbe
+
+
+PILOT_KEYCHAIN_SERVICE = "t100225-mexc-pilot-subaccount"
+
+
+class PilotKeychainUnavailable(RuntimeError):
+    pass
+
+
+def read_pilot_keychain_credentials() -> tuple[str, str]:
+    """Load only the dedicated T100 V5 pilot account, without printing secrets.
+
+    No fallback to BOXWAVE, Render monitoring roles or generic MEXC keys.
+    This process-local pair is never exported to the environment.
+    """
+    if platform.system() != "Darwin":
+        raise PilotKeychainUnavailable("T100_PILOT_MAC_REQUIRED")
+    values: list[str] = []
+    for account in ("MEXC_API_KEY", "MEXC_API_SECRET"):
+        try:
+            result = subprocess.run(
+                (
+                    "/usr/bin/security", "find-generic-password",
+                    "-s", PILOT_KEYCHAIN_SERVICE,
+                    "-a", account, "-w",
+                ),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                text=True,
+                check=False,
+                timeout=15,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            raise PilotKeychainUnavailable(
+                "T100_PILOT_KEYCHAIN_READ_FAILED"
+            ) from None
+        if result.returncode != 0 or not result.stdout.strip():
+            raise PilotKeychainUnavailable(
+                "T100_PILOT_KEYCHAIN_CREDENTIAL_MISSING"
+            )
+        values.append(result.stdout.rstrip("\r\n"))
+    return values[0], values[1]
 
 
 def shareable_current_inventory_report(report: Any) -> dict[str, Any]:
@@ -167,7 +211,7 @@ async def _run(*, client: Any, timeout: float = 45.) -> dict[str, Any]:
         })
 
 
-async def _main() -> None:
+async def _main(*, mac_pilot_keychain: bool = False) -> None:
     controls = T100ExecutionControls.from_env()
     if (
         controls.mode != "paper"
@@ -179,8 +223,20 @@ async def _main() -> None:
             "live_authorization": False,
         }))
         raise SystemExit(2)
-    key = os.getenv("MEXC_API_KEY") or ""
-    secret = os.getenv("MEXC_API_SECRET") or ""
+    if mac_pilot_keychain:
+        try:
+            key, secret = read_pilot_keychain_credentials()
+        except PilotKeychainUnavailable as exc:
+            print(json.dumps({
+                "status": str(exc),
+                "credential_scope": "T100_V5_PILOT_SUBACCOUNT",
+                "render_shadow_account_binding_verified": False,
+                "live_authorization": False,
+            }, sort_keys=True))
+            raise SystemExit(2) from None
+    else:
+        key = os.getenv("MEXC_API_KEY") or ""
+        secret = os.getenv("MEXC_API_SECRET") or ""
     if not key or not secret:
         print(json.dumps({
             "status": "CURRENT_INVENTORY_READ_CREDENTIALS_MISSING",
@@ -195,6 +251,13 @@ async def _main() -> None:
     )
     try:
         report = await _run(client=client)
+        # Pilot credentials prove only this pilot subaccount's current state,
+        # not the separate deployed Render shadow's account binding.
+        report["credential_scope"] = (
+            "T100_V5_PILOT_SUBACCOUNT" if mac_pilot_keychain
+            else "UNVERIFIED_ENV_ACCOUNT"
+        )
+        report["render_shadow_account_binding_verified"] = False
         print(json.dumps(report, indent=2, sort_keys=True))
         print("PRIVATE GET ONLY. NO ORDERS. LIVE TRADING DISABLED.")
     finally:
@@ -205,9 +268,13 @@ def cli() -> None:
     parser = argparse.ArgumentParser(
         description="Non-atomic, redacted MEXC account inventory audit"
     )
-    parser.parse_args()
+    parser.add_argument(
+        "--mac-pilot-keychain", action="store_true",
+        help="Read only the dedicated T100 V5 pilot Keychain credentials on Mac",
+    )
+    args = parser.parse_args()
     try:
-        asyncio.run(_main())
+        asyncio.run(_main(mac_pilot_keychain=args.mac_pilot_keychain))
     except SystemExit:
         raise
     except Exception as exc:
