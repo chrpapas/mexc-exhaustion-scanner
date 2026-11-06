@@ -42,9 +42,10 @@ def test_ticker_websocket_parser_ignores_other_symbol():
     assert ticker_price_from_message(message, "BTC_USDT") is None
 
 @pytest.mark.asyncio
-async def test_position_stop_uses_documented_mexc_request_fields_only():
-    """Regression: earlier live pilot failed stop attachment with stopLossType.
+async def test_position_stop_payload_is_fixed_and_venue_unverified():
+    """Regression fixture only: venue rejected this shape in a prior pilot.
 
+    Current docs list these optional fields, but the combination is unverified.
     No venue network call is performed; the private POST is stubbed.
     """
     from unittest.mock import AsyncMock, patch
@@ -68,9 +69,11 @@ async def test_position_stop_uses_documented_mexc_request_fields_only():
                 "vol": 1,
                 "stopLossPrice": 95000.5,
                 "priceProtect": 0,
+                "profitLossVolType": "SAME",
+                "volType": 2,
+                "stopLossReverse": 2,
+                "stopLossType": 0,
             },
         )
-        assert "stopLossType" not in str(send.await_args)
-        assert "profitLossVolType" not in str(send.await_args)
     finally:
         await client.close()
