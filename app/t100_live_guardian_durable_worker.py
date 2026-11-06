@@ -92,11 +92,23 @@ async def verify_alert_writer_role(conn: Any) -> None:
                 has_table_privilege(current_user,
                     'public.t100_guardian_incident_state','UPDATE') AS incident_update,
                 has_table_privilege(current_user,
+                    'public.t100_guardian_incident_state','DELETE') AS incident_delete,
+                has_table_privilege(current_user,
+                    'public.t100_guardian_incident_state','TRUNCATE') AS incident_truncate,
+                has_table_privilege(current_user,
                     'public.t100_guardian_incident_outbox','SELECT') AS outbox_select,
                 has_table_privilege(current_user,
                     'public.t100_guardian_incident_outbox','UPDATE') AS outbox_update,
                 has_table_privilege(current_user,
+                    'public.t100_guardian_incident_outbox','DELETE') AS outbox_delete,
+                has_table_privilege(current_user,
+                    'public.t100_guardian_incident_outbox','TRUNCATE') AS outbox_truncate,
+                has_table_privilege(current_user,
+                    'public.t100_live_position_checkpoints','INSERT') AS checkpoint_insert,
+                has_table_privilege(current_user,
                     'public.t100_live_position_checkpoints','UPDATE') AS checkpoint_update,
+                has_table_privilege(current_user,
+                    'public.t100_live_position_checkpoints','DELETE') AS checkpoint_delete,
                 has_table_privilege(current_user,
                     'public.t100_live_order_intents','INSERT') AS trade_intent_insert,
                 has_table_privilege(current_user,
@@ -112,7 +124,10 @@ async def verify_alert_writer_role(conn: Any) -> None:
             any(row[x] is not True for x in (
                 "incident_insert","incident_update","outbox_select","outbox_update")) or
             any(row[x] is not False for x in (
-                "checkpoint_update","trade_intent_insert","stop_update",
+                "incident_delete","incident_truncate",
+                "outbox_delete","outbox_truncate",
+                "checkpoint_insert","checkpoint_update","checkpoint_delete",
+                "trade_intent_insert","stop_update",
                 "emergency_update","enrollment_insert"))):
         raise GuardianDurableHalted("GUARDIAN_ALERT_ROLE_HAS_UNSAFE_PRIVILEGES")
 
