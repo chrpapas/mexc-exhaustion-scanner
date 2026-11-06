@@ -18,6 +18,33 @@ class TraderNotifierSecurityTests(unittest.IsolatedAsyncioTestCase):
             logging.getLogger("httpcore").getEffectiveLevel(), logging.WARNING
         )
 
+    async def test_untrusted_http_error_body_cannot_leak_webhook_token(self):
+        secret_url=(
+            "https://discord.com/api/webhooks/123/"
+            "SUPER_SECRET_WEBHOOK_TOKEN"
+        )
+        sensitive="THIS_TOKEN_MUST_NEVER_LEAK"
+        async def handler(request: httpx.Request) -> httpx.Response:
+            # An upstream failure could echo URL or secret payloads.
+            return httpx.Response(
+                403,request=request,
+                text=f"Rejected {secret_url} {sensitive}",
+            )
+        notifier=TraderNotifier(secret_url)
+        await notifier.client.aclose()
+        notifier.client=httpx.AsyncClient(
+            transport=httpx.MockTransport(handler),timeout=15.0,
+        )
+        with self.assertLogs("app.trader_notifier",level="ERROR") as captured:
+            sent=await notifier.send("guardian incident","redacted")
+        self.assertFalse(sent)
+        logs="\n".join(captured.output)
+        self.assertIn("403",logs)
+        self.assertNotIn(secret_url,logs)
+        self.assertNotIn("SUPER_SECRET_WEBHOOK_TOKEN",logs)
+        self.assertNotIn(sensitive,logs)
+        await notifier.close()
+
     async def test_failed_webhook_does_not_log_secret_url(self):
         secret_url = (
             "https://discord.com/api/webhooks/123/"
