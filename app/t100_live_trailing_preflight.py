@@ -108,7 +108,8 @@ def review_t100_trailing_candidate(
 
     # A stale or future-dated input must not yield an executable proposal.
     if (
-        first.observed_at_ms > second.observed_at_ms
+        first.observed_at_ms >= second.observed_at_ms
+        or second.observed_at_ms - first.observed_at_ms > 2000
         or second.observed_at_ms > now_ms + 2000
         or market_observed_at_ms > now_ms + 2000
         or first.observed_at_ms < now_ms - 10000
@@ -166,6 +167,29 @@ def review_t100_trailing_candidate(
         return blocked("TRAILING_CRITICAL_ACCOUNT_DIGEST_UNVERIFIED")
 
     equal = {"account_bookends_equal": True}
+    # The shared critical digest intentionally excludes stop.errorCode because
+    # it is not always part of normal position/stop equality. Nevertheless,
+    # a safety-relevant error in either bookend must not be skipped. Require
+    # BOTH witnessed stop rows to satisfy native full-volume semantics.
+    for cp in checkpoints:
+        prior = [
+            row for row in first.stops
+            if str(row.get("positionId") or "") == cp.position_id
+            and row.get("symbol") == cp.symbol
+        ]
+        if len(prior) != 1:
+            return blocked("TRAILING_FIRST_STOP_NOT_UNIQUE", **equal)
+        prior_audit = assess_native_short_market_stop_row(
+            stop=prior[0], symbol=cp.symbol,
+            position_id=cp.position_id,
+            position_quantity=cp.contracts,
+            maximum_short_stop_price=cp.stop_price,
+        )
+        if not prior_audit.active_native_full_volume_market_sl_observed:
+            return blocked(
+                "TRAILING_FIRST_NATIVE_STOP_UNVERIFIED:" + prior_audit.status,
+                **equal,
+            )
     # No adoption of operator-owned positions or stops in this strict path.
     if (
         len(second.positions) != len(checkpoints)
