@@ -1,5 +1,6 @@
 """Concrete MEXC futures POST/GET adapter. POST sends real orders; nothing runs on import."""
 from __future__ import annotations
+import re
 from typing import Any, TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -73,9 +74,18 @@ class LiveMexcAdapter:
                 "lossTrend": 1,
             },
         )
-        if not isinstance(result, dict) or not result.get("orderId"):
+        # The current MEXC order/create response returns a numeric string
+        # orderId. Never journal a boolean, signed, zero, Unicode or
+        # nonintegral value as a successful exchange acknowledgement.
+        raw_id = result.get("orderId") if type(result) is dict else None
+        if (
+            type(raw_id) not in (int, str)
+            or re.fullmatch(r"[1-9][0-9]*", str(raw_id)) is None
+        ):
+            # The POST may already have succeeded. The durable caller must
+            # reconcile by externalOid and MUST NOT retry this entry.
             raise RuntimeError("MEXC did not return orderId")
-        return str(result["orderId"])
+        return str(raw_id)
 
     async def submit_native_short_stop_tightening(
         self,
