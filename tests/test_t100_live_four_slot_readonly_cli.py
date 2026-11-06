@@ -7,7 +7,7 @@ from types import ModuleType
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from app.t100_live_four_slot_readonly_cli import (
-    _main, run_readonly_four_slot_audit,
+    _PrivateGetOnly, _main, run_readonly_four_slot_audit,
 )
 from tests.test_t100_live_four_slot_mexc_readonly import (
     MockMexcGetOnly, prepare_rows,
@@ -25,6 +25,53 @@ PAPER_KILLED = {
 
 
 class FourSlotOperatorCliTests(unittest.IsolatedAsyncioTestCase):
+    async def test_four_slot_transport_allows_only_scoped_signed_get(self):
+        class Recorder:
+            def __init__(self):
+                self.calls = []
+
+            async def _private_get(self, path, params=None):
+                self.calls.append((path, params))
+                return None
+
+            async def _private_post(self, path, body):
+                raise AssertionError("NO_POST_POSSIBLE")
+
+        recorder = Recorder()
+        facade = _PrivateGetOnly(recorder)
+        self.assertFalse(hasattr(facade, "_private_post"))
+        for path, params in (
+            ("/api/v1/private/position/open_positions", None),
+            ("/api/v1/private/position/open_positions",
+             {"symbol": "SIREN_USDT"}),
+            ("/api/v1/private/stoporder/open_orders", None),
+            ("/api/v1/private/account/assets", None),
+            ("/api/v1/private/order/open_order_total_count", None),
+            ("/api/v1/private/order/external/SIREN_USDT/t100v1e123", None),
+            ("/api/v1/private/order/deal_details/123", None),
+        ):
+            self.assertIsNone(await facade._private_get(path, params))
+        self.assertEqual(len(recorder.calls), 7)
+
+        for path, params in (
+            ("/api/v1/private/order/create", None),
+            ("/api/v1/private/stoporder/change_plan_price", None),
+            ("/api/v1/private/order/get/123", None),
+            ("/api/v1/private/account/risk_limit", None),
+            ("/api/v1/private/order/external/SIREN_USDT/../123", None),
+            ("/api/v1/private/order/deal_details/01", None),
+            ("/api/v1/private/order/deal_details/²", None),
+            ("/api/v1/private/order/deal_details/123", {}),
+            ("/api/v1/private/account/assets", {}),
+            ("/api/v1/private/position/open_positions", {"positionId": 1}),
+            ("/api/v1/private/stoporder/open_orders",
+             {"symbol": "SYMBOL/../SIREN_USDT"}),
+        ):
+            with self.subTest(path=path, params=params):
+                with self.assertRaises(RuntimeError):
+                    await facade._private_get(path, params)
+        self.assertEqual(len(recorder.calls), 7)
+
     async def test_clean_three_owned_slots_are_observation_not_live_authorization(self):
         snapshot, orders, positions, stops = prepare_rows(3)
         cli_result = await run_readonly_four_slot_audit(
