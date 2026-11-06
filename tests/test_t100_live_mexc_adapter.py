@@ -198,6 +198,46 @@ class LiveMexcAdapterContractTests(unittest.IsolatedAsyncioTestCase):
                         intent(), permit=permit()
                     )
 
+    async def test_malformed_post_acknowledgements_never_count_as_order_id(self):
+        # These malformed ACKs must never become journal order identifiers.
+        # A real POST may still have succeeded, so the caller reconciles
+        # the existing externalOid rather than retrying.
+        for invalid in (
+            {"orderId": True},
+            {"orderId": False},
+            {"orderId": -1},
+            {"orderId": 0},
+            {"orderId": 1.5},
+            {"orderId": "0"},
+            {"orderId": "-1"},
+            {"orderId": "+1"},
+            {"orderId": "01"},
+            {"orderId": " 1"},
+            {"orderId": "1 "},
+            {"orderId": "1e5"},
+            {"orderId": "١٢٣"},
+            {"orderId": ["123"]},
+            {"orderId": {"id": "123"}},
+        ):
+            with self.subTest(invalid=invalid):
+                self.client.post_result = invalid
+                self.client.posts = []
+                with self.assertRaisesRegex(
+                    RuntimeError, "MEXC did not return orderId",
+                ):
+                    await self.adapter.submit_short_with_stop(
+                        intent(), permit=permit(),
+                    )
+                self.assertEqual(len(self.client.posts), 1)
+
+    async def test_numeric_integer_order_id_accepted_when_positive(self):
+        self.client.post_result = {"orderId": 739113577038255616}
+        response = await self.adapter.submit_short_with_stop(
+            intent(), permit=permit(),
+        )
+        self.assertEqual(response, "739113577038255616")
+        self.assertEqual(len(self.client.posts), 1)
+
     async def test_current_native_stop_endpoint_unverified_never_posts(self):
         # Current MEXC public stop-change docs cover limit-order
         # change_price; the old change_plan_price contract must not be
