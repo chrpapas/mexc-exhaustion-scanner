@@ -43,6 +43,7 @@ class SafeDeploymentReviewTests(unittest.TestCase):
         for name,value in (
             ("T100_GUARDIAN_WORKER_ENABLED","false"),
             ("T100_GUARDIAN_OBSERVER_ENABLED","false"),
+            ("T100_GUARDIAN_DURABLE_ALERTS_ENABLED","false"),
             ("T100_EXECUTION_MODE","paper"),
             ("T100_LIVE_ORDER_API_ENABLED","false"),
             ("T100_LIVE_KILL_SWITCH","true"),
@@ -58,6 +59,8 @@ class SafeDeploymentReviewTests(unittest.TestCase):
             "T100_GUARDIAN_POSITION_ID",
             "T100_GUARDIAN_READONLY_DB_DSN",
             "T100_GUARDIAN_DB_CA_FILE",
+            "T100_GUARDIAN_INCIDENT_DB_DSN",
+            "T100_GUARDIAN_DISCORD_WEBHOOK_URL",
         ):
             with self.subTest(name=name):
                 self.assertRegex(s,rf"- key: {name}\n\s+sync: false")
@@ -66,7 +69,7 @@ class SafeDeploymentReviewTests(unittest.TestCase):
     def test_worker_entrypoint_is_read_only_runtime_only(self):
         s=MANIFEST.read_text()
         self.assertIn(
-            "startCommand: python -m app.t100_live_guardian_readonly_worker --run",s)
+            "startCommand: python -m app.t100_live_guardian_durable_worker --run",s)
         self.assertTrue(callable(run_worker))
         self.assertFalse(hasattr(GetOnlyMexcTransport,"_private_post"))
 
