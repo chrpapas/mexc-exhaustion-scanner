@@ -5,6 +5,7 @@ The production operator command uses real asyncpg, not this fake.
 """
 import ssl
 import unittest
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
 
 from app.t100_live_db_fencing_diagnostic import (
@@ -158,6 +159,72 @@ class FencingDBDiagnosticTests(unittest.IsolatedAsyncioTestCase):
         second.execute.assert_not_awaited()
         first.close.assert_awaited_once()
         second.close.assert_awaited_once()
+
+    async def test_keychain_lookup_uses_only_executor_identity(self):
+        with (
+            patch("app.t100_live_db_fencing_diagnostic.sys.platform", "darwin"),
+            patch(
+                "app.t100_live_db_fencing_diagnostic.subprocess.run",
+                return_value=SimpleNamespace(
+                    returncode=0, stdout="keychain-runtime-secret\\n",
+                ),
+            ) as run,
+        ):
+            from app.t100_live_db_fencing_diagnostic import (
+                _runtime_password_from_mac_keychain,
+            )
+            self.assertEqual(
+                _runtime_password_from_mac_keychain(),
+                "keychain-runtime-secret",
+            )
+        command = run.call_args.args[0]
+        self.assertEqual(command[0:2], (
+            "/usr/bin/security", "find-generic-password",
+        ))
+        self.assertEqual(command[-1], "-w")
+        self.assertIn("t100_live_executor_runtime", command)
+        self.assertNotIn("t100_shadow_witness_writer", command)
+        self.assertNotIn("t100_shadow_sentinel_outbox", command)
+
+    async def test_keychain_lookup_missing_stops_before_database_or_orders(self):
+        from app.t100_live_db_fencing_diagnostic import (
+            _runtime_password_from_mac_keychain,
+        )
+        with (
+            patch("app.t100_live_db_fencing_diagnostic.sys.platform", "darwin"),
+            patch(
+                "app.t100_live_db_fencing_diagnostic.subprocess.run",
+                return_value=SimpleNamespace(returncode=44, stdout=""),
+            ) as run,
+        ):
+            with self.assertRaisesRegex(
+                FencingDiagnosticHalted,
+                "MAC_KEYCHAIN_EXECUTOR_PASSWORD_NOT_FOUND",
+            ):
+                _runtime_password_from_mac_keychain()
+        for call in run.call_args_list:
+            command=call.args[0]
+            self.assertNotIn("t100_shadow_witness_writer", command)
+            self.assertNotIn("t100_shadow_sentinel_outbox", command)
+
+    async def test_keychain_flag_blocks_before_db_if_executor_password_missing(self):
+        from app.t100_live_db_fencing_diagnostic import _main
+        with (
+            patch("builtins.input", return_value=CONFIRMATION),
+            patch(
+                "app.t100_live_db_fencing_diagnostic._runtime_password_from_mac_keychain",
+                side_effect=FencingDiagnosticHalted(
+                    "MAC_KEYCHAIN_EXECUTOR_PASSWORD_NOT_FOUND"
+                ),
+            ),
+            patch("getpass.getpass") as prompt,
+        ):
+            with self.assertRaisesRegex(
+                FencingDiagnosticHalted,
+                "MAC_KEYCHAIN_EXECUTOR_PASSWORD_NOT_FOUND",
+            ):
+                await _main(keychain=True)
+        prompt.assert_not_called()
 
     async def test_rejects_production_lease_name_without_any_writes(self):
         db = SharedDB()
