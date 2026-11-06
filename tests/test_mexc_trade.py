@@ -40,3 +40,37 @@ def test_ticker_websocket_parser():
 def test_ticker_websocket_parser_ignores_other_symbol():
     message = '{"channel":"push.ticker","data":{"lastPrice":0.1234,"symbol":"VELVET_USDT"},"symbol":"VELVET_USDT"}'
     assert ticker_price_from_message(message, "BTC_USDT") is None
+
+@pytest.mark.asyncio
+async def test_position_stop_uses_documented_mexc_request_fields_only():
+    """Regression: earlier live pilot failed stop attachment with stopLossType.
+
+    No venue network call is performed; the private POST is stubbed.
+    """
+    from unittest.mock import AsyncMock, patch
+
+    from app.mexc_trade import MexcTradeClient
+
+    client = MexcTradeClient("https://api.mexc.com", api_key="TEST", api_secret="TEST")
+    try:
+        with patch.object(client, "_private_post", new_callable=AsyncMock) as send:
+            send.return_value = {"id": 2345}
+            stop_id = await client.place_position_stop(
+                position_id=1234, contracts=1, stop_price=95000.5,
+            )
+        assert stop_id == 2345
+        send.assert_awaited_once_with(
+            "/api/v1/private/stoporder/place",
+            {
+                "lossTrend": 1,
+                "profitTrend": 1,
+                "positionId": 1234,
+                "vol": 1,
+                "stopLossPrice": 95000.5,
+                "priceProtect": 0,
+            },
+        )
+        assert "stopLossType" not in str(send.await_args)
+        assert "profitLossVolType" not in str(send.await_args)
+    finally:
+        await client.close()
