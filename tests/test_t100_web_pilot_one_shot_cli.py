@@ -266,3 +266,46 @@ async def test_status_is_read_only_and_uses_journal_scope(temp_journal):
     with patch.object(pilot, "_snapshot", new=AsyncMock(return_value={"status": "UNKNOWN"})):
         await pilot._status(client, d["key_sha256"])
     client._private_post.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_status_after_close_requires_bookended_verified_flat(temp_journal):
+    d = stored()
+    d["close_post_attempted"] = True
+    pilot._first_journal(d)
+    client = fake_client()
+    verified = {
+        "status": "CURRENT_ACCOUNT_INVENTORY_COMPLETENESS_VERIFIED_NONATOMIC",
+        "account_reconciled": True, "account_wide_completeness_verified": True,
+        "before_positions": 0, "after_positions": 0,
+        "before_current_tpsl": 0, "after_current_tpsl": 0,
+        "reported_open_order_counts": {
+            "sumCount": 0, "stopOrderCount": 0,
+            "limitOrderCount": 0, "planOrderCount": 0, "trackOrderCount": 0,
+        },
+    }
+    with (
+        patch.object(pilot, "_snapshot", new=AsyncMock(return_value={"status": "FLAT"})),
+        patch.object(pilot, "run_inventory", new=AsyncMock(return_value=verified)),
+    ):
+        await pilot._status(client, d["key_sha256"])
+    client._private_post.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_status_nonflat_after_close_never_claims_flat(temp_journal, capsys):
+    d = stored()
+    d["close_post_attempted"] = True
+    pilot._first_journal(d)
+    client = fake_client()
+    with (
+        patch.object(pilot, "_snapshot", new=AsyncMock(return_value={"status": "NONFLAT"})),
+        patch.object(pilot, "run_inventory", new=AsyncMock(return_value={
+            "account_reconciled": False,
+            "account_wide_completeness_verified": False,
+            "before_positions": 1, "after_positions": 1,
+        })),
+    ):
+        await pilot._status(client, d["key_sha256"])
+    assert "CLOSE_FLAT_ACCOUNT_BOOKEND_VERIFIED=false" in capsys.readouterr().out
+    client._private_post.assert_not_awaited()
