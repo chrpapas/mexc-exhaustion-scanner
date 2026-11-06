@@ -242,12 +242,15 @@ class ReadOnlyMexcProbe:
 
     async def raw_history_positions_page(
         self, symbol: str, *, page: int, size: int,
-    ) -> dict[str, Any]:
-        """GET-only historical closed-position page with venue metadata.
+    ) -> dict[str, Any] | list[dict[str, Any]]:
+        """Signed GET of ONE historical-position page. No completeness claim.
 
-        Caller must exhaust every declared page; a short page alone cannot
-        establish history completeness. Never accept a wrapper without a
-        position resultList, totalCount, totalPage and currentPage.
+        The actual dedicated T100 MEXC subaccount (2026-11-06) returned
+        data=[rows] without pagination metadata; the documentation describes
+        data={resultList,totalCount,totalPage,...}. Both are accepted as
+        *positive row evidence*. Only the metadata-object variant can provide
+        a verifiable complete paginated census. A short bare array does NOT
+        certify that all historical positions have been returned.
         """
         if (
             type(symbol) is not str
@@ -263,6 +266,13 @@ class ReadOnlyMexcProbe:
             )
         except Exception:
             raise VenueReadHalted("HISTORY_POSITIONS_GET_FAILED") from None
+
+        if type(raw) is list:
+            if len(raw) > size or any(type(r) is not dict for r in raw):
+                raise VenueReadHalted("HISTORY_POSITION_ARRAY_ROWS_UNVERIFIED")
+            # A successful historical GET returning [] remains UNKNOWN
+            # for any target missing from that page, not proven absent.
+            return raw
         if type(raw) is not dict:
             raise VenueReadHalted("HISTORY_POSITIONS_RESPONSE_UNVERIFIED")
         rows = raw.get("resultList")
