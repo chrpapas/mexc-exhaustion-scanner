@@ -182,7 +182,7 @@ class CurrentInventoryCliTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn("t100225-mexc-pilot-subaccount", args)
             self.assertNotIn("t100-render-monitoring-db-roles-v1", args)
         self.assertEqual(
-            [call.args[0][-3] for call in run.call_args_list],
+            [call.args[0][-2] for call in run.call_args_list],
             ["MEXC_API_KEY", "MEXC_API_SECRET"],
         )
 
