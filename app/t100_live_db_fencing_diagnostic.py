@@ -21,6 +21,7 @@ import asyncio
 import getpass
 import json
 import os
+import ssl
 import uuid
 from typing import Any
 
@@ -197,7 +198,7 @@ async def _main() -> None:
                 dsn=owner_url,
                 user=TARGET_ROLE,
                 password=password,
-                ssl="require",
+                ssl=ssl.create_default_context(),
                 timeout=10,
                 command_timeout=20,
             )
