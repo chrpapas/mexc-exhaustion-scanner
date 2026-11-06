@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock, patch
 
 from app.t100_live_current_inventory_cli import (
     PilotKeychainUnavailable,
+    InventoryGetOnlyClient,
     _main,
     _run,
     read_pilot_keychain_credentials,
@@ -261,6 +262,30 @@ class CurrentInventoryCliTests(unittest.IsolatedAsyncioTestCase):
                 await _main(mac_pilot_keychain=True)
         lookup.assert_not_called()
         self.assertIn("CURRENT_INVENTORY_READ_ONLY_MODE_REQUIRED", output.getvalue())
+
+    async def test_inventory_get_only_wrapper_denies_out_of_scope_endpoints(self):
+        inner = FakeReadClient()
+        wrapped = InventoryGetOnlyClient(inner)
+        self.assertFalse(hasattr(wrapped, "_private_post"))
+        self.assertEqual(await wrapped._private_get(
+            "/api/v1/private/position/open_positions",
+        ), [])
+        self.assertEqual(await wrapped._private_get(
+            "/api/v1/private/position/open_positions",
+            {"symbol": "BTC_USDT"},
+        ), [])
+        self.assertEqual(len(inner.calls), 2)
+        for path, params in (
+            ("/api/v1/private/order/create", None),
+            ("/api/v1/private/account/assets", {"symbol": "BTC_USDT"}),
+            ("/api/v1/private/position/open_positions",
+             {"positionId": 123}),
+            ("/api/v1/private/stoporder/open_orders",
+             {"symbol": "../BTC_USDT"}),
+        ):
+            with self.assertRaises(RuntimeError):
+                await wrapped._private_get(path, params)
+        self.assertEqual(len(inner.calls), 2)
 
     def test_allowlist_never_emits_raw_payload_values(self):
         result = shareable_current_inventory_report({
