@@ -18,7 +18,10 @@ from tests.test_t100_live_guardian_readonly_once import env as once_env
 
 
 def worker_env(**kwargs):
-    return dict(once_env(),T100_GUARDIAN_WORKER_ENABLED="true",**kwargs)
+    result = dict(once_env())
+    result["T100_GUARDIAN_WORKER_ENABLED"] = "true"
+    result.update(kwargs)
+    return result
 
 
 def report(**kwargs):
