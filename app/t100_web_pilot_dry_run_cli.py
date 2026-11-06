@@ -1,6 +1,6 @@
 """T100 new-web-subaccount BTC_USDT one-contract PREVIEW.
 
-No POST/order method or send switch. Explicitly non-authorizing. Reads the
+No POST invocation or send switch. Explicitly non-authorizing. Reads the
 dedicated Mac Keychain, bookended account inventory and venue metadata.
 Output intentionally excludes identities, balances, raw API responses and keys.
 """
@@ -15,7 +15,7 @@ from decimal import Decimal, InvalidOperation, ROUND_CEILING
 from typing import Any
 
 from app.t100_live_current_inventory_cli import (
-    InventoryGetOnlyClient, PilotKeychainUnavailable,
+    INVENTORY_GET_ENDPOINTS, InventoryGetOnlyClient, PilotKeychainUnavailable,
     _run as run_inventory,
     read_pilot_keychain_credentials,
 )
@@ -29,6 +29,39 @@ MAX_TICKER_AGE_MS = 30000
 
 class PilotDryRunHalted(ValueError):
     pass
+
+
+class PilotDryRunGetOnlyClient:
+    """No mutating methods; hard GET route/parameter allowlist."""
+
+    __slots__ = ("__client",)
+
+    def __init__(self, client: Any) -> None:
+        self.__client = client
+
+    async def _private_get(
+        self, path: str, params: dict[str, Any] | None = None,
+    ) -> Any:
+        if path not in INVENTORY_GET_ENDPOINTS | {
+            "/api/v1/private/position/position_mode",
+        }:
+            raise PilotDryRunHalted("PRIVATE_GET_PATH_DISALLOWED")
+        if path == "/api/v1/private/position/position_mode" and params is not None:
+            raise PilotDryRunHalted("POSITION_MODE_GET_PARAMETERS_DISALLOWED")
+        if path in INVENTORY_GET_ENDPOINTS:
+            # Reuse the stricter four-slot inventory route filters.
+            return await InventoryGetOnlyClient(self.__client)._private_get(path, params)
+        return await self.__client._private_get(path)
+
+    async def _public_get(
+        self, path: str, params: dict[str, Any] | None = None,
+    ) -> Any:
+        if path not in {
+            "/api/v1/contract/detail",
+            "/api/v1/contract/ticker",
+        } or params != {"symbol": SYMBOL}:
+            raise PilotDryRunHalted("PUBLIC_GET_NOT_ALLOWLISTED")
+        return await self.__client._public_get(path, params)
 
 
 def decimal(value: Any) -> Decimal:
@@ -194,7 +227,9 @@ async def _main() -> None:
         "https://api.mexc.com", api_key=key, api_secret=secret,
     )
     try:
-        output = await asyncio.wait_for(check(client), timeout=50)
+        output = await asyncio.wait_for(
+            check(PilotDryRunGetOnlyClient(client)), timeout=50,
+        )
     finally:
         await client.close()
     print(json.dumps(output, indent=2, sort_keys=True))
