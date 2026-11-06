@@ -24,7 +24,10 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
-from app.t100_live_current_inventory_cli import read_pilot_keychain_credentials
+from app.t100_live_current_inventory_cli import (
+    InventoryGetOnlyClient, _run as run_inventory,
+    read_pilot_keychain_credentials,
+)
 from app.t100_web_pilot_dry_run_cli import PilotDryRunGetOnlyClient, check
 from app.t100_web_pilot_entry_review import (
     assess_post_entry_snapshot, draft_entry_request,
@@ -317,6 +320,23 @@ async def _status(client: Any, fingerprint: str) -> None:
     print("JOURNAL_CLOSE_POST_ATTEMPTED=" + str(data["close_post_attempted"]).lower())
     report = await _snapshot(client, data["external_oid"], data["draft"])
     print("VENUE_POSTFLIGHT=" + json.dumps(report, sort_keys=True))
+    if data["close_post_attempted"]:
+        flat_report = await run_inventory(client=InventoryGetOnlyClient(client))
+        flat = (
+            flat_report.get("account_reconciled") is True
+            and flat_report.get("account_wide_completeness_verified") is True
+            and flat_report.get("before_positions") == 0
+            and flat_report.get("after_positions") == 0
+            and flat_report.get("before_current_tpsl") == 0
+            and flat_report.get("after_current_tpsl") == 0
+            and all(
+                x == 0
+                for x in flat_report.get("reported_open_order_counts", {}).values()
+            )
+        )
+        print("CLOSE_FLAT_ACCOUNT_BOOKEND_VERIFIED=" + str(flat).lower())
+        if not flat:
+            print("RECONCILE_OPEN_POSITION_AND_RESIDUAL_TPSL_IN_MEXC_UI_NOW=true")
     print("NO_POST_REQUESTS_FROM_STATUS=true")
 
 
