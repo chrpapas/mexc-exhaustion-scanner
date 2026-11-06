@@ -2,8 +2,10 @@
 
 MEXC historical position records provide terminal state and close quantity;
 the open-position endpoint also supports an exact positionId filter. Neither
-alone is sufficient. We require two complete, metadata-verified history
-retrievals and two exact-position GET reads, all consistent.
+alone is sufficient. We require two independent, matching POSITIVE historical
+position records and two exact-position GET reads, all consistent. The
+observed bare-array API response is never an exhaustive history census.
+Metadata-backed responses continue to require full declared pagination.
 
 This proves only the specified managed position's closure. Manual/foreign
 positions may still be open; this is NOT account-wide flatness, admission to
@@ -44,15 +46,57 @@ def _decimal0(raw: Any) -> Decimal | None:
     return d if d.is_finite() and d >= 0 else None
 
 
+def _pick_verified_exact_closed_record(
+    owned: OwnedShort, records: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    """Only a POSITIVE exact identity match can establish history evidence."""
+    seen: set[str] = set()
+    matched: dict[str, Any] | None = None
+    for item in records:
+        identity = str(item.get("positionId") or "")
+        if (not identity.isascii() or not identity.isdecimal() or
+                int(identity) <= 0 or identity in seen):
+            raise OwnedPositionFinalityHalted(
+                "HISTORY_POSITION_IDENTITY_DUPLICATE_OR_INVALID"
+            )
+        if item.get("symbol") != owned.symbol:
+            raise OwnedPositionFinalityHalted(
+                "HISTORY_POSITION_FILTER_BROKEN"
+            )
+        seen.add(identity)
+        if identity == owned.position_id:
+            if matched is not None:
+                raise OwnedPositionFinalityHalted(
+                    "OWNED_CLOSED_POSITION_AMBIGUOUS"
+                )
+            matched = item
+    if matched is None:
+        return None
+    p = matched
+    if (type(p.get("positionType")) is not int or p["positionType"] != 2 or
+            type(p.get("openType")) is not int or p["openType"] != 1 or
+            type(p.get("state")) is not int or p["state"] != 3 or
+            _decimal0(p.get("holdVol")) != Decimal(0) or
+            _decimal0(p.get("closeVol")) != owned.contracts or
+            p.get("positionShowStatus") not in (None, "CLOSED")):
+        return None
+    return p
+
+
 async def _closed_position_record(
     owned: OwnedShort, probe: ReadOnlyMexcProbe, *,
     page_size: int, max_pages: int,
-) -> dict[str, Any] | None:
+) -> tuple[dict[str, Any] | None, bool]:
+    """(exact closed record, history exhaustive).
+
+    A historical array is useful for a match PRESENT on page 1, but it
+    supplies no independent total count. Never paginate it speculatively
+    or treat a missing row as evidence that a position did not exist.
+    """
     records: list[dict[str, Any]] = []
     expected_count: int | None = None
     expected_pages: int | None = None
     seen: set[str] = set()
-
     for page in range(1, max_pages + 1):
         try:
             response = await probe.raw_history_positions_page(
@@ -62,6 +106,13 @@ async def _closed_position_record(
             raise OwnedPositionFinalityHalted(
                 "HISTORY_POSITION_GET_OR_SCHEMA_UNVERIFIED"
             ) from exc
+        if type(response) is list:
+            if page != 1:
+                raise OwnedPositionFinalityHalted(
+                    "HISTORY_POSITION_RESPONSE_SHAPE_CHANGED"
+                )
+            return _pick_verified_exact_closed_record(owned, response), False
+
         count = response["totalCount"]
         declared_pages = response["totalPage"]
         needed = (count + page_size - 1) // page_size
@@ -103,21 +154,7 @@ async def _closed_position_record(
 
     if len(records) != expected_count:
         raise OwnedPositionFinalityHalted("HISTORY_POSITION_PAGE_INCOMPLETE")
-    matches = [r for r in records
-               if str(r.get("positionId")) == owned.position_id]
-    if len(matches) == 0:
-        return None
-    if len(matches) != 1:
-        raise OwnedPositionFinalityHalted("OWNED_CLOSED_POSITION_AMBIGUOUS")
-    p = matches[0]
-    if (type(p.get("positionType")) is not int or p["positionType"] != 2 or
-            type(p.get("openType")) is not int or p["openType"] != 1 or
-            type(p.get("state")) is not int or p["state"] != 3 or
-            _decimal0(p.get("holdVol")) != Decimal(0) or
-            _decimal0(p.get("closeVol")) != owned.contracts or
-            p.get("positionShowStatus") not in (None, "CLOSED")):
-        return None
-    return p
+    return _pick_verified_exact_closed_record(owned, records), True
 
 
 async def verify_owned_position_finality(
@@ -132,10 +169,10 @@ async def verify_owned_position_finality(
         raise OwnedPositionFinalityHalted("INVALID_HISTORY_COLLECTION_BOUNDS")
 
     try:
-        first_hist = await _closed_position_record(
+        first_hist, first_exhaustive = await _closed_position_record(
             owned, probe, page_size=page_size, max_pages=max_pages)
         open_a = await probe.raw_open_position_by_id(owned.position_id)
-        second_hist = await _closed_position_record(
+        second_hist, second_exhaustive = await _closed_position_record(
             owned, probe, page_size=page_size, max_pages=max_pages)
         open_b = await probe.raw_open_position_by_id(owned.position_id)
     except OwnedPositionFinalityHalted:
@@ -147,6 +184,8 @@ async def verify_owned_position_finality(
 
     if open_a or open_b:
         return OwnedPositionFinality("EXACT_OWNED_POSITION_STILL_OPEN")
+    if first_exhaustive != second_exhaustive:
+        return OwnedPositionFinality("HISTORY_RESPONSE_SHAPE_CHANGED_NOT_CERTIFIED")
     if first_hist is None or second_hist is None:
         return OwnedPositionFinality("EXACT_CLOSED_POSITION_HISTORY_NOT_FOUND")
     critical = (
@@ -158,8 +197,10 @@ async def verify_owned_position_finality(
         return OwnedPositionFinality("CLOSED_POSITION_HISTORY_DRIFT")
 
     return OwnedPositionFinality(
-        status="OWNED_POSITION_CLOSED_EXACT_HISTORY_AND_GET_VERIFIED",
+        status=("OWNED_POSITION_CLOSED_EXACT_HISTORY_AND_GET_VERIFIED"
+                if first_exhaustive else
+                "OWNED_POSITION_CLOSED_POSITIVE_ARRAY_MATCH_VERIFIED"),
         closed_position_verified=True,
-        historical_pages_exhausted=True,
+        historical_pages_exhausted=first_exhaustive,
         open_position_absent_twice=True,
     )
