@@ -3,11 +3,15 @@
 The fake models the SQL predicates against a shared logical database clock.
 The production operator command uses real asyncpg, not this fake.
 """
+import ssl
 import unittest
+from unittest.mock import AsyncMock, patch
 
 from app.t100_live_db_fencing_diagnostic import (
     FencingDiagnosticHalted,
     LEASE_PREFIX,
+    CONFIRMATION,
+    _main,
     exercise_test_fencing,
 )
 
@@ -112,6 +116,45 @@ class FencingDBDiagnosticTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(set(db.rows), {name})
         self.assertLess(db.rows[name]["expires"], db.now)
         self.assertEqual(db.rows[name]["token"], 4)
+
+    async def test_real_connection_uses_verified_tls_before_any_test_lease(self):
+        """Blocked runtime audit must stop before lease writes; TLS checks both connections."""
+        first = AsyncMock()
+        second = AsyncMock()
+        first.fetchval.side_effect = [
+            "mexc_exhaustion", "t100_live_executor_runtime",
+        ]
+        second.fetchval.side_effect = [
+            "mexc_exhaustion", "t100_live_executor_runtime",
+        ]
+        with (
+            patch("builtins.input", return_value=CONFIRMATION),
+            patch("getpass.getpass", side_effect=[
+                "test-password", "postgresql://owner:unused@example.com/mexc_exhaustion",
+            ]),
+            patch("asyncpg.connect",
+                  new=AsyncMock(side_effect=[first, second])) as connect,
+            patch(
+                "app.t100_live_db_fencing_diagnostic.independent_runtime_audit",
+                new=AsyncMock(return_value={"status": "NOT_CERTIFIED"}),
+            ),
+        ):
+            with self.assertRaisesRegex(
+                FencingDiagnosticHalted,
+                "RUNTIME_ROLE_EFFECTIVE_PRIVILEGES_UNVERIFIED",
+            ):
+                await _main()
+        self.assertEqual(connect.await_count, 2)
+        for call in connect.await_args_list:
+            context = call.kwargs["ssl"]
+            self.assertIsInstance(context, ssl.SSLContext)
+            self.assertTrue(context.check_hostname)
+            self.assertEqual(context.verify_mode, ssl.CERT_REQUIRED)
+            self.assertEqual(call.kwargs["user"], "t100_live_executor_runtime")
+        first.execute.assert_not_awaited()
+        second.execute.assert_not_awaited()
+        first.close.assert_awaited_once()
+        second.close.assert_awaited_once()
 
     async def test_rejects_production_lease_name_without_any_writes(self):
         db = SharedDB()
