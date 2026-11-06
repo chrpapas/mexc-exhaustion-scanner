@@ -28,7 +28,12 @@ class SafeDeploymentReviewTests(unittest.TestCase):
         self.assertNotIn("autoDeployTrigger: checksPass",s)
         self.assertNotIn("  - type: web",s)
         self.assertNotIn("  - type: cron",s)
-        self.assertNotIn("mexc-t100-live-shadow",s)
+        # Comments can mention the old service as a warning; only actual
+        # service declarations could accidentally overwrite it.
+        self.assertNotRegex(s,r"(?m)^\\s+name:\\s+mexc-t100-live-shadow\\s*$")
+        self.assertRegex(
+            s,r"(?m)^\\s+name:\\s+mexc-t100-guardian-observer-review-only\\s*$"
+        )
         self.assertNotIn("fromDatabase:",s)
         self.assertNotIn("fromService:",s)
         self.assertNotIn("plan:",s)
