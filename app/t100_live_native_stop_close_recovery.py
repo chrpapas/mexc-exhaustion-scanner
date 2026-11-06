@@ -38,6 +38,7 @@ class NativeStopRecoveryReport:
     owned_position_closed_verified: bool = False
     venue_trigger_side_conflict: bool = False
     stop_loss_trigger_side_proven: bool = False
+    venue_sl_label_observed: bool = False
     historical_pages_exhausted: bool = False
     manual_position_management_allowed: bool = False
     whole_account_flat_certified: bool = False
@@ -186,7 +187,11 @@ async def recover_native_stop_close_read_only(
 
     side=a["triggerSide"]
     state["venue_trigger_side_conflict"]=side == 1
-    state["stop_loss_trigger_side_proven"]=side == 2
+    # The terminal label alone, even when side==2, is not independent
+    # certification of SL triggering without previously witnessed live
+    # protection and validated stop-only request provenance.
+    state["stop_loss_trigger_side_proven"]=False
+    state["venue_sl_label_observed"]=side == 2
 
     # A full market CLOSE_SHORT and a terminal stop record still do not
     # alone prove that the original owned position finished and stayed
