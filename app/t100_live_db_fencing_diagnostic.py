@@ -223,11 +223,16 @@ async def exercise_test_fencing(
 async def _main(*, keychain: bool = False) -> None:
     if os.getenv("T100_EXECUTION_MODE", "paper").strip().lower() != "paper":
         raise FencingDiagnosticHalted("PAPER_MODE_REQUIRED")
+    # Check Keychain before asking for DB-write consent: absent credentials
+    # must stop without unnecessarily prompting the operator.
+    password = _runtime_password_from_mac_keychain() if keychain else ""
     typed = input(f"Type '{CONFIRMATION}' to run isolated DB test: ")
     if typed.strip() != CONFIRMATION:
         raise FencingDiagnosticHalted("OPERATOR_CONFIRMATION_MISSING")
-    password = (_runtime_password_from_mac_keychain() if keychain else
-                getpass.getpass("Restricted T100 runtime DB password (hidden): "))
+    if not keychain:
+        password = getpass.getpass(
+            "Restricted T100 runtime DB password (hidden): "
+        )
     if not password:
         raise FencingDiagnosticHalted("RUNTIME_PASSWORD_REQUIRED")
     owner_url = getpass.getpass(
