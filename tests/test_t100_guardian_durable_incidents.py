@@ -61,7 +61,11 @@ class FakeConnection:
                      checkpoint_insert=False,checkpoint_update=False,
                      checkpoint_delete=False,trade_intent_insert=False,
                      stop_update=False,emergency_update=False,
-                     enrollment_insert=False)
+                     enrollment_insert=False,
+                     schema_create=False,db_create=False,
+                     checkpoint_any=False,revision_any=False,
+                     intent_any=False,stop_any=False,
+                     emergency_any=False,enrollment_any=False)
             if self.privilege:
                 row.update(self.privilege)
             return row
@@ -304,6 +308,9 @@ class DurableWorkerTests(unittest.IsolatedAsyncioTestCase):
             "incident_delete", "incident_truncate", "outbox_delete",
             "outbox_truncate", "trade_intent_insert", "stop_update",
             "emergency_update", "enrollment_insert",
+            "schema_create", "db_create", "checkpoint_any",
+            "revision_any", "intent_any", "stop_any",
+            "emergency_any", "enrollment_any",
         ):
             with self.subTest(privilege=privilege):
                 db=FakeConnection(privilege={privilege:True})
