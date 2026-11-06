@@ -39,7 +39,8 @@ def env(**updates):
 
 
 class FakeConnection:
-    def __init__(self, *, privilege=None, fail=False):
+    def __init__(self, *, privilege=None, fail=False, unrelated_access=0):
+        self.unrelated_access=unrelated_access
         self.events=[]
         self.current=None
         self.revision=0
@@ -92,6 +93,8 @@ class FakeConnection:
     async def fetchval(self,sql,*args):
         if self.fail:
             raise RuntimeError("db secret")
+        if "pg_catalog.pg_class" in sql:
+            return self.unrelated_access
         if "pg_try_advisory_lock" in sql:
             return True
         if "SET attempts=attempts+1" in sql:
@@ -327,6 +330,23 @@ class DurableWorkerTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(called,[])
                 self.assertEqual(db.events,[])
                 self.assertTrue(db.closed)
+
+    async def test_future_public_table_read_grant_halts_before_observation(self):
+        db=FakeConnection(unrelated_access=1)
+        called=[]
+        async def connect(_dsn,_ca):
+            return db
+        async def observe(_env):
+            called.append(True)
+            return ReadOnlyCycleSummary(status="UNKNOWN",alert=True)
+        notifier=FakeNotifier(HOOK)
+        with self.assertRaises(GuardianDurableHalted):
+            await run(environ=env(),cycles=1,connect=connect,
+                      observe=observe,
+                      notifier_factory=lambda *_a,**_k:notifier)
+        self.assertEqual(called,[])
+        self.assertEqual(notifier.sent,[])
+        self.assertTrue(db.closed)
 
     async def test_outbox_database_outage_aborts_no_untracked_notification(self):
         db=FakeConnection(fail=True)
