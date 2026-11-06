@@ -90,6 +90,11 @@ def test_insufficient_balance_blocks():
         preview(available="1")
 
 
+def test_pilot_fraction_cap_prevents_large_share_of_available_funds():
+    with pytest.raises(PilotDryRunHalted, match="CAP"):
+        preview(available="20")
+
+
 def test_notional_limit_blocks_when_btc_expensive():
     t = ticker()
     t["lastPrice"] = "130000"
