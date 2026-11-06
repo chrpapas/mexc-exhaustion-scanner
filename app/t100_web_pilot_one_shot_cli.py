@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import fcntl
 import hashlib
 import json
 import os
@@ -54,6 +55,36 @@ def _durable_dir_sync() -> None:
         os.fsync(fd)
     finally:
         os.close(fd)
+
+
+class OneShotProcessLock:
+    """Prevent two local CLI processes from racing any send/close decision."""
+
+    def __init__(self) -> None:
+        self.fd: int | None = None
+
+    def __enter__(self):
+        _journal_dir()
+        path = JOURNAL.parent / "pilot.lock"
+        if path.is_symlink():
+            raise OneShotHalted("PILOT_LOCK_SYMLINK_UNSAFE")
+        flags = os.O_CREAT | os.O_RDWR
+        if hasattr(os, "O_NOFOLLOW"):
+            flags |= os.O_NOFOLLOW
+        fd = os.open(path, flags, 0o600)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BaseException:
+            os.close(fd)
+            raise OneShotHalted("ANOTHER_PILOT_PROCESS_ACTIVE") from None
+        self.fd = fd
+        return self
+
+    def __exit__(self, *_args):
+        if self.fd is not None:
+            fcntl.flock(self.fd, fcntl.LOCK_UN)
+            os.close(self.fd)
+            self.fd = None
 
 
 def _first_journal(body: dict[str, Any]) -> None:
@@ -319,7 +350,13 @@ async def _close(client: Any, fingerprint: str) -> None:
     _confirmed(CLOSE_PHRASE)
     # Recheck before closing, and refuse all intervening position changes.
     positions2 = await safe.get("/api/v1/private/position/open_positions")
-    if positions2 != positions:
+    if type(positions2) is not list or len(positions2) != 1 or type(positions2[0]) is not dict:
+        raise OneShotHalted("POSITION_CHANGED_BEFORE_CLOSE")
+    # Floating PnL / mark-price fields can change between GETs. Compare
+    # actual position identity, side, mode and held volume instead.
+    witness_fields = ("positionId", "symbol", "positionType",
+                      "openType", "leverage", "holdVol")
+    if any(str(positions2[0].get(k)) != str(pos.get(k)) for k in witness_fields):
         raise OneShotHalted("POSITION_CHANGED_BEFORE_CLOSE")
     close_oid = _make_oid()
     body = {
@@ -383,7 +420,8 @@ def main() -> None:
         k for k in ("check", "send", "status", "close") if getattr(args, k)
     )
     try:
-        asyncio.run(run(mode))
+        with OneShotProcessLock():
+            asyncio.run(run(mode))
     except BaseException as exc:
         # Never leak API keys, signed URLs, or venue response payloads.
         reason = str(exc) if isinstance(exc, OneShotHalted) else type(exc).__name__
