@@ -46,6 +46,9 @@ class GuardianIncidentPostgresIntegration(unittest.IsolatedAsyncioTestCase):
                         f"CREATE TABLE IF NOT EXISTS public.{name} (ci_dummy int)"
                     )
                 await conn.execute(
+                    "CREATE TABLE public.t100_ci_future_trading_table (ci_dummy int)"
+                )
+                await conn.execute(
                     (ROOT/"migrations/035_t100_guardian_incident_outbox.sql")
                     .read_text()
                 )
@@ -222,6 +225,24 @@ class GuardianIncidentPostgresIntegration(unittest.IsolatedAsyncioTestCase):
                         await self.conn.execute("RESET ROLE")
                 finally:
                     await self.conn.execute(revoke_sql)
+
+    async def test_future_public_trading_table_read_grant_is_rejected(self):
+        await self.conn.execute(
+            "GRANT SELECT ON public.t100_ci_future_trading_table "
+            "TO t100_ci_guardian_incident_writer"
+        )
+        try:
+            await self.conn.execute("SET ROLE t100_ci_guardian_incident_writer")
+            try:
+                with self.assertRaises(GuardianDurableHalted):
+                    await verify_alert_writer_role(self.conn)
+            finally:
+                await self.conn.execute("RESET ROLE")
+        finally:
+            await self.conn.execute(
+                "REVOKE SELECT ON public.t100_ci_future_trading_table "
+                "FROM t100_ci_guardian_incident_writer"
+            )
 
     async def test_advisory_singleton_prevents_duplicate_worker(self):
         import asyncpg
