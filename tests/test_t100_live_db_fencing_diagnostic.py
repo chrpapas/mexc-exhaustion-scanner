@@ -166,7 +166,7 @@ class FencingDBDiagnosticTests(unittest.IsolatedAsyncioTestCase):
             patch(
                 "app.t100_live_db_fencing_diagnostic.subprocess.run",
                 return_value=SimpleNamespace(
-                    returncode=0, stdout="keychain-runtime-secret\\n",
+                    returncode=0, stdout="keychain-runtime-secret\n",
                 ),
             ) as run,
         ):
