@@ -218,3 +218,81 @@ not establish that MEXC's `triggerSide=1` (documented take-profit) was a
 correct label for the loss-direction stop-only V5 close. The stop-loss
 trigger-side evidence is still not certified. No Render role migration,
 no emergency-close POST deployment, and no four-slot live trading follow.
+
+## 2026-11-06 — Separate worker integration (review only)
+
+A continuous observation-only runtime has been committed in
+`app/t100_live_guardian_readonly_worker.py`. This is **not** the
+existing Render shadow service and is **not deployed**.
+
+### Runtime behavior
+
+- Start with `python -m app.t100_live_guardian_readonly_worker` (no
+  arguments) for a zero-network wiring check. It reports
+  `GUARDIAN_WORKER_NOT_STARTED`.
+- The explicit `--run` flag executes a repeating signed-GET +
+  SELECT-only observation loop, **only if** both
+  `T100_GUARDIAN_WORKER_ENABLED=true` and
+  `T100_GUARDIAN_OBSERVER_ENABLED=true` are configured with the existing
+  strict paper-mode, live-API-disabled, kill-switch-on conditions,
+  complete private credentials, exact account and position pins, a
+  restricted PostgreSQL role, and a trusted CA.
+- No live execution gateway, exchange POST method, stop writer, durable
+  DB mutation, migration, account adoption or latch reset is imported.
+  The worker produces only redacted JSON status snapshots with boolean
+  `foreign_positions_seen` (no exchange IDs/quantities/secrets).
+- `OWNED_NATIVE_MARKET_STOP_CURRENTLY_OBSERVED` is classified as
+  `OBSERVER_CYCLE_OK`; **this does not mean live trading is safe**.
+  A historically closed T100-owned position is classified
+  `OBSERVER_CYCLE_INACTIVE` and also does not permit new entries.
+- **No enrolled checkpoint is never green**: it reports
+  `OBSERVER_UNENROLLED` and alerts. Unknown/stale/missing stop,
+  mismatched identity and failed GET/DB cycles alert. Consecutive
+  uncertified observations are bounded, default 3, and make the
+  process fail closed with nonzero exit. A process restart cannot
+  place an order.
+- This version is an **observer that emits Render logs**, not a certified
+  independent emergency-action guardian. It does not yet deliver
+  durable/acknowledged Discord incidents, and its failure counter is
+  per-process, not an exchange- or DB-persisted risk latch.
+
+### Safe deployment blueprint
+
+`deploy/t100_guardian_observer.render.REVIEW_ONLY.yaml` is a
+**non-root, review-only** Render worker Blueprint. It uses the
+development branch, `autoDeployTrigger: off`, distinct name
+`mexc-t100-guardian-observer-review-only`, no database
+`fromDatabase` reference to an existing account, no embedded
+credentials, and the following explicitly disabled defaults:
+
+- `T100_GUARDIAN_WORKER_ENABLED=false`
+- `T100_GUARDIAN_OBSERVER_ENABLED=false`
+- `T100_EXECUTION_MODE=paper`
+- `T100_LIVE_ORDER_API_ENABLED=false`
+- `T100_LIVE_KILL_SWITCH=true`
+
+A Blueprint sync can create or modify Render services and incur costs.
+**It was not synchronized, and no new Render worker was created.**
+
+### Before any actual deployment
+
+1. Review the separate observer runtime and its Blueprint; do not
+   point it at the original manual-position account's credentials or
+   reuse the existing Render shadow service.
+2. Independently audit and apply account enrollment migration 034
+   (not yet applied), verify the dedicated MEXC account, durable
+   exact position/entry ID, and SELECT-only PostgreSQL login role.
+   Do not auto-enroll positions from a symbol or manual inventory.
+3. Provision a **separate view-only Futures MEXC API key** and
+   appropriate TLS CA. Mac Keychain credentials are not automatically
+   available on Render and must never be copied to GitHub or chat.
+4. Test one real GET+SELECT observation with flags still disabled for
+   trading. Review redacted logs. Add durable incident notifications and
+   restart/failure observation before relying on the worker.
+5. Keep the original live trader paper-only until the real entry
+   adapter, protective-stop execution verification, account-wide
+   risk/collateral certification and exchange post-recovery gates pass.
+
+**Progress classification:** this is audited worker scaffolding with
+offline mocks and CI checks, not a running production observer and
+definitely not authorization to switch to live risk.
