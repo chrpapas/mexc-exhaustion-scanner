@@ -80,9 +80,13 @@ class FakeDb:
     async def fetchrow(self, sql, *args):
         self.calls.append(("fetchrow",sql,args))
         perms = {key:False for key in (
-            "cp_insert","cp_update","cp_delete",
-            "intent_update","stop_update",
-            "enrollment_insert","enrollment_update","enrollment_delete")}
+            "cp_insert","cp_update","cp_delete","cp_truncate",
+            "revision_insert","revision_update","revision_delete",
+            "revision_truncate",
+            "intent_insert","intent_update","intent_delete","intent_truncate",
+            "stop_insert","stop_update","stop_delete","stop_truncate",
+            "enrollment_insert","enrollment_update","enrollment_delete",
+            "enrollment_truncate")}
         if self.bad_priv:
             perms[self.bad_priv] = True
         return dict(read_only=self.mode, enrollment_select=True, **perms)
@@ -163,9 +167,15 @@ class CheckpointReadTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(db.calls,[])
 
     async def test_db_not_readonly_or_mutation_capable_role_is_blocked(self):
-        for variant in ("off","cp_insert","cp_update","cp_delete",
-                        "intent_update","stop_update",
-                        "enrollment_insert","enrollment_update","enrollment_delete"):
+        for variant in (
+            "off", "cp_insert", "cp_update", "cp_delete", "cp_truncate",
+            "revision_insert", "revision_update", "revision_delete",
+            "revision_truncate",
+            "intent_insert", "intent_update", "intent_delete", "intent_truncate",
+            "stop_insert", "stop_update", "stop_delete", "stop_truncate",
+            "enrollment_insert", "enrollment_update", "enrollment_delete",
+            "enrollment_truncate",
+        ):
             with self.subTest(variant=variant):
                 db=(FakeDb(mode="off") if variant=="off"
                     else FakeDb(bad_priv=variant))
