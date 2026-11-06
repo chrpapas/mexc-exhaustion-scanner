@@ -216,21 +216,120 @@ class FinalityTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(x.closed_position_verified)
         self.assertEqual(x.status,"EXACT_CLOSED_POSITION_HISTORY_NOT_FOUND")
 
-    async def test_documented_mexc_list_response_cannot_fake_pagination(self):
-        # MEXC's published sample currently shows data=[rows] even though
-        # its field table describes pageSize/totalCount/totalPage. If the
-        # live venue returns a bare list, we must NOT infer completeness
-        # from a short page and manufacture historical finality.
+    async def test_actual_mexc_array_positive_exact_match_is_valid_but_not_exhaustive(self):
+        # 2026-11-06 observed MEXC returned data=[four rows] without
+        # pageSize/totalCount/totalPage. Exact closed-position evidence can
+        # be positive and useful; history completeness is still FALSE.
         class BareListVenue(FakeVenue):
             async def _private_get(self, path, params=None):
                 if path == "/api/v1/private/position/list/history_positions":
                     self.calls.append((path,params))
-                    return [historical()]
+                    self.history_reads += 1
+                    return [historical(positionId=551),
+                            historical(positionId=552),
+                            historical(),historical(positionId=554)]
                 return await super()._private_get(path,params)
         v=BareListVenue()
-        with self.assertRaises(OwnedPositionFinalityHalted):
+        proof=await verify_owned_position_finality(
+            owned=own(),actual_scope=SCOPE,probe=ReadOnlyMexcProbe(v))
+        self.assertEqual(proof.status,
+                         "OWNED_POSITION_CLOSED_POSITIVE_ARRAY_MATCH_VERIFIED")
+        self.assertTrue(proof.closed_position_verified)
+        self.assertTrue(proof.open_position_absent_twice)
+        self.assertFalse(proof.historical_pages_exhausted)
+        self.assertFalse(proof.account_flat_certified)
+        self.assertFalse(proof.live_authorization)
+        self.assertFalse(proof.emergency_close_authorized)
+        self.assertEqual(v.history_reads,2)
+        self.assertEqual(v.writes,0)
+
+    async def test_bare_array_missing_owned_id_never_certifies_closure(self):
+        class BareListVenue(FakeVenue):
+            async def _private_get(self, path, params=None):
+                if path == "/api/v1/private/position/list/history_positions":
+                    self.calls.append((path,params))
+                    return [historical(positionId=551),
+                            historical(positionId=552)]
+                return await super()._private_get(path,params)
+        v=BareListVenue()
+        proof=await verify_owned_position_finality(
+            owned=own(),actual_scope=SCOPE,probe=ReadOnlyMexcProbe(v))
+        self.assertEqual(proof.status,"EXACT_CLOSED_POSITION_HISTORY_NOT_FOUND")
+        self.assertFalse(proof.closed_position_verified)
+        self.assertFalse(proof.historical_pages_exhausted)
+        self.assertEqual(v.writes,0)
+
+    async def test_bare_array_partial_or_wrong_identity_cannot_certify(self):
+        for change in (dict(closeVol="0.5"),dict(holdVol=1),
+                       dict(state=2),dict(positionType=1),dict(openType=2),
+                       dict(positionShowStatus="OPEN")):
+            class BareListVenue(FakeVenue):
+                async def _private_get(self, path, params=None):
+                    if path == "/api/v1/private/position/list/history_positions":
+                        self.calls.append((path,params))
+                        return [historical(**change)]
+                    return await super()._private_get(path,params)
+            with self.subTest(case=change):
+                v=BareListVenue()
+                p=await verify_owned_position_finality(
+                    owned=own(),actual_scope=SCOPE,probe=ReadOnlyMexcProbe(v))
+                self.assertFalse(p.closed_position_verified)
+                self.assertEqual(v.writes,0)
+
+    async def test_bare_array_duplicate_id_and_shape_drift_block(self):
+        class DuplicateVenue(FakeVenue):
+            async def _private_get(self,path,params=None):
+                if path == "/api/v1/private/position/list/history_positions":
+                    return [historical(),historical()]
+                return await super()._private_get(path,params)
+        with self.assertRaisesRegex(OwnedPositionFinalityHalted,"DUPLICATE"):
             await verify_owned_position_finality(
-                owned=own(),actual_scope=SCOPE,probe=ReadOnlyMexcProbe(v))
+                owned=own(),actual_scope=SCOPE,
+                probe=ReadOnlyMexcProbe(DuplicateVenue()))
+
+        class ShapeDriftVenue(FakeVenue):
+            async def _private_get(self,path,params=None):
+                if path == "/api/v1/private/position/list/history_positions":
+                    self.history_reads += 1
+                    if self.history_reads == 1:
+                        return [historical()]
+                return await super()._private_get(path,params)
+        v=ShapeDriftVenue()
+        p=await verify_owned_position_finality(
+            owned=own(),actual_scope=SCOPE,probe=ReadOnlyMexcProbe(v))
+        self.assertEqual(p.status,"HISTORY_RESPONSE_SHAPE_CHANGED_NOT_CERTIFIED")
+        self.assertFalse(p.closed_position_verified)
+
+    async def test_bare_array_partial_close_in_second_read_does_not_certify(self):
+        class DriftVenue(FakeVenue):
+            async def _private_get(self,path,params=None):
+                if path == "/api/v1/private/position/list/history_positions":
+                    self.history_reads += 1
+                    return [historical()] if self.history_reads == 1 else [
+                        historical(closeVol="0.5")]
+                return await super()._private_get(path,params)
+        p=await verify_owned_position_finality(
+            owned=own(),actual_scope=SCOPE,probe=ReadOnlyMexcProbe(DriftVenue()))
+        self.assertFalse(p.closed_position_verified)
+
+    async def test_bare_array_exposes_no_new_live_authorization_on_reconciliation(self):
+        class ArrayVenue(FakeVenue):
+            async def _private_get(self,path,params=None):
+                if path == "/api/v1/private/position/list/history_positions":
+                    self.calls.append((path,params))
+                    return [historical()]
+                return await super()._private_get(path,params)
+        v=ArrayVenue()
+        proof=await reconcile_close_read_only(
+            owned=own(),actual_scope=SCOPE,ledger=Ledger(),
+            probe=ReadOnlyMexcProbe(v))
+        self.assertEqual(proof.status,
+                         "EXACT_OWNED_CLOSE_AND_CLOSED_POSITION_HISTORY_VERIFIED")
+        self.assertTrue(proof.owned_position_closure_certified)
+        self.assertTrue(proof.order_filled_verified)
+        self.assertEqual(proof.foreign_positions_preserved_observed,1)
+        self.assertFalse(proof.live_authorization)
+        self.assertTrue(proof.ledger_reconcile_only)
         self.assertEqual(v.writes,0)
 
     async def test_exact_position_filter_bug_hard_halts(self):
