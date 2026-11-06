@@ -111,3 +111,50 @@ https://www.mexc.io/api-docs/futures/account-and-trading-endpoints/get-current-t
 > and timestamps privately through the secure support channel.
 >
 > No API credentials, headers, signatures or passwords will be shared.
+
+## November 6, 2026 — Independent real V5 terminal position confirmation
+
+The operator ran the reviewed local `t100_mexc_v5_closed_position_four_get_local.py`
+on the **dedicated T100 pilot subaccount**, reading the original V5
+journal without modifying it and issuing two signed history GETs plus two
+exact position-ID GETs. The returned redacted report was:
+
+```text
+FORENSIC_MODE=EXISTING_V5_JOURNAL_FOUR_SIGNED_GET_ONLY
+HISTORY_RESPONSE=ARRAY_WITHOUT_PAGINATION_METADATA
+V5_EXACT_CLOSED_POSITION_HISTORY=V5_EXACT_CLOSED_POSITION_POSITIVE_HISTORY_MATCH
+V5_CLOSED_POSITION_VERIFIED=true
+FULL_HISTORY_CERTIFIED=false
+WHOLE_ACCOUNT_FLAT_CERTIFIED=false
+STOP_LOSS_TRIGGER_SIDE_PROVEN=false
+LIVE_AUTHORIZATION=false
+MEXC_ORDERS_SENT=0
+DATABASE_MUTATIONS=0
+REQUIRES_MANUAL_POSITION_MANAGEMENT_CHANGE=false
+```
+
+This is positive independent evidence that the **exact original V5 position**
+closed. It is not a proof of whole-account flatness; four historical rows
+on page 1 are not an independently complete history. MEXC's venue
+`triggerSide=1` (documented take-profit) contradiction is unchanged and
+the STOP-LOSS-SIDE **trigger itself is not certified**. No V5 rerun or
+further live order was made.
+
+### Production recovery bridge (development-only)
+
+`app/t100_live_native_stop_close_recovery.py` is a GET-only recovery
+path distinct from the **guardian's emergency-close** recovery. It now
+requires all four specific evidence links: originating T100-filled entry,
+exact finished position-origin native stop, its generated full-volume
+market CLOSE_SHORT and a positive exact closed-position historical
+record with matching targeted-position GETs. Finished TP/SL history has
+no independent page count: an absent row is **not proof** the stop never
+existed or executed. The bridge retains both the venue's contradictory
+take-profit trigger label and the proof of a venue-generated close.
+It performs **zero exchange mutations, zero checkpoint writes, zero
+manual-position adoption, and never authorizes new live entries**.
+The actual-account V5 journal is a local forensic source, not an
+account-enrolled durable production checkpoint.
+
+This is engineering evidence, **not** production certification or
+a justification to clear the existing Render kill latch.
