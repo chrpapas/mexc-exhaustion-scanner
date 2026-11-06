@@ -47,6 +47,8 @@ class _FakeConnection:
         if "pg_has_role(" in sql:
             return {
                 "owner_can_set_role": False,
+                "can_use_public": True,
+                "can_connect_database": True,
                 "can_create_in_public": False,
                 "can_create_in_database": False,
                 **self.override.get("role_grants", {}),
@@ -128,6 +130,14 @@ class TestTargetRoleAclProbe(unittest.IsolatedAsyncioTestCase):
         }})
         report = await inspect_target_role_acl(conn)
         self.assertIn("ROLE_UNSAFE_can_create_in_public", report["mismatches"])
+
+    async def test_missing_schema_usage_fails_closed(self):
+        conn = _FakeConnection(override={"role_grants": {
+            "can_use_public": False,
+        }})
+        report = await inspect_target_role_acl(conn)
+        self.assertIn("ROLE_REQUIRED_can_use_public_MISSING",
+                      report["mismatches"])
 
     async def test_missing_evidence_fails_closed(self):
         report = await inspect_target_role_acl(_FakeConnection(drop_table=True))
