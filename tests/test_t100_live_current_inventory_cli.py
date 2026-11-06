@@ -253,7 +253,7 @@ class CurrentInventoryCliTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(clients), 1)
         self.assertTrue(clients[0].closed)
         result = output.getvalue()
-        report = json.loads(result.split("\\nPRIVATE GET ONLY.", 1)[0])
+        report = json.loads(result.split("\nPRIVATE GET ONLY.", 1)[0])
         self.assertEqual(report["credential_scope"], "T100_WEB_PILOT_SUBACCOUNT")
         self.assertFalse(report["render_shadow_account_binding_verified"])
         self.assertFalse(report["live_authorization"])
