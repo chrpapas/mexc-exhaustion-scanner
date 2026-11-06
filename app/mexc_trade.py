@@ -301,12 +301,11 @@ class MexcTradeClient:
                 "profitTrend": 1,
                 "positionId": position_id,
                 "vol": contracts,
+                # Only MEXC-documented position TP/SL fields.
+                # Earlier pilot stop attachment was rejected while sending
+                # undocumented stopLossType / volume-mode fields.
                 "stopLossPrice": stop_price,
                 "priceProtect": 0,
-                "profitLossVolType": "SAME",
-                "volType": 2,
-                "stopLossReverse": 2,
-                "stopLossType": 0,
             },
         )
         if isinstance(data, list) and data:
