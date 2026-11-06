@@ -66,8 +66,12 @@ async def inspect_target_role_acl(conn: Any) -> dict[str, Any]:
             return result
         role_privs = await conn.fetchrow(
             """SELECT pg_has_role(session_user,$1::name,'SET') AS owner_can_set_role,
+                      has_schema_privilege($1::name,'public','USAGE')
+                        AS can_use_public,
                       has_schema_privilege($1::name,'public','CREATE')
                         AS can_create_in_public,
+                      has_database_privilege($1::name,current_database(),'CONNECT')
+                        AS can_connect_database,
                       has_database_privilege($1::name,current_database(),'CREATE')
                         AS can_create_in_database""", ROLE)
         if role_privs is None:
@@ -131,6 +135,9 @@ async def inspect_target_role_acl(conn: Any) -> dict[str, Any]:
             issues.append("ROLE_UNSAFE_" + key)
     if attributes["rolcanlogin"] is not True:
         issues.append("ROLE_LOGIN_MISSING")
+    for key in ("can_use_public", "can_connect_database"):
+        if role_privs[key] is not True:
+            issues.append("ROLE_REQUIRED_" + key + "_MISSING")
     for key in ("can_create_in_public", "can_create_in_database"):
         if role_privs[key] is not False:
             issues.append("ROLE_UNSAFE_" + key)
