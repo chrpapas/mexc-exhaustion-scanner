@@ -1,0 +1,43 @@
+# REVIEW ONLY. Do not sync to Render until account enrollment,
+# private read-only API key, restricted SELECT-only database role,
+# TLS CA certificate and alerting policy are independently verified.
+# This is not the existing mexc-t100-live-shadow service.
+# It is intentionally located outside the repository-root render.yaml.
+services:
+  - type: worker
+    name: mexc-t100-guardian-observer-review-only
+    runtime: python
+    repo: https://github.com/chrpapas/mexc-exhaustion-scanner
+    branch: codex/t100-readiness-issue-14
+    autoDeployTrigger: off
+    buildCommand: pip install .
+    startCommand: python -m app.t100_live_guardian_readonly_worker --run
+    envVars:
+      - key: T100_GUARDIAN_WORKER_ENABLED
+        value: "false"
+      - key: T100_GUARDIAN_OBSERVER_ENABLED
+        value: "false"
+      - key: T100_EXECUTION_MODE
+        value: paper
+      - key: T100_LIVE_ORDER_API_ENABLED
+        value: "false"
+      - key: T100_LIVE_KILL_SWITCH
+        value: "true"
+      - key: T100_GUARDIAN_INTERVAL_SECONDS
+        value: "90"
+      - key: T100_GUARDIAN_MAX_FAILURES
+        value: "3"
+      # Values below must be independently reviewed and entered privately.
+      # Never copy credentials or DSNs from existing shadow/manual account.
+      - key: T100_GUARDIAN_MEXC_API_KEY
+        sync: false
+      - key: T100_GUARDIAN_MEXC_API_SECRET
+        sync: false
+      - key: T100_GUARDIAN_ACCOUNT_KEY_SHA256
+        sync: false
+      - key: T100_GUARDIAN_POSITION_ID
+        sync: false
+      - key: T100_GUARDIAN_READONLY_DB_DSN
+        sync: false
+      - key: T100_GUARDIAN_DB_CA_FILE
+        sync: false
