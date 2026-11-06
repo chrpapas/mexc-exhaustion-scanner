@@ -69,11 +69,44 @@ async def _require_restricted_readonly_connection(conn: Any) -> None:
                           'public.t100_live_position_checkpoints', 'DELETE')
                           AS cp_delete,
                       has_table_privilege(current_user,
+                          'public.t100_live_position_checkpoints', 'TRUNCATE')
+                          AS cp_truncate,
+                      has_table_privilege(current_user,
+                          'public.t100_live_position_checkpoint_revisions', 'INSERT')
+                          AS revision_insert,
+                      has_table_privilege(current_user,
+                          'public.t100_live_position_checkpoint_revisions', 'UPDATE')
+                          AS revision_update,
+                      has_table_privilege(current_user,
+                          'public.t100_live_position_checkpoint_revisions', 'DELETE')
+                          AS revision_delete,
+                      has_table_privilege(current_user,
+                          'public.t100_live_position_checkpoint_revisions', 'TRUNCATE')
+                          AS revision_truncate,
+                      has_table_privilege(current_user,
+                          'public.t100_live_order_intents', 'INSERT')
+                          AS intent_insert,
+                      has_table_privilege(current_user,
                           'public.t100_live_order_intents', 'UPDATE')
                           AS intent_update,
                       has_table_privilege(current_user,
+                          'public.t100_live_order_intents', 'DELETE')
+                          AS intent_delete,
+                      has_table_privilege(current_user,
+                          'public.t100_live_order_intents', 'TRUNCATE')
+                          AS intent_truncate,
+                      has_table_privilege(current_user,
+                          'public.t100_live_stop_amendments', 'INSERT')
+                          AS stop_insert,
+                      has_table_privilege(current_user,
                           'public.t100_live_stop_amendments', 'UPDATE')
                           AS stop_update,
+                      has_table_privilege(current_user,
+                          'public.t100_live_stop_amendments', 'DELETE')
+                          AS stop_delete,
+                      has_table_privilege(current_user,
+                          'public.t100_live_stop_amendments', 'TRUNCATE')
+                          AS stop_truncate,
                       has_table_privilege(current_user,
                           'public.t100_guardian_account_enrollments', 'SELECT')
                           AS enrollment_select,
@@ -85,16 +118,24 @@ async def _require_restricted_readonly_connection(conn: Any) -> None:
                           AS enrollment_update,
                       has_table_privilege(current_user,
                           'public.t100_guardian_account_enrollments', 'DELETE')
-                          AS enrollment_delete"""
+                          AS enrollment_delete,
+                      has_table_privilege(current_user,
+                          'public.t100_guardian_account_enrollments', 'TRUNCATE')
+                          AS enrollment_truncate"""
         )
     except Exception as exc:
         raise GuardianCheckpointHalted("RESTRICTED_DB_ROLE_READ_UNVERIFIED") from exc
     if (row is None or row["read_only"] != "on" or
             row["enrollment_select"] is not True or
             any(row[key] is not False for key in (
-                "cp_insert", "cp_update", "cp_delete",
-                "intent_update", "stop_update",
-                "enrollment_insert", "enrollment_update", "enrollment_delete"
+                "cp_insert", "cp_update", "cp_delete", "cp_truncate",
+                "revision_insert", "revision_update", "revision_delete",
+                "revision_truncate",
+                "intent_insert", "intent_update", "intent_delete",
+                "intent_truncate",
+                "stop_insert", "stop_update", "stop_delete", "stop_truncate",
+                "enrollment_insert", "enrollment_update", "enrollment_delete",
+                "enrollment_truncate"
             ))):
         raise GuardianCheckpointHalted("DB_ROLE_HAS_MUTATION_PRIVILEGES")
 
