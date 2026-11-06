@@ -296,3 +296,51 @@ A Blueprint sync can create or modify Render services and incur costs.
 **Progress classification:** this is audited worker scaffolding with
 offline mocks and CI checks, not a running production observer and
 definitely not authorization to switch to live risk.
+
+## November 6: durable guardian incident channel replaces logs-only monitoring
+
+**Deployment remains REVIEW ONLY and requires operator approval.**
+
+The review-only Blueprint now starts
+`python -m app.t100_live_guardian_durable_worker --run`,
+rather than the logs-only observer worker. This code combines:
+
+- `run_with_network`: independent GET-only MEXC observer and existing
+  SELECT-only account-enrolled checkpoint DB role.
+- `migrations/035_t100_guardian_incident_outbox.sql` plus
+  `GuardianIncidentOutbox`: durable, at-least-once incident outbox,
+  sticky critical latch, persistent failed/undelivered notices.
+- A **distinct incident-writer** role and DSN used only for guardian
+  alert state/outbox. This role is checked to have *no privileges* to
+  modify trade checkpoints, order intents, stop amendments, emergency
+  close intents or account enrollments.
+- `T100LiveOpsNotifier` for incident-only Discord delivery. This POST
+  only goes to the allowlisted Discord webhook, NEVER to MEXC.
+
+New explicit disabled default: `T100_GUARDIAN_DURABLE_ALERTS_ENABLED=false`.
+
+Private additional configuration (not embedded in the Blueprint):
+`T100_GUARDIAN_INCIDENT_DB_DSN` and
+`T100_GUARDIAN_DISCORD_WEBHOOK_URL`. The DB DSN must differ from the
+read-only checkpoint DSN. The outbound webhook is parsed and restricted
+to official Discord webhook paths. A private CA file must validate
+the database connection; redirects/URLs are never logged.
+
+The outbox commits incidents **before** Discord delivery and marks them
+delivered only after a successful notification response. A crash after
+sending but before database acknowledgement may send a duplicate:
+at-least-once delivery, NOT exactly-once. Repeated identical statuses do
+not generate new outbox events. The incident critical latch is sticky
+and must NOT be silently reset by observer recovery. If the outbox DB
+itself is unavailable, the runner fails closed and cannot guarantee a
+Discord message; independent Render deploy/process failure alerts must
+be configured before production reliance.
+
+PG17 integration tests (disposable localhost) validate advisory
+singleton, incident state and trigger, impossible owner-side latch clear
+via ordinary UPDATE/DELETE, pending outbox survival across DB connections,
+and alert-only role denial of trade-table operations.
+
+**No live database migration, Render deployment, Discord message or
+MEXC order was performed during this work.** See
+`docs/T100_READINESS_EXTERNAL_APPROVAL_BOUNDARY_20261106.md`.
