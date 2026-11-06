@@ -116,7 +116,27 @@ async def verify_alert_writer_role(conn: Any) -> None:
                 has_table_privilege(current_user,
                     'public.t100_owned_emergency_close_intents','UPDATE') AS emergency_update,
                 has_table_privilege(current_user,
-                    'public.t100_guardian_account_enrollments','INSERT') AS enrollment_insert"""
+                    'public.t100_guardian_account_enrollments','INSERT') AS enrollment_insert,
+                has_schema_privilege(current_user,'public','CREATE') AS schema_create,
+                has_database_privilege(current_user,current_database(),'CREATE') AS db_create,
+                has_table_privilege(current_user,
+                    'public.t100_live_position_checkpoints',
+                    'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER') AS checkpoint_any,
+                has_table_privilege(current_user,
+                    'public.t100_live_position_checkpoint_revisions',
+                    'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER') AS revision_any,
+                has_table_privilege(current_user,
+                    'public.t100_live_order_intents',
+                    'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER') AS intent_any,
+                has_table_privilege(current_user,
+                    'public.t100_live_stop_amendments',
+                    'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER') AS stop_any,
+                has_table_privilege(current_user,
+                    'public.t100_owned_emergency_close_intents',
+                    'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER') AS emergency_any,
+                has_table_privilege(current_user,
+                    'public.t100_guardian_account_enrollments',
+                    'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER') AS enrollment_any"""
         )
     except Exception:
         raise GuardianDurableHalted("GUARDIAN_ALERT_ROLE_CANNOT_BE_VERIFIED") from None
@@ -128,7 +148,10 @@ async def verify_alert_writer_role(conn: Any) -> None:
                 "outbox_delete","outbox_truncate",
                 "checkpoint_insert","checkpoint_update","checkpoint_delete",
                 "trade_intent_insert","stop_update",
-                "emergency_update","enrollment_insert"))):
+                "emergency_update","enrollment_insert",
+                "schema_create","db_create",
+                "checkpoint_any","revision_any","intent_any",
+                "stop_any","emergency_any","enrollment_any"))):
         raise GuardianDurableHalted("GUARDIAN_ALERT_ROLE_HAS_UNSAFE_PRIVILEGES")
 
 
