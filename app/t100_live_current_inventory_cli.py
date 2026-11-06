@@ -26,6 +26,43 @@ from app.t100_live_readonly_probe import ReadOnlyMexcProbe
 
 
 PILOT_KEYCHAIN_SERVICE = "t100225-mexc-pilot-subaccount"
+INVENTORY_GET_ENDPOINTS = frozenset({
+    "/api/v1/private/position/open_positions",
+    "/api/v1/private/stoporder/open_orders",
+    "/api/v1/private/account/assets",
+    "/api/v1/private/order/open_order_total_count",
+})
+
+
+class InventoryGetOnlyClient:
+    """Restrict this operator CLI to the four inventory GET endpoints."""
+
+    __slots__ = ("_client",)
+
+    def __init__(self, client: Any) -> None:
+        self._client = client
+
+    async def _private_get(
+        self, path: str, params: dict[str, Any] | None = None,
+    ) -> Any:
+        if path not in INVENTORY_GET_ENDPOINTS:
+            raise RuntimeError("INVENTORY_GET_ENDPOINT_NOT_ALLOWED")
+        if path in {
+            "/api/v1/private/account/assets",
+            "/api/v1/private/order/open_order_total_count",
+        }:
+            if params is not None:
+                raise RuntimeError("INVENTORY_GET_FILTER_NOT_ALLOWED")
+        else:
+            import re
+            if params is not None and (
+                type(params) is not dict
+                or set(params) != {"symbol"}
+                or type(params["symbol"]) is not str
+                or re.fullmatch(r"[A-Z0-9]+_USDT", params["symbol"]) is None
+            ):
+                raise RuntimeError("INVENTORY_GET_SYMBOL_FILTER_INVALID")
+        return await self._client._private_get(path, params)
 
 
 class PilotKeychainUnavailable(RuntimeError):
@@ -250,7 +287,7 @@ async def _main(*, mac_pilot_keychain: bool = False) -> None:
         api_key=key, api_secret=secret,
     )
     try:
-        report = await _run(client=client)
+        report = await _run(client=InventoryGetOnlyClient(client))
         # Pilot credentials prove only this pilot subaccount's current state,
         # not the separate deployed Render shadow's account binding.
         report["credential_scope"] = (
