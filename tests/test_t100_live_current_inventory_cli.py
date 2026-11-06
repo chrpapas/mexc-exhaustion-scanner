@@ -1,9 +1,17 @@
 """Offline tests for manual GET-only redacted account-completeness CLI."""
 import asyncio
+import io
+import json
+import os
 import unittest
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
 
 from app.t100_live_current_inventory_cli import (
+    PilotKeychainUnavailable,
+    _main,
     _run,
+    read_pilot_keychain_credentials,
     shareable_current_inventory_report,
 )
 
@@ -151,6 +159,108 @@ class CurrentInventoryCliTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["failure_type"], "TimeoutError")
         self.assertFalse(result["account_wide_completeness_verified"])
         self.assertFalse(result["live_authorization"])
+
+    def test_pilot_keychain_uses_fixed_service_and_never_substitutes_monitoring(self):
+        secret_pair = (
+            SimpleNamespace(returncode=0, stdout="PILOT_KEY_PRIVATE\n"),
+            SimpleNamespace(returncode=0, stdout="PILOT_SECRET_PRIVATE\n"),
+        )
+        with (
+            patch("app.t100_live_current_inventory_cli.platform.system",
+                  return_value="Darwin"),
+            patch("app.t100_live_current_inventory_cli.subprocess.run",
+                  side_effect=secret_pair) as run,
+        ):
+            self.assertEqual(
+                read_pilot_keychain_credentials(),
+                ("PILOT_KEY_PRIVATE", "PILOT_SECRET_PRIVATE"),
+            )
+        self.assertEqual(run.call_count, 2)
+        for call in run.call_args_list:
+            args = call.args[0]
+            self.assertEqual(args[0], "/usr/bin/security")
+            self.assertIn("t100225-mexc-pilot-subaccount", args)
+            self.assertNotIn("t100-render-monitoring-db-roles-v1", args)
+        self.assertEqual(
+            [call.args[0][-3] for call in run.call_args_list],
+            ["MEXC_API_KEY", "MEXC_API_SECRET"],
+        )
+
+    def test_missing_pilot_credential_fails_closed(self):
+        with (
+            patch("app.t100_live_current_inventory_cli.platform.system",
+                  return_value="Darwin"),
+            patch("app.t100_live_current_inventory_cli.subprocess.run",
+                  return_value=SimpleNamespace(returncode=44, stdout="")),
+        ):
+            with self.assertRaisesRegex(
+                PilotKeychainUnavailable,
+                "T100_PILOT_KEYCHAIN_CREDENTIAL_MISSING",
+            ):
+                read_pilot_keychain_credentials()
+
+    async def test_main_keychain_only_scope_and_no_secret_output(self):
+        class Client:
+            def __init__(self, host, *, api_key, api_secret):
+                self.host, self.api_key, self.api_secret = host, api_key, api_secret
+                self.closed = False
+
+            async def close(self):
+                self.closed = True
+
+        client_objects = []
+        def create_client(host, *, api_key, api_secret):
+            c = Client(host, api_key=api_key, api_secret=api_secret)
+            client_objects.append(c)
+            return c
+
+        output = io.StringIO()
+        with (
+            patch.dict(os.environ, {
+                "T100_EXECUTION_MODE": "paper",
+                "T100_LIVE_ORDER_API_ENABLED": "false",
+                "T100_LIVE_KILL_SWITCH": "true",
+            }, clear=True),
+            patch("app.t100_live_current_inventory_cli.read_pilot_keychain_credentials",
+                  return_value=("PILOT_KEY_PRIVATE", "PILOT_SECRET_PRIVATE")),
+            patch.dict("sys.modules", {
+                "app.mexc_trade": SimpleNamespace(MexcTradeClient=create_client),
+            }),
+            patch("app.t100_live_current_inventory_cli._run",
+                  new=AsyncMock(return_value={
+                      "status": "CURRENT_ACCOUNT_INVENTORY_COMPLETENESS_VERIFIED_NONATOMIC",
+                      "read_only": True,
+                      "live_authorization": False,
+                  })),
+            patch("sys.stdout", output),
+        ):
+            await _main(mac_pilot_keychain=True)
+        self.assertEqual(len(client_objects), 1)
+        self.assertTrue(client_objects[0].closed)
+        self.assertEqual(client_objects[0].host, "https://api.mexc.com")
+        value = output.getvalue()
+        report = json.loads(value.split("\nPRIVATE GET ONLY.", 1)[0])
+        self.assertEqual(report["credential_scope"], "T100_V5_PILOT_SUBACCOUNT")
+        self.assertFalse(report["render_shadow_account_binding_verified"])
+        self.assertFalse(report["live_authorization"])
+        self.assertNotIn("PILOT_KEY_PRIVATE", value)
+        self.assertNotIn("PILOT_SECRET_PRIVATE", value)
+
+    async def test_no_keychain_read_when_live_switch_enabled(self):
+        output = io.StringIO()
+        with (
+            patch.dict(os.environ, {
+                "T100_EXECUTION_MODE": "paper",
+                "T100_LIVE_ORDER_API_ENABLED": "true",
+                "T100_LIVE_KILL_SWITCH": "true",
+            }, clear=True),
+            patch("app.t100_live_current_inventory_cli.read_pilot_keychain_credentials") as lookup,
+            patch("sys.stdout", output),
+        ):
+            with self.assertRaises(SystemExit):
+                await _main(mac_pilot_keychain=True)
+        lookup.assert_not_called()
+        self.assertIn("CURRENT_INVENTORY_READ_ONLY_MODE_REQUIRED", output.getvalue())
 
     def test_allowlist_never_emits_raw_payload_values(self):
         result = shareable_current_inventory_report({
