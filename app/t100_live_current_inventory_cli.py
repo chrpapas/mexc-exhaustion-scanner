@@ -26,6 +26,7 @@ from app.t100_live_readonly_probe import ReadOnlyMexcProbe
 
 
 PILOT_KEYCHAIN_SERVICE = "t100225-mexc-pilot-subaccount"
+WEB_PILOT_KEYCHAIN_SERVICE = "t100225-mexc-web-pilot-subaccount-v1"
 INVENTORY_GET_ENDPOINTS = frozenset({
     "/api/v1/private/position/open_positions",
     "/api/v1/private/stoporder/open_orders",
@@ -69,12 +70,16 @@ class PilotKeychainUnavailable(RuntimeError):
     pass
 
 
-def read_pilot_keychain_credentials() -> tuple[str, str]:
-    """Load only the dedicated T100 V5 pilot account, without printing secrets.
+def read_pilot_keychain_credentials(*, web_pilot: bool = False) -> tuple[str, str]:
+    """Load credentials from one fixed T100 pilot Keychain service.
 
-    No fallback to BOXWAVE, Render monitoring roles or generic MEXC keys.
-    This process-local pair is never exported to the environment.
+    The web-login pilot and older API-only pilot have distinct services;
+    there is no account fallback, and no substitution of BOXWAVE, Render or
+    generic MEXC credentials. Secrets are not exported or printed.
     """
+    if type(web_pilot) is not bool:
+        raise PilotKeychainUnavailable("T100_PILOT_KEYCHAIN_SCOPE_INVALID")
+    service = WEB_PILOT_KEYCHAIN_SERVICE if web_pilot else PILOT_KEYCHAIN_SERVICE
     if platform.system() != "Darwin":
         raise PilotKeychainUnavailable("T100_PILOT_MAC_REQUIRED")
     values: list[str] = []
@@ -83,7 +88,7 @@ def read_pilot_keychain_credentials() -> tuple[str, str]:
             result = subprocess.run(
                 (
                     "/usr/bin/security", "find-generic-password",
-                    "-s", PILOT_KEYCHAIN_SERVICE,
+                    "-s", service,
                     "-a", account, "-w",
                 ),
                 stdout=subprocess.PIPE,
@@ -248,7 +253,10 @@ async def _run(*, client: Any, timeout: float = 45.) -> dict[str, Any]:
         })
 
 
-async def _main(*, mac_pilot_keychain: bool = False) -> None:
+async def _main(
+    *, mac_pilot_keychain: bool = False,
+    mac_web_pilot_keychain: bool = False,
+) -> None:
     controls = T100ExecutionControls.from_env()
     if (
         controls.mode != "paper"
@@ -260,13 +268,28 @@ async def _main(*, mac_pilot_keychain: bool = False) -> None:
             "live_authorization": False,
         }))
         raise SystemExit(2)
-    if mac_pilot_keychain:
+    if (type(mac_pilot_keychain) is not bool
+            or type(mac_web_pilot_keychain) is not bool
+            or (mac_pilot_keychain and mac_web_pilot_keychain)):
+        print(json.dumps({
+            "status": "CURRENT_INVENTORY_CREDENTIAL_SCOPE_CONFLICT",
+            "live_authorization": False,
+        }))
+        raise SystemExit(2)
+    selected_scope = (
+        "T100_WEB_PILOT_SUBACCOUNT" if mac_web_pilot_keychain
+        else "T100_V5_PILOT_SUBACCOUNT" if mac_pilot_keychain
+        else "UNVERIFIED_ENV_ACCOUNT"
+    )
+    if mac_pilot_keychain or mac_web_pilot_keychain:
         try:
-            key, secret = read_pilot_keychain_credentials()
+            key, secret = read_pilot_keychain_credentials(
+                web_pilot=mac_web_pilot_keychain,
+            )
         except PilotKeychainUnavailable as exc:
             print(json.dumps({
                 "status": str(exc),
-                "credential_scope": "T100_V5_PILOT_SUBACCOUNT",
+                "credential_scope": selected_scope,
                 "render_shadow_account_binding_verified": False,
                 "live_authorization": False,
             }, sort_keys=True))
@@ -290,10 +313,7 @@ async def _main(*, mac_pilot_keychain: bool = False) -> None:
         report = await _run(client=InventoryGetOnlyClient(client))
         # Pilot credentials prove only this pilot subaccount's current state,
         # not the separate deployed Render shadow's account binding.
-        report["credential_scope"] = (
-            "T100_V5_PILOT_SUBACCOUNT" if mac_pilot_keychain
-            else "UNVERIFIED_ENV_ACCOUNT"
-        )
+        report["credential_scope"] = selected_scope
         report["render_shadow_account_binding_verified"] = False
         print(json.dumps(report, indent=2, sort_keys=True))
         print("PRIVATE GET ONLY. NO ORDERS. LIVE TRADING DISABLED.")
@@ -305,13 +325,21 @@ def cli() -> None:
     parser = argparse.ArgumentParser(
         description="Non-atomic, redacted MEXC account inventory audit"
     )
-    parser.add_argument(
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument(
         "--mac-pilot-keychain", action="store_true",
-        help="Read only the dedicated T100 V5 pilot Keychain credentials on Mac",
+        help="GET-only audit of the old T100 V5 API-only pilot Mac Keychain",
+    )
+    mode.add_argument(
+        "--mac-web-pilot-keychain", action="store_true",
+        help="GET-only audit of the NEW T100 web-login pilot Mac Keychain",
     )
     args = parser.parse_args()
     try:
-        asyncio.run(_main(mac_pilot_keychain=args.mac_pilot_keychain))
+        asyncio.run(_main(
+            mac_pilot_keychain=args.mac_pilot_keychain,
+            mac_web_pilot_keychain=args.mac_web_pilot_keychain,
+        ))
     except SystemExit:
         raise
     except Exception as exc:
