@@ -67,6 +67,7 @@ def draft_entry_request(preview: Any, *, external_oid: str) -> dict[str, Any]:
         "stop_reference": "LATEST_PRICE",
         "notional_ceiling_usdt": "12.50",
         "available_futures_ge_12_50": True,
+        "notional_le_25_pct_observed_available": True,
         "entry_allowed": False,
         "live_authorization": False,
         "native_stop_protectiveness_verified": False,
