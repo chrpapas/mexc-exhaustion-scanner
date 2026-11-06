@@ -189,6 +189,40 @@ class GuardianIncidentPostgresIntegration(unittest.IsolatedAsyncioTestCase):
                    FROM t100_ci_guardian_incident_writer"""
             )
 
+    async def test_restricted_writer_rejects_trading_read_and_schema_create(self):
+        # These privileges could leak strategy/position data or allow DDL
+        # even though the incident writer never explicitly requests them.
+        variants = (
+            (
+                "trading_select",
+                "GRANT SELECT ON public.t100_live_order_intents "
+                "TO t100_ci_guardian_incident_writer",
+                "REVOKE SELECT ON public.t100_live_order_intents "
+                "FROM t100_ci_guardian_incident_writer",
+            ),
+            (
+                "schema_create",
+                "GRANT CREATE ON SCHEMA public "
+                "TO t100_ci_guardian_incident_writer",
+                "REVOKE CREATE ON SCHEMA public "
+                "FROM t100_ci_guardian_incident_writer",
+            ),
+        )
+        for name, grant_sql, revoke_sql in variants:
+            with self.subTest(privilege=name):
+                await self.conn.execute(grant_sql)
+                try:
+                    await self.conn.execute(
+                        "SET ROLE t100_ci_guardian_incident_writer"
+                    )
+                    try:
+                        with self.assertRaises(GuardianDurableHalted):
+                            await verify_alert_writer_role(self.conn)
+                    finally:
+                        await self.conn.execute("RESET ROLE")
+                finally:
+                    await self.conn.execute(revoke_sql)
+
     async def test_advisory_singleton_prevents_duplicate_worker(self):
         import asyncpg
         first=GuardianIncidentOutbox(self.conn,scope_sha256=SCOPE)
