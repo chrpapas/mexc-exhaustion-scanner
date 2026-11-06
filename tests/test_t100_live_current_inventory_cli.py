@@ -187,6 +187,111 @@ class CurrentInventoryCliTests(unittest.IsolatedAsyncioTestCase):
             ["MEXC_API_KEY", "MEXC_API_SECRET"],
         )
 
+    def test_web_pilot_keychain_uses_distinct_fixed_service(self):
+        private_pair = (
+            SimpleNamespace(returncode=0, stdout="WEB_KEY_PRIVATE\\n"),
+            SimpleNamespace(returncode=0, stdout="WEB_SECRET_PRIVATE\\n"),
+        )
+        with (
+            patch("app.t100_live_current_inventory_cli.platform.system",
+                  return_value="Darwin"),
+            patch("app.t100_live_current_inventory_cli.subprocess.run",
+                  side_effect=private_pair) as run,
+        ):
+            self.assertEqual(
+                read_pilot_keychain_credentials(web_pilot=True),
+                ("WEB_KEY_PRIVATE", "WEB_SECRET_PRIVATE"),
+            )
+        self.assertEqual(run.call_count, 2)
+        for call in run.call_args_list:
+            args = call.args[0]
+            self.assertIn("t100225-mexc-web-pilot-subaccount-v1", args)
+            self.assertNotIn("t100225-mexc-pilot-subaccount", args)
+            self.assertNotIn("t100-render-monitoring-db-roles-v1", args)
+            self.assertNotIn("boxwave", str(args).lower())
+        self.assertEqual(
+            [call.args[0][-2] for call in run.call_args_list],
+            ["MEXC_API_KEY", "MEXC_API_SECRET"],
+        )
+
+    async def test_web_scope_diagnostic_is_safe_and_never_prints_secrets(self):
+        class Client:
+            def __init__(self, host, *, api_key, api_secret):
+                self.api_key, self.api_secret = api_key, api_secret
+                self.closed = False
+
+            async def close(self):
+                self.closed = True
+
+        clients = []
+        def create_client(host, *, api_key, api_secret):
+            c = Client(host, api_key=api_key, api_secret=api_secret)
+            clients.append(c)
+            return c
+
+        output = io.StringIO()
+        with (
+            patch.dict(os.environ, {
+                "T100_EXECUTION_MODE": "paper",
+                "T100_LIVE_ORDER_API_ENABLED": "false",
+                "T100_LIVE_KILL_SWITCH": "true",
+            }, clear=True),
+            patch("app.t100_live_current_inventory_cli.read_pilot_keychain_credentials",
+                  return_value=("WEB_KEY_PRIVATE", "WEB_SECRET_PRIVATE")) as reader,
+            patch.dict("sys.modules", {
+                "app.mexc_trade": SimpleNamespace(MexcTradeClient=create_client),
+            }),
+            patch("app.t100_live_current_inventory_cli._run",
+                  new=AsyncMock(return_value={
+                      "status": "CURRENT_ACCOUNT_INVENTORY_COMPLETENESS_VERIFIED_NONATOMIC",
+                      "read_only": True, "live_authorization": False,
+                  })),
+            patch("sys.stdout", output),
+        ):
+            await _main(mac_web_pilot_keychain=True)
+        reader.assert_called_once_with(web_pilot=True)
+        self.assertEqual(len(clients), 1)
+        self.assertTrue(clients[0].closed)
+        result = output.getvalue()
+        report = json.loads(result.split("\\nPRIVATE GET ONLY.", 1)[0])
+        self.assertEqual(report["credential_scope"], "T100_WEB_PILOT_SUBACCOUNT")
+        self.assertFalse(report["render_shadow_account_binding_verified"])
+        self.assertFalse(report["live_authorization"])
+        self.assertNotIn("WEB_KEY_PRIVATE", result)
+        self.assertNotIn("WEB_SECRET_PRIVATE", result)
+
+    async def test_web_scope_conflict_fails_before_keychain_read(self):
+        output = io.StringIO()
+        with (
+            patch.dict(os.environ, {
+                "T100_EXECUTION_MODE": "paper",
+                "T100_LIVE_ORDER_API_ENABLED": "false",
+                "T100_LIVE_KILL_SWITCH": "true",
+            }, clear=True),
+            patch("app.t100_live_current_inventory_cli.read_pilot_keychain_credentials") as reader,
+            patch("sys.stdout", output),
+        ):
+            with self.assertRaises(SystemExit):
+                await _main(mac_pilot_keychain=True, mac_web_pilot_keychain=True)
+        reader.assert_not_called()
+        self.assertIn("CURRENT_INVENTORY_CREDENTIAL_SCOPE_CONFLICT", output.getvalue())
+
+    async def test_web_scope_live_switch_refused_before_keychain_read(self):
+        output = io.StringIO()
+        with (
+            patch.dict(os.environ, {
+                "T100_EXECUTION_MODE": "paper",
+                "T100_LIVE_ORDER_API_ENABLED": "false",
+                "T100_LIVE_KILL_SWITCH": "false",
+            }, clear=True),
+            patch("app.t100_live_current_inventory_cli.read_pilot_keychain_credentials") as reader,
+            patch("sys.stdout", output),
+        ):
+            with self.assertRaises(SystemExit):
+                await _main(mac_web_pilot_keychain=True)
+        reader.assert_not_called()
+        self.assertIn("CURRENT_INVENTORY_READ_ONLY_MODE_REQUIRED", output.getvalue())
+
     def test_missing_pilot_credential_fails_closed(self):
         with (
             patch("app.t100_live_current_inventory_cli.platform.system",
