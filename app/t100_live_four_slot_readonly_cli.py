@@ -19,6 +19,7 @@ import asyncio
 import getpass
 import json
 import os
+import re
 import ssl
 from typing import Any, Mapping
 
@@ -106,8 +107,26 @@ def _report(
     return result
 
 
+_INVENTORY_GET_ROUTES = frozenset({
+    "/api/v1/private/position/open_positions",
+    "/api/v1/private/stoporder/open_orders",
+    "/api/v1/private/account/assets",
+    "/api/v1/private/order/open_order_total_count",
+})
+_EXACT_ORDER_GET_ROUTES = (
+    re.compile(r"/api/v1/private/order/external/[A-Z0-9]+_USDT/[A-Za-z0-9_-]{1,128}"),
+    re.compile(r"/api/v1/private/order/deal_details/[1-9][0-9]*"),
+)
+
+
 class _PrivateGetOnly:
-    """Expose only the signed GET transport, no mutation interface."""
+    """Allowlisted signed GET transport, exposing no mutation method.
+
+    The general client also offers POST. This diagnostic facade allows only
+    currently reviewed inventory and exact immutable order-origin GETs.
+    """
+
+    __slots__ = ("_client",)
 
     def __init__(self, client: Any) -> None:
         self._client = client
@@ -115,6 +134,27 @@ class _PrivateGetOnly:
     async def _private_get(
         self, path: str, params: dict[str, Any] | None = None,
     ) -> Any:
+        if path in _INVENTORY_GET_ROUTES:
+            if path in {
+                "/api/v1/private/account/assets",
+                "/api/v1/private/order/open_order_total_count",
+            }:
+                if params is not None:
+                    raise RuntimeError("FOUR_SLOT_GET_FILTER_NOT_ALLOWED")
+            elif params is not None and (
+                type(params) is not dict
+                or set(params) != {"symbol"}
+                or type(params["symbol"]) is not str
+                or re.fullmatch(r"[A-Z0-9]+_USDT", params["symbol"]) is None
+            ):
+                raise RuntimeError("FOUR_SLOT_GET_SYMBOL_FILTER_INVALID")
+        elif (
+            type(path) is not str
+            or not any(pattern.fullmatch(path)
+                       for pattern in _EXACT_ORDER_GET_ROUTES)
+            or params is not None
+        ):
+            raise RuntimeError("FOUR_SLOT_GET_ENDPOINT_NOT_ALLOWED")
         return await self._client._private_get(path, params)
 
 
