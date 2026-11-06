@@ -161,10 +161,60 @@ position IDs, prices, timestamps, account details, key or secret. It
 does not check whether all history was returned, trigger a mutation,
 authorize trading, or touch manual positions.
 
-Until the user performs that local GET and the results are reconciled,
-the historical-position response format remains a measured **unknown**.
+**Result on 2026-11-06:** user ran this exact GET-only probe against the
+dedicated T100 pilot account. The live endpoint returned
+`ARRAY_WITHOUT_PAGINATION_METADATA`, with 4 rows on page 1 and all
+critical positional fields present. None of `pageSize`, `totalCount`,
+`totalPage`, `currentPage` appeared. **This result is ground truth
+for the observed API shape, but it does not certify full history or
+prove that V5's specific position is among those four rows.**
 The observer stays development-only and no Render deployment is authorized.
 
 Official MEXC notices:
 - https://www.mexc.com/announcements/article/futures-api-access-domain-update-17827791532974
 - https://www.mexc.co/api-docs/futures/account-and-trading-endpoints/get-historical-positions
+
+## 2026-11-06 Plan B resolution: positive matching history without fake totals
+
+The user-confirmed real API result is now supported by
+`app/t100_live_readonly_probe.py` and
+`app/t100_live_owned_position_finality.py`:
+
+- A **bare list** is an incomplete candidate *history page*, never an
+  account-wide historical-position inventory or negative proof of absence.
+- If that list contains the **exact enrolled T100 position ID**, and two
+  successive historical GET reads show the same fully closed SHORT /
+  isolated / full contract volume record, with two exact-position GETs
+  returning no active position, the **single T100 position** may be
+  classified as closed. All other account/manual positions remain
+  entirely outside that certification.
+- The resulting certificate explicitly sets
+  `historical_pages_exhausted=False`, `account_flat_certified=False`,
+  `live_authorization=False`, `emergency_close_authorized=False`.
+- If the exact ID is absent from a bare history array, the result is
+  `NOT_PROVEN`, not `position never existed` or `position closed`.
+- Metadata-bearing objects retain their stricter full-page validation.
+  History response-shape drift, duplicate position IDs, wrong symbol,
+  partial volume, nonterminal state and inconsistent repeated GETs
+  stop certification.
+
+**Next read-only V5 verification:** The new standalone local Mac script
+`tools/t100_mexc_v5_closed_position_four_get_local.py` reads the existing
+V5 durable journal (without changing it), obtains the dedicated pilot
+subaccount key and secret from the existing macOS Keychain, sends two
+first-page history GETs and two exact position-ID open-position GETs,
+and prints only redacted booleans/enums. It NEVER posts an order.
+Run only on the user's own Mac with the established journal:
+
+```bash
+python3 "$HOME/Downloads/t100_mexc_v5_closed_position_four_get_local.py" --diagnose
+```
+
+The user should fetch the reviewed committed script from the repository
+into Downloads before running. It does not re-run V5 or authorize entries.
+
+**Original venue ambiguity remains:** A confirmed exact position close does
+not establish that MEXC's `triggerSide=1` (documented take-profit) was a
+correct label for the loss-direction stop-only V5 close. The stop-loss
+trigger-side evidence is still not certified. No Render role migration,
+no emergency-close POST deployment, and no four-slot live trading follow.
