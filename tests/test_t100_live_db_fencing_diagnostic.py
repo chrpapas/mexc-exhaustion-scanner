@@ -5,7 +5,7 @@ The production operator command uses real asyncpg, not this fake.
 """
 import ssl
 import unittest
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 from app.t100_live_db_fencing_diagnostic import (
     FencingDiagnosticHalted,
@@ -127,13 +127,16 @@ class FencingDBDiagnosticTests(unittest.IsolatedAsyncioTestCase):
         second.fetchval.side_effect = [
             "mexc_exhaustion", "t100_live_executor_runtime",
         ]
+        connect = AsyncMock(side_effect=[first, second])
         with (
             patch("builtins.input", return_value=CONFIRMATION),
             patch("getpass.getpass", side_effect=[
                 "test-password", "postgresql://owner:unused@example.com/mexc_exhaustion",
             ]),
-            patch("asyncpg.connect",
-                  new=AsyncMock(side_effect=[first, second])) as connect,
+            patch.dict(
+                "sys.modules",
+                {"asyncpg": Mock(connect=connect)},
+            ),
             patch(
                 "app.t100_live_db_fencing_diagnostic.independent_runtime_audit",
                 new=AsyncMock(return_value={"status": "NOT_CERTIFIED"}),
