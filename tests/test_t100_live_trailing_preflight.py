@@ -151,7 +151,10 @@ def test_manual_extra_position_blocks():
     cp = checkpoint()
     initial = book([cp])
     initial.positions.append(pos(checkpoint("ETH_USDT", "78", "812")))
-    initial = replace(initial, completeness=report(2))
+    n = report(1)
+    n["before_positions"] = 2
+    n["after_positions"] = 2
+    initial = replace(initial, completeness=n)
     second = replace(initial, observed_at_ms=NOW-1000)
     assert inspect(first=initial, second=second).status == (
         "TRAILING_UNOWNED_INVENTORY_PRESENT"
@@ -166,7 +169,7 @@ def test_manual_extra_position_blocks():
     ("errorCode", 12, "NATIVE_SL_TRIGGER_OR_EXECUTION_ERROR_UNVERIFIED"),
     ("volType", 0, "NATIVE_SL_FULL_CONTRACT_COVERAGE_UNVERIFIED"),
     ("stopLossPrice", "177", "NATIVE_SL_PRICE_NOT_PROTECTIVE"),
-    ("positionId", "12345", "TRAILING_POSITION_STOP_OWNERSHIP_MISMATCH"),
+    ("positionId", "12345", "TRAILING_FIRST_STOP_NOT_UNIQUE"),
 ])
 def test_bad_native_stop_fails_closed(field, value, expected):
     cp = checkpoint()
@@ -247,4 +250,31 @@ def test_nan_or_invalid_market_data_blocks():
     )
     assert inspect(price_tick=D("-0.01")).status == (
         "TRAILING_INPUT_OR_TIMESTAMP_INVALID"
+    )
+
+
+def test_first_bookend_error_code_cannot_be_hidden_by_second_get():
+    cp = checkpoint()
+    a = book([cp])
+    b = book([cp], timestamp=NOW-1000)
+    a.stops[0]["errorCode"] = 99
+    # Critical snapshots otherwise match; errorCode is a separately audited
+    # safety field, and must block even if second response has errorCode=0.
+    r = inspect(first=a, second=b)
+    assert r.status == (
+        "TRAILING_FIRST_NATIVE_STOP_UNVERIFIED:"
+        "NATIVE_SL_TRIGGER_OR_EXECUTION_ERROR_UNVERIFIED"
+    )
+
+
+def test_overlong_or_nonmonotonic_bookend_gap_blocks():
+    cp = checkpoint()
+    a = book([cp], timestamp=NOW-5000)
+    b = book([cp], timestamp=NOW-1000)
+    assert inspect(first=a, second=b).status == (
+        "TRAILING_BOOKEND_OR_MARKET_STALE"
+    )
+    same = book([cp], timestamp=NOW-1000)
+    assert inspect(first=same, second=same).status == (
+        "TRAILING_BOOKEND_OR_MARKET_STALE"
     )
