@@ -116,7 +116,7 @@ def test_draft_exact_minimum_short_with_embedded_stop():
     ("mexc_orders_sent", 1),
     ("indicative_notional_usdt", "12.5001"),
     ("embedded_stop_loss", "75875.2"),
-    ("embedded_stop_loss", "77000"),
+    ("embedded_stop_loss", "78000"),
     ("embedded_stop_loss", "1e309"),
     ("reference_last_price", "NaN"),
 ])
