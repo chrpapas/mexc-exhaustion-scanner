@@ -56,7 +56,10 @@ class FakeConnection:
             row=dict(read_only="off",incident_insert=True,
                      incident_update=True,outbox_select=True,
                      outbox_update=True,
-                     checkpoint_update=False,trade_intent_insert=False,
+                     incident_delete=False,incident_truncate=False,
+                     outbox_delete=False,outbox_truncate=False,
+                     checkpoint_insert=False,checkpoint_update=False,
+                     checkpoint_delete=False,trade_intent_insert=False,
                      stop_update=False,emergency_update=False,
                      enrollment_insert=False)
             if self.privilege:
@@ -295,20 +298,28 @@ class DurableWorkerTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn(secret,"".join(logs))
         self.assertNotIn(secret,str(x))
 
-    async def test_writer_role_with_trade_privilege_aborts_before_observation(self):
-        db=FakeConnection(privilege={"checkpoint_update":True})
-        called=[]
-        async def connect(_dsn,_ca):
-            return db
-        async def observe(_env):
-            called.append("should not happen")
-            return ReadOnlyCycleSummary(status="UNKNOWN",alert=True)
-        with self.assertRaises(GuardianDurableHalted):
-            await run(environ=env(),cycles=1,connect=connect,observe=observe,
-                      notifier_factory=lambda *_a,**_k:FakeNotifier(HOOK))
-        self.assertEqual(called,[])
-        self.assertEqual(db.events,[])
-        self.assertTrue(db.closed)
+    async def test_writer_role_with_unsafe_privilege_aborts_before_observation(self):
+        for privilege in (
+            "checkpoint_insert", "checkpoint_update", "checkpoint_delete",
+            "incident_delete", "incident_truncate", "outbox_delete",
+            "outbox_truncate", "trade_intent_insert", "stop_update",
+            "emergency_update", "enrollment_insert",
+        ):
+            with self.subTest(privilege=privilege):
+                db=FakeConnection(privilege={privilege:True})
+                called=[]
+                async def connect(_dsn,_ca):
+                    return db
+                async def observe(_env):
+                    called.append("should not happen")
+                    return ReadOnlyCycleSummary(status="UNKNOWN",alert=True)
+                with self.assertRaises(GuardianDurableHalted):
+                    await run(environ=env(),cycles=1,connect=connect,
+                              observe=observe,
+                              notifier_factory=lambda *_a,**_k:FakeNotifier(HOOK))
+                self.assertEqual(called,[])
+                self.assertEqual(db.events,[])
+                self.assertTrue(db.closed)
 
     async def test_outbox_database_outage_aborts_no_untracked_notification(self):
         db=FakeConnection(fail=True)
