@@ -193,7 +193,7 @@ def test_tpsl_count_mismatch_blocks():
     cp = checkpoint()
     b = book([cp])
     b.completeness["open_order_counts"]["stopOrderCount"] = 2
-    assert inspect(first=b, second=b).status == (
+    assert inspect(first=b, second=replace(b, observed_at_ms=NOW-1000)).status == (
         "TRAILING_ACCOUNT_COMPLETENESS_UNVERIFIED"
     )
 
@@ -204,7 +204,7 @@ def test_unrelated_open_limit_order_blocks():
     b.completeness["open_order_counts"].update(
         sumCount=2, limitOrderCount=1,
     )
-    assert inspect(first=b, second=b).status == (
+    assert inspect(first=b, second=replace(b, observed_at_ms=NOW-1000)).status == (
         "TRAILING_ACCOUNT_COMPLETENESS_UNVERIFIED"
     )
 
