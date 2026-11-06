@@ -138,11 +138,27 @@ async def verify_alert_writer_role(conn: Any) -> None:
                     'public.t100_guardian_account_enrollments',
                     'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER') AS enrollment_any"""
         )
+        # Future public trading tables must not become readable by the
+        # incident writer merely because they were added after this audit.
+        unrelated_access=await conn.fetchval(
+            """SELECT COUNT(*)::integer
+               FROM pg_catalog.pg_class c
+               JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace
+               WHERE n.nspname='public'
+                 AND c.relkind IN ('r','p','v','m','f')
+                 AND c.relname NOT IN (
+                   't100_guardian_incident_state',
+                   't100_guardian_incident_outbox')
+                 AND has_table_privilege(
+                   current_user,c.oid,
+                   'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER')"""
+        )
     except Exception:
         raise GuardianDurableHalted("GUARDIAN_ALERT_ROLE_CANNOT_BE_VERIFIED") from None
     if (row is None or row["read_only"]!="off" or
             any(row[x] is not True for x in (
                 "incident_insert","incident_update","outbox_select","outbox_update")) or
+            type(unrelated_access) is not int or unrelated_access != 0 or
             any(row[x] is not False for x in (
                 "incident_delete","incident_truncate",
                 "outbox_delete","outbox_truncate",
