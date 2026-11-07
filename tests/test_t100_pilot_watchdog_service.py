@@ -132,8 +132,12 @@ class ServiceTests(unittest.TestCase):
         asyncio.run(scenario())
 
     def test_end_to_end_injected_get_and_notification_only(self):
+        import time
         events = []
         paths = []
+        # Signed two-bookend audit MUST see one immutable execution timestamp.
+        # Recomputing now() on every mocked fill GET creates false venue drift.
+        fixed_fill_ms = int(time.time() * 1000) - 1000
         class FakeMexc:
             def __init__(self, *_):
                 pass
@@ -159,11 +163,10 @@ class ServiceTests(unittest.TestCase):
                         "side": 3, "state": 3, "dealVol": "1",
                     }
                 if path == "/api/v1/private/order/deal_details/100":
-                    import time
                     return [{
                         "id": "201", "orderId": "100", "symbol": "BTC_USDT",
                         "side": 3, "vol": "1", "price": "100",
-                        "timestamp": int(time.time() * 1000) - 1000,
+                        "timestamp": fixed_fill_ms,
                     }]
                 raise AssertionError("unexpected GET path")
             async def close(self):
