@@ -214,8 +214,10 @@ async def audit_fifth(client: Any, fingerprint: str) -> dict[str, Any]:
         out["status"] = "FIFTH_GENERATED_EXIT_OR_FLATNESS_UNVERIFIED"
     elif out["historical_trigger_side"] == "TP":
         out["status"] = (
-            "FIFTH_NATIVE_ATTACHED_EXIT_EXACT_MARKET_FILL_VERIFIED"
-            "_TP_CLASSIFICATION_CONFLICT_NONAUTHORIZING"
+            "FIFTH_NATIVE_ATTACHED_EXIT_TP_LEG_POSSIBLE_NONAUTHORIZING"
+            if not out["no_take_profit_price_observed"]
+            else "FIFTH_NATIVE_ATTACHED_EXIT_EXACT_MARKET_FILL_VERIFIED"
+                 "_TP_CLASSIFICATION_CONFLICT_NONAUTHORIZING"
         )
     elif out["native_sl_trigger_certified"]:
         out["status"] = "FIFTH_NATIVE_SL_TRIGGER_EXACT_FILL_VERIFIED_NONAUTHORIZING"
