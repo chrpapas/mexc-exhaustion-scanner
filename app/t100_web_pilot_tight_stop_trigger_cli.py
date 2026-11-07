@@ -30,8 +30,8 @@ from app.t100_live_current_inventory_cli import (
     read_pilot_keychain_credentials,
 )
 from app.t100_web_pilot_dry_run_cli import (
-    PilotDryRunGetOnlyClient, check as preflight,
-    decimal, one_contract_metadata,
+    PilotDryRunGetOnlyClient, PilotDryRunHalted,
+    check as preflight, decimal, one_contract_metadata,
 )
 from app.t100_web_pilot_one_shot_cli import (
     OneShotProcessLock, _allow_real_mode_env,
@@ -125,6 +125,9 @@ def _load(fingerprint: str) -> dict[str, Any]:
     if JOURNAL.stat().st_mode & 0o077:
         raise TriggerPilotHalted("UNSAFE_JOURNAL_PERMISSIONS")
     body = json.loads(JOURNAL.read_text(encoding="utf-8"))
+    # Legacy 15bp records must remain READABLE for read-only reconciliation
+    # and exact-owned manual close. --send NEVER reuses any existing journal;
+    # a prior POST is fenced regardless of whether its outcome is known.
     if (
         type(body) is not dict
         or body.get("version") != 1
@@ -135,7 +138,7 @@ def _load(fingerprint: str) -> dict[str, Any]:
         or not OID_RE.fullmatch(body["external_oid"])
         or body.get("contracts") != 1
         or body.get("open_type") != 1
-        or body.get("stop_bps") != "5"
+        or body.get("stop_bps") not in ("5", "15")
         or positive(body.get("stop_price")) is None
         or type(body.get("entry_post_attempted")) is not bool
         or type(body.get("close_post_attempted")) is not bool
@@ -471,6 +474,8 @@ async def _status(client: Any, fingerprint: str) -> dict[str, Any]:
         "credential_scope": "T100_WEB_PILOT_SUBACCOUNT",
         "entry_filled": True,
         "journal_entry_acknowledged": body["entry_ack_verified"],
+        "journal_original_stop_bps": body["stop_bps"],
+        "journal_is_legacy_15bp": body["stop_bps"] == "15",
         "journal_manual_close_attempted": body["close_post_attempted"],
         "position_count": len(safe_positions),
         "stop_count": len(safe_stops),
@@ -712,7 +717,10 @@ def main() -> None:
         with OneShotProcessLock():
             asyncio.run(_main(action))
     except BaseException as exc:
-        reason = str(exc) if isinstance(exc, TriggerPilotHalted) else type(exc).__name__
+        reason = (
+            str(exc) if isinstance(exc, (TriggerPilotHalted, PilotDryRunHalted))
+            else type(exc).__name__
+        )
         print("PILOT_HALTED=" + reason)
         if action in ("send", "close"):
             print("DO_NOT_REPEAT_UNCERTAIN_POST_CHECK_MEXC_UI=true")
