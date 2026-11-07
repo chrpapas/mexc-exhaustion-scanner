@@ -20,6 +20,7 @@ import re
 import secrets
 import sys
 import tempfile
+import time
 from decimal import Decimal, ROUND_CEILING
 from pathlib import Path
 from typing import Any
@@ -174,6 +175,28 @@ async def _preview(client: Any) -> dict[str, Any]:
     tick = decimal(one_contract_metadata(meta).get("priceUnit"))
     last = decimal(result.get("reference_last_price"))
     notional = decimal(result.get("indicative_notional_usdt"))
+    ticker = await PilotDryRunGetOnlyClient(client)._public_get(
+        "/api/v1/contract/ticker", {"symbol": SYMBOL},
+    )
+    if type(ticker) is list:
+        matches = [row for row in ticker
+                   if type(row) is dict and row.get("symbol") == SYMBOL]
+        if len(matches) != 1:
+            raise TriggerPilotHalted("SECOND_MARKET_QUOTE_NOT_UNIQUE")
+        ticker = matches[0]
+    if type(ticker) is not dict or ticker.get("symbol") != SYMBOL:
+        raise TriggerPilotHalted("SECOND_MARKET_QUOTE_INVALID")
+    fresh_last = decimal(ticker.get("lastPrice"))
+    fresh_ask = decimal(ticker.get("ask1"))
+    observed_ms = ticker.get("timestamp")
+    now_ms = int(time.time() * 1000)
+    if (
+        type(observed_ms) is not int
+        or observed_ms > now_ms + 5000
+        or now_ms - observed_ms > 5000
+        or abs(fresh_last / last - D(1)) > D("0.001")
+    ):
+        raise TriggerPilotHalted("SECOND_MARKET_QUOTE_STALE_OR_DRIFTED")
     if notional > MAX_NOTIONAL:
         raise TriggerPilotHalted("NOTIONAL_OVER_CAP")
     stop = (last * (D(1) + STOP_BPS / D(10000)) / tick).to_integral_value(
@@ -185,7 +208,8 @@ async def _preview(client: Any) -> dict[str, Any]:
         stop <= last
         or (stop / last - D(1)) * D(10000) > MAX_BPS
         or stop <= last + tick * 2
-        or stop * D("0.9992") <= last
+        or stop <= fresh_ask + last * D("0.0005")
+        or stop * D("0.9992") <= fresh_last
     ):
         raise TriggerPilotHalted("TIGHT_STOP_TICK_OR_MARKET_INVALID")
     return {
