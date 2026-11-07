@@ -310,6 +310,8 @@ async def test_one_real_amendment_post_fenced_before_send_and_get_confirmed(
     assert result["status"] == "NATIVE_STOP_AMENDMENT_READBACK_VERIFIED_RECONCILE_ONLY"
     assert result["amendment_same_stop_order_verified"]
     assert result["amendment_full_volume_market_protection_observed"]
+    assert result["single_native_stop_edit_two_readbacks_verified"] is True
+    assert result["exchange_continuous_protection_certified"] is False
     assert result["native_amendment_live_certified"] is False
     assert m._check_journal(FP)["amend_ack_verified"] is True
     assert client._private_post.await_count == 1
