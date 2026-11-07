@@ -155,6 +155,85 @@ def test_original_fixture_reports_explicit_verified_fields():
     assert result["stop_loss_reverse_status"] == "NO_REVERSE"
 
 
+def test_documented_auto_cancel_code_maps_without_claiming_stop_executed():
+    s = stop()
+    s["errorCode"] = 8912
+    s["stopLossVol"] = 1
+    result = assess(finished_rows=[s])
+    assert result["error_code_status"] == "NONZERO_REPORTED"
+    assert result["error_code_value"] == 8912
+    assert result["error_code_documented_meaning"] == (
+        "AUTOMATICALLY_CANCELED_AS_POSITION_CLOSED"
+    )
+    assert result["historical_stop_loss_quantity_check"] == (
+        "SL_QUANTITY_MATCHES_ENTRY_FILL_HISTORICALLY"
+    )
+    assert result["historical_stop_loss_volume_equal_one_contract"]
+    assert not result["live_stop_full_coverage_certified"]
+    assert not result["native_stop_execution_certified"]
+    assert not result["live_authorization"]
+
+
+@pytest.mark.parametrize("quantity,expected", [
+    (None, "SL_QUANTITY_MISSING_OR_NONPOSITIVE"),
+    ("0", "SL_QUANTITY_MISSING_OR_NONPOSITIVE"),
+    ("0.5", "SL_QUANTITY_BELOW_ENTRY_FILL"),
+    ("1", "SL_QUANTITY_MATCHES_ENTRY_FILL_HISTORICALLY"),
+    ("2", "SL_QUANTITY_EXCEEDS_ENTRY_FILL"),
+    ("not-a-number", "SL_QUANTITY_MISSING_OR_NONPOSITIVE"),
+])
+def test_separate_stop_loss_quantity_uses_stop_loss_vol_not_vol(
+    quantity, expected,
+):
+    s = stop()
+    s["vol"] = 1
+    s["stopLossVol"] = quantity
+    result = assess(finished_rows=[s])
+    assert result["historical_stop_loss_quantity_check"] == expected
+    assert not result["live_stop_full_coverage_certified"]
+
+
+def test_fully_attached_stop_history_may_omit_market_stop_type():
+    s = stop()
+    s.pop("stopLossType")
+    s["stopLossVol"] = 1
+    s["errorCode"] = 8912
+    result = assess(finished_rows=[s])
+    assert result["stop_loss_type_status"] == "NOT_REPORTED"
+    assert result["historical_stop_loss_quantity_check"] == (
+        "SL_QUANTITY_MATCHES_ENTRY_FILL_HISTORICALLY"
+    )
+    assert not result["market_stop_type_observed"]
+    assert not result["native_stop_execution_certified"]
+
+
+def test_unknown_nonzero_error_does_not_infer_normal_auto_cancel():
+    s = stop()
+    s["errorCode"] = 5931
+    result = assess(finished_rows=[s])
+    assert result["error_code_value"] == 5931
+    assert result["error_code_documented_meaning"] == "UNKNOWN_OR_NOT_REPORTED"
+    assert not result["no_error_reported"]
+
+
+def test_untrusted_boolean_error_code_rejected_without_code_number():
+    s = stop()
+    s["errorCode"] = False
+    result = assess(finished_rows=[s])
+    assert result["error_code_status"] == "UNEXPECTED_TYPE"
+    assert result["error_code_value"] is None
+    assert result["error_code_documented_meaning"] == "UNKNOWN_OR_NOT_REPORTED"
+
+
+def test_take_profit_presence_is_diagnostic_not_proof_of_execution():
+    s = stop()
+    s["takeProfitPrice"] = "75000"
+    result = assess(finished_rows=[s])
+    assert result["take_profit_price_status"] == "POSITIVE_REPORTED"
+    assert result["trigger_side"] == "NOT_TRIGGERED"
+    assert not result["native_stop_triggered_verified"]
+
+
 def test_invalidated_untriggered_also_only_terminal_observation():
     s = stop()
     s["state"] = 4
