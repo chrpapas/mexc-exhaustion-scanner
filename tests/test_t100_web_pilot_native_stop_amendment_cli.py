@@ -296,6 +296,93 @@ async def test_missing_market_and_reverse_fields_exposed_by_get_only_diagnostics
 
 
 @pytest.mark.asyncio
+async def test_second_official_get_market_type_presence_without_amend_bypass(
+    journal_scope,
+):
+    client = fake_client()
+    row = stop()
+    row.pop("stopLossType")
+    second_row = stop()
+    client._private_get.side_effect = [
+        entry(), [position()], [row], counts(1), [second_row],
+    ]
+    result = await m.inspect(client, FP)
+    assert result["status"] == "ACTIVE_STOP_OR_POSITION_NOT_STRICT_FULL_MARKET"
+    assert result["failed_strict_fields"] == ["stop_is_market_type"]
+    assert result["second_official_stop_get_checked"] is True
+    assert result["second_official_stop_get_exact_identity"] is True
+    assert result["second_official_stop_loss_type"] == "MARKET"
+    assert result["second_get_can_reconcile_missing_market_type"] is True
+    assert result["native_amendment_live_certified"] is False
+    assert result["amendment_full_volume_market_protection_observed"] is False
+    assert client._private_get.await_args.args[0] == (
+        "/api/v1/private/stoporder/list/orders"
+    )
+    assert client._private_get.await_args.args[1] == {
+        "symbol": "BTC_USDT", "is_finished": 0,
+        "page_num": 1, "page_size": 100,
+    }
+    client._private_post.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_second_official_get_missing_type_still_blocks_amend(
+    journal_scope,
+):
+    client = fake_client()
+    row = stop()
+    row.pop("stopLossType")
+    other = stop()
+    other.pop("stopLossType")
+    client._private_get.side_effect = [
+        entry(), [position()], [row], counts(1), [other],
+    ]
+    result = await m.inspect(client, FP)
+    assert result["failed_strict_fields"] == ["stop_is_market_type"]
+    assert result["second_official_stop_loss_type"] == "FIELD_NOT_REPORTED"
+    assert result["second_get_can_reconcile_missing_market_type"] is False
+    assert result["status"] == "ACTIVE_STOP_OR_POSITION_NOT_STRICT_FULL_MARKET"
+    client._private_post.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_second_official_get_wrong_position_cannot_certify_market(
+    journal_scope,
+):
+    client = fake_client()
+    row = stop()
+    row.pop("stopLossType")
+    other = stop()
+    other["positionId"] = "456789"
+    client._private_get.side_effect = [
+        entry(), [position()], [row], counts(1), [other],
+    ]
+    result = await m.inspect(client, FP)
+    assert result["second_official_stop_loss_type"] == "MARKET"
+    assert result["second_official_stop_get_exact_identity"] is False
+    assert result["second_get_can_reconcile_missing_market_type"] is False
+    client._private_post.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_second_official_get_limit_stop_is_rejected(
+    journal_scope,
+):
+    client = fake_client()
+    row = stop()
+    row.pop("stopLossType")
+    other = stop()
+    other["stopLossType"] = 1
+    client._private_get.side_effect = [
+        entry(), [position()], [row], counts(1), [other],
+    ]
+    result = await m.inspect(client, FP)
+    assert result["second_official_stop_loss_type"] == "LIMIT"
+    assert result["second_get_can_reconcile_missing_market_type"] is False
+    client._private_post.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_mismatched_stop_entry_identity_is_reported_never_amended(
     journal_scope,
 ):
