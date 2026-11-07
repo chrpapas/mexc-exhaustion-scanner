@@ -262,6 +262,9 @@ async def test_second_journal_blocks_reentry_without_post(scoped):
 async def test_second_status_only_reads_second_journal(scoped):
     root, old, new = scoped
     client = fake_client()
+    async def status_only(_client, _fingerprint):
+        assert pilot.JOURNAL == new
+        return {"status": "GET_ONLY"}
     with (
         patch.object(second.sys, "platform", "darwin"),
         patch.object(second, "_allow_real_mode_env"),
@@ -269,11 +272,10 @@ async def test_second_status_only_reads_second_journal(scoped):
                      return_value=("mock-key", "mock-secret")),
         patch.object(second, "MexcTradeClient", return_value=client),
         patch.object(pilot, "_status",
-                     new=AsyncMock(return_value={"status": "GET_ONLY"})) as status,
+                     new=AsyncMock(side_effect=status_only)) as status,
     ):
         result = await second.run("status")
         assert result["status"] == "GET_ONLY"
-        assert pilot.JOURNAL == new
     status.assert_awaited_once()
     assert pilot.JOURNAL == old
     client._private_post.assert_not_awaited()
@@ -285,16 +287,18 @@ async def test_second_close_does_not_require_previous_recheck_if_second_is_open(
 ):
     root, old, new = scoped
     client = fake_client()
+    async def close_only(_client, _fingerprint):
+        assert pilot.JOURNAL == new
     with (
         patch.object(second.sys, "platform", "darwin"),
         patch.object(second, "_allow_real_mode_env"),
         patch.object(second, "read_pilot_keychain_credentials",
                      return_value=("mock-key", "mock-secret")),
         patch.object(second, "MexcTradeClient", return_value=client),
-        patch.object(pilot, "_close", new=AsyncMock()) as close_attempt,
+        patch.object(pilot, "_close",
+                     new=AsyncMock(side_effect=close_only)) as close_attempt,
     ):
         await second.run("close")
-        assert pilot.JOURNAL == new
     close_attempt.assert_awaited_once()
     assert pilot.JOURNAL == old
     client._private_post.assert_not_awaited()
