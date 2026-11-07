@@ -97,6 +97,64 @@ def test_exact_embedded_stop_terminal_canceled_not_triggered():
     assert not r["live_authorization"]
 
 
+@pytest.mark.parametrize("field,expected_key,expected_status", [
+    ("stopLossType", "stop_loss_type_status", "NOT_REPORTED"),
+    ("volType", "volume_type_status", "NOT_REPORTED"),
+    ("profitLossVolType", "profit_loss_volume_mode_status", "NOT_REPORTED"),
+    ("errorCode", "error_code_status", "NOT_REPORTED"),
+])
+def test_missing_historical_fields_are_unknown_not_negative_evidence(
+    field, expected_key, expected_status,
+):
+    s = stop()
+    del s[field]
+    result = assess(finished_rows=[s])
+    assert result["attached_entry_stop_terminal_observed"]
+    assert result[expected_key] == expected_status
+    assert not result["native_stop_execution_certified"]
+    assert not result["live_authorization"]
+
+
+def test_explicit_limit_and_partial_metadata_distinguished_from_absent():
+    s = stop()
+    s["stopLossType"] = 1
+    s["volType"] = 1
+    s["profitLossVolType"] = "SEPARATE"
+    s["errorCode"] = 1234
+    result = assess(finished_rows=[s])
+    assert result["status"] == "ORDER_ATTACHED_STOP_TERMINAL_UNTRIGGERED_OBSERVED"
+    assert result["stop_loss_type_status"] == "LIMIT"
+    assert result["volume_type_status"] == "PARTIAL"
+    assert result["profit_loss_volume_mode_status"] == "SEPARATE"
+    assert result["error_code_status"] == "NONZERO_REPORTED"
+    assert not result["market_stop_type_observed"]
+    assert not result["full_position_mode_observed"]
+    assert not result["no_error_reported"]
+
+
+@pytest.mark.parametrize("field,status_key", [
+    ("stopLossType", "stop_loss_type_status"),
+    ("volType", "volume_type_status"),
+    ("errorCode", "error_code_status"),
+    ("stopLossReverse", "stop_loss_reverse_status"),
+])
+def test_boolean_venue_numeric_fields_never_validate_as_zero(field, status_key):
+    s = stop()
+    s[field] = False
+    result = assess(finished_rows=[s])
+    assert result[status_key] == "UNEXPECTED_TYPE"
+    assert not result["native_stop_execution_certified"]
+
+
+def test_original_fixture_reports_explicit_verified_fields():
+    result = assess()
+    assert result["stop_loss_type_status"] == "MARKET"
+    assert result["volume_type_status"] == "ENTIRE_POSITION"
+    assert result["profit_loss_volume_mode_status"] == "SAME"
+    assert result["error_code_status"] == "ZERO_NORMAL"
+    assert result["stop_loss_reverse_status"] == "NO_REVERSE"
+
+
 def test_invalidated_untriggered_also_only_terminal_observation():
     s = stop()
     s["state"] = 4
