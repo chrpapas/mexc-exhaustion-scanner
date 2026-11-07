@@ -2,7 +2,7 @@
 
 A NEW minimum-size short is needed because the earlier pilot is flat.
 --check is GET only. --send explicitly confirms ONE exchange POST with a
-15-basis-point embedded short stop (0.15% above latest-price reference).
+5-basis-point embedded short stop (0.05% above latest-price reference).
 --status / --watch are GET only. --close explicitly confirms one close POST
 for the exact owned position, if still open. Neither POST ever retries.
 The native stop MAY FAIL TO ATTACH, TRIGGER OR FILL. An order ACK proves
@@ -42,8 +42,8 @@ D = Decimal
 BASE_DIR = Path.home() / "Library" / "Application Support" / "T100WebPilot"
 JOURNAL = BASE_DIR / "tight_stop_trigger_001.json"
 SYMBOL = "BTC_USDT"
-STOP_BPS = D(15)
-MAX_BPS = D(17)
+STOP_BPS = D(5)
+MAX_BPS = D(7)
 MAX_NOTIONAL = D("12.50")
 MAX_PAGES = 3
 MAX_WATCH_SECONDS = 240
@@ -135,7 +135,7 @@ def _load(fingerprint: str) -> dict[str, Any]:
         or not OID_RE.fullmatch(body["external_oid"])
         or body.get("contracts") != 1
         or body.get("open_type") != 1
-        or body.get("stop_bps") != "15"
+        or body.get("stop_bps") != "5"
         or positive(body.get("stop_price")) is None
         or type(body.get("entry_post_attempted")) is not bool
         or type(body.get("close_post_attempted")) is not bool
@@ -203,13 +203,13 @@ async def _preview(client: Any) -> dict[str, Any]:
         rounding=ROUND_CEILING,
     ) * tick
     # Rounding must be sane and the short protective stop must not have
-    # been reached already. A 15bps stop has no guaranteed loss ceiling.
+    # been reached already. A 5bps stop has no guaranteed loss ceiling and may trigger immediately.
     if (
         stop <= last
         or (stop / last - D(1)) * D(10000) > MAX_BPS
         or stop <= last + tick * 2
-        or stop <= fresh_ask + last * D("0.0005")
-        or stop * D("0.9992") <= fresh_last
+        or stop <= fresh_ask + last * D("0.0001")
+        or stop * D("0.9998") <= fresh_last
     ):
         raise TriggerPilotHalted("TIGHT_STOP_TICK_OR_MARKET_INVALID")
     return {
