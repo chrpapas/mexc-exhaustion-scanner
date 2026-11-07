@@ -409,9 +409,24 @@ async def amend_once(client: Any, fingerprint: str) -> dict[str, Any]:
     except BaseException:
         print("AMENDMENT_POST_OUTCOME_UNKNOWN_DO_NOT_RETRY=true")
         raise
-    report = await inspect(client, fingerprint)
-    print("AMENDMENT_READBACK_GET_ONLY=" + json.dumps(report, sort_keys=True))
-    return report
+    first = await inspect(client, fingerprint)
+    second = await inspect(client, fingerprint)
+    second["single_native_stop_edit_two_readbacks_verified"] = (
+        journal.get("amend_ack_verified") is True
+        and first.get("status") ==
+            "NATIVE_STOP_AMENDMENT_READBACK_VERIFIED_RECONCILE_ONLY"
+        and second.get("status") ==
+            "NATIVE_STOP_AMENDMENT_READBACK_VERIFIED_RECONCILE_ONLY"
+        and first.get("amendment_full_volume_market_protection_observed") is True
+        and second.get("amendment_full_volume_market_protection_observed") is True
+        and first.get("amendment_same_stop_order_verified") is True
+        and second.get("amendment_same_stop_order_verified") is True
+    )
+    # Even two authenticated snapshots do not prove continuous atomicity
+    # during the POST or readiness for unattended production execution.
+    second["exchange_continuous_protection_certified"] = False
+    print("AMENDMENT_READBACK_GET_ONLY=" + json.dumps(second, sort_keys=True))
+    return second
 
 
 async def execute(action: str) -> dict[str, Any] | None:
