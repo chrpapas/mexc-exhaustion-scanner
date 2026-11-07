@@ -262,6 +262,99 @@ def _active_stop_redacted_checks(
     }
 
 
+async def _unfinished_stop_list_market_type_probe(
+    client: Any, *,
+    exact_stop: dict[str, Any],
+    position_id: str,
+    order_id: str,
+) -> dict[str, Any]:
+    """Independent signed GET route, fail closed if stopLossType absent.
+
+    No POST; does not treat the UI label or `takeProfitType` as native
+    stop-loss market execution proof. The unfinished TP/SL list uses the
+    published historical-list endpoint rather than current open_orders.
+    Only allowlisted statuses/booleans leave the account.
+    """
+    out: dict[str, Any] = {
+        "second_official_stop_get_checked": False,
+        "second_official_stop_get_exact_identity": False,
+        "second_official_stop_loss_type": "UNVERIFIED",
+        "second_official_stop_loss_is_market": False,
+        "second_get_can_reconcile_missing_market_type": False,
+    }
+    try:
+        response = await client._private_get(
+            "/api/v1/private/stoporder/list/orders", {
+                "symbol": SYMBOL,
+                "is_finished": 0,
+                "page_num": 1,
+                "page_size": 100,
+            },
+        )
+    except Exception:
+        out["second_official_stop_get_status"] = "GET_UNAVAILABLE"
+        return out
+    if (
+        type(response) is not list or len(response) > 100
+        or any(type(row) is not dict for row in response)
+    ):
+        out["second_official_stop_get_status"] = "SHAPE_NOT_VERIFIED"
+        return out
+    out["second_official_stop_get_checked"] = True
+    stop_id = pilot.id_string(exact_stop.get("id"))
+    matches = [
+        row for row in response
+        if pilot.id_string(row.get("id")) == stop_id
+    ]
+    if stop_id is None or len(matches) != 1:
+        out["second_official_stop_get_status"] = "EXACT_STOP_NOT_UNIQUE_ON_PAGE"
+        return out
+    row = matches[0]
+    original_price = pilot.positive(exact_stop.get("stopLossPrice"))
+    exact_identity = (
+        pilot.id_string(row.get("positionId")) == position_id
+        and pilot.id_string(row.get("orderId")) == order_id
+        and row.get("symbol") == SYMBOL
+        and type(row.get("positionType")) is int
+        and row["positionType"] == 2
+        and type(row.get("state")) is int
+        and row["state"] == 1
+        and type(row.get("isFinished")) is int
+        and row["isFinished"] == 0
+        and type(row.get("triggerSide")) is int
+        and row["triggerSide"] == 0
+        and type(row.get("errorCode")) is int
+        and row["errorCode"] == 0
+        and type(row.get("lossTrend")) is int
+        and row["lossTrend"] == 1
+        and type(row.get("stopLossReverse")) is int
+        and row["stopLossReverse"] == 2
+        and row.get("profitLossVolType") == "SEPARATE"
+        and pilot.positive(row.get("stopLossVol")) == D(1)
+        and original_price is not None
+        and pilot.positive(row.get("stopLossPrice")) == original_price
+    )
+    out["second_official_stop_get_exact_identity"] = exact_identity
+    if type(row.get("stopLossType")) is int:
+        out["second_official_stop_loss_type"] = (
+            "MARKET" if row["stopLossType"] == 0
+            else "LIMIT" if row["stopLossType"] == 1
+            else "UNRECOGNIZED"
+        )
+    else:
+        out["second_official_stop_loss_type"] = "FIELD_NOT_REPORTED"
+    out["second_official_stop_loss_is_market"] = (
+        type(row.get("stopLossType")) is int and row["stopLossType"] == 0
+    )
+    out["second_get_can_reconcile_missing_market_type"] = (
+        exact_identity and out["second_official_stop_loss_is_market"]
+    )
+    out["second_official_stop_get_status"] = (
+        "EXACT_GET_MATCH" if exact_identity else "IDENTITY_OR_COVERAGE_MISMATCH"
+    )
+    return out
+
+
 async def inspect(client: Any, fingerprint: str) -> dict[str, Any]:
     """Observe original/updated active native stop, always without POST."""
     journal = _check_journal(fingerprint)
@@ -348,6 +441,11 @@ async def inspect(client: Any, fingerprint: str) -> dict[str, Any]:
         )
         report["reason_detail_GET_only"] = True
         report["signed_current_stop_row_full_market_semantics_certified"] = False
+        if checks["stop_is_market_type"] is False:
+            report.update(await _unfinished_stop_list_market_type_probe(
+                client,
+                exact_stop=stop, position_id=position_id, order_id=order_id,
+            ))
         return report
     current_stop = pilot.positive(stop.get("stopLossPrice"))
     original_stop = D(journal["stop_price"])
