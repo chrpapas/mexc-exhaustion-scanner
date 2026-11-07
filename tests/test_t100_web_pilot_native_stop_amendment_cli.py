@@ -269,6 +269,51 @@ async def test_unprotected_or_changed_current_stop_blocks_amend(
 
 
 @pytest.mark.asyncio
+async def test_missing_market_and_reverse_fields_exposed_by_get_only_diagnostics(
+    journal_scope,
+):
+    client = fake_client()
+    row = stop()
+    row.pop("stopLossType")
+    row.pop("stopLossReverse")
+    client._private_get.side_effect = [
+        entry(), [position()], [row], counts(1),
+    ]
+    result = await m.inspect(client, FP)
+    assert result["status"] == "ACTIVE_STOP_OR_POSITION_NOT_STRICT_FULL_MARKET"
+    assert result["failed_strict_fields"] == [
+        "stop_is_market_type", "stop_no_reverse",
+    ]
+    assert result["unreported_native_fields"] == [
+        "stop_is_market_type", "stop_no_reverse",
+    ]
+    assert result["reason_detail_GET_only"] is True
+    assert result["signed_current_stop_row_full_market_semantics_certified"] is False
+    assert "98765" not in str(result)
+    assert "56789" not in str(result)
+    assert result["amend_post_attempted"] is False
+    client._private_post.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_mismatched_stop_entry_identity_is_reported_never_amended(
+    journal_scope,
+):
+    client = fake_client()
+    row = stop()
+    row["orderId"] = "123"
+    client._private_get.side_effect = [
+        entry(), [position()], [row], counts(1),
+    ]
+    result = await m.inspect(client, FP)
+    assert result["status"] == "ACTIVE_STOP_OR_POSITION_NOT_STRICT_FULL_MARKET"
+    assert result["failed_strict_fields"] == ["stop_order_matches_entry"]
+    assert result["unreported_native_fields"] == []
+    assert not result["amendment_full_volume_market_protection_observed"]
+    client._private_post.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_one_real_amendment_post_fenced_before_send_and_get_confirmed(
     journal_scope,
 ):
