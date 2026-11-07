@@ -163,6 +163,24 @@ async def inspect_real_third_finished_stop(
             and safe_error_code != 0 else "NOT_REPORTED_OR_OUT_OF_RANGE"
         ),
         "finished_stop_error_code_value": safe_error_code,
+        "finished_stop_error_code_exchange_meaning": (
+            "AUTOMATICALLY_CANCELED_AS_POSITION_CLOSED"
+            if safe_error_code == 8912
+            else "MANUALLY_CANCELED_BY_USER"
+            if safe_error_code == 8913
+            else "NOT_MAPPED_OR_NOT_REPORTED"
+        ),
+        "finished_stop_auto_cancel_after_position_close_exchange_reported": (
+            state == 2 and type(state) is int
+            and type(is_finished) is int and is_finished == 1
+            and type(trigger) is int and trigger == 0
+            and safe_error_code == 8912
+            and close.get("status") ==
+            "THIRD_ONE_CONTRACT_REAL_CLOSE_AND_FLAT_VERIFIED_NONAUTHORIZING"
+            and close.get("account_bookended_flat_verified") is True
+            and close.get("exact_close_order_filled") is True
+            and close.get("exact_close_trade_deals_filled") is True
+        ),
         "finished_stop_update_vs_actual_close_fills": stop_vs_close,
         "finished_stop_terminal_cancellation_observed": (
             state == 2 and type(state) is int
