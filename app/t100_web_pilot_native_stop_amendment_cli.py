@@ -181,6 +181,87 @@ def candidate_amended_stop(*, reference: D, tick: D) -> D:
             ).to_integral_value(rounding=ROUND_CEILING) * tick
 
 
+def _active_stop_redacted_checks(
+    *,
+    position: dict[str, Any],
+    stop: dict[str, Any],
+    position_id: str,
+    order_id: str,
+) -> dict[str, bool]:
+    """Redacted, strict field-by-field GET witness; no raw API values.
+
+    These checks are the exact amendment requirements, NOT proof that an
+    incomplete API row still provides safe protective market execution.
+    """
+    return {
+        "position_id_matches_entry": (
+            pilot.id_string(position.get("positionId")) == position_id
+        ),
+        "position_symbol_btc": position.get("symbol") == SYMBOL,
+        "position_side_short": (
+            type(position.get("positionType")) is int
+            and position["positionType"] == 2
+        ),
+        "position_margin_isolated": (
+            type(position.get("openType")) is int
+            and position["openType"] == 1
+        ),
+        "position_hold_volume_one": (
+            pilot.positive(position.get("holdVol")) == D(1)
+        ),
+        "position_leverage_one": (
+            type(position.get("leverage")) in (int, float, str)
+            and pilot.positive(position.get("leverage")) == D(1)
+        ),
+        "stop_id_present": pilot.id_string(stop.get("id")) is not None,
+        "stop_position_matches_entry": (
+            pilot.id_string(stop.get("positionId")) == position_id
+        ),
+        "stop_order_matches_entry": (
+            pilot.id_string(stop.get("orderId")) == order_id
+        ),
+        "stop_symbol_btc": stop.get("symbol") == SYMBOL,
+        "stop_side_short": (
+            type(stop.get("positionType")) is int
+            and stop["positionType"] == 2
+        ),
+        "stop_state_active": (
+            type(stop.get("state")) is int
+            and stop["state"] == 1
+        ),
+        "stop_not_finished": (
+            type(stop.get("isFinished")) is int
+            and stop["isFinished"] == 0
+        ),
+        "stop_not_triggered": (
+            type(stop.get("triggerSide")) is int
+            and stop["triggerSide"] == 0
+        ),
+        "stop_uses_latest_price": (
+            type(stop.get("lossTrend")) is int
+            and stop["lossTrend"] == 1
+        ),
+        "stop_no_reverse": (
+            type(stop.get("stopLossReverse")) is int
+            and stop["stopLossReverse"] == 2
+        ),
+        "stop_is_market_type": (
+            type(stop.get("stopLossType")) is int
+            and stop["stopLossType"] == 0
+        ),
+        "stop_error_code_zero": (
+            type(stop.get("errorCode")) is int
+            and stop["errorCode"] == 0
+        ),
+        "stop_quantity_mode_separate": (
+            stop.get("profitLossVolType") == "SEPARATE"
+        ),
+        "stop_loss_quantity_full_one": (
+            pilot.positive(stop.get("stopLossVol")) == D(1)
+        ),
+    }
+
+
 async def inspect(client: Any, fingerprint: str) -> dict[str, Any]:
     """Observe original/updated active native stop, always without POST."""
     journal = _check_journal(fingerprint)
@@ -245,40 +326,28 @@ async def inspect(client: Any, fingerprint: str) -> dict[str, Any]:
         report["status"] = "POSITION_OR_STOPS_NOT_UNIQUE_MANAGE_IN_MEXC"
         return report
     position, stop = positions[0], stops[0]
-    if (
-        pilot.id_string(position.get("positionId")) != position_id
-        or position.get("symbol") != SYMBOL
-        or type(position.get("positionType")) is not int
-        or position["positionType"] != 2
-        or type(position.get("openType")) is not int
-        or position["openType"] != 1
-        or pilot.positive(position.get("holdVol")) != D(1)
-        or type(position.get("leverage")) not in (int, float, str)
-        or pilot.positive(position.get("leverage")) != D(1)
-        or pilot.id_string(stop.get("id")) is None
-        or pilot.id_string(stop.get("positionId")) != position_id
-        or pilot.id_string(stop.get("orderId")) != order_id
-        or stop.get("symbol") != SYMBOL
-        or type(stop.get("positionType")) is not int
-        or stop["positionType"] != 2
-        or type(stop.get("state")) is not int
-        or stop["state"] != 1
-        or type(stop.get("isFinished")) is not int
-        or stop["isFinished"] != 0
-        or type(stop.get("triggerSide")) is not int
-        or stop["triggerSide"] != 0
-        or type(stop.get("lossTrend")) is not int
-        or stop["lossTrend"] != 1
-        or type(stop.get("stopLossReverse")) is not int
-        or stop["stopLossReverse"] != 2
-        or type(stop.get("stopLossType")) is not int
-        or stop["stopLossType"] != 0
-        or type(stop.get("errorCode")) is not int
-        or stop["errorCode"] != 0
-        or stop.get("profitLossVolType") != "SEPARATE"
-        or pilot.positive(stop.get("stopLossVol")) != D(1)
-    ):
+    checks = _active_stop_redacted_checks(
+        position=position, stop=stop,
+        position_id=position_id, order_id=order_id,
+    )
+    if not all(checks.values()):
         report["status"] = "ACTIVE_STOP_OR_POSITION_NOT_STRICT_FULL_MARKET"
+        report["failed_strict_fields"] = sorted(
+            name for name, passed in checks.items() if not passed
+        )
+        report["unreported_native_fields"] = sorted(
+            name for name, field in (
+                ("stop_is_market_type", "stopLossType"),
+                ("stop_no_reverse", "stopLossReverse"),
+                ("stop_error_code_zero", "errorCode"),
+                ("stop_loss_quantity_full_one", "stopLossVol"),
+                ("stop_quantity_mode_separate", "profitLossVolType"),
+                ("stop_not_triggered", "triggerSide"),
+            )
+            if stop.get(field) is None
+        )
+        report["reason_detail_GET_only"] = True
+        report["signed_current_stop_row_full_market_semantics_certified"] = False
         return report
     current_stop = pilot.positive(stop.get("stopLossPrice"))
     original_stop = D(journal["stop_price"])
