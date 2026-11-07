@@ -708,6 +708,7 @@ async def _status(client: Any, fingerprint: str) -> dict[str, Any]:
     generated_id = id_string(sl.get("placeOrderId"))
     if (
         sl.get("state") == 3
+        and sl.get("triggerSide") == 1
         and sl.get("isFinished") == 1
         and generated_id is not None
         and positive(sl.get("stopLossPrice")) == D(body["stop_price"])
