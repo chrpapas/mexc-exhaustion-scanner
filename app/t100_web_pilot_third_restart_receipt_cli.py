@@ -22,9 +22,7 @@ import hashlib
 import hmac
 import json
 import os
-import stat
 import sys
-from pathlib import Path
 from typing import Any
 
 from app import t100_web_pilot_third_close_audit_cli as closed
@@ -123,7 +121,9 @@ def _write_receipt_once(record: dict[str, Any]) -> None:
     native.THIRD_JOURNAL.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     if (
         native.THIRD_JOURNAL.parent.is_symlink()
+        or native.THIRD_JOURNAL.parent.stat().st_mode & 0o077
         or path.parent.resolve() != native.THIRD_JOURNAL.parent.resolve()
+        or path == native.THIRD_JOURNAL
         or path.is_symlink()
     ):
         raise pilot.TriggerPilotHalted("CLOSED_RECEIPT_PATH_UNSAFE")
