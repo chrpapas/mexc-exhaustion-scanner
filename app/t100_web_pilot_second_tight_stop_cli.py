@@ -33,7 +33,7 @@ from app.mexc_trade import MexcTradeClient
 PREVIOUS_JOURNAL = pilot.JOURNAL
 SECOND_JOURNAL = pilot.BASE_DIR / "tight_stop_trigger_002.json"
 EXPECTED_STOP_BPS = "5"
-OID = re.compile(r"TPWEB[a-f0-9]{24}\\Z")
+OID = re.compile(r"TPWEB[a-f0-9]{24}")
 
 
 def _valid_oid(raw: Any) -> bool:
