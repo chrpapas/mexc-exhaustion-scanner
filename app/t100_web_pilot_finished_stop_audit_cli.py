@@ -51,6 +51,42 @@ def _positive(value: Any) -> Decimal | None:
     return amount if amount.is_finite() and amount > 0 else None
 
 
+def _enum_status(raw: Any, names: dict[int, str]) -> str:
+    """Classify a documented numeric venue field without leaking raw rows.
+
+    Missing is NOT the same as a contradictory value; booleans and text do
+    not silently compare equal to integer 0 in a Python venue response.
+    """
+    if raw is None:
+        return "NOT_REPORTED"
+    if type(raw) is not int:
+        return "UNEXPECTED_TYPE"
+    return names.get(raw, "UNRECOGNIZED_VALUE")
+
+
+def _error_code_status(raw: Any) -> str:
+    if raw is None:
+        return "NOT_REPORTED"
+    if type(raw) is not int:
+        return "UNEXPECTED_TYPE"
+    if raw == 0:
+        return "ZERO_NORMAL"
+    if raw > 0:
+        return "NONZERO_REPORTED"
+    return "NEGATIVE_INVALID"
+
+
+def _quantity_mode_status(raw: Any) -> str:
+    if raw is None:
+        return "NOT_REPORTED"
+    if type(raw) is not str:
+        return "UNEXPECTED_TYPE"
+    return {
+        "SAME": "SAME",
+        "SEPARATE": "SEPARATE",
+    }.get(raw, "UNRECOGNIZED_VALUE")
+
+
 def _is_flat(book: Any) -> bool:
     return (
         type(book) is dict
@@ -197,13 +233,37 @@ def assess_closed_pilot_finished_stop(
     base["trigger_side"] = {
         0: "NOT_TRIGGERED", 1: "TAKE_PROFIT", 2: "STOP_LOSS",
     }[row["triggerSide"]]
-    base["market_stop_type_observed"] = row.get("stopLossType") == 0
-    base["no_reverse_observed"] = row.get("stopLossReverse") == 2
-    base["full_position_mode_observed"] = (
-        row.get("volType") == 2 and
-        row.get("profitLossVolType") == "SAME"
+    # A `false` field below is only an UNVERIFIED observation. The
+    # additional status labels differentiate MEXC omitting historical
+    # metadata from MEXC actually returning a conflicting value.
+    base["stop_loss_type_status"] = _enum_status(
+        row.get("stopLossType"), {0: "MARKET", 1: "LIMIT"},
     )
-    base["no_error_reported"] = row.get("errorCode") == 0
+    base["volume_type_status"] = _enum_status(
+        row.get("volType"), {1: "PARTIAL", 2: "ENTIRE_POSITION"},
+    )
+    base["profit_loss_volume_mode_status"] = _quantity_mode_status(
+        row.get("profitLossVolType"),
+    )
+    base["error_code_status"] = _error_code_status(
+        row.get("errorCode"),
+    )
+    base["stop_loss_reverse_status"] = _enum_status(
+        row.get("stopLossReverse"), {1: "REVERSE", 2: "NO_REVERSE"},
+    )
+    base["market_stop_type_observed"] = (
+        base["stop_loss_type_status"] == "MARKET"
+    )
+    base["no_reverse_observed"] = (
+        base["stop_loss_reverse_status"] == "NO_REVERSE"
+    )
+    base["full_position_mode_observed"] = (
+        base["volume_type_status"] == "ENTIRE_POSITION"
+        and base["profit_loss_volume_mode_status"] == "SAME"
+    )
+    base["no_error_reported"] = (
+        base["error_code_status"] == "ZERO_NORMAL"
+    )
 
     if row["state"] in (2, 4) and row["triggerSide"] == 0:
         base["status"] = "ORDER_ATTACHED_STOP_TERMINAL_UNTRIGGERED_OBSERVED"
