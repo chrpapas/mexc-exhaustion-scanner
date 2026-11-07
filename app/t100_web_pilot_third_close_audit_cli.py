@@ -63,9 +63,14 @@ class HistoryGetOnly:
             ):
                 raise pilot.TriggerPilotHalted("CLOSE_HISTORY_PARAMETERS_INVALID")
         elif (
-            re.fullmatch(r"/api/v1/private/order/(?:get|deal_details)/[1-9][0-9]*", path)
-            is None or params is not None
-        ):
+            re.fullmatch(
+                r"/api/v1/private/order/(?:get|deal_details)/[1-9][0-9]*", path
+            ) is None
+            and re.fullmatch(
+                r"/api/v1/private/order/external/BTC_USDT/TPWEB[a-f0-9]{24}",
+                path,
+            ) is None
+        ) or params is not None:
             raise pilot.TriggerPilotHalted("CLOSE_AUDIT_GET_ROUTE_NOT_ALLOWED")
         return await self.__client._private_get(path, params)
 
@@ -259,7 +264,7 @@ async def audit_third_pilot(client: Any, fingerprint: str) -> dict[str, Any]:
     if not _is_flat(before):
         report["status"] = "ACCOUNT_NOT_FLAT_CLOSE_AUDIT_HALTED"
         return report
-    entry = await client._private_get(
+    entry = await safe.get(
         f"/api/v1/private/order/external/{pilot.SYMBOL}/{journal['external_oid']}"
     )
     position_id = (
