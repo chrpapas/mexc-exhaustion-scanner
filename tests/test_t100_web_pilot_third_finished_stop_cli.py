@@ -34,6 +34,8 @@ def good_close():
         "account_bookended_flat_verified": True,
         "all_historical_orders_complete": False,
         "close_origin": "UNKNOWN_OR_EXTERNAL",
+        "exact_close_order_filled": True,
+        "exact_close_trade_deals_filled": True,
     }
 
 
@@ -117,6 +119,8 @@ async def test_real_canceled_stop_with_nonzero_code_reports_exact_enum_and_seque
     assert result["finished_stop_state"] == "CANCELED"
     assert result["finished_stop_error_code"] == "NONZERO"
     assert result["finished_stop_error_code_value"] == 5002
+    assert result["finished_stop_error_code_exchange_meaning"] == "NOT_MAPPED_OR_NOT_REPORTED"
+    assert result["finished_stop_auto_cancel_after_position_close_exchange_reported"] is False
     assert result["finished_stop_terminal_cancellation_observed"] is True
     assert result["finished_stop_update_vs_actual_close_fills"] == (
         "STOP_TERMINAL_UPDATE_AFTER_LAST_CLOSE_FILL"
@@ -125,6 +129,61 @@ async def test_real_canceled_stop_with_nonzero_code_reports_exact_enum_and_seque
     assert result["native_sl_trigger_origin_certified"] is False
     assert result["native_stop_market_type_certified"] is False
     assert result["mexc_orders_sent"] == 0
+
+
+@pytest.mark.asyncio
+async def test_real_mexc_code_8912_verified_auto_cancel_only_after_closed_position():
+    result = await get_result(
+        client(),
+        [finished(
+            state=2, triggerSide=0, placeOrderId=0, stopLossType=None,
+            errorCode=8912, updateTime=1794050000000,
+        )],
+    )
+    assert result["finished_stop_state"] == "CANCELED"
+    assert result["finished_stop_error_code_value"] == 8912
+    assert result["finished_stop_error_code_exchange_meaning"] == (
+        "AUTOMATICALLY_CANCELED_AS_POSITION_CLOSED"
+    )
+    assert result["finished_stop_auto_cancel_after_position_close_exchange_reported"] is True
+    assert result["finished_stop_update_vs_actual_close_fills"] == (
+        "STOP_TERMINAL_UPDATE_WITHIN_CLOSE_FILL_WINDOW"
+    )
+    assert result["native_sl_trigger_origin_certified"] is False
+    assert result["native_stop_market_type_certified"] is False
+    assert result["stop_cancellation_caused_by_market_close_certified"] is False
+    assert result["live_authorization"] is False
+
+
+@pytest.mark.asyncio
+async def test_mexc_user_cancel_code_8913_not_misread_as_automatic():
+    result = await get_result(
+        client(),
+        [finished(state=2, triggerSide=0, errorCode=8913)],
+    )
+    assert result["finished_stop_error_code_exchange_meaning"] == (
+        "MANUALLY_CANCELED_BY_USER"
+    )
+    assert result["finished_stop_auto_cancel_after_position_close_exchange_reported"] is False
+    assert result["native_sl_trigger_origin_certified"] is False
+
+
+@pytest.mark.asyncio
+async def test_8912_without_verified_market_close_never_claims_automatic_lifecycle():
+    c = client()
+    bad = good_close()
+    bad["exact_close_trade_deals_filled"] = False
+    # Call the genuine observer with a deliberately incomplete close audit;
+    # it must refuse before any stop-history inspection.
+    async def missing_fills(_client, _fp, *, evidence_sink=None):
+        evidence_sink.update(private())
+        return bad
+    result = await get_result(
+        c, [finished(state=2, triggerSide=0, errorCode=8912)],
+        close=AsyncMock(side_effect=missing_fills),
+    )
+    assert result["finished_stop_auto_cancel_after_position_close_exchange_reported"] is False
+    assert result["native_sl_trigger_origin_certified"] is False
 
 
 @pytest.mark.asyncio
