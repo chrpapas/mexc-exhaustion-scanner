@@ -365,12 +365,23 @@ def _open_stop(stop: dict[str, Any], *, pid: str, oid: str, price: D) -> dict[st
         and stop.get("lossTrend") == 1
         and positive(stop.get("stopLossPrice")) == price
         and qty == D(1)
+        and (stop.get("stopLossType") is None
+             or (type(stop.get("stopLossType")) is int
+                 and stop["stopLossType"] == 0))
+        and (stop.get("errorCode") is None
+             or (type(stop.get("errorCode")) is int
+                 and stop["errorCode"] == 0))
+        and (stop.get("stopLossReverse") is None
+             or (type(stop.get("stopLossReverse")) is int
+                 and stop["stopLossReverse"] == 2))
     )
     return {
         "active_attached_sl_quantity_and_price_observed": bool(active),
         "stop_loss_type": (
-            "MARKET" if stop.get("stopLossType") == 0
-            else "LIMIT" if stop.get("stopLossType") == 1
+            "MARKET" if type(stop.get("stopLossType")) is int
+                and stop["stopLossType"] == 0
+            else "LIMIT" if type(stop.get("stopLossType")) is int
+                and stop["stopLossType"] == 1
             else "NOT_CERTIFIED"
         ),
         "quantity_mode": str(qty_mode) if qty_mode in ("SAME", "SEPARATE") else "UNVERIFIED",
@@ -395,6 +406,11 @@ async def _status(client: Any, fingerprint: str) -> dict[str, Any]:
         raise TriggerPilotHalted("EXACT_ENTRY_ORDER_UNVERIFIED")
     order_id = id_string(order.get("orderId"))
     position_id = id_string(order.get("positionId"))
+    if (
+        body["entry_ack_verified"] is True
+        and body.get("entry_order_id") != order_id
+    ):
+        raise TriggerPilotHalted("JOURNALED_ENTRY_ORDER_ID_MISMATCH")
     if position_id is None:
         raise TriggerPilotHalted("ENTRY_POSITION_ID_NOT_AVAILABLE")
     entry_filled = (
@@ -417,6 +433,10 @@ async def _status(client: Any, fingerprint: str) -> dict[str, Any]:
             "planOrderCount", "trackOrderCount"
         ))
         or counts["stopOrderCount"] != len(safe_stops)
+        or counts["sumCount"] != sum(counts[k] for k in (
+            "limitOrderCount", "stopOrderCount",
+            "planOrderCount", "trackOrderCount"
+        ))
     ):
         raise TriggerPilotHalted("CURRENT_INVENTORY_OR_COUNT_UNVERIFIED")
     linked, pages = await _history(safe, order_id, position_id)
@@ -441,6 +461,11 @@ async def _status(client: Any, fingerprint: str) -> dict[str, Any]:
         "mexc_orders_sent_by_status": 0,
     }
     if len(safe_positions) == 1:
+        if any(counts[k] != 0 for k in (
+            "limitOrderCount", "planOrderCount", "trackOrderCount"
+        )):
+            result["status"] = "UNRELATED_PENDING_ORDERS_CHECK_UI_NOW"
+            return result
         p = safe_positions[0]
         if not (
             id_string(p.get("positionId")) == position_id
@@ -502,6 +527,13 @@ async def _status(client: Any, fingerprint: str) -> dict[str, Any]:
         or sl.get("positionType") != 2
         or sl.get("isFinished") != 1
         or sl.get("lossTrend") != 1
+        or type(sl.get("errorCode")) is not int
+        or sl["errorCode"] != 0
+        or (sl.get("stopLossType") is not None
+            and (type(sl.get("stopLossType")) is not int
+                 or sl["stopLossType"] != 0))
+        or (sl.get("profitLossVolType") == "SEPARATE"
+            and positive(sl.get("stopLossVol")) != D(1))
     ):
         result["status"] = "SL_TRIGGER_SEEN_LINKED_CLOSE_ID_OR_FIELDS_MISSING"
         return result
@@ -515,6 +547,9 @@ async def _status(client: Any, fingerprint: str) -> dict[str, Any]:
         and executed_close.get("state") == 3
         and executed_close.get("orderType") == 5
         and positive(executed_close.get("dealVol")) == D(1)
+        and (executed_close.get("errorCode") is None
+            or (type(executed_close.get("errorCode")) is int
+                and executed_close["errorCode"] == 0))
     ):
         result["status"] = "SL_TRIGGER_SEEN_BUT_NATIVE_MARKET_CLOSE_FILL_UNVERIFIED"
         return result
@@ -545,6 +580,8 @@ async def _close(client: Any, fingerprint: str) -> None:
         and order.get("externalOid") == body["external_oid"]
         and order.get("symbol") == SYMBOL and order.get("side") == 3
         and order.get("state") == 3 and positive(order.get("dealVol")) == D(1)
+        and (body["entry_ack_verified"] is not True
+             or body.get("entry_order_id") == id_string(order.get("orderId")))
         and p.get("symbol") == SYMBOL
         and p.get("positionType") == 2 and p.get("openType") == 1
         and positive(p.get("holdVol")) == D(1)
@@ -575,7 +612,8 @@ async def _close(client: Any, fingerprint: str) -> None:
     print("CLOSE_POST_FENCED=true; ONE_REAL_CLOSE_ATTEMPT=true")
     try:
         ack = await client._private_post(OPEN_PATH, payload, throttle=False)
-        if type(ack) is not dict or id_string(ack.get("orderId")) is None:
+        close_id = id_string(ack.get("orderId")) if type(ack) is dict else None
+        if close_id is None or close_id == body.get("entry_order_id"):
             raise TriggerPilotHalted("CLOSE_ACK_UNKNOWN_NO_RETRY")
         body["close_ack_verified"] = True
         body["status"] = "CLOSE_ACKED_FLAT_ACCOUNT_NOT_YET_VERIFIED"
