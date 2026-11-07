@@ -151,6 +151,7 @@ async def _verify_exact_close(
     safe: HistoryGetOnly, *,
     close_order_id: str, entry_position_id: str,
     journal: dict[str, Any],
+    evidence_sink: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     result: dict[str, Any] = {
         "exact_close_order_filled": False,
@@ -206,6 +207,7 @@ async def _verify_exact_close(
         return result
     total = D(0)
     ids: set[str] = set()
+    verified_fills: list[dict[str, Any]] = []
     taker = False
     for fill in fills:
         trade_id = pilot.id_string(fill.get("id"))
@@ -226,16 +228,44 @@ async def _verify_exact_close(
         ids.add(trade_id)
         total += vol
         taker = taker or liquidity
+        verified_fills.append({
+            "deal_id": trade_id,
+            "order_id": close_order_id,
+            "qty": str(vol),
+            "fill_price": str(price),
+            "timestamp_ms": fill["timestamp"],
+            "taker": liquidity,
+        })
     result["close_deal_count"] = len(ids)
     result["closed_contract_quantity_exact_one"] = total == D(1)
     result["exact_close_trade_deals_filled"] = (
         total == D(1) and result["exact_close_order_filled"]
     )
     result["taker_close_trade_observed"] = taker
+    if (
+        evidence_sink is not None
+        and result["exact_close_trade_deals_filled"]
+        and result["close_market_order_type_verified"]
+        and result["close_api_error"] == "ZERO"
+    ):
+        # The private evidence stays in the in-process sink only. Never
+        # include this object in the printed redacted forensic report.
+        evidence_sink.update({
+            "close_order_id": close_order_id,
+            "position_id": entry_position_id,
+            "close_external_oid": row.get("externalOid"),
+            "exact_close_market_order_type": 5,
+            "close_deals": sorted(
+                verified_fills, key=lambda v: int(v["deal_id"])
+            ),
+        })
     return result
 
 
-async def audit_third_pilot(client: Any, fingerprint: str) -> dict[str, Any]:
+async def audit_third_pilot(
+    client: Any, fingerprint: str,
+    *, evidence_sink: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     """Reconstruct one real trade from third immutable journal + signed GET."""
     prior_path = pilot.JOURNAL
     try:
@@ -317,6 +347,7 @@ async def audit_third_pilot(client: Any, fingerprint: str) -> dict[str, Any]:
     verified = await _verify_exact_close(
         safe, close_order_id=order_ids[0],
         entry_position_id=position_id, journal=journal,
+        evidence_sink=evidence_sink,
     )
     report.update(verified)
     after = await run_inventory(client=InventoryGetOnlyClient(client))
@@ -335,6 +366,29 @@ async def audit_third_pilot(client: Any, fingerprint: str) -> dict[str, Any]:
         )
     else:
         report["status"] = "THIRD_CLOSE_FILL_NOT_INDEPENDENTLY_VERIFIED"
+    if (
+        evidence_sink is not None
+        and report["status"] ==
+        "THIRD_ONE_CONTRACT_REAL_CLOSE_AND_FLAT_VERIFIED_NONAUTHORIZING"
+        and evidence_sink.get("position_id") == position_id
+        and verified["close_market_order_type_verified"] is True
+        and verified["close_api_error"] == "ZERO"
+    ):
+        evidence_sink.update({
+            "entry_order_id": entry_id,
+            "entry_external_oid": journal["external_oid"],
+            "entry_original_stop_price": str(D(journal["stop_price"])),
+            "entry_contracts": "1",
+            "account_fingerprint_sha256": fingerprint,
+            "journal_amend_post_attempted": journal.get(
+                "amend_post_attempted", False,
+            ),
+            "journal_close_post_attempted": journal.get(
+                "close_post_attempted", False,
+            ),
+        })
+    elif evidence_sink is not None:
+        evidence_sink.clear()
     return report
 
 
