@@ -129,6 +129,12 @@ def stop(**kw):
         "vol": D("20"),
         "volType": 1,
         "profitLossVolType": "SAME",
+        "orderId": 0,
+        "triggerSide": 0,
+        "errorCode": 0,
+        "stopLossType": 0,
+        "stopLossReverse": 2,
+        "lossTrend": 1,
     }
     row.update(kw)
     return row
@@ -158,7 +164,7 @@ class ProtectedEntryTests(unittest.IsolatedAsyncioTestCase):
             checkpoints=CheckpointPersistenceCoordinator(self.writer),
         )
 
-    async def run(self, **kw):
+    async def reconcile(self, **kw):
         data = {
             "external_oid": "t100v1eabc",
             "positions": [position()],
@@ -169,7 +175,7 @@ class ProtectedEntryTests(unittest.IsolatedAsyncioTestCase):
         return await self.pipeline.reconcile_and_persist(**data)
 
     async def test_full_entry_evidence_persists_fill_and_checkpoint(self):
-        r = await self.run()
+        r = await self.reconcile()
         self.assertEqual(r.checkpoint.exchange_order_id, "100")
         self.assertEqual(r.checkpoint.position_id, "10")
         self.assertEqual(r.checkpoint.stop_order_id, "99")
@@ -189,7 +195,7 @@ class ProtectedEntryTests(unittest.IsolatedAsyncioTestCase):
                 with self.assertRaises(
                     ProtectedEntryReconciliationHalted
                 ):
-                    await self.run()
+                    await self.reconcile()
             self.intents.row[field] = original
         self.assertEqual(self.fills.calls, 0)
 
@@ -199,7 +205,7 @@ class ProtectedEntryTests(unittest.IsolatedAsyncioTestCase):
             ProtectedEntryReconciliationHalted,
             "NO_RESUBMIT",
         ):
-            await self.run()
+            await self.reconcile()
         self.assertEqual(self.fills.calls, 0)
 
     async def test_order_identity_or_partial_fill_blocks(self):
@@ -217,7 +223,7 @@ class ProtectedEntryTests(unittest.IsolatedAsyncioTestCase):
                 with self.assertRaises(
                     ProtectedEntryReconciliationHalted
                 ):
-                    await self.run()
+                    await self.reconcile()
             self.exchange.order[field] = original
         self.assertEqual(self.fills.calls, 0)
 
@@ -227,7 +233,7 @@ class ProtectedEntryTests(unittest.IsolatedAsyncioTestCase):
             ProtectedEntryReconciliationHalted,
             "FILL_RECONCILIATION_BLOCKED",
         ):
-            await self.run()
+            await self.reconcile()
         self.assertIsNone(self.writer.current)
 
     async def test_unprotected_inventory_blocks_before_persistence(self):
@@ -235,12 +241,12 @@ class ProtectedEntryTests(unittest.IsolatedAsyncioTestCase):
             ProtectedEntryReconciliationHalted,
             "PROTECTION_SEMANTICS_UNVERIFIED",
         ):
-            await self.run(stops=[])
+            await self.reconcile(stops=[])
         self.assertEqual(self.fills.calls, 0)
         self.assertIsNone(self.writer.current)
 
     async def test_whole_position_same_native_stop_is_accepted(self):
-        r = await self.run(stops=[stop(
+        r = await self.reconcile(stops=[stop(
             vol=D("0"),
             volType=2,
             profitLossVolType="SAME",
@@ -252,7 +258,7 @@ class ProtectedEntryTests(unittest.IsolatedAsyncioTestCase):
             ProtectedEntryReconciliationHalted,
             "PRE_ENTRY_ACCOUNT_NOT_RECONCILED",
         ):
-            await self.run(pre_entry_account_reconciled=False)
+            await self.reconcile(pre_entry_account_reconciled=False)
         self.assertEqual(self.fills.calls, 1)
         self.assertIsNone(self.writer.current)
 
@@ -262,13 +268,13 @@ class ProtectedEntryTests(unittest.IsolatedAsyncioTestCase):
             ProtectedEntryReconciliationHalted,
             "CHECKPOINT_PERSISTENCE_BLOCKED",
         ):
-            await self.run()
+            await self.reconcile()
         self.assertEqual(self.fills.calls, 1)
         self.assertIsNotNone(self.fills.digest)
         self.assertIsNone(self.writer.current)
 
         self.writer.fail = False
-        recovered = await self.run()
+        recovered = await self.reconcile()
         self.assertEqual(
             recovered.fill_persistence_status,
             "ALREADY_VERIFIED",
@@ -293,7 +299,7 @@ class ProtectedEntryTests(unittest.IsolatedAsyncioTestCase):
                     ProtectedEntryReconciliationHalted,
                     "INCOMPLETE",
                 ):
-                    await self.run(**{field: False})
+                    await self.reconcile(**{field: False})
                 self.assertEqual(self.fills.calls, 1)
                 self.assertIsNone(self.writer.current)
 

@@ -1,5 +1,6 @@
 """Concrete MEXC futures POST/GET adapter. POST sends real orders; nothing runs on import."""
 from __future__ import annotations
+import re
 from typing import Any, TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -63,6 +64,8 @@ class LiveMexcAdapter:
                 "vol": str(intent.volume_contracts),
                 "leverage": 1,
                 "side": 3,
+                "sideType": "sell",
+                "positionType": "short",
                 "type": 5,
                 "openType": self.open_type,
                 "positionMode": 1,
@@ -71,9 +74,18 @@ class LiveMexcAdapter:
                 "lossTrend": 1,
             },
         )
-        if not isinstance(result, dict) or not result.get("orderId"):
+        # The current MEXC order/create response returns a numeric string
+        # orderId. Never journal a boolean, signed, zero, Unicode or
+        # nonintegral value as a successful exchange acknowledgement.
+        raw_id = result.get("orderId") if type(result) is dict else None
+        if (
+            type(raw_id) not in (int, str)
+            or re.fullmatch(r"[1-9][0-9]*", str(raw_id)) is None
+        ):
+            # The POST may already have succeeded. The durable caller must
+            # reconcile by externalOid and MUST NOT retry this entry.
             raise RuntimeError("MEXC did not return orderId")
-        return str(result["orderId"])
+        return str(raw_id)
 
     async def submit_native_short_stop_tightening(
         self,
@@ -106,6 +118,15 @@ class LiveMexcAdapter:
             raise ValueError(
                 "non-tightening or invalid short stop modification"
             )
+        from app import t100_live_guards
+        from app.t100_live_authorization import LiveAuthorizationHalted
+        if (
+            t100_live_guards.LIVE_NATIVE_STOP_AMENDMENT_STATUS
+            != "CERTIFIED"
+        ):
+            raise LiveAuthorizationHalted(
+                "MEXC_NATIVE_STOP_AMENDMENT_CONTRACT_UNVERIFIED"
+            )
         await self.client._private_post(
             "/api/v1/private/stoporder/change_plan_price",
             {
@@ -120,25 +141,18 @@ class LiveMexcAdapter:
         new_stop_price: str, previous_stop_price: str,
         permit: LiveMutationPermit,
     ) -> None:
-        """Legacy send-then-read helper; never retries ambiguous mutations."""
-        from decimal import Decimal
-        requested = Decimal(new_stop_price)
-        await self.submit_native_short_stop_tightening(
-            stop_order_id=stop_order_id,
-            new_stop_price=new_stop_price,
-            previous_stop_price=previous_stop_price,
-            permit=permit,
+        """DISABLED: unsafe legacy send-then-read stop mutation bypass.
+
+        This helper has no durable PREPARED -> SUBMITTING CAS and can never
+        independently prove that one worker owns the exchange POST attempt.
+        Calling it could duplicate a stop edit after a restart or ambiguity.
+        Only StopMutationExecutor.submit_once may use the separate
+        submit_native_short_stop_tightening transport *after* durable journal
+        ownership; it still requires a certified permit and independent GET.
+        """
+        raise RuntimeError(
+            "LEGACY_STOP_MUTATION_REQUIRES_DURABLE_JOURNAL"
         )
-        orders = await self.open_stop_orders(symbol)
-        ok = any(
-            str(item.get("id")) == str(stop_order_id)
-            and str(item.get("positionId")) == str(position_id)
-            and int(item.get("state", 0)) == 1
-            and Decimal(str(item.get("stopLossPrice") or 0)) <= requested
-            for item in orders
-        )
-        if not ok:
-            raise RuntimeError("NATIVE_STOP_MODIFICATION_UNVERIFIED")
 
     async def open_positions(self, symbol: str | None = None) -> list[dict[str, Any]]:
         # Do not interpret an unexpected/NULL account response as an empty account.

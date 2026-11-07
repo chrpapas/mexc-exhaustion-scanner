@@ -27,6 +27,10 @@ from app.t100_live_inventory_completeness_probe import (
 )
 from app.t100_live_readonly_probe import ReadOnlyMexcProbe
 from app.t100_live_schema_gate import assess_live_schema_and_privileges
+from app.t100_live_v40_state_gate import assess_v40_unresolved_dispatch_state
+from app.t100_live_v40_dispatch_privilege_audit import (
+    assess_v40_dispatch_claim_privileges,
+)
 
 
 async def run_dynamic_readiness_bundle(
@@ -60,6 +64,26 @@ async def run_dynamic_readiness_bundle(
 
     schema = await assess_live_schema_and_privileges(pool)
     state = await assess_unresolved_live_state(pool)
+    v40_state = await assess_v40_unresolved_dispatch_state(pool)
+    v40_privileges = {
+        "status": "V40_DISPATCH_PRIVILEGE_AUDIT_UNAVAILABLE",
+        "dispatch_claim_privileges_verified": False,
+        "live_authorization": False,
+    }
+    try:
+        # The audit MUST inspect effective rights under the ACTUAL runtime
+        # role inside a real read-only repeatable-read transaction. An
+        # administrator's GRANT assertions are not a substitute.
+        async with pool.acquire() as conn:
+            async with conn.transaction(
+                isolation="repeatable_read", readonly=True,
+            ):
+                v40_privileges = await assess_v40_dispatch_claim_privileges(
+                    conn,
+                )
+    except Exception:
+        # No driver/DSN/credential details may leak into readiness output.
+        pass
     inventory = await run_current_inventory_completeness_probe(
         ReadOnlyMexcProbe(client)
     )
@@ -72,6 +96,8 @@ async def run_dynamic_readiness_bundle(
     result.update({
         "durable_schema": schema,
         "durable_state": state,
+        "v40_dispatch_state": v40_state,
+        "v40_dispatch_privileges": v40_privileges,
         "current_inventory": inventory,
         "account_reconciliation": account,
         "durable_nonflat_recovery_evidence_verified": False,
@@ -80,6 +106,12 @@ async def run_dynamic_readiness_bundle(
         ),
         "unresolved_mutations_absent": (
             state.get("unresolved_mutations_absent") is True
+        ),
+        "v40_unresolved_dispatch_state_absent": (
+            v40_state.get("v40_unresolved_dispatch_state_absent") is True
+        ),
+        "v40_dispatch_claim_privileges_verified": (
+            v40_privileges.get("dispatch_claim_privileges_verified") is True
         ),
         "current_inventory_completeness_verified": (
             inventory.get("account_wide_completeness_verified") is True
@@ -92,6 +124,8 @@ async def run_dynamic_readiness_bundle(
     for key in (
         "durable_schema_deployed_verified",
         "unresolved_mutations_absent",
+        "v40_unresolved_dispatch_state_absent",
+        "v40_dispatch_claim_privileges_verified",
         "current_inventory_completeness_verified",
         "account_reconciled",
     ):

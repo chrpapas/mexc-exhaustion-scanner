@@ -11,6 +11,7 @@ from dataclasses import asdict
 from datetime import datetime, timezone
 from decimal import Decimal as D
 import unittest
+from unittest.mock import patch
 
 from app.t100_live_v40_protected_commit import (
     ACK_INTENT_SQL, CURRENT_INTENT_SQL, INSERT_CHECKPOINT_SQL, INSERT_FILL_SQL,
@@ -176,7 +177,7 @@ class ProtectedCommitTests(unittest.IsolatedAsyncioTestCase):
         )
 
     async def commit(self):
-        return await self.store.persist(
+        return await self.store.persist_offline_unclaimed(
             batch=self.batch,
             pre_attempt_witness=self.prior.before,
             lease=lease(),
@@ -274,6 +275,47 @@ class ProtectedCommitTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(len(result.recovered), 4)
         self.assertFalse(result.live_authorization)
+
+    async def test_public_unclaimed_commit_entry_point_is_disabled(self):
+        before = self.snapshot()
+        with self.assertRaisesRegex(
+            ProtectedCommitHalted,
+            "V40_UNCLAIMED_PROTECTED_COMMIT_API_FORBIDDEN",
+        ):
+            await self.store.persist(
+                batch=self.batch, pre_attempt_witness=self.prior.before,
+                lease=lease(),
+                observed_at=self.pg.reserved[0]["snapshot_observed_at"],
+            )
+        self.assertEqual(self.snapshot(), before)
+
+    async def test_offline_fixture_legacy_commit_rejects_live_environment(self):
+        for env in (
+            {"T100_EXECUTION_MODE": "live"},
+            {"T100_LIVE_ORDER_API_ENABLED": "true"},
+            {"DATABASE_URL": "postgres://never-connect"},
+            {"MEXC_API_KEY": "nonsecret-fixture"},
+            {"MEXC_API_SECRET": "nonsecret-fixture"},
+        ):
+            with self.subTest(env=list(env)):
+                before = self.snapshot()
+                with patch.dict("os.environ", env):
+                    with self.assertRaisesRegex(
+                        ProtectedCommitHalted,
+                        "V40_OFFLINE_UNCLAIMED_COMMIT_ENVIRONMENT_UNSAFE",
+                    ):
+                        await self.commit()
+                self.assertEqual(self.snapshot(), before)
+
+    def test_offline_unclaimed_fixture_is_not_called_by_any_app_module(self):
+        from pathlib import Path
+        for path in Path("app").glob("t100_live_*.py"):
+            text = path.read_text(encoding="utf-8")
+            self.assertNotIn(
+                ".persist_offline_unclaimed(",
+                text,
+                msg=f"Forbidden runtime offline bypass: {path.name}",
+            )
 
     def test_only_database_adapter_no_mexc_order_transport(self):
         import inspect

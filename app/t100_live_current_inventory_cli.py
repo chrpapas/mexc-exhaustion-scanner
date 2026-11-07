@@ -13,6 +13,8 @@ import argparse
 import asyncio
 import json
 import os
+import platform
+import subprocess
 from typing import Any
 
 from app.t100_live_account_reconciliation import assess_account_reconciliation
@@ -21,6 +23,90 @@ from app.t100_live_inventory_completeness_probe import (
     run_current_inventory_completeness_probe,
 )
 from app.t100_live_readonly_probe import ReadOnlyMexcProbe
+
+
+PILOT_KEYCHAIN_SERVICE = "t100225-mexc-pilot-subaccount"
+WEB_PILOT_KEYCHAIN_SERVICE = "t100225-mexc-web-pilot-subaccount-v1"
+INVENTORY_GET_ENDPOINTS = frozenset({
+    "/api/v1/private/position/open_positions",
+    "/api/v1/private/stoporder/open_orders",
+    "/api/v1/private/account/assets",
+    "/api/v1/private/order/open_order_total_count",
+})
+
+
+class InventoryGetOnlyClient:
+    """Restrict this operator CLI to the four inventory GET endpoints."""
+
+    __slots__ = ("_client",)
+
+    def __init__(self, client: Any) -> None:
+        self._client = client
+
+    async def _private_get(
+        self, path: str, params: dict[str, Any] | None = None,
+    ) -> Any:
+        if path not in INVENTORY_GET_ENDPOINTS:
+            raise RuntimeError("INVENTORY_GET_ENDPOINT_NOT_ALLOWED")
+        if path in {
+            "/api/v1/private/account/assets",
+            "/api/v1/private/order/open_order_total_count",
+        }:
+            if params is not None:
+                raise RuntimeError("INVENTORY_GET_FILTER_NOT_ALLOWED")
+        else:
+            import re
+            if params is not None and (
+                type(params) is not dict
+                or set(params) != {"symbol"}
+                or type(params["symbol"]) is not str
+                or re.fullmatch(r"[A-Z0-9]+_USDT", params["symbol"]) is None
+            ):
+                raise RuntimeError("INVENTORY_GET_SYMBOL_FILTER_INVALID")
+        return await self._client._private_get(path, params)
+
+
+class PilotKeychainUnavailable(RuntimeError):
+    pass
+
+
+def read_pilot_keychain_credentials(*, web_pilot: bool = False) -> tuple[str, str]:
+    """Load credentials from one fixed T100 pilot Keychain service.
+
+    The web-login pilot and older API-only pilot have distinct services;
+    there is no account fallback, and no substitution of BOXWAVE, Render or
+    generic MEXC credentials. Secrets are not exported or printed.
+    """
+    if type(web_pilot) is not bool:
+        raise PilotKeychainUnavailable("T100_PILOT_KEYCHAIN_SCOPE_INVALID")
+    service = WEB_PILOT_KEYCHAIN_SERVICE if web_pilot else PILOT_KEYCHAIN_SERVICE
+    if platform.system() != "Darwin":
+        raise PilotKeychainUnavailable("T100_PILOT_MAC_REQUIRED")
+    values: list[str] = []
+    for account in ("MEXC_API_KEY", "MEXC_API_SECRET"):
+        try:
+            result = subprocess.run(
+                (
+                    "/usr/bin/security", "find-generic-password",
+                    "-s", service,
+                    "-a", account, "-w",
+                ),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                text=True,
+                check=False,
+                timeout=15,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            raise PilotKeychainUnavailable(
+                "T100_PILOT_KEYCHAIN_READ_FAILED"
+            ) from None
+        if result.returncode != 0 or not result.stdout.strip():
+            raise PilotKeychainUnavailable(
+                "T100_PILOT_KEYCHAIN_CREDENTIAL_MISSING"
+            )
+        values.append(result.stdout.rstrip("\r\n"))
+    return values[0], values[1]
 
 
 def shareable_current_inventory_report(report: Any) -> dict[str, Any]:
@@ -167,7 +253,10 @@ async def _run(*, client: Any, timeout: float = 45.) -> dict[str, Any]:
         })
 
 
-async def _main() -> None:
+async def _main(
+    *, mac_pilot_keychain: bool = False,
+    mac_web_pilot_keychain: bool = False,
+) -> None:
     controls = T100ExecutionControls.from_env()
     if (
         controls.mode != "paper"
@@ -179,8 +268,35 @@ async def _main() -> None:
             "live_authorization": False,
         }))
         raise SystemExit(2)
-    key = os.getenv("MEXC_API_KEY") or ""
-    secret = os.getenv("MEXC_API_SECRET") or ""
+    if (type(mac_pilot_keychain) is not bool
+            or type(mac_web_pilot_keychain) is not bool
+            or (mac_pilot_keychain and mac_web_pilot_keychain)):
+        print(json.dumps({
+            "status": "CURRENT_INVENTORY_CREDENTIAL_SCOPE_CONFLICT",
+            "live_authorization": False,
+        }))
+        raise SystemExit(2)
+    selected_scope = (
+        "T100_WEB_PILOT_SUBACCOUNT" if mac_web_pilot_keychain
+        else "T100_V5_PILOT_SUBACCOUNT" if mac_pilot_keychain
+        else "UNVERIFIED_ENV_ACCOUNT"
+    )
+    if mac_pilot_keychain or mac_web_pilot_keychain:
+        try:
+            key, secret = read_pilot_keychain_credentials(
+                web_pilot=mac_web_pilot_keychain,
+            )
+        except PilotKeychainUnavailable as exc:
+            print(json.dumps({
+                "status": str(exc),
+                "credential_scope": selected_scope,
+                "render_shadow_account_binding_verified": False,
+                "live_authorization": False,
+            }, sort_keys=True))
+            raise SystemExit(2) from None
+    else:
+        key = os.getenv("MEXC_API_KEY") or ""
+        secret = os.getenv("MEXC_API_SECRET") or ""
     if not key or not secret:
         print(json.dumps({
             "status": "CURRENT_INVENTORY_READ_CREDENTIALS_MISSING",
@@ -194,7 +310,11 @@ async def _main() -> None:
         api_key=key, api_secret=secret,
     )
     try:
-        report = await _run(client=client)
+        report = await _run(client=InventoryGetOnlyClient(client))
+        # Pilot credentials prove only this pilot subaccount's current state,
+        # not the separate deployed Render shadow's account binding.
+        report["credential_scope"] = selected_scope
+        report["render_shadow_account_binding_verified"] = False
         print(json.dumps(report, indent=2, sort_keys=True))
         print("PRIVATE GET ONLY. NO ORDERS. LIVE TRADING DISABLED.")
     finally:
@@ -205,9 +325,21 @@ def cli() -> None:
     parser = argparse.ArgumentParser(
         description="Non-atomic, redacted MEXC account inventory audit"
     )
-    parser.parse_args()
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument(
+        "--mac-pilot-keychain", action="store_true",
+        help="GET-only audit of the old T100 V5 API-only pilot Mac Keychain",
+    )
+    mode.add_argument(
+        "--mac-web-pilot-keychain", action="store_true",
+        help="GET-only audit of the NEW T100 web-login pilot Mac Keychain",
+    )
+    args = parser.parse_args()
     try:
-        asyncio.run(_main())
+        asyncio.run(_main(
+            mac_pilot_keychain=args.mac_pilot_keychain,
+            mac_web_pilot_keychain=args.mac_web_pilot_keychain,
+        ))
     except SystemExit:
         raise
     except Exception as exc:

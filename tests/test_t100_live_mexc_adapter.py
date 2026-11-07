@@ -89,6 +89,14 @@ class LiveMexcAdapterContractTests(unittest.IsolatedAsyncioTestCase):
         )
         self._certified_mock.start()
         self.addCleanup(self._certified_mock.stop)
+        # Fixture-only: current venue documentation has NOT certified
+        # legacy change_plan_price. Production constant remains blocked.
+        self._stop_contract_mock = patch(
+            "app.t100_live_guards.LIVE_NATIVE_STOP_AMENDMENT_STATUS",
+            "CERTIFIED",
+        )
+        self._stop_contract_mock.start()
+        self.addCleanup(self._stop_contract_mock.stop)
         self.client = FakeClient()
         self.adapter = LiveMexcAdapter(self.client)
 
@@ -163,6 +171,10 @@ class LiveMexcAdapterContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(path, "/api/v1/private/order/create")
         self.assertEqual(body["symbol"], "SIREN_USDT")
         self.assertEqual(body["side"], 3)
+        # MEXC documentation changed on 2026-10-23: sideType is
+        # required and positionType now explicitly declares direction.
+        self.assertEqual(body["sideType"], "sell")
+        self.assertEqual(body["positionType"], "short")
         self.assertEqual(body["type"], 5)
         self.assertEqual(body["openType"], 2)  # mandatory CROSS pilot
         self.assertEqual(body["positionMode"], 1)
@@ -185,6 +197,79 @@ class LiveMexcAdapterContractTests(unittest.IsolatedAsyncioTestCase):
                     await self.adapter.submit_short_with_stop(
                         intent(), permit=permit()
                     )
+
+    async def test_malformed_post_acknowledgements_never_count_as_order_id(self):
+        # These malformed ACKs must never become journal order identifiers.
+        # A real POST may still have succeeded, so the caller reconciles
+        # the existing externalOid rather than retrying.
+        for invalid in (
+            {"orderId": True},
+            {"orderId": False},
+            {"orderId": -1},
+            {"orderId": 0},
+            {"orderId": 1.5},
+            {"orderId": "0"},
+            {"orderId": "-1"},
+            {"orderId": "+1"},
+            {"orderId": "01"},
+            {"orderId": " 1"},
+            {"orderId": "1 "},
+            {"orderId": "1e5"},
+            {"orderId": "١٢٣"},
+            {"orderId": ["123"]},
+            {"orderId": {"id": "123"}},
+        ):
+            with self.subTest(invalid=invalid):
+                self.client.post_result = invalid
+                self.client.posts = []
+                with self.assertRaisesRegex(
+                    RuntimeError, "MEXC did not return orderId",
+                ):
+                    await self.adapter.submit_short_with_stop(
+                        intent(), permit=permit(),
+                    )
+                self.assertEqual(len(self.client.posts), 1)
+
+    async def test_numeric_integer_order_id_accepted_when_positive(self):
+        self.client.post_result = {"orderId": 739113577038255616}
+        response = await self.adapter.submit_short_with_stop(
+            intent(), permit=permit(),
+        )
+        self.assertEqual(response, "739113577038255616")
+        self.assertEqual(len(self.client.posts), 1)
+
+    async def test_current_native_stop_endpoint_unverified_never_posts(self):
+        # Current MEXC public stop-change docs cover limit-order
+        # change_price; the old change_plan_price contract must not be
+        # considered certified merely because an adapter permit exists.
+        with patch(
+            "app.t100_live_guards.LIVE_NATIVE_STOP_AMENDMENT_STATUS",
+            "UNVERIFIED_CURRENT_DOCS",
+        ):
+            with self.assertRaisesRegex(
+                LiveAuthorizationHalted,
+                "MEXC_NATIVE_STOP_AMENDMENT_CONTRACT_UNVERIFIED",
+            ):
+                await self.adapter.submit_native_short_stop_tightening(
+                    stop_order_id=99,
+                    previous_stop_price="175",
+                    new_stop_price="90",
+                    permit=permit(),
+                )
+        self.assertEqual(self.client.posts, [])
+
+    async def test_entry_payload_side_type_sell_is_required(self):
+        self.client.post_result = {"orderId": "101"}
+        await self.adapter.submit_short_with_stop(
+            intent(), permit=permit(),
+        )
+        path, body = self.client.posts[0]
+        self.assertEqual(path, "/api/v1/private/order/create")
+        self.assertEqual(body["sideType"], "sell")
+        self.assertEqual(body["positionType"], "short")
+        self.assertEqual(body["side"], 3)
+        self.assertEqual(body["openType"], 2)
+        self.assertEqual(body["externalOid"], intent().external_oid)
 
     async def test_one_shot_stop_tightening_contract(self):
         await self.adapter.submit_native_short_stop_tightening(
@@ -249,7 +334,10 @@ class LiveMexcAdapterContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(rows), 1)
         self.assertEqual(self.client.open_stop_calls, ["SIREN_USDT"])
 
-    async def test_legacy_send_then_read_verifies_without_second_post(self):
+    async def test_legacy_send_then_read_stop_mutation_is_unconditionally_disabled(self):
+        # Historical helper had no durable journal fencing and could mutate
+        # a stop outside exactly-once-attempt orchestration. Refuse it even
+        # when a test constructs an otherwise certified permit.
         self.client.current_stops = [{
             "id": 99,
             "positionId": 10,
@@ -257,31 +345,18 @@ class LiveMexcAdapterContractTests(unittest.IsolatedAsyncioTestCase):
             "state": 1,
             "stopLossPrice": "89",
         }]
-        await self.adapter.tighten_native_short_stop(
-            symbol="SIREN_USDT",
-            stop_order_id=99,
-            position_id=10,
-            previous_stop_price="175",
-            new_stop_price="90",
-            permit=permit(),
-        )
-        self.assertEqual(len(self.client.posts), 1)
-        self.assertEqual(self.client.open_stop_calls, ["SIREN_USDT"])
-
-    async def test_legacy_send_then_read_fails_if_current_stop_not_verified(self):
-        self.client.current_stops = []
-        with self.assertRaisesRegex(
-            RuntimeError, "NATIVE_STOP_MODIFICATION_UNVERIFIED"
-        ):
-            await self.adapter.tighten_native_short_stop(
-                symbol="SIREN_USDT",
-                stop_order_id=99,
-                position_id=10,
-                previous_stop_price="175",
-                new_stop_price="90",
-                permit=permit(),
-            )
-        self.assertEqual(len(self.client.posts), 1)
+        for active_permit in (permit(), None):
+            with self.subTest(active_permit=active_permit is not None):
+                with self.assertRaisesRegex(
+                    RuntimeError, "LEGACY_STOP_MUTATION_REQUIRES_DURABLE_JOURNAL",
+                ):
+                    await self.adapter.tighten_native_short_stop(
+                        symbol="SIREN_USDT", stop_order_id=99,
+                        position_id=10, previous_stop_price="175",
+                        new_stop_price="90", permit=active_permit,
+                    )
+                self.assertEqual(self.client.posts, [])
+                self.assertEqual(self.client.open_stop_calls, [])
 
 
 if __name__ == "__main__":

@@ -1,8 +1,14 @@
 name: T100 V40 isolated PostgreSQL transaction integration
 
 on:
+  push:
+    branches:
+      - codex/t100-readiness-issue-14
   pull_request:
     paths:
+      - 'pyproject.toml'
+      - 'app/t100_live_leader_fencing.py'
+      - 'docs/T100_ISSUE14_GATE_REGISTER.md'
       - 'app/t100_live_v40_protected_commit.py'
       - 'app/t100_live_v40_protected_finalization.py'
       - 'app/t100_live_four_slot_*.py'
@@ -13,6 +19,7 @@ on:
       - 'migrations/029_t100_live_durable_state.sql'
       - 'migrations/030_t100_live_executor_lease.sql'
       - 'migrations/031_t100_live_v40_four_slot_reservations.sql'
+      - 'migrations/032_t100_live_v40_dispatch_claims.sql'
       - 'tests/test_t100_live_v40_postgres_integration.py'
       - 'tests/test_t100_live_shared_postgres_integration.py'
       - 'app/t100_live_shared_account_reservation_scope.py'

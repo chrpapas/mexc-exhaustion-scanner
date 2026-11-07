@@ -45,13 +45,14 @@ class ReplayCompareTests(unittest.TestCase):
                 for i, s in enumerate(self.pool)
             ], ["symbol", "entry_ts"]))
             z.writestr("capital_2000/entries.csv", csv_data([
-                {"scenario": self.scenario, "symbol": s}
-                for s in self.entries
-            ], ["scenario", "symbol"]))
+                {"scenario": self.scenario, "symbol": s,
+                 "time": f"frozen-{i}", "notional": "500.0"}
+                for i, s in enumerate(self.entries)
+            ], ["scenario", "symbol", "time", "notional"]))
             z.writestr("capital_2000/metrics.csv", csv_data([
                 {"scenario": self.scenario, "entered": "108",
-                 "final_equity": "14476.81238416"}
-            ], ["scenario", "entered", "final_equity"]))
+                 "final_equity": "14476.81238416", "high_envelope_dd_pct": "-54.8664"}
+            ], ["scenario", "entered", "final_equity", "high_envelope_dd_pct"]))
         sha = hashlib.sha256(self.archive.read_bytes()).hexdigest()
         self.manifest = self.root / "manifest.json"
         self.manifest.write_text(json.dumps({
@@ -71,9 +72,10 @@ class ReplayCompareTests(unittest.TestCase):
 
     def write(self, folder, symbols, equity, dd):
         (folder / "entries.csv").write_text(csv_data([
-            {"scenario": self.scenario, "symbol": s}
-            for s in symbols
-        ], ["scenario", "symbol"]))
+            {"scenario": self.scenario, "symbol": s,
+             "time": f"frozen-{i}", "notional": "500.0"}
+            for i, s in enumerate(symbols)
+        ], ["scenario", "symbol", "time", "notional"]))
         (folder / "metrics.csv").write_text(csv_data([
             {"scenario": self.scenario, "entered": str(len(symbols)),
              "final_equity": str(equity), "high_envelope_dd_pct": str(dd)}
@@ -95,12 +97,28 @@ class ReplayCompareTests(unittest.TestCase):
         self.assertFalse(result["live_authorization"])
 
     def test_denied_symbols_and_baseline_drift_block(self):
-        self.write(self.baseline, self.entries, 14476.81238416, -54.8)
+        self.write(self.baseline, self.entries, 14476.81238416, -54.8664)
         self.write(self.filtered, ["TEST110_USDT"], 10000., -20)
         with patch.object(pinned, "PINNED_ARCHIVE_SHA", self.sha):
             with self.assertRaisesRegex(ValueError, "FILTERED_ENTRY_INELIGIBLE_SYMBOL"):
                 compare_replays(
                     self.baseline, self.filtered, self.archive, self.manifest)
+
+    def test_same_symbols_and_equity_cannot_hide_entry_or_risk_drift(self):
+        for filename, old, new, code in (
+            ("entries.csv", "frozen-0", "changed-time", "BASELINE_ENTRY_FIELDS_NOT_REPRODUCED"),
+            ("entries.csv", "500.0", "501.0", "BASELINE_ENTRY_FIELDS_NOT_REPRODUCED"),
+            ("entries.csv", "500.0", "NaN", "BASELINE_ENTRY_FIELDS_NOT_REPRODUCED"),
+            ("metrics.csv", "-54.8664", "-20.0", "BASELINE_METRIC_FIELDS_NOT_REPRODUCED"),
+        ):
+            with self.subTest(filename=filename, new=new):
+                self.write(self.baseline, self.entries, 14476.81238416, -54.8664)
+                self.write(self.filtered, self.eligible, 11000., -40.5)
+                path = self.baseline / filename
+                path.write_text(path.read_text().replace(old, new, 1))
+                with patch.object(pinned, "PINNED_ARCHIVE_SHA", self.sha):
+                    with self.assertRaisesRegex(ValueError, code):
+                        compare_replays(self.baseline, self.filtered, self.archive, self.manifest)
         self.write(self.baseline, self.entries, 14460., -54.8)
         with patch.object(pinned, "PINNED_ARCHIVE_SHA", self.sha):
             with self.assertRaisesRegex(ValueError, "BASELINE_EQUITY_NOT_REPRODUCED"):

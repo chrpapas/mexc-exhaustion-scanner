@@ -1,4 +1,5 @@
 """Offline leader lease/fencing behavior tests."""
+
 import unittest
 
 from app.t100_live_leader_fencing import (
@@ -23,18 +24,10 @@ class Store:
         return self.token, True
 
     async def renew(self, name, holder, token, ttl):
-        return (
-            self.current
-            and self.holder == holder
-            and self.token == token
-        )
+        return self.current and self.holder == holder and self.token == token
 
     async def assert_current(self, name, holder, token):
-        return (
-            self.current
-            and self.holder == holder
-            and self.token == token
-        )
+        return self.current and self.holder == holder and self.token == token
 
     async def release(self, name, holder, token):
         if not await self.assert_current(name, holder, token):
@@ -61,9 +54,7 @@ class LeaderFencingTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_second_holder_cannot_acquire_live_lease(self):
         await self.c.acquire("a")
-        with self.assertRaisesRegex(
-            LeaderLeaseHalted, "NOT_ACQUIRED"
-        ):
+        with self.assertRaisesRegex(LeaderLeaseHalted, "NOT_ACQUIRED"):
             await self.c.acquire("b")
 
     async def test_takeover_after_expiry_increments_fencing_token(self):
@@ -72,9 +63,7 @@ class LeaderFencingTests(unittest.IsolatedAsyncioTestCase):
         second = await self.c.acquire("b")
         self.assertEqual(first.fencing_token, 1)
         self.assertEqual(second.fencing_token, 2)
-        with self.assertRaisesRegex(
-            LeaderLeaseHalted, "FENCING_TOKEN_STALE"
-        ):
+        with self.assertRaisesRegex(LeaderLeaseHalted, "FENCING_TOKEN_STALE"):
             await self.c.require_current(first)
         await self.c.require_current(second)
 
@@ -84,22 +73,20 @@ class LeaderFencingTests(unittest.IsolatedAsyncioTestCase):
         second = await self.c.acquire("render-instance-a")
         self.assertEqual(first.fencing_token, 1)
         self.assertEqual(second.fencing_token, 2)
-        with self.assertRaisesRegex(
-            LeaderLeaseHalted, "FENCING_TOKEN_STALE"
-        ):
+        with self.assertRaisesRegex(LeaderLeaseHalted, "FENCING_TOKEN_STALE"):
             await self.c.require_current(first)
-        with self.assertRaisesRegex(
-            LeaderLeaseHalted, "LEASE_LOST"
-        ):
+        with self.assertRaisesRegex(LeaderLeaseHalted, "LEASE_LOST"):
             await self.c.renew(first)
         await self.c.require_current(second)
 
     def test_postgres_acquire_fences_expired_same_holder_in_sql(self):
-        from app.t100_live_leader_fencing import PostgresLeaderLeaseStore
         import inspect
+
+        from app.t100_live_leader_fencing import PostgresLeaderLeaseStore
+
         source = inspect.getsource(PostgresLeaderLeaseStore.acquire)
         self.assertIn(
-            "t100_live_executor_leases.lease_expires_at > now()",
+            "t100_live_executor_leases.lease_expires_at > clock_timestamp()",
             source,
         )
         self.assertIn(
@@ -111,9 +98,7 @@ class LeaderFencingTests(unittest.IsolatedAsyncioTestCase):
         first = await self.c.acquire("a")
         self.store.expire()
         await self.c.acquire("b")
-        with self.assertRaisesRegex(
-            LeaderLeaseHalted, "LEASE_LOST"
-        ):
+        with self.assertRaisesRegex(LeaderLeaseHalted, "LEASE_LOST"):
             await self.c.renew(first)
 
     async def test_release_only_current_holder(self):
@@ -124,10 +109,21 @@ class LeaderFencingTests(unittest.IsolatedAsyncioTestCase):
 
     def test_ttl_bounds(self):
         for ttl in (0, 14, 121):
-            with self.subTest(ttl=ttl):
-                with self.assertRaises(ValueError):
-                    LeaderLeaseCoordinator(Store(), ttl_seconds=ttl)
+            with self.subTest(ttl=ttl), self.assertRaises(ValueError):
+                LeaderLeaseCoordinator(Store(), ttl_seconds=ttl)
 
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class MalformedLeaseTests(unittest.IsolatedAsyncioTestCase):
+    async def test_noninteger_fences_are_rejected_before_store_access(self):
+        from dataclasses import replace
+
+        store = Store()
+        coordinator = LeaderLeaseCoordinator(store)
+        lease = await coordinator.acquire("worker")
+        for token in (True, 1.0, "1", None):
+            with self.subTest(token=token), self.assertRaises(LeaderLeaseHalted):
+                await coordinator.require_current(replace(lease, fencing_token=token))

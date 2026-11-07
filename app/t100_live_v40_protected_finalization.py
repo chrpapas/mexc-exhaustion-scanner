@@ -25,6 +25,7 @@ from app.t100_live_fill_ledger import (
 )
 from app.t100_live_four_slot_attempt_journal import DurableAttemptStage
 from app.t100_live_four_slot_attempt_outcome import assess_staged_protected_attempts
+from app.t100_live_native_stop_execution_audit import assess_native_short_market_stop_row
 from app.t100_live_four_slot_snapshot_coordinator import FourSlotSnapshotResult
 
 
@@ -112,6 +113,28 @@ def prepare_protected_entries(
                 or not fill_set.fills
             ):
                 raise ProtectedFinalizeHalted("FILL_SET_INTENT_IDENTITY_MISMATCH")
+            # The older outcome/checkpoint provenance parser checks active
+            # quantity, but does not distinguish market from limit SL.
+            # Never prepare even an offline protected checkpoint from a
+            # static limit/unknown-trigger native stop row.
+            stop_audit = assess_native_short_market_stop_row(
+                stop=by_stop[position_id],
+                symbol=intent.symbol,
+                position_id=position_id,
+                position_quantity=fill_set.deal_volume,
+                maximum_short_stop_price=intent.stop_price,
+            )
+            if (
+                stop_audit.status
+                != "NATIVE_MARKET_SHORT_SL_ROW_OBSERVED_NONAUTHORIZING"
+                or stop_audit.active_native_full_volume_market_sl_observed
+                is not True
+                or stop_audit.stop_execution_certified is not False
+                or stop_audit.live_authorization is not False
+            ):
+                raise ProtectedFinalizeHalted(
+                    "NATIVE_MARKET_STOP_SEMANTICS_NOT_VERIFIED"
+                )
             # This is a proposed post-CAS ACK row, NOT a durable ACK.
             # The DB transaction must persist ACK with exact identity.
             hypothetical_ack = {

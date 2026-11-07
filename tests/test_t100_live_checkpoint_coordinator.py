@@ -79,6 +79,10 @@ def stop(price=D("175"), **kw):
         "positionId": "10",
         "symbol": "SIREN_USDT",
         "state": 1,
+        "isFinished": 0, "positionType": 2,
+        "orderId": 0, "triggerSide": 0, "errorCode": 0,
+        "stopLossType": 0, "stopLossReverse": 2, "lossTrend": 1,
+        "volType": 1, "profitLossVolType": "SAME",
         "stopLossPrice": price,
         "vol": D("20"),
     }
@@ -213,6 +217,44 @@ class CoordinatorTests(unittest.IsolatedAsyncioTestCase):
                 intent=intent(), order=order(),
                 positions=[position()],
                 stops=[stop(), stop()], **initial_gates())
+
+    async def test_initial_checkpoint_writer_rejects_nonmarket_native_stop(self):
+        for field, value in (
+            ("stopLossType", 1), ("orderId", 100),
+            ("triggerSide", 2), ("errorCode", 1),
+            ("profitLossVolType", "UNKNOWN"),
+        ):
+            with self.subTest(field=field, value=value):
+                with self.assertRaisesRegex(
+                    CheckpointCoordinatorHalted,
+                    "NATIVE_POSITION_MARKET_SL_UNVERIFIED",
+                ):
+                    await self.coordinator.persist_initial_protected(
+                        intent=intent(), order=order(),
+                        positions=[position()],
+                        stops=[stop(**{field: value})],
+                        **initial_gates(),
+                    )
+                self.assertEqual(self.writer.calls, [])
+
+    async def test_verified_checkpoint_writer_rejects_nonmarket_native_stop(self):
+        for field, value in (
+            ("stopLossType", 1), ("orderId", "100"),
+            ("triggerSide", 2), ("errorCode", 1),
+            ("volType", None), ("stopLossReverse", 1),
+        ):
+            with self.subTest(field=field, value=value):
+                with self.assertRaisesRegex(
+                    CheckpointCoordinatorHalted,
+                    "NATIVE_POSITION_MARKET_SL_UNVERIFIED",
+                ):
+                    await self.coordinator.persist_verified_stop(
+                        cp(), amendment=amendment(),
+                        stops=[stop(D("90"), **{field: value})],
+                        best_profit_pct=D("14"), armed=True,
+                        **gates(),
+                    )
+                self.assertEqual(self.writer.calls, [])
 
     async def test_verified_stop_persist_requires_complete_reconciled_evidence(self):
         with self.assertRaisesRegex(

@@ -12,15 +12,21 @@ already configured GET-only client and an independent SELECT-only ledger.
 from __future__ import annotations
 
 from typing import Any, Sequence
+from copy import deepcopy
 
 from app.t100_live_execution import EntryIntent
 from app.t100_live_four_slot_attempt_journal import DurableAttemptStage
 from app.t100_live_four_slot_attempt_outcome import (
     ProtectedAttemptObservation, observe_staged_protected_attempts,
 )
+from app.t100_live_four_slot_protected_get_evidence import (
+    ProtectedGetPreparation, ProtectedClaimReader,
+    observe_and_prepare_staged_protection_get_only,
+    observe_claimed_staged_protection_get_only,
+)
 from app.t100_live_four_slot_snapshot_coordinator import (
     FourSlotSnapshotCoordinator, FourSlotSnapshotResult,
-    LedgerSnapshotReader,
+    LedgerSnapshotReader, _venue_digest,
 )
 from app.t100_live_inventory_completeness_probe import (
     run_current_inventory_completeness_probe,
@@ -35,12 +41,18 @@ class FourSlotMexcReadVenue:
         if not isinstance(probe, ReadOnlyMexcProbe):
             raise TypeError("FOUR_SLOT_GET_PROBE_REQUIRED")
         self.probe = probe
+        self.last_positions = None
+        self.last_stops = None
 
     async def open_positions(self) -> list[dict[str, Any]]:
-        return await self.probe.raw_open_positions()
+        rows = await self.probe.raw_open_positions()
+        self.last_positions = deepcopy(rows)
+        return rows
 
     async def open_stop_orders(self) -> list[dict[str, Any]]:
-        return await self.probe.raw_open_stops()
+        rows = await self.probe.raw_open_stops()
+        self.last_stops = deepcopy(rows)
+        return rows
 
     async def order_by_external_oid(
         self, symbol: str, external_oid: str,
@@ -58,12 +70,17 @@ class FourSlotMexcReadVenue:
 class FourSlotMexcCompleteness:
     """Actual GET-only inventory completeness, not a caller's asserted booleans."""
 
-    def __init__(self, probe: ReadOnlyMexcProbe) -> None:
+    def __init__(self, probe: ReadOnlyMexcProbe, venue: FourSlotMexcReadVenue | None = None) -> None:
         if not isinstance(probe, ReadOnlyMexcProbe):
             raise TypeError("FOUR_SLOT_GET_PROBE_REQUIRED")
         self.probe = probe
+        self.venue = venue
 
     async def inspect(self) -> dict[str, Any]:
+        if (self.venue is None or self.venue.last_positions is None
+                or self.venue.last_stops is None):
+            raise RuntimeError("FOUR_SLOT_COMPLETENESS_UNBOUND")
+        expected = _venue_digest(self.venue.last_positions, self.venue.last_stops)
         result = await run_current_inventory_completeness_probe(self.probe)
         if not isinstance(result, dict):
             raise RuntimeError("FOUR_SLOT_COMPLETENESS_RESPONSE_INVALID")
@@ -74,6 +91,9 @@ class FourSlotMexcCompleteness:
             raise RuntimeError("FOUR_SLOT_GET_ENTRY_ASSERTION_INVALID")
         if result.get("live_authorization") is not False:
             raise RuntimeError("FOUR_SLOT_GET_AUTHORIZATION_ASSERTION_INVALID")
+        if (result.get("account_wide_completeness_verified") is True
+                and result.get("critical_inventory_sha256") != expected):
+            raise RuntimeError("FOUR_SLOT_COMPLETENESS_DIFFERENT_INVENTORY")
         return result
 
 
@@ -81,7 +101,8 @@ def _components(
     client: PrivateGet,
 ) -> tuple[FourSlotMexcReadVenue, FourSlotMexcCompleteness]:
     probe = ReadOnlyMexcProbe(client)
-    return FourSlotMexcReadVenue(probe), FourSlotMexcCompleteness(probe)
+    venue = FourSlotMexcReadVenue(probe)
+    return venue, FourSlotMexcCompleteness(probe, venue)
 
 
 async def inspect_existing_four_slots_get_only(
@@ -110,5 +131,43 @@ async def inspect_staged_four_slot_fill_get_only(
     return await observe_staged_protected_attempts(
         stages=stages, intents=intents,
         pre_attempt_witness=pre_attempt_witness,
+        venue=venue, completeness=completeness,
+    )
+
+async def inspect_staged_four_slot_prepared_get_only(
+    *, stages: Sequence[DurableAttemptStage],
+    intents: Sequence[EntryIntent],
+    pre_attempt_witness: FourSlotSnapshotResult,
+    client: PrivateGet,
+) -> ProtectedGetPreparation:
+    """Signed GET-only order/deal/full-account evidence -> offline bundle.
+
+    No DB writes, venue POST, ACK persistence, live permit or Render effects.
+    Failure leaves the SUBMITTING outcome unresolved; never retries a POST.
+    """
+    venue, completeness = _components(client)
+    return await observe_and_prepare_staged_protection_get_only(
+        stages=stages, intents=intents,
+        pre_attempt_witness=pre_attempt_witness,
+        venue=venue, completeness=completeness,
+    )
+
+async def inspect_claimed_four_slot_prepared_get_only(
+    *, stages: Sequence[DurableAttemptStage],
+    intents: Sequence[EntryIntent],
+    pre_attempt_witness: FourSlotSnapshotResult,
+    claim_reader: ProtectedClaimReader,
+    client: PrivateGet,
+) -> ProtectedGetPreparation:
+    """Restricted SQL claim witness -> signed GETs -> offline protected bundle.
+
+    No venue POST, DB write, stop mutation, or execution permit. Missing or
+    mismatched claims prevent all exchange GETs, not just finalization.
+    """
+    venue, completeness = _components(client)
+    return await observe_claimed_staged_protection_get_only(
+        stages=stages, intents=intents,
+        pre_attempt_witness=pre_attempt_witness,
+        claim_reader=claim_reader,
         venue=venue, completeness=completeness,
     )

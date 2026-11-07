@@ -13,6 +13,8 @@ async def assess_unresolved_live_state(pool: Any) -> dict[str, Any]:
         "prepared_order_intents": 0,
         "submitting_order_intents": 0,
         "unknown_order_intents": 0,
+        "review_order_intents": 0,
+        "unprotected_ack_intents": 0,
         "unresolved_stop_amendments": 0,
         "review_checkpoints": 0,
         "closing_checkpoints": 0,
@@ -31,6 +33,17 @@ async def assess_unresolved_live_state(pool: Any) -> dict[str, Any]:
                    WHERE state='SUBMITTING') AS submitting_order_intents,
                  (SELECT count(*) FROM t100_live_order_intents
                    WHERE state='UNKNOWN') AS unknown_order_intents,
+                 (SELECT count(*) FROM t100_live_order_intents
+                   WHERE state='REVIEW') AS review_order_intents,
+                 (SELECT count(*)
+                    FROM t100_live_order_intents AS i
+                    WHERE i.state='ACK'
+                      AND NOT EXISTS (
+                          SELECT 1 FROM t100_live_position_checkpoints AS c
+                          WHERE c.external_oid=i.external_oid
+                            AND c.exchange_order_id=i.exchange_order_id
+                            AND c.lifecycle_state <> 'CLOSED'
+                      )) AS unprotected_ack_intents,
                  (SELECT count(*) FROM t100_live_stop_amendments
                    WHERE state <> 'VERIFIED') AS unresolved_stop_amendments,
                  (SELECT count(*) FROM t100_live_position_checkpoints
@@ -50,6 +63,8 @@ async def assess_unresolved_live_state(pool: Any) -> dict[str, Any]:
         "prepared_order_intents",
         "submitting_order_intents",
         "unknown_order_intents",
+        "review_order_intents",
+        "unprotected_ack_intents",
         "unresolved_stop_amendments",
         "review_checkpoints",
         "closing_checkpoints",

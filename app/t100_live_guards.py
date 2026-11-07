@@ -15,6 +15,9 @@ from typing import Mapping
 
 LIVE_CONFIRMATION = "I_UNDERSTAND_MEXC_REAL_FUNDS_AT_RISK"
 LIVE_ADAPTER_STATUS = "NOT_IMPLEMENTED"
+# Legacy stoporder/change_plan_price is documented in older futures docs;
+# the current public reference needs independent scope/identity confirmation.
+LIVE_NATIVE_STOP_AMENDMENT_STATUS = "UNVERIFIED_CURRENT_DOCS"
 
 
 def _flag(values: Mapping[str, str], key: str, default: bool = False) -> bool:

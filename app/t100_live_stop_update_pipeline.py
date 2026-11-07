@@ -16,6 +16,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from app.t100_live_native_stop_execution_audit import assess_native_short_market_stop_row
 from app.t100_live_checkpoint_coordinator import (
     CheckpointCoordinatorHalted,
     CheckpointPersistenceCoordinator,
@@ -47,6 +48,70 @@ class StopUpdatePersistencePipeline:
     ) -> None:
         self.amendments = amendment_coordinator
         self.checkpoints = checkpoint_coordinator
+
+    @staticmethod
+    def _require_checkpoint_amendment_identity(
+        previous: PositionCheckpoint,
+        amendment: StopAmendment,
+    ) -> None:
+        """Prevent a mismatched amendment being journal-VERIFIED first.
+
+        Previously the checkpoint writer rejected this mismatch only after
+        the amendment journal had already transitioned to VERIFIED.
+        """
+        if (
+            not isinstance(previous, PositionCheckpoint)
+            or previous.lifecycle_state != "OPEN"
+            or not isinstance(amendment, StopAmendment)
+            or previous.symbol != amendment.symbol
+            or previous.position_id != amendment.position_id
+            or previous.stop_order_id != amendment.stop_order_id
+            or previous.stop_price != amendment.previous_stop
+            or amendment.proposed_stop >= previous.stop_price
+        ):
+            raise StopUpdatePipelineHalted(
+                "STOP_AMENDMENT_CHECKPOINT_PROVENANCE_MISMATCH"
+            )
+
+    @staticmethod
+    def _require_full_native_protection(
+        previous: PositionCheckpoint,
+        stops: Any,
+    ) -> None:
+        """Before journal VERIFIED, require one active full-volume native SL.
+
+        A price-only match must never turn a partially uncovered position's
+        stop amendment into a verified durable record. The later checkpoint
+        writer independently repeats its own full-volume protection check.
+        """
+        if (
+            not isinstance(previous, PositionCheckpoint)
+            or not isinstance(stops, list)
+            or any(type(row) is not dict for row in stops)
+        ):
+            raise StopUpdatePipelineHalted("STOP_PROTECTION_EVIDENCE_INVALID")
+        matching = [
+            row for row in stops
+            if str(row.get("positionId") or "") == previous.position_id
+            and row.get("symbol") == previous.symbol
+        ]
+        if len(matching) != 1:
+            raise StopUpdatePipelineHalted("STOP_PROTECTION_NOT_UNIQUE")
+        report = assess_native_short_market_stop_row(
+            stop=matching[0], symbol=previous.symbol,
+            position_id=previous.position_id,
+            position_quantity=previous.contracts,
+            maximum_short_stop_price=previous.stop_price,
+        )
+        if (
+            report.status
+            != "NATIVE_MARKET_SHORT_SL_ROW_OBSERVED_NONAUTHORIZING"
+            or report.active_native_full_volume_market_sl_observed is not True
+            or report.stop_execution_certified is not False
+        ):
+            raise StopUpdatePipelineHalted(
+                "STOP_NATIVE_FULL_VOLUME_PROTECTION_UNVERIFIED"
+            )
 
     @staticmethod
     def _verified_amendment_row(
@@ -81,11 +146,15 @@ class StopUpdatePersistencePipeline:
         positions_complete: bool,
         stops_complete: bool,
     ) -> StopUpdatePersistenceOutcome:
+        self._require_checkpoint_amendment_identity(previous, amendment)
+        self._require_full_native_protection(previous, before_stops)
+        self._require_full_native_protection(previous, after_stops)
         reconciliation = (
             await self.amendments.reconcile_observed_transition(
                 amendment,
                 before_stops=before_stops,
                 after_stops=after_stops,
+                position_quantity=previous.contracts,
                 finished_stops=finished_stops,
             )
         )
@@ -117,10 +186,13 @@ class StopUpdatePersistencePipeline:
         stops_complete: bool,
     ) -> StopUpdatePersistenceOutcome:
         """Restart-safe path for SUBMITTING/UNKNOWN/VERIFIED amendments."""
+        self._require_checkpoint_amendment_identity(previous, amendment)
+        self._require_full_native_protection(previous, current_stops)
         reconciliation = (
             await self.amendments.reconcile_current_outcome(
                 amendment,
                 current_stops=current_stops,
+                position_quantity=previous.contracts,
                 finished_stops=finished_stops,
             )
         )

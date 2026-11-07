@@ -82,7 +82,7 @@ class SharedProtectedCommitTests(unittest.IsolatedAsyncioTestCase):
             shared_pre_stops=self.stops,
         )
         kwargs.update(changes)
-        return await self.store.persist(**kwargs)
+        return await self.store.persist_offline_unclaimed(**kwargs)
 
     async def test_one_real_t100_checkpoint_two_manual_positions_db_atomic(self):
         before_manual = copy.deepcopy((self.positions, self.stops))

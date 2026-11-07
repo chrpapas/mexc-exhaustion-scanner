@@ -201,6 +201,64 @@ class SharedAccountPartitionTests(unittest.IsolatedAsyncioTestCase):
         pending = await coord.inspect(shared_manual_observation=True)
         self.assertEqual(pending.status, "INVENTORY_COMPLETENESS_UNVERIFIED")
 
+    def test_manual_position_identity_must_be_positive_ascii_and_explicit(self):
+        """Malformed live venue identities must not be labelled safe/manual."""
+        _, _, positions, _ = prepare_rows(1)
+        original = positions[0]
+        invalid = (None, True, 0, -1, 1.5, "0", "01", "+1",
+                   " 1", "1 ", "١٢٣", "９９", "1e3", "1x", {"id": 1})
+        for raw in invalid:
+            with self.subTest(raw=raw):
+                row = dict(original, positionId=raw)
+                # A plausible alternate row ID cannot conceal an invalid
+                # positionId. No T100 ownership may be inferred.
+                row["id"] = "999"
+                with self.assertRaises(SharedPartitionHalted):
+                    partition_shared_account(
+                        checkpoints=[], positions=[row], stops=[],
+                    )
+        # Even if an id exists, absence of the primary positionId is
+        # ambiguous for this MEXC futures contract.
+        row = dict(original)
+        row.pop("positionId", None)
+        row["id"] = "999"
+        with self.assertRaises(SharedPartitionHalted):
+            partition_shared_account(
+                checkpoints=[], positions=[row], stops=[],
+            )
+
+    def test_manual_stop_identity_alias_conflicts_fail_closed(self):
+        """Never accept conflicting stop identifiers or fallback past bad IDs."""
+        _, _, positions, stops = prepare_rows(1)
+        original = stops[0]
+        cases = (
+            {"id": "0", "stopPlanOrderId": "99"},
+            {"id": "01", "stopPlanOrderId": "99"},
+            {"id": "99", "stopPlanOrderId": "98"},
+            {"id": True, "stopPlanOrderId": "99"},
+            {"id": "９９", "stopPlanOrderId": "99"},
+            {"id": "99", "positionId": "0"},
+            {"id": "99", "positionId": " 1"},
+        )
+        for changes in cases:
+            with self.subTest(changes=changes):
+                row = dict(original, **changes)
+                with self.assertRaises(SharedPartitionHalted):
+                    partition_shared_account(
+                        checkpoints=[], positions=positions, stops=[row],
+                    )
+
+    def test_manual_stop_alias_is_accepted_when_unambiguous(self):
+        _, _, positions, stops = prepare_rows(1)
+        stop = dict(stops[0])
+        stop["stopPlanOrderId"] = stop.pop("id")
+        result = partition_shared_account(
+            checkpoints=[], positions=positions, stops=[stop],
+        )
+        self.assertEqual(result.manual_positions, 1)
+        self.assertEqual(result.manual_current_tpsl_rows, 1)
+        self.assertFalse(result.live_authorization)
+
     def test_partition_rejects_duplicate_owned_checkpoint_identity(self):
         snap, _, positions, stops = prepare_rows(1)
         cp = checkpoint_from_row(snap.checkpoints[0])

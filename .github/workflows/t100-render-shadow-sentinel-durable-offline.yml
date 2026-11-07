@@ -1,0 +1,38 @@
+name: T100 Render durable sentinel offline safety
+
+on:
+  pull_request:
+    paths:
+      - 'migrations/032_t100_render_shadow_sentinel_outbox.sql'
+      - 'app/t100_render_shadow_alert_outbox.py'
+      - 'app/t100_render_shadow_sentinel_durable.py'
+      - 'tests/test_t100_render_shadow_sentinel_outbox.py'
+      - '.github/workflows/t100-render-shadow-sentinel-durable-offline.yml'
+  push:
+    branches:
+      - codex/t100-readiness-issue-14
+
+permissions:
+  contents: read
+
+jobs:
+  durable-outbox-policy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    env:
+      T100_EXECUTION_MODE: paper
+      T100_LIVE_ORDER_API_ENABLED: 'false'
+      T100_LIVE_KILL_SWITCH: 'true'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install test/runtime dependencies
+        run: python -m pip install '.[dev]'
+      - name: Compile no-MEXC durable alert modules
+        run: |
+          python -m py_compile app/t100_render_shadow_alert_outbox.py
+          python -m py_compile app/t100_render_shadow_sentinel_durable.py
+      - name: Fail-closed outbox and restart/retry behavioral tests
+        run: python -m unittest -v tests.test_t100_render_shadow_sentinel_outbox

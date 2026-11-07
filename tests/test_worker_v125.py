@@ -40,6 +40,7 @@ async def test_signal_evaluation_runs_concurrently_and_logs_progress(caplog):
     symbols = [f"T{i}_USDT" for i in range(8)]
     worker.settings = SimpleNamespace(
         excluded_symbols=frozenset(),
+        snapshot_audit_enabled=False,
         signal_eval_concurrency=4,
         signal_eval_progress_every=2,
         diagnostic_symbols=frozenset(),
@@ -89,6 +90,7 @@ async def test_signal_evaluation_isolates_single_symbol_failure(caplog):
     symbols = ["BAD_USDT", "GOOD_USDT"]
     worker.settings = SimpleNamespace(
         excluded_symbols=frozenset(),
+        snapshot_audit_enabled=False,
         signal_eval_concurrency=2,
         signal_eval_progress_every=1,
         diagnostic_symbols=frozenset(),

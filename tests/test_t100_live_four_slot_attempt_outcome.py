@@ -5,21 +5,15 @@ production gateway. These tests must never use MEXC POST or enable live mode.
 """
 from __future__ import annotations
 
-import copy
 from dataclasses import replace
 from decimal import Decimal as D
 import unittest
 
-from app.t100_live_execution import EntryIntent
-from app.t100_live_four_slot_attempt_journal import DurableAttemptStage
 from app.t100_live_four_slot_attempt_outcome import (
-    assess_staged_protected_attempts, observe_staged_protected_attempts,
-)
-from app.t100_live_four_slot_snapshot_coordinator import (
-    FourSlotSnapshotCoordinator,
+    observe_staged_protected_attempts,
 )
 from tests.test_t100_live_four_slot_snapshot_coordinator import (
-    fixture, Ledger, Venue, Completeness, report,
+    fixture, Venue, Completeness, report,
 )
 import tests.test_t100_live_four_slot_attempt_journal as stage_tests
 
@@ -61,6 +55,9 @@ class ProtectedOutcomeTests(unittest.IsolatedAsyncioTestCase):
             "id": "999", "state": 1, "isFinished": 0,
             "positionType": 2, "stopLossPrice": D("3.5"),
             "vol": D("250"),
+            "orderId": 0, "triggerSide": 0, "errorCode": 0,
+            "volType": 1, "profitLossVolType": "SAME",
+            "stopLossType": 0, "stopLossReverse": 2, "lossTrend": 1,
         })
         self.venue = Venue([*oldorders, new_order], positions, stops)
         self.complete = Completeness(report(4))
@@ -92,6 +89,27 @@ class ProtectedOutcomeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.venue.order_reads, 2)
         self.assertEqual(self.pg.new_intents[0]["state"], "SUBMITTING")
         self.assertEqual(self.pg.reserved[0]["state"], "SUBMITTING")
+
+    async def test_preexisting_margin_mode_drift_blocks(self):
+        for rows in (self.venue.first_positions, self.venue.last_positions):
+            rows[0]["openType"] = 1
+        self.assertEqual((await self.observe()).status,
+                         "ATTEMPT_PREEXISTING_POSITION_CHANGED")
+
+    async def test_boolean_venue_states_do_not_count_as_integer_enums(self):
+        for index in (0, -1):
+            for collection, field, value in (
+                ("positions", "state", True),
+                ("stops", "state", True),
+                ("stops", "isFinished", False),
+            ):
+                with self.subTest(index=index, collection=collection, field=field):
+                    await self.asyncSetUp()
+                    for prefix in ("first_", "last_"):
+                        getattr(self.venue, prefix + collection)[index][field] = value
+                    result = await self.observe()
+                    self.assertFalse(result.all_staged_attempts_fully_filled_and_protected)
+                    self.assertFalse(result.native_stop_witness_observed)
 
     async def test_partial_fill_is_never_marked_protected(self):
         key = ("FOURTH_USDT", self.intent.external_oid)
@@ -132,6 +150,46 @@ class ProtectedOutcomeTests(unittest.IsolatedAsyncioTestCase):
                         "stopLossPrice": D("3.5"), "isFinished": 0,
                         "positionType": 2, "state": 1,
                     }[attr]
+
+    async def test_new_limit_or_unknown_native_stop_never_marks_filled_position_protected(self):
+        for field, value in (
+            ("stopLossType", 1), ("stopLossType", None),
+            ("stopLossReverse", 1), ("lossTrend", 2),
+            ("volType", 3), ("profitLossVolType", "UNRECOGNIZED"),
+        ):
+            with self.subTest(field=field, value=value):
+                await self.asyncSetUp()
+                self.venue.first_stops[-1][field] = value
+                self.venue.last_stops[-1][field] = value
+                result = await self.observe()
+                self.assertEqual(
+                    result.status,
+                    "ATTEMPT_NATIVE_MARKET_STOP_SEMANTICS_UNVERIFIED",
+                )
+                self.assertFalse(result.native_stop_witness_observed)
+                self.assertFalse(result.all_staged_attempts_fully_filled_and_protected)
+                self.assertFalse(result.live_authorization)
+                self.assertFalse(result.mexc_orders_sent)
+
+    async def test_order_attached_or_triggered_sl_is_not_position_native(self):
+        for field, value in (
+            ("orderId", "990"),
+            ("orderId", None),
+            ("triggerSide", 2),
+            ("errorCode", 1),
+        ):
+            with self.subTest(field=field, value=value):
+                await self.asyncSetUp()
+                self.venue.first_stops[-1][field] = value
+                self.venue.last_stops[-1][field] = value
+                result = await self.observe()
+                self.assertEqual(
+                    result.status,
+                    "ATTEMPT_NATIVE_MARKET_STOP_SEMANTICS_UNVERIFIED",
+                )
+                self.assertFalse(result.all_staged_attempts_fully_filled_and_protected)
+                self.assertFalse(result.native_stop_witness_observed)
+                self.assertFalse(result.live_authorization)
 
     async def test_exact_get_missing_must_not_trigger_retry(self):
         self.venue.orders.clear()

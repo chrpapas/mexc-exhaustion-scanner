@@ -104,6 +104,28 @@ class ReadOnlyMexcProbe:
             raise VenueReadHalted("POSITIONS_RESPONSE_UNVERIFIED")
         return raw
 
+    async def raw_open_position_by_id(
+        self, position_id: str,
+    ) -> list[dict[str, Any]]:
+        """Exact position-ID GET. Empty does not on its own prove closed."""
+        if (type(position_id) is not str or
+                re.fullmatch(r"[1-9][0-9]*", position_id) is None):
+            raise VenueReadHalted("INVALID_EXACT_POSITION_ID")
+        try:
+            raw = await self._client._private_get(
+                "/api/v1/private/position/open_positions",
+                {"positionId": int(position_id)},
+            )
+        except Exception:
+            raise VenueReadHalted("EXACT_OPEN_POSITION_GET_FAILED") from None
+        if type(raw) is not list or any(type(row) is not dict for row in raw):
+            raise VenueReadHalted("EXACT_OPEN_POSITION_RESPONSE_UNVERIFIED")
+        if any(str(row.get("positionId")) != position_id for row in raw):
+            raise VenueReadHalted("EXACT_OPEN_POSITION_FILTER_BROKEN")
+        if len(raw) > 1:
+            raise VenueReadHalted("EXACT_OPEN_POSITION_DUPLICATE")
+        return raw
+
     async def raw_open_order_counts(self) -> dict[str, int]:
         """Read MEXC account-level in-flight order counts via GET only."""
         try:
@@ -216,6 +238,53 @@ class ReadOnlyMexcProbe:
         rows = raw.get("resultList")
         if not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows):
             raise VenueReadHalted("FUNDING_PAGE_ROWS_UNVERIFIED")
+        return raw
+
+    async def raw_history_positions_page(
+        self, symbol: str, *, page: int, size: int,
+    ) -> dict[str, Any] | list[dict[str, Any]]:
+        """Signed GET of ONE historical-position page. No completeness claim.
+
+        The actual dedicated T100 MEXC subaccount (2026-11-06) returned
+        data=[rows] without pagination metadata; the documentation describes
+        data={resultList,totalCount,totalPage,...}. Both are accepted as
+        *positive row evidence*. Only the metadata-object variant can provide
+        a verifiable complete paginated census. A short bare array does NOT
+        certify that all historical positions have been returned.
+        """
+        if (
+            type(symbol) is not str
+            or re.fullmatch(r"[A-Z0-9]+_USDT", symbol) is None
+            or type(page) is not int or page < 1
+            or type(size) is not int or not 1 <= size <= 100
+        ):
+            raise VenueReadHalted("INVALID_HISTORY_POSITION_PAGE_ARGUMENTS")
+        try:
+            raw = await self._client._private_get(
+                "/api/v1/private/position/list/history_positions",
+                {"symbol": symbol, "page_num": page, "page_size": size},
+            )
+        except Exception:
+            raise VenueReadHalted("HISTORY_POSITIONS_GET_FAILED") from None
+
+        if type(raw) is list:
+            if len(raw) > size or any(type(r) is not dict for r in raw):
+                raise VenueReadHalted("HISTORY_POSITION_ARRAY_ROWS_UNVERIFIED")
+            # A successful historical GET returning [] remains UNKNOWN
+            # for any target missing from that page, not proven absent.
+            return raw
+        if type(raw) is not dict:
+            raise VenueReadHalted("HISTORY_POSITIONS_RESPONSE_UNVERIFIED")
+        rows = raw.get("resultList")
+        if type(rows) is not list or any(type(r) is not dict for r in rows):
+            raise VenueReadHalted("HISTORY_POSITIONS_ROWS_UNVERIFIED")
+        keys = ("pageSize", "totalCount", "totalPage", "currentPage")
+        if any(type(raw.get(key)) is not int for key in keys):
+            raise VenueReadHalted("HISTORY_POSITIONS_METADATA_UNVERIFIED")
+        if (raw["pageSize"] != size or raw["currentPage"] != page
+            or raw["totalCount"] < 0 or raw["totalPage"] < 0
+            or len(rows) > size):
+            raise VenueReadHalted("HISTORY_POSITIONS_PAGINATION_CONTRADICTION")
         return raw
 
     async def raw_order_by_external_oid(

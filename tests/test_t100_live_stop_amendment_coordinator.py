@@ -64,6 +64,16 @@ def current_stop(**extra):
         "symbol": "SIREN_USDT",
         "state": 1,
         "isFinished": 0,
+        "positionType": 2,
+        "orderId": 0,
+        "triggerSide": 0,
+        "errorCode": 0,
+        "volType": 1,
+        "profitLossVolType": "SAME",
+        "stopLossType": 0,
+        "stopLossReverse": 2,
+        "lossTrend": 1,
+        "vol": D("20"),
         "stopLossPrice": "175",
     }
     row.update(extra)
@@ -106,6 +116,7 @@ class StopAmendmentCoordinatorTests(unittest.IsolatedAsyncioTestCase):
         ):
             await self.coordinator.reconcile_observed_transition(
                 self.amendment,
+                position_quantity=D("20"),
                 before_stops=[current_stop()],
                 after_stops=[current_stop(stopLossPrice="90")],
             )
@@ -114,6 +125,7 @@ class StopAmendmentCoordinatorTests(unittest.IsolatedAsyncioTestCase):
         await self.coordinator.mark_submitting(self.amendment)
         outcome = await self.coordinator.reconcile_observed_transition(
             self.amendment,
+            position_quantity=D("20"),
             before_stops=[current_stop()],
             after_stops=[current_stop(stopLossPrice="90")],
         )
@@ -133,6 +145,7 @@ class StopAmendmentCoordinatorTests(unittest.IsolatedAsyncioTestCase):
         ):
             await self.coordinator.reconcile_observed_transition(
                 self.amendment,
+                position_quantity=D("20"),
                 before_stops=[current_stop()],
                 after_stops=[
                     current_stop(id="100", stopLossPrice="90")
@@ -147,6 +160,7 @@ class StopAmendmentCoordinatorTests(unittest.IsolatedAsyncioTestCase):
         await self.coordinator.mark_submitting(self.amendment)
         outcome = await self.coordinator.reconcile_observed_transition(
             self.amendment,
+            position_quantity=D("20"),
             before_stops=[current_stop()],
             after_stops=[current_stop(id="100", stopLossPrice="89")],
             finished_stops=[finished_old()],
@@ -163,6 +177,7 @@ class StopAmendmentCoordinatorTests(unittest.IsolatedAsyncioTestCase):
         await self.coordinator.mark_unknown(self.amendment)
         outcome = await self.coordinator.reconcile_observed_transition(
             self.amendment,
+            position_quantity=D("20"),
             before_stops=[current_stop()],
             after_stops=[current_stop(stopLossPrice="90")],
         )
@@ -180,6 +195,7 @@ class StopAmendmentCoordinatorTests(unittest.IsolatedAsyncioTestCase):
         ):
             await self.coordinator.reconcile_observed_transition(
                 self.amendment,
+                position_quantity=D("20"),
                 before_stops=[current_stop()],
                 after_stops=[],
             )
@@ -192,6 +208,7 @@ class StopAmendmentCoordinatorTests(unittest.IsolatedAsyncioTestCase):
         await self.coordinator.mark_submitting(self.amendment)
         await self.coordinator.reconcile_observed_transition(
             self.amendment,
+            position_quantity=D("20"),
             before_stops=[current_stop()],
             after_stops=[current_stop(stopLossPrice="90")],
         )
@@ -202,6 +219,7 @@ class StopAmendmentCoordinatorTests(unittest.IsolatedAsyncioTestCase):
         ):
             await self.coordinator.reconcile_observed_transition(
                 self.amendment,
+                position_quantity=D("20"),
                 before_stops=[current_stop()],
                 after_stops=[current_stop(stopLossPrice="90")],
             )
@@ -211,6 +229,7 @@ class StopAmendmentCoordinatorTests(unittest.IsolatedAsyncioTestCase):
         await self.coordinator.mark_unknown(self.amendment)
         outcome = await self.coordinator.reconcile_current_outcome(
             self.amendment,
+            position_quantity=D("20"),
             current_stops=[current_stop(stopLossPrice="90")],
         )
         self.assertEqual(outcome.verified_stop_order_id, "99")
@@ -228,6 +247,7 @@ class StopAmendmentCoordinatorTests(unittest.IsolatedAsyncioTestCase):
         ):
             await self.coordinator.reconcile_current_outcome(
                 self.amendment,
+                position_quantity=D("20"),
                 current_stops=[current_stop(stopLossPrice="175")],
             )
         self.assertEqual(
@@ -240,6 +260,7 @@ class StopAmendmentCoordinatorTests(unittest.IsolatedAsyncioTestCase):
         await self.coordinator.mark_unknown(self.amendment)
         outcome = await self.coordinator.reconcile_current_outcome(
             self.amendment,
+            position_quantity=D("20"),
             current_stops=[
                 current_stop(id="100", stopLossPrice="89")
             ],
@@ -247,6 +268,89 @@ class StopAmendmentCoordinatorTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(outcome.verified_stop_order_id, "100")
         self.assertTrue(outcome.replacement_stop_identity)
+
+    async def test_direct_coordinator_cannot_verify_undercovered_stop(self):
+        await self.coordinator.mark_submitting(self.amendment)
+        with self.assertRaisesRegex(
+            StopAmendmentCoordinatorHalted, "NATIVE_FULL_COVERAGE_UNVERIFIED",
+        ):
+            await self.coordinator.reconcile_observed_transition(
+                self.amendment, position_quantity=D("20"),
+                before_stops=[current_stop()],
+                after_stops=[current_stop(stopLossPrice="90", vol=D("1"))],
+            )
+        self.assertEqual(
+            self.journal.states[self.amendment.external_id], "SUBMITTING",
+        )
+
+    async def test_direct_restart_requires_protected_quantity_and_short_side(self):
+        await self.coordinator.mark_submitting(self.amendment)
+        await self.coordinator.mark_unknown(self.amendment)
+        for invalid in (
+            current_stop(stopLossPrice="90", vol=D("2")),
+            current_stop(stopLossPrice="90", positionType=1),
+            current_stop(stopLossPrice="90", positionType=None),
+            current_stop(stopLossPrice="90", isFinished=1),
+        ):
+            with self.subTest(invalid=invalid):
+                with self.assertRaisesRegex(
+                    StopAmendmentCoordinatorHalted,
+                    "NATIVE_FULL_COVERAGE_UNVERIFIED",
+                ):
+                    await self.coordinator.reconcile_current_outcome(
+                        self.amendment, position_quantity=D("20"),
+                        current_stops=[invalid],
+                    )
+                self.assertEqual(
+                    self.journal.states[self.amendment.external_id],
+                    "UNKNOWN",
+                )
+        self.assertEqual(self.journal.verified, {})
+
+    async def test_no_limit_or_order_attached_stop_marked_amendment_verified(self):
+        await self.coordinator.mark_submitting(self.amendment)
+        for field, value in (
+            ("stopLossType", 1),
+            ("orderId", "123"),
+            ("triggerSide", 2),
+            ("errorCode", 7),
+            ("lossTrend", 2),
+            ("stopLossReverse", 1),
+            ("volType", None),
+        ):
+            with self.subTest(field=field, value=value):
+                with self.assertRaisesRegex(
+                    StopAmendmentCoordinatorHalted,
+                    "NATIVE_FULL_COVERAGE_UNVERIFIED",
+                ):
+                    await self.coordinator.reconcile_observed_transition(
+                        self.amendment,
+                        position_quantity=D("20"),
+                        before_stops=[current_stop()],
+                        after_stops=[current_stop(
+                            stopLossPrice="90", **{field: value},
+                        )],
+                    )
+                self.assertEqual(
+                    self.journal.states[self.amendment.external_id],
+                    "SUBMITTING",
+                )
+                self.assertEqual(self.journal.verified, {})
+
+    async def test_restart_wrong_market_stop_semantics_remains_unknown(self):
+        await self.coordinator.mark_submitting(self.amendment)
+        await self.coordinator.mark_unknown(self.amendment)
+        with self.assertRaisesRegex(
+            StopAmendmentCoordinatorHalted, "NATIVE_FULL_COVERAGE_UNVERIFIED",
+        ):
+            await self.coordinator.reconcile_current_outcome(
+                self.amendment,
+                position_quantity=D("20"),
+                current_stops=[current_stop(
+                    stopLossPrice="90", stopLossType=1,
+                )],
+            )
+        self.assertEqual(self.journal.states[self.amendment.external_id], "UNKNOWN")
 
     async def test_unknown_requires_submitting(self):
         with self.assertRaisesRegex(

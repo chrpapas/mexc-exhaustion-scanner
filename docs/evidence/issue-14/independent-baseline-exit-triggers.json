@@ -1,0 +1,28 @@
+{
+  "100": {
+    "positions": 108,
+    "candles": 32158,
+    "triggers": 105,
+    "normal_fills": 105,
+    "delayed_fills": 23,
+    "trims": 0,
+    "pending_positions": 0,
+    "capacity_quantities_certified": false,
+    "trim_decisions_certified": false,
+    "full_strategy_parity_certified": false,
+    "live_authorization": false
+  },
+  "200": {
+    "positions": 108,
+    "candles": 32157,
+    "triggers": 105,
+    "normal_fills": 105,
+    "delayed_fills": 22,
+    "trims": 1,
+    "pending_positions": 0,
+    "capacity_quantities_certified": false,
+    "trim_decisions_certified": false,
+    "full_strategy_parity_certified": false,
+    "live_authorization": false
+  }
+}

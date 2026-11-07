@@ -4,6 +4,7 @@ import unittest
 from app.t100_live_strategy_parity_gate import (
     FROZEN_V40_ARCHIVE_SHA256,
     FULL_REPLAY_REQUIRED_TRUE,
+    FULL_REPLAY_REQUIRED_ZERO,
     assess_strategy_parity_report,
 )
 
@@ -41,6 +42,23 @@ def full_replay():
 
 
 class StrategyParityGateTests(unittest.TestCase):
+    def test_boolean_float_or_string_counters_cannot_certify_parity(self):
+        for field in FULL_REPLAY_REQUIRED_ZERO:
+            for value in (False, 0.0, "0", None):
+                with self.subTest(field=field, value=value):
+                    report = entry_report()
+                    report["full_replay"] = full_replay()
+                    report["full_replay"][field] = value
+                    self.assertFalse(assess_strategy_parity_report(report)["strategy_parity_verified"])
+        for field in ("candidates", "prior_candles", "reference_entry_notionals_exact", "discrepancies"):
+            report = entry_report()
+            report[field] = float(report[field])
+            self.assertFalse(assess_strategy_parity_report(report)["historical_entry_parity_verified"])
+        report = entry_report()
+        report["full_replay"] = full_replay()
+        report["full_replay"]["frozen_anchor"]["stage_rows"] = 27776.0
+        self.assertFalse(assess_strategy_parity_report(report)["strategy_parity_verified"])
+
     def test_existing_entry_audit_is_not_full_strategy_parity(self):
         r = assess_strategy_parity_report(entry_report())
         self.assertTrue(r["historical_entry_parity_verified"])

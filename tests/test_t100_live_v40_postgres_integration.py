@@ -39,6 +39,7 @@ MIGRATIONS = (
     "029_t100_live_durable_state.sql",
     "030_t100_live_executor_lease.sql",
     "031_t100_live_v40_four_slot_reservations.sql",
+    "032_t100_live_v40_dispatch_claims.sql",
 )
 ROOT = Path(__file__).resolve().parents[1]
 TEST_PASSWORD = "t100-ci-only-local-postgres"
@@ -65,8 +66,25 @@ def require_isolated_ci() -> None:
 
 
 class RealPostgresProtectedV40Tests(unittest.IsolatedAsyncioTestCase):
+    async def test_lease_expiry_uses_wall_clock_inside_long_transaction(self):
+        from app.t100_live_leader_fencing import PostgresLeaderLeaseStore
+        async with self.pool.acquire() as db:
+            async with db.transaction():
+                await db.execute("""UPDATE t100_live_executor_leases
+                    SET lease_expires_at=clock_timestamp()+interval '100 milliseconds'
+                    WHERE lease_name='t100-live-executor'""")
+                store = PostgresLeaderLeaseStore(db)
+                await db.execute("SELECT pg_sleep(0.2)")
+                self.assertFalse(await store.assert_current('t100-live-executor', 'worker-A', 11))
+                self.assertFalse(await store.renew('t100-live-executor', 'worker-A', 11, 30))
+                token, acquired = await store.acquire('t100-live-executor', 'worker-A', 30)
+                self.assertTrue(acquired)
+                self.assertEqual(token, 12)
+                self.assertTrue(await store.assert_current('t100-live-executor', 'worker-A', 12))
+
     async def asyncSetUp(self):
         require_isolated_ci()
+        self.read_pool = None
         self.pool = await asyncpg.create_pool(
             host="127.0.0.1", port=5432,
             user="postgres", password=TEST_PASSWORD,
@@ -159,11 +177,13 @@ class RealPostgresProtectedV40Tests(unittest.IsolatedAsyncioTestCase):
             await journal.create_initial(checkpoint_from_row(cp_row))
 
     async def asyncTearDown(self):
+        if self.read_pool is not None:
+            await self.read_pool.close()
         await self.pool.close()
 
     async def finalize(self):
         from app.t100_live_leader_fencing import LeaderLease
-        return await self.executor.persist(
+        return await self.executor.persist_offline_unclaimed(
             batch=self.batch, pre_attempt_witness=self.witness,
             lease=LeaderLease("t100-live-executor", "worker-A", 11, 45),
             observed_at=self.observed_at,
@@ -203,6 +223,150 @@ class RealPostgresProtectedV40Tests(unittest.IsolatedAsyncioTestCase):
                 ),
             }
 
+    async def restricted_dispatch_claim_reader(self):
+        """Disposable SELECT-only runtime account, never production credentials."""
+        from app.t100_live_four_slot_dispatch_claim_reader import (
+            PostgresFourSlotDispatchClaimReader,
+        )
+        from app.t100_live_role_preflight import TARGET_ROLE
+
+        require_isolated_ci()
+        async with self.pool.acquire() as db:
+            await db.execute("""
+                DO $claimroleci$
+                BEGIN
+                    IF NOT EXISTS (
+                        SELECT 1 FROM pg_roles
+                        WHERE rolname='t100_live_executor_runtime'
+                    ) THEN
+                        CREATE ROLE t100_live_executor_runtime
+                        LOGIN PASSWORD 't100-ci-only-local-postgres'
+                        NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION;
+                    END IF;
+                END $claimroleci$
+            """)
+            await db.execute(
+                "GRANT CONNECT ON DATABASE mexc_exhaustion TO t100_live_executor_runtime"
+            )
+            await db.execute(
+                "GRANT USAGE ON SCHEMA public TO t100_live_executor_runtime"
+            )
+            await db.execute("""
+                GRANT SELECT ON
+                    public.t100_live_v40_dispatch_claims,
+                    public.t100_live_v40_slot_reservations,
+                    public.t100_live_order_intents
+                TO t100_live_executor_runtime
+            """)
+        self.read_pool = await asyncpg.create_pool(
+            host="127.0.0.1", port=5432, user=TARGET_ROLE,
+            password=TEST_PASSWORD, database=EXPECTED_DATABASE,
+            min_size=1, max_size=1, timeout=5,
+            server_settings={"default_transaction_read_only": "on"},
+        )
+        return PostgresFourSlotDispatchClaimReader(self.read_pool)
+
+    async def test_restricted_reader_requires_exact_claim_after_restart(self):
+        from app.t100_live_four_slot_dispatch_claims import (
+            PostgresFourSlotDispatchClaims,
+        )
+        from app.t100_live_leader_fencing import LeaderLease
+
+        stage = self.batch.entries[0].stage
+        reader = await self.restricted_dispatch_claim_reader()
+        absent = await reader.inspect([stage])
+        self.assertEqual(absent.status, "DISPATCH_CLAIMS_MISSING_NO_RETRY")
+        self.assertFalse(absent.all_claims_exact_and_durable)
+        self.assertFalse(absent.resubmission_allowed)
+        self.assertFalse(absent.live_authorization)
+
+        await PostgresFourSlotDispatchClaims(self.pool).claim(
+            stage=stage,
+            lease=LeaderLease("t100-live-executor", "worker-A", 11, 45),
+        )
+        found = await reader.inspect([stage])
+        self.assertEqual(
+            found.status, "DISPATCH_CLAIMS_PRESENT_RECONCILE_ONLY"
+        )
+        self.assertTrue(found.all_claims_exact_and_durable)
+        self.assertEqual(found.claimed_attempts, 1)
+        self.assertRegex(found.claim_snapshot_sha256, r"^[0-9a-f]{64}$")
+        prior_claim_digest = found.claim_snapshot_sha256
+        self.assertFalse(found.resubmission_allowed)
+        self.assertFalse(found.mexc_orders_sent)
+
+        # Crash recovery may find a prior UNKNOWN or finalized ACK. Neither
+        # state can justify another order POST for this immutable claim.
+        for target_slot, target_intent in (
+            ("UNKNOWN", "UNKNOWN"), ("ACK", "ACK"),
+            ("PROTECTED", "ACK"),
+        ):
+            with self.subTest(target_slot=target_slot):
+                async with self.pool.acquire() as db:
+                    await db.execute("""
+                        UPDATE public.t100_live_v40_slot_reservations
+                        SET state=$1 WHERE signal_id=$2
+                    """, target_slot, stage.signal_id)
+                    await db.execute("""
+                        UPDATE public.t100_live_order_intents
+                        SET state=$1 WHERE signal_id=$2
+                    """, target_intent, stage.signal_id)
+                witnessed = await reader.inspect([stage])
+                self.assertTrue(witnessed.all_claims_exact_and_durable)
+                self.assertEqual(
+                    witnessed.status, "DISPATCH_CLAIMS_PRESENT_RECONCILE_ONLY"
+                )
+                # The summary counts remain identical for these valid
+                # journal transitions, but the exact read-only SQL digest
+                # must change so a post-GET bookend cannot miss the drift.
+                self.assertRegex(
+                    witnessed.claim_snapshot_sha256, r"^[0-9a-f]{64}$",
+                )
+                self.assertNotEqual(
+                    witnessed.claim_snapshot_sha256, prior_claim_digest,
+                )
+                prior_claim_digest = witnessed.claim_snapshot_sha256
+                self.assertFalse(witnessed.resubmission_allowed)
+
+    async def test_restricted_claim_reader_rejects_privileged_and_mismatched_rows(self):
+        from app.t100_live_four_slot_dispatch_claim_reader import (
+            PostgresFourSlotDispatchClaimReader,
+            DispatchClaimRecoveryHalted,
+        )
+        from dataclasses import replace
+
+        stage = self.batch.entries[0].stage
+        with self.assertRaisesRegex(
+            DispatchClaimRecoveryHalted, "RESTRICTED_CONTEXT_REQUIRED",
+        ):
+            await PostgresFourSlotDispatchClaimReader(self.pool).inspect(
+                [stage],
+            )
+        reader = await self.restricted_dispatch_claim_reader()
+        for bad in (
+            [replace(stage, signal_id=-1)],
+            [stage, stage],
+            [replace(stage, state="UNKNOWN")],
+        ):
+            with self.assertRaisesRegex(
+                DispatchClaimRecoveryHalted,
+                "STAGED_IDENTITIES_INVALID",
+            ):
+                await reader.inspect(bad)
+
+        # CI-only seed an inconsistent immutable claim. A row's existence
+        # is not enough: exact origin and slot ownership must also match.
+        async with self.pool.acquire() as db:
+            await db.execute("""
+                INSERT INTO public.t100_live_v40_dispatch_claims
+                (signal_id,external_oid,holder_id,fencing_token)
+                VALUES($1, 'wrong-origin', 'worker-A', 11)
+            """, stage.signal_id)
+        result = await reader.inspect([stage])
+        self.assertEqual(result.status, "DISPATCH_CLAIM_JOURNAL_DRIFT_NO_RETRY")
+        self.assertFalse(result.resubmission_allowed)
+        self.assertFalse(result.all_claims_exact_and_durable)
+
     async def test_real_postgres_atomic_commit_and_restart_recovery(self):
         before = await self.state()
         self.assertEqual(before, {
@@ -239,6 +403,1100 @@ class RealPostgresProtectedV40Tests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(len(recovered.recovered), 4)
         self.assertFalse(recovered.live_authorization)
+
+
+    async def test_legacy_durable_readiness_gate_flags_review_and_orphan_ack(self):
+        """Actual disposable PostgreSQL recognizes intervention states."""
+        from app.t100_live_db_state_gate import assess_unresolved_live_state
+
+        entry = self.batch.entries[0]
+        initial = await assess_unresolved_live_state(self.pool)
+        self.assertEqual(initial["submitting_order_intents"], 1)
+        self.assertFalse(initial["unresolved_mutations_absent"])
+        self.assertEqual(initial["review_order_intents"], 0)
+
+        async with self.pool.acquire() as db:
+            await db.execute("""
+                UPDATE public.t100_live_order_intents SET state='REVIEW'
+                WHERE signal_id=$1
+            """, entry.intent.signal_id)
+        review = await assess_unresolved_live_state(self.pool)
+        self.assertEqual(review["review_order_intents"], 1)
+        self.assertFalse(review["unresolved_mutations_absent"])
+        self.assertEqual(review["unprotected_ack_intents"], 0)
+
+        # ACK before the protected checkpoint is an intervention-required
+        # inconsistent journal, even if the external order ID is present.
+        async with self.pool.acquire() as db:
+            await db.execute("""
+                UPDATE public.t100_live_order_intents
+                SET state='ACK', exchange_order_id=$2
+                WHERE signal_id=$1
+            """, entry.intent.signal_id, entry.order_id)
+        orphan = await assess_unresolved_live_state(self.pool)
+        self.assertEqual(orphan["unprotected_ack_intents"], 1)
+        self.assertFalse(orphan["unresolved_mutations_absent"])
+
+        # The actual atomic protected writer persists ACK and the OPEN
+        # checkpoint together; this clears only the legacy journal gate.
+        async with self.pool.acquire() as db:
+            await db.execute("""
+                UPDATE public.t100_live_order_intents
+                SET state='SUBMITTING', exchange_order_id=NULL
+                WHERE signal_id=$1
+            """, entry.intent.signal_id)
+        committed = await self.finalize()
+        self.assertTrue(committed.db_atomic_commit_observed)
+        healed = await assess_unresolved_live_state(self.pool)
+        self.assertEqual(healed["unprotected_ack_intents"], 0)
+        self.assertEqual(healed["review_order_intents"], 0)
+        self.assertTrue(healed["unresolved_mutations_absent"])
+        self.assertFalse(healed["live_authorization"])
+
+    async def test_v40_dispatch_readiness_gate_tracks_real_sql_stage_claim_and_ack(self):
+        """Read-only gate sees unresolved states and a protected claim outcome."""
+        from app.t100_live_v40_state_gate import (
+            assess_v40_unresolved_dispatch_state,
+        )
+        from app.t100_live_four_slot_dispatch_claims import (
+            PostgresFourSlotDispatchClaims,
+        )
+        from app.t100_live_leader_fencing import LeaderLease
+
+        staged = await assess_v40_unresolved_dispatch_state(self.pool)
+        self.assertEqual(staged["status"],
+                         "V40_DB_DISPATCH_OR_RESERVATION_UNRESOLVED")
+        self.assertEqual(staged["unresolved_reservations"], 1)
+        self.assertEqual(staged["unresolved_dispatch_claims"], 0)
+        self.assertFalse(staged["v40_unresolved_dispatch_state_absent"])
+
+        entry = self.batch.entries[0]
+        leader = LeaderLease("t100-live-executor", "worker-A", 11, 45)
+        await PostgresFourSlotDispatchClaims(self.pool).claim(
+            stage=entry.stage, lease=leader,
+        )
+        claimed = await assess_v40_unresolved_dispatch_state(self.pool)
+        self.assertEqual(claimed["unresolved_reservations"], 1)
+        self.assertEqual(claimed["unresolved_dispatch_claims"], 1)
+        self.assertFalse(claimed["live_authorization"])
+
+        committed = await self.executor.persist_claimed(
+            batch=self.batch, pre_attempt_witness=self.witness,
+            lease=leader, observed_at=self.observed_at,
+        )
+        self.assertTrue(committed.db_atomic_commit_observed)
+        cleared = await assess_v40_unresolved_dispatch_state(self.pool)
+        self.assertEqual(
+            cleared["status"], "V40_DB_STATE_CLEAR_NONAUTHORIZING",
+        )
+        self.assertTrue(cleared["v40_unresolved_dispatch_state_absent"])
+        self.assertEqual(cleared["unresolved_reservations"], 0)
+        self.assertEqual(cleared["unresolved_dispatch_claims"], 0)
+        self.assertEqual(cleared["unclaimed_protected_reservations"], 0)
+        self.assertEqual(cleared["dispatch_claim_provenance_mismatches"], 0)
+        self.assertEqual(cleared["protected_reservations"], 1)
+        self.assertEqual(cleared["total_dispatch_claims"], 1)
+        self.assertFalse(cleared["entry_allowed"])
+        self.assertFalse(cleared["live_authorization"])
+        self.assertFalse(cleared["mexc_orders_sent"])
+
+    async def test_restricted_v40_dispatch_claim_privileges_and_trigger(self):
+        """Audit real, disposable PostgreSQL role and immutable trigger.
+
+        GRANT/REVOKE/DISABLE operations exist ONLY in CI-guarded ephemeral
+        database; the audit itself never writes or changes a permission.
+        """
+        from app.t100_live_v40_dispatch_privilege_audit import (
+            assess_v40_dispatch_claim_privileges,
+        )
+
+        require_isolated_ci()
+        await self.restricted_dispatch_claim_reader()
+        role = "t100_live_executor_runtime"
+        async with self.pool.acquire() as admin:
+            await admin.execute("""
+                REVOKE INSERT, UPDATE, DELETE, TRUNCATE, TRIGGER
+                ON public.t100_live_v40_dispatch_claims
+                FROM t100_live_executor_runtime
+            """)
+
+        async def inspect():
+            async with self.read_pool.acquire() as conn:
+                async with conn.transaction(
+                    isolation="repeatable_read", readonly=True,
+                ):
+                    return await assess_v40_dispatch_claim_privileges(conn)
+
+        before = await inspect()
+        self.assertEqual(
+            before["status"], "V40_DISPATCH_CLAIM_PRIVILEGES_BLOCKED",
+        )
+        self.assertFalse(before["dispatch_claim_privileges_verified"])
+        self.assertFalse(before["live_authorization"])
+
+        try:
+            async with self.pool.acquire() as admin:
+                await admin.execute("""
+                    GRANT INSERT ON public.t100_live_v40_dispatch_claims
+                    TO t100_live_executor_runtime
+                """)
+            allowed = await inspect()
+            self.assertEqual(
+                allowed["status"],
+                "V40_DISPATCH_CLAIM_PRIVILEGES_VERIFIED_NONAUTHORIZING",
+            )
+            self.assertTrue(allowed["immutable_trigger_verified"])
+            self.assertTrue(allowed["runtime_ddl_rights_absent"])
+
+            async with self.pool.acquire() as admin:
+                await admin.execute("""
+                    GRANT DELETE ON public.t100_live_v40_dispatch_claims
+                    TO t100_live_executor_runtime
+                """)
+            unsafe = await inspect()
+            self.assertFalse(unsafe["dispatch_claim_privileges_verified"])
+            self.assertEqual(
+                unsafe["status"], "V40_DISPATCH_CLAIM_PRIVILEGES_BLOCKED",
+            )
+            async with self.pool.acquire() as admin:
+                await admin.execute("""
+                    REVOKE DELETE ON public.t100_live_v40_dispatch_claims
+                    FROM t100_live_executor_runtime
+                """)
+                await admin.execute("""
+                    ALTER TABLE public.t100_live_v40_dispatch_claims
+                    DISABLE TRIGGER t100_v40_dispatch_claim_immutable
+                """)
+            trigger_disabled = await inspect()
+            self.assertFalse(trigger_disabled["immutable_trigger_verified"])
+            self.assertFalse(
+                trigger_disabled["dispatch_claim_privileges_verified"],
+            )
+        finally:
+            async with self.pool.acquire() as admin:
+                await admin.execute("""
+                    ALTER TABLE public.t100_live_v40_dispatch_claims
+                    ENABLE TRIGGER t100_v40_dispatch_claim_immutable
+                """)
+                await admin.execute("""
+                    REVOKE INSERT, DELETE
+                    ON public.t100_live_v40_dispatch_claims
+                    FROM t100_live_executor_runtime
+                """)
+
+    async def test_real_postgres_settled_restart_supervisor_runs_get_only_four_slot_audit(self):
+        """A settled SQL attempt can only initiate GET-only inventory audit.
+
+        Uses the exact real persisted checkpoint and three already-owned
+        historical test positions; simulated MEXC GET orders and native
+        stops match the committed four-slot ledger. Still NONAUTHORIZING.
+        """
+        from app.t100_live_four_slot_restart_triage import (
+            PostgresFourSlotRestartTriage,
+        )
+        from app.t100_live_four_slot_restart_supervisor import (
+            run_four_slot_restart_readonly_cycle,
+        )
+        from app.t100_live_four_slot_ledger_reader import (
+            PostgresFourSlotLedgerReader,
+        )
+        from app.t100_live_four_slot_dispatch_claims import (
+            PostgresFourSlotDispatchClaims,
+        )
+        from app.t100_live_leader_fencing import LeaderLease
+        from tests.test_t100_live_four_slot_readonly_cli import PAPER_KILLED
+        from tests.test_t100_live_four_slot_mexc_readonly import (
+            MockMexcGetOnly, prepare_rows,
+        )
+
+        await self.restricted_dispatch_claim_reader()
+        entry = self.batch.entries[0]
+        leader = LeaderLease("t100-live-executor", "worker-A", 11, 45)
+        await PostgresFourSlotDispatchClaims(self.pool).claim(
+            stage=entry.stage, lease=leader,
+        )
+        committed = await self.executor.persist_claimed(
+            batch=self.batch, pre_attempt_witness=self.witness,
+            lease=leader, observed_at=self.observed_at,
+        )
+        self.assertTrue(committed.db_atomic_commit_observed)
+        from decimal import Decimal as D
+        _, old_orders, _, _ = prepare_rows(3)
+        positions = [dict(p) for p in self.position_rows]
+        for position in positions:
+            position.update({"im": D("10"), "unRealizedPnl": D("0")})
+        new_order = dict(self.new_order)
+        new_order["externalOid"] = entry.intent.external_oid
+        new_order["feeCurrency"] = "USDT"
+        client = MockMexcGetOnly(
+            [*old_orders, new_order],
+            positions, [dict(p) for p in self.stop_rows],
+        )
+        before = await self.state()
+        report = await run_four_slot_restart_readonly_cycle(
+            triage=PostgresFourSlotRestartTriage(self.read_pool),
+            ledger=PostgresFourSlotLedgerReader(self.read_pool),
+            client=client,
+            env=PAPER_KILLED,
+            shared_manual_observation=False,
+        )
+        self.assertEqual(
+            report["status"], "RESTART_OBSERVED_NONAUTHORIZING",
+            msg=report.get("inventory_status"),
+        )
+        self.assertEqual(
+            report["inventory_status"],
+            "NONFLAT_PROVENANCE_MATCHED_NONAUTHORIZING",
+        )
+        self.assertGreater(len(client.calls), 0)
+        self.assertTrue(
+            all("/private/" in path for path, _ in client.calls)
+        )
+        self.assertEqual(await self.state(), before)
+        self.assertFalse(report["manual_position_adopted"])
+        self.assertFalse(report["order_retry_allowed"])
+        self.assertFalse(report["entry_allowed"])
+        self.assertFalse(report["live_authorization"])
+        self.assertFalse(report["mexc_orders_sent"])
+        self.assertFalse(report["database_writes_sent"])
+
+    async def test_real_pg_restart_rejects_slot_change_during_get_window(self):
+        """Actual restricted SQL bookends expose concurrent journal drift.
+
+        The synthetic account-audit callback represents a venue GET window;
+        it only mutates the disposable CI database to simulate another
+        worker changing a slot. The read-only supervisor itself has no
+        database mutation and never sends exchange orders.
+        """
+        from unittest.mock import patch
+        from app.t100_live_four_slot_restart_triage import (
+            PostgresFourSlotRestartTriage,
+        )
+        from app.t100_live_four_slot_restart_supervisor import (
+            run_four_slot_restart_readonly_cycle,
+        )
+        from app.t100_live_four_slot_dispatch_claims import (
+            PostgresFourSlotDispatchClaims,
+        )
+        from app.t100_live_leader_fencing import LeaderLease
+        from tests.test_t100_live_four_slot_readonly_cli import PAPER_KILLED
+
+        await self.restricted_dispatch_claim_reader()
+        entry = self.batch.entries[0]
+        leader = LeaderLease("t100-live-executor", "worker-A", 11, 45)
+        await PostgresFourSlotDispatchClaims(self.pool).claim(
+            stage=entry.stage, lease=leader,
+        )
+        committed = await self.executor.persist_claimed(
+            batch=self.batch,
+            pre_attempt_witness=self.witness,
+            lease=leader, observed_at=self.observed_at,
+        )
+        self.assertTrue(committed.db_atomic_commit_observed)
+
+        async def synthetic_get_window(**kwargs):
+            # This is a simulated competing writer against EPHEMERAL
+            # Postgres, never an operation on MEXC or production DB.
+            async with self.pool.acquire() as db:
+                await db.execute("""
+                    UPDATE public.t100_live_v40_slot_reservations
+                    SET state='UNKNOWN' WHERE signal_id=$1
+                """, entry.intent.signal_id)
+                await db.execute("""
+                    UPDATE public.t100_live_order_intents
+                    SET state='UNKNOWN' WHERE signal_id=$1
+                """, entry.intent.signal_id)
+            return {
+                "status": "NONFLAT_PROVENANCE_MATCHED_NONAUTHORIZING",
+                "entry_allowed": False, "live_authorization": False,
+                "mexc_orders_sent": False,
+                "database_writes_sent": False,
+            }
+
+        with patch(
+            "app.t100_live_four_slot_restart_supervisor.run_readonly_four_slot_audit",
+            new=synthetic_get_window,
+        ):
+            result = await run_four_slot_restart_readonly_cycle(
+                triage=PostgresFourSlotRestartTriage(self.read_pool),
+                ledger=object(), client=object(), env=PAPER_KILLED,
+            )
+        self.assertEqual(
+            result["status"], "RESTART_DB_CHANGED_DURING_GET_NO_RETRY",
+        )
+        self.assertFalse(result["entry_allowed"])
+        self.assertFalse(result["live_authorization"])
+        self.assertFalse(result["order_retry_allowed"])
+        self.assertFalse(result["mexc_orders_sent"])
+        self.assertFalse(result["database_writes_sent"])
+        self.assertEqual((await self.state())["slot"], "UNKNOWN")
+
+    async def test_real_postgres_restart_supervisor_never_gets_before_pending_attempt_recovery(self):
+        """End-to-end restricted SQL triage -> no GET while POST ambiguous."""
+        from app.t100_live_four_slot_restart_triage import (
+            PostgresFourSlotRestartTriage,
+        )
+        from app.t100_live_four_slot_restart_supervisor import (
+            run_four_slot_restart_readonly_cycle,
+        )
+        from app.t100_live_four_slot_ledger_reader import (
+            PostgresFourSlotLedgerReader,
+        )
+        from app.t100_live_four_slot_dispatch_claims import (
+            PostgresFourSlotDispatchClaims,
+        )
+        from app.t100_live_leader_fencing import LeaderLease
+        from tests.test_t100_live_four_slot_readonly_cli import PAPER_KILLED
+        from tests.test_t100_live_four_slot_mexc_readonly import MockMexcGetOnly
+
+        await self.restricted_dispatch_claim_reader()
+        triage = PostgresFourSlotRestartTriage(self.read_pool)
+        ledger = PostgresFourSlotLedgerReader(self.read_pool)
+        client = MockMexcGetOnly([], [], [])
+        initial = await self.state()
+        blocked = await run_four_slot_restart_readonly_cycle(
+            triage=triage, ledger=ledger, client=client,
+            env=PAPER_KILLED,
+        )
+        self.assertEqual(
+            blocked["status"],
+            "RESTART_PENDING_ATTEMPT_EXACT_ORIGIN_RECONCILE_ONLY",
+        )
+        self.assertEqual(blocked["durable_v40_dispatch_claims"], 0)
+        self.assertEqual(client.calls, [])
+        self.assertEqual(await self.state(), initial)
+
+        # Even a committed claim never permits a fresh exchange POST
+        # or a normal inventory-only restart while still SUBMITTING.
+        entry = self.batch.entries[0]
+        await PostgresFourSlotDispatchClaims(self.pool).claim(
+            stage=entry.stage,
+            lease=LeaderLease("t100-live-executor", "worker-A", 11, 45),
+        )
+        again = await run_four_slot_restart_readonly_cycle(
+            triage=triage, ledger=ledger, client=client,
+            env=PAPER_KILLED,
+        )
+        self.assertEqual(again["durable_v40_dispatch_claims"], 1)
+        self.assertEqual(
+            again["status"],
+            "RESTART_PENDING_ATTEMPT_EXACT_ORIGIN_RECONCILE_ONLY",
+        )
+        self.assertEqual(client.calls, [])
+        self.assertFalse(again["order_retry_allowed"])
+        self.assertFalse(again["live_authorization"])
+        self.assertEqual(await self.state(), initial)
+
+    async def test_released_v40_slot_cannot_hide_unresolved_post_from_restart(self):
+        """Actual restricted PostgreSQL detects hidden released ambiguity."""
+        from app.t100_live_four_slot_restart_triage import (
+            PostgresFourSlotRestartTriage,
+        )
+
+        await self.restricted_dispatch_claim_reader()
+        entry = self.batch.entries[0]
+        async with self.pool.acquire() as db:
+            await db.execute("""
+                UPDATE public.t100_live_v40_slot_reservations
+                SET state='RELEASED' WHERE signal_id=$1
+            """, entry.intent.signal_id)
+        report = await PostgresFourSlotRestartTriage(
+            self.read_pool,
+        ).inspect()
+        self.assertEqual(
+            report.status, "RESTART_TRIAGE_RELEASED_ATTEMPT_UNRESOLVED",
+        )
+        self.assertEqual(report.attempts, ())
+        self.assertFalse(report.entry_allowed)
+        self.assertFalse(report.retry_allowed)
+        self.assertFalse(report.mexc_orders_sent)
+
+    async def test_released_v40_claim_with_wrong_origin_fails_same_snapshot(self):
+        """CI-only inconsistent immutable claim must never be hidden."""
+        from app.t100_live_four_slot_restart_triage import (
+            PostgresFourSlotRestartTriage,
+        )
+
+        await self.restricted_dispatch_claim_reader()
+        entry = self.batch.entries[0]
+        async with self.pool.acquire() as db:
+            await db.execute("""
+                INSERT INTO public.t100_live_v40_dispatch_claims
+                (signal_id, external_oid, holder_id, fencing_token)
+                VALUES($1, 'wrong-origin', 'worker-A', 11)
+            """, entry.intent.signal_id)
+            await db.execute("""
+                UPDATE public.t100_live_order_intents
+                SET state='CLOSED' WHERE signal_id=$1
+            """, entry.intent.signal_id)
+            await db.execute("""
+                UPDATE public.t100_live_v40_slot_reservations
+                SET state='RELEASED' WHERE signal_id=$1
+            """, entry.intent.signal_id)
+        report = await PostgresFourSlotRestartTriage(
+            self.read_pool,
+        ).inspect()
+        self.assertEqual(
+            report.status, "RESTART_TRIAGE_RELEASED_ATTEMPT_UNRESOLVED",
+        )
+        self.assertEqual(report.attempts, ())
+        self.assertFalse(report.live_authorization)
+
+    async def test_real_pg_pending_origin_get_only_never_recovers_or_retries(self):
+        """Actual restricted SQL triage -> synthetic exact MEXC GET twice.
+
+        This test cannot certify native protection, order submission
+        permissions, venue settlement or account-wide risk. It performs
+        ZERO SQL writes after the observer starts.
+        """
+        from app.t100_live_four_slot_restart_triage import (
+            PostgresFourSlotRestartTriage,
+        )
+        from app.t100_live_four_slot_pending_origin_get import (
+            observe_pending_origins_get_only,
+        )
+        from app.t100_live_four_slot_dispatch_claims import (
+            PostgresFourSlotDispatchClaims,
+        )
+        from app.t100_live_leader_fencing import LeaderLease
+        from tests.test_t100_live_four_slot_mexc_readonly import MockMexcGetOnly
+
+        await self.restricted_dispatch_claim_reader()
+        triage = PostgresFourSlotRestartTriage(self.read_pool)
+        source = await triage.inspect()
+        self.assertEqual(source.pending_attempts, 1)
+        self.assertEqual(source.durable_claims, 0)
+        entry = self.batch.entries[0]
+        client = MockMexcGetOnly([self.new_order], [], [])
+        before = await self.state()
+        present = await observe_pending_origins_get_only(
+            triage=source, client=client,
+        )
+        self.assertEqual(
+            present.status,
+            "PENDING_ORIGIN_ORDERS_SEEN_UNPROTECTED_NONAUTHORIZING",
+        )
+        self.assertEqual(present.origins_checked, 1)
+        self.assertEqual(present.origin_orders_seen, 1)
+        self.assertEqual(len(client.calls), 2)
+        self.assertEqual(await self.state(), before)
+        self.assertFalse(present.order_fill_verified)
+        self.assertFalse(present.native_stop_protection_verified)
+        self.assertFalse(present.mexc_orders_sent)
+
+        # After a one-shot claim is committed, the exact same origin can
+        # only be observed, never submitted/retried by this module.
+        lease = LeaderLease("t100-live-executor", "worker-A", 11, 45)
+        await PostgresFourSlotDispatchClaims(self.pool).claim(
+            stage=entry.stage, lease=lease,
+        )
+        claimed = await triage.inspect()
+        self.assertEqual(claimed.durable_claims, 1)
+        missing = MockMexcGetOnly([], [], [])
+        after_claim = await self.state()
+        absent = await observe_pending_origins_get_only(
+            triage=claimed, client=missing,
+        )
+        self.assertEqual(
+            absent.status,
+            "PENDING_ORIGIN_ALL_ABSENT_STILL_UNKNOWN_NO_RETRY",
+        )
+        self.assertEqual(len(missing.calls), 2)
+        self.assertEqual(await self.state(), after_claim)
+        self.assertFalse(absent.retry_allowed)
+        self.assertFalse(absent.entry_allowed)
+        self.assertFalse(absent.live_authorization)
+
+    async def test_real_postgres_restricted_restart_triage_is_reconcile_only(self):
+        """Database recovery triage cannot retry even before dispatch claim.
+
+        SQL SELECT-only under the actual restricted runtime CI role.
+        Exchange remains entirely uncontacted and no DB write is made by
+        the triage inspector.
+        """
+        from app.t100_live_four_slot_restart_triage import (
+            PostgresFourSlotRestartTriage,
+        )
+        from app.t100_live_four_slot_dispatch_claims import (
+            PostgresFourSlotDispatchClaims,
+        )
+        from app.t100_live_leader_fencing import LeaderLease
+
+        entry = self.batch.entries[0]
+        await self.restricted_dispatch_claim_reader()
+        triage = PostgresFourSlotRestartTriage(self.read_pool)
+        before = await self.state()
+        pending = await triage.inspect()
+        self.assertEqual(
+            pending.status, "RESTART_TRIAGE_UNRESOLVED_RECONCILE_ONLY",
+        )
+        self.assertEqual(pending.active_slots, 1)
+        self.assertEqual(pending.pending_attempts, 1)
+        self.assertEqual(pending.durable_claims, 0)
+        self.assertFalse(pending.retry_allowed)
+        self.assertFalse(pending.native_stop_protection_verified)
+        self.assertFalse(pending.manual_position_adopted)
+        self.assertFalse(pending.mexc_orders_sent)
+        self.assertEqual(await self.state(), before)
+        summary = pending.safe_summary()
+        self.assertNotIn(entry.intent.external_oid, str(summary))
+        self.assertNotIn(entry.intent.symbol, str(summary))
+
+        leader = LeaderLease("t100-live-executor", "worker-A", 11, 45)
+        await PostgresFourSlotDispatchClaims(self.pool).claim(
+            stage=entry.stage, lease=leader,
+        )
+        claimed = await triage.inspect()
+        self.assertEqual(claimed.pending_attempts, 1)
+        self.assertEqual(claimed.durable_claims, 1)
+        self.assertTrue(claimed.attempts[0].claim_present)
+        self.assertFalse(claimed.retry_allowed)
+        self.assertEqual((await self.state())["new_intent"], "SUBMITTING")
+
+        finalized = await self.executor.persist_claimed(
+            batch=self.batch, pre_attempt_witness=self.witness,
+            lease=leader, observed_at=self.observed_at,
+        )
+        self.assertTrue(finalized.db_atomic_commit_observed)
+        protected = await triage.inspect()
+        self.assertEqual(
+            protected.status, "RESTART_TRIAGE_NO_PENDING_NONAUTHORIZING",
+        )
+        self.assertEqual(protected.active_slots, 1)
+        self.assertEqual(protected.pending_attempts, 0)
+        self.assertEqual(protected.durable_claims, 1)
+        self.assertFalse(protected.entry_allowed)
+        self.assertFalse(protected.live_authorization)
+
+    async def test_restart_triage_detects_unknown_state_and_claim_drift(self):
+        from app.t100_live_four_slot_restart_triage import (
+            PostgresFourSlotRestartTriage,
+        )
+
+        await self.restricted_dispatch_claim_reader()
+        entry = self.batch.entries[0]
+        triage = PostgresFourSlotRestartTriage(self.read_pool)
+
+        # An UNKNOWN attempt without a claim still forbids retry: the
+        # venue may have received a POST before a process crash.
+        async with self.pool.acquire() as db:
+            await db.execute("""
+                UPDATE public.t100_live_v40_slot_reservations
+                SET state='UNKNOWN' WHERE signal_id=$1
+            """, entry.intent.signal_id)
+            await db.execute("""
+                UPDATE public.t100_live_order_intents
+                SET state='UNKNOWN' WHERE signal_id=$1
+            """, entry.intent.signal_id)
+        ambiguous = await triage.inspect()
+        self.assertEqual(
+            ambiguous.status, "RESTART_TRIAGE_UNRESOLVED_RECONCILE_ONLY",
+        )
+        self.assertEqual(ambiguous.attempts[0].slot_state, "UNKNOWN")
+        self.assertFalse(ambiguous.retry_allowed)
+
+        # CI-only intentionally inserts a mismatched immutable origin.
+        # Reader must not use the claim as an authoritative ownership fact.
+        async with self.pool.acquire() as db:
+            await db.execute("""
+                INSERT INTO public.t100_live_v40_dispatch_claims
+                (signal_id, external_oid, holder_id, fencing_token)
+                VALUES ($1, 'incorrect-origin', 'worker-A', 11)
+            """, entry.intent.signal_id)
+        inconsistent = await triage.inspect()
+        self.assertEqual(
+            inconsistent.status, "RESTART_TRIAGE_CLAIM_PROVENANCE_DRIFT",
+        )
+        self.assertEqual(inconsistent.attempts, ())
+        self.assertFalse(inconsistent.entry_allowed)
+        self.assertFalse(inconsistent.retry_allowed)
+
+    async def test_restart_triage_rejects_admin_context(self):
+        from app.t100_live_four_slot_restart_triage import (
+            PostgresFourSlotRestartTriage,
+        )
+
+        refused = await PostgresFourSlotRestartTriage(self.pool).inspect()
+        self.assertEqual(
+            refused.status, "RESTART_TRIAGE_RESTRICTED_CONTEXT_UNVERIFIED",
+        )
+        self.assertFalse(refused.entry_allowed)
+        self.assertEqual(refused.attempts, ())
+
+    async def test_one_shot_dispatch_claim_is_durable_and_never_reclaimed(self):
+        """Claim is NOT order permission; no code in this test sends a POST."""
+        from app.t100_live_four_slot_dispatch_claims import (
+            PostgresFourSlotDispatchClaims, FourSlotDispatchClaimHalted,
+        )
+        from app.t100_live_leader_fencing import LeaderLease
+
+        entry = self.batch.entries[0]
+        leader = LeaderLease("t100-live-executor", "worker-A", 11, 45)
+        store = PostgresFourSlotDispatchClaims(self.pool)
+        result = await store.claim(stage=entry.stage, lease=leader)
+        self.assertEqual(result.state, "POST_POSSIBLE_UNRESOLVED")
+        self.assertTrue(result.reconciliation_required)
+        self.assertFalse(result.post_attempted)
+        self.assertFalse(result.exchange_post_authorized)
+        self.assertFalse(result.live_authorization)
+        self.assertFalse(result.mexc_orders_sent)
+        self.assertEqual((await self.state())["new_intent"], "SUBMITTING")
+        self.assertEqual((await self.state())["slot"], "SUBMITTING")
+
+        async with self.pool.acquire() as db:
+            saved = await db.fetchrow("""
+                SELECT signal_id, external_oid, holder_id, fencing_token, state
+                FROM public.t100_live_v40_dispatch_claims
+            """)
+            self.assertEqual(saved["signal_id"], entry.intent.signal_id)
+            self.assertEqual(saved["external_oid"], entry.intent.external_oid)
+            self.assertEqual(saved["holder_id"], "worker-A")
+            self.assertEqual(saved["fencing_token"], 11)
+            self.assertEqual(saved["state"], "POST_POSSIBLE_UNRESOLVED")
+
+        # Simulate restart: even the SAME leader can never regain permission.
+        restarted = PostgresFourSlotDispatchClaims(self.pool)
+        with self.assertRaisesRegex(
+            FourSlotDispatchClaimHalted, "ALREADY_CLAIMED_RECONCILE_ONLY",
+        ):
+            await restarted.claim(stage=entry.stage, lease=leader)
+        async with self.pool.acquire() as db:
+            self.assertEqual(
+                await db.fetchval(
+                    "SELECT count(*) FROM public.t100_live_v40_dispatch_claims"
+                ), 1,
+            )
+
+    async def test_one_shot_claim_cannot_be_reset_with_direct_update_or_delete(self):
+        """Database-level invariant, even in the privileged disposable CI role."""
+        from app.t100_live_four_slot_dispatch_claims import (
+            PostgresFourSlotDispatchClaims,
+        )
+        from app.t100_live_leader_fencing import LeaderLease
+
+        stage = self.batch.entries[0].stage
+        store = PostgresFourSlotDispatchClaims(self.pool)
+        leader = LeaderLease("t100-live-executor", "worker-A", 11, 45)
+        await store.claim(stage=stage, lease=leader)
+        async with self.pool.acquire() as db:
+            for query in (
+                """UPDATE public.t100_live_v40_dispatch_claims
+                   SET state='POST_POSSIBLE_UNRESOLVED'
+                   WHERE signal_id=$1""",
+                """DELETE FROM public.t100_live_v40_dispatch_claims
+                   WHERE signal_id=$1""",
+            ):
+                with self.subTest(query=query.split()[0]):
+                    with self.assertRaisesRegex(
+                        asyncpg.PostgresError,
+                        "T100_DISPATCH_CLAIM_IMMUTABLE",
+                    ):
+                        await db.execute(query, stage.signal_id)
+            saved = await db.fetchrow("""
+                SELECT signal_id, external_oid, state, holder_id,
+                       fencing_token
+                FROM public.t100_live_v40_dispatch_claims
+                WHERE signal_id=$1
+            """, stage.signal_id)
+            self.assertEqual(saved["external_oid"], stage.external_oid)
+            self.assertEqual(saved["holder_id"], "worker-A")
+            self.assertEqual(saved["fencing_token"], 11)
+            self.assertEqual(saved["state"], "POST_POSSIBLE_UNRESOLVED")
+            self.assertEqual(await db.fetchval("""
+                SELECT count(*) FROM public.t100_live_v40_dispatch_claims
+            """), 1)
+
+    async def test_two_competing_dispatch_claims_have_exactly_one_winner(self):
+        from app.t100_live_four_slot_dispatch_claims import (
+            PostgresFourSlotDispatchClaims, FourSlotDispatchClaimHalted,
+        )
+        from app.t100_live_leader_fencing import LeaderLease
+
+        stage = self.batch.entries[0].stage
+        leader = LeaderLease("t100-live-executor", "worker-A", 11, 45)
+        store = PostgresFourSlotDispatchClaims(self.pool)
+        answers = await asyncio.gather(
+            store.claim(stage=stage, lease=leader),
+            store.claim(stage=stage, lease=leader),
+            return_exceptions=True,
+        )
+        self.assertEqual(
+            sum(not isinstance(v, Exception) for v in answers), 1
+        )
+        self.assertEqual(
+            sum(isinstance(v, FourSlotDispatchClaimHalted) for v in answers), 1
+        )
+        async with self.pool.acquire() as db:
+            self.assertEqual(await db.fetchval("""
+                SELECT count(*) FROM public.t100_live_v40_dispatch_claims
+            """), 1)
+        self.assertEqual((await self.state())["new_intent"], "SUBMITTING")
+
+    async def test_backend_termination_mid_dispatch_claim_rolls_back_and_never_posts(self):
+        """Kill only the disposable DB backend AFTER INSERT, before COMMIT."""
+        from app.t100_live_four_slot_dispatch_claims import (
+            PostgresFourSlotDispatchClaims, FourSlotDispatchClaimHalted,
+        )
+        from app.t100_live_leader_fencing import LeaderLease
+
+        require_isolated_ci()
+        store = PostgresFourSlotDispatchClaims(self.pool)
+        stage = self.batch.entries[0].stage
+        leader = LeaderLease("t100-live-executor", "worker-A", 11, 45)
+        async with self.pool.acquire() as db:
+            await db.execute("""
+                CREATE FUNCTION public.t100_ci_kill_dispatch_claim()
+                RETURNS trigger LANGUAGE plpgsql AS $claimci$
+                BEGIN
+                    PERFORM pg_terminate_backend(pg_backend_pid());
+                    RETURN NEW;
+                END
+                $claimci$
+            """)
+            await db.execute("""
+                CREATE TRIGGER t100_ci_kill_claim_after_insert
+                AFTER INSERT ON public.t100_live_v40_dispatch_claims
+                FOR EACH ROW EXECUTE FUNCTION public.t100_ci_kill_dispatch_claim()
+            """)
+        try:
+            with self.assertRaisesRegex(
+                FourSlotDispatchClaimHalted, "DB_FAILURE_RECONCILE_ONLY",
+            ):
+                await store.claim(stage=stage, lease=leader)
+            async with self.pool.acquire() as db:
+                self.assertEqual(await db.fetchval("""
+                    SELECT count(*) FROM public.t100_live_v40_dispatch_claims
+                """), 0)
+            self.assertEqual((await self.state())["new_intent"], "SUBMITTING")
+        finally:
+            async with self.pool.acquire() as db:
+                await db.execute("""
+                    DROP TRIGGER IF EXISTS t100_ci_kill_claim_after_insert
+                    ON public.t100_live_v40_dispatch_claims
+                """)
+                await db.execute("""
+                    DROP FUNCTION IF EXISTS public.t100_ci_kill_dispatch_claim()
+                """)
+
+        # The previous failed DB transaction cannot have sent an order:
+        # this module is exclusively SQL. A new claim is now permissible
+        # only because the old INSERT demonstrably rolled back entirely.
+        result = await store.claim(stage=stage, lease=leader)
+        self.assertFalse(result.mexc_orders_sent)
+        self.assertEqual(result.state, "POST_POSSIBLE_UNRESOLVED")
+        async with self.pool.acquire() as db:
+            self.assertEqual(await db.fetchval("""
+                SELECT count(*) FROM public.t100_live_v40_dispatch_claims
+            """), 1)
+
+    async def test_dispatch_claim_rejects_stale_leader_unknown_intent_and_bad_id(self):
+        from dataclasses import replace
+        from app.t100_live_four_slot_dispatch_claims import (
+            PostgresFourSlotDispatchClaims, FourSlotDispatchClaimHalted,
+        )
+        from app.t100_live_leader_fencing import LeaderLease
+
+        stage = self.batch.entries[0].stage
+        leader = LeaderLease("t100-live-executor", "worker-A", 11, 45)
+        store = PostgresFourSlotDispatchClaims(self.pool)
+        with self.assertRaisesRegex(
+            FourSlotDispatchClaimHalted, "STAGE_OR_FENCE_INVALID",
+        ):
+            await store.claim(stage=replace(stage, state="UNKNOWN"), lease=leader)
+        with self.assertRaisesRegex(
+            FourSlotDispatchClaimHalted, "DURABLE_STAGE_MISMATCH",
+        ):
+            await store.claim(
+                stage=replace(stage, external_oid="altered-origin"),
+                lease=leader,
+            )
+        async with self.pool.acquire() as db:
+            await db.execute("""
+                UPDATE public.t100_live_order_intents
+                SET state='UNKNOWN'
+                WHERE signal_id=$1
+            """, stage.signal_id)
+        with self.assertRaisesRegex(
+            FourSlotDispatchClaimHalted, "DURABLE_STAGE_MISMATCH",
+        ):
+            await store.claim(stage=stage, lease=leader)
+        async with self.pool.acquire() as db:
+            await db.execute("""
+                UPDATE public.t100_live_order_intents
+                SET state='SUBMITTING' WHERE signal_id=$1
+            """, stage.signal_id)
+            await db.execute("""
+                UPDATE public.t100_live_executor_leases
+                SET fencing_token=12
+                WHERE lease_name='t100-live-executor'
+            """)
+        with self.assertRaisesRegex(
+            FourSlotDispatchClaimHalted, "LEASE_STALE",
+        ):
+            await store.claim(stage=stage, lease=leader)
+        async with self.pool.acquire() as db:
+            self.assertEqual(await db.fetchval("""
+                SELECT count(*) FROM public.t100_live_v40_dispatch_claims
+            """), 0)
+
+    async def test_claim_bound_commit_rejects_missing_or_wrong_dispatch_origin(self):
+        """The final SQL writer itself refuses a non-claimed bundle.
+
+        No venue client is involved; a prepared bundle supplied by a caller
+        must never override the database's immutable claim ownership.
+        """
+        from app.t100_live_leader_fencing import LeaderLease
+
+        entry = self.batch.entries[0]
+        leader = LeaderLease("t100-live-executor", "worker-A", 11, 45)
+        before = await self.state()
+
+        with self.assertRaisesRegex(
+            ProtectedCommitHalted, "DISPATCH_CLAIM_UNVERIFIED",
+        ):
+            await self.executor.persist_claimed(
+                batch=self.batch,
+                pre_attempt_witness=self.witness, lease=leader,
+                observed_at=self.observed_at,
+            )
+        self.assertEqual(await self.state(), before)
+
+        # Exact signal, wrong origin: even privileged direct CI SQL
+        # cannot manufacture a claim matching the observed fill.
+        async with self.pool.acquire() as db:
+            await db.execute("""
+                INSERT INTO public.t100_live_v40_dispatch_claims
+                (signal_id, external_oid, holder_id, fencing_token)
+                VALUES($1, 'foreign-origin', 'worker-A', 11)
+            """, entry.intent.signal_id)
+        with self.assertRaisesRegex(
+            ProtectedCommitHalted, "DISPATCH_CLAIM_UNVERIFIED",
+        ):
+            await self.executor.persist_claimed(
+                batch=self.batch, pre_attempt_witness=self.witness,
+                lease=leader, observed_at=self.observed_at,
+            )
+        self.assertEqual(await self.state(), before)
+        async with self.pool.acquire() as db:
+            self.assertEqual(await db.fetchval("""
+                SELECT count(*) FROM public.t100_live_order_fills
+            """), 0)
+
+    async def test_claim_bound_restart_reconciles_private_get_then_real_postgres_commit(self):
+        """True restricted-SQL claim + mock GET + actual DB atomic commit.
+
+        The mock exchange positions/stops/fills are NOT a live venue test.
+        No future real transport is connected to this procedure.
+        """
+        from decimal import Decimal
+        from app.t100_live_four_slot_mexc_readonly import (
+            inspect_claimed_four_slot_prepared_get_only,
+        )
+        from app.t100_live_four_slot_dispatch_claims import (
+            PostgresFourSlotDispatchClaims,
+        )
+        from app.t100_live_leader_fencing import LeaderLease
+        from tests.test_t100_live_four_slot_mexc_readonly import MockMexcGetOnly
+        from tests.test_t100_live_v40_protected_finalization import deal
+
+        entry = self.batch.entries[0]
+        positions = [dict(x) for x in self.position_rows]
+        stops = [dict(x) for x in self.stop_rows]
+        for row in positions:
+            row.update({"im": Decimal("10"), "unRealizedPnl": Decimal("0")})
+        client = MockMexcGetOnly([self.new_order], positions, stops)
+        client.deals[entry.order_id] = [deal()]
+        before = await self.state()
+        reader = await self.restricted_dispatch_claim_reader()
+
+        # No durable POST-possibility claim = no exchange read, no bundle
+        # and no database write, even if the mock venue contains a fill.
+        rejected = await inspect_claimed_four_slot_prepared_get_only(
+            stages=[entry.stage], intents=[entry.intent],
+            pre_attempt_witness=self.witness, claim_reader=reader,
+            client=client,
+        )
+        self.assertEqual(
+            rejected.status, "PROTECTED_GET_DISPATCH_CLAIM_NOT_VERIFIED_NO_RETRY",
+        )
+        self.assertIsNone(rejected.prepared_batch)
+        self.assertEqual(client.calls, [])
+        self.assertEqual(await self.state(), before)
+
+        leader = LeaderLease("t100-live-executor", "worker-A", 11, 45)
+        claimed = await PostgresFourSlotDispatchClaims(self.pool).claim(
+            stage=entry.stage, lease=leader,
+        )
+        self.assertFalse(claimed.exchange_post_authorized)
+        self.assertFalse(claimed.mexc_orders_sent)
+
+        prepared = await inspect_claimed_four_slot_prepared_get_only(
+            stages=[entry.stage], intents=[entry.intent],
+            pre_attempt_witness=self.witness, claim_reader=reader,
+            client=client,
+        )
+        self.assertTrue(prepared.dispatch_claims_verified)
+        self.assertEqual(
+            prepared.status, "PROTECTED_GET_BATCH_PREPARED_NONAUTHORIZING",
+        )
+        self.assertEqual(prepared.deal_histories_observed, 1)
+        self.assertIsNotNone(prepared.prepared_batch)
+        self.assertEqual(await self.state(), before)
+        self.assertTrue(all("/private/" in path for path, _ in client.calls))
+        self.assertFalse(prepared.entry_allowed)
+        self.assertFalse(prepared.live_authorization)
+
+        saved = await self.executor.persist_claimed(
+            batch=prepared.prepared_batch,
+            pre_attempt_witness=self.witness,
+            lease=leader,
+            observed_at=self.observed_at,
+        )
+        self.assertTrue(saved.db_atomic_commit_observed)
+        self.assertFalse(saved.mexc_orders_sent)
+        self.assertEqual(await self.state(), {
+            "new_intent": "ACK", "slot": "PROTECTED",
+            "fills": 1, "fill_sets": 1, "checkpoints": 4,
+            "revisions": 4,
+        })
+        async with self.pool.acquire() as db:
+            self.assertEqual(await db.fetchval("""
+                SELECT count(*) FROM public.t100_live_v40_dispatch_claims
+                WHERE signal_id=$1 AND external_oid=$2
+            """, entry.intent.signal_id, entry.intent.external_oid), 1)
+
+    async def test_real_postgres_commit_requires_fresh_two_bookend_private_get_fill_evidence(self):
+        """One test crosses mocked PRIVATE GETs into REAL disposable PostgreSQL.
+
+        The exchange is a fixture: never MEXC POST or real native stops.
+        Restart from actual persisted rows is exercised in the companion
+        test_real_postgres_atomic_commit_and_restart_recovery.
+        """
+        from decimal import Decimal
+        from app.t100_live_four_slot_mexc_readonly import (
+            inspect_staged_four_slot_prepared_get_only,
+        )
+        from tests.test_t100_live_four_slot_mexc_readonly import MockMexcGetOnly
+        from tests.test_t100_live_v40_protected_finalization import deal
+        from app.t100_live_leader_fencing import LeaderLease
+
+        entry = self.batch.entries[0]
+        positions = [dict(x) for x in self.position_rows]
+        stops = [dict(x) for x in self.stop_rows]
+        for row in positions:
+            row.update({"im": Decimal("10"), "unRealizedPnl": Decimal("0")})
+        client = MockMexcGetOnly([self.new_order], positions, stops)
+        client.deals[entry.order_id] = [deal()]
+        before = await self.state()
+        self.assertEqual(before["new_intent"], "SUBMITTING")
+        self.assertEqual(before["slot"], "SUBMITTING")
+
+        # Exchange observation cannot write ACK or a new checkpoint.
+        observed = await inspect_staged_four_slot_prepared_get_only(
+            stages=[entry.stage], intents=[entry.intent],
+            pre_attempt_witness=self.witness, client=client,
+        )
+        self.assertEqual(
+            observed.status, "PROTECTED_GET_BATCH_PREPARED_NONAUTHORIZING",
+        )
+        self.assertEqual(observed.orders_observed, 1)
+        self.assertEqual(observed.deal_histories_observed, 1)
+        self.assertEqual(
+            sum("/private/order/deal_details/" in path
+                for path, _ in client.calls), 2,
+        )
+        self.assertTrue(all("/private/" in path for path, _ in client.calls))
+        self.assertFalse(observed.live_authorization)
+        self.assertFalse(observed.mexc_orders_sent)
+        self.assertEqual(await self.state(), before)
+
+        # The fresh GET-backed bundle, not self.batch from an offline helper,
+        # is the ONLY input to actual PostgreSQL ACK+fill/checkpoint writes.
+        batch = observed.prepared_batch
+        self.assertIsNotNone(batch)
+        saved = await self.executor.persist_offline_unclaimed(
+            batch=batch, pre_attempt_witness=self.witness,
+            lease=LeaderLease("t100-live-executor", "worker-A", 11, 45),
+            observed_at=self.observed_at,
+        )
+        self.assertEqual(
+            saved.status,
+            "V40_PROTECTED_RECORDS_ATOMICALLY_PERSISTED_NONAUTHORIZING",
+        )
+        self.assertFalse(saved.live_authorization)
+        self.assertEqual(await self.state(), {
+            "new_intent": "ACK", "slot": "PROTECTED",
+            "fills": 1, "fill_sets": 1, "checkpoints": 4, "revisions": 4,
+        })
+        async with self.pool.acquire() as db:
+            persisted = await db.fetchrow("""
+                SELECT order_id, fill_digest_sha256, fill_count
+                FROM public.t100_live_order_fill_sets WHERE order_id=$1
+            """, entry.order_id)
+            self.assertEqual(persisted["order_id"], entry.order_id)
+            self.assertEqual(
+                persisted["fill_digest_sha256"],
+                batch.entries[0].fill_set.fill_digest_sha256,
+            )
+            self.assertEqual(persisted["fill_count"], 1)
+        with self.assertRaises(ProtectedCommitHalted):
+            await self.executor.persist_offline_unclaimed(
+                batch=batch, pre_attempt_witness=self.witness,
+                lease=LeaderLease("t100-live-executor", "worker-A", 11, 45),
+                observed_at=self.observed_at,
+            )
+        self.assertEqual((await self.state())["fills"], 1)
+
+    async def test_real_postgres_stays_unmodified_after_invalid_private_get_outcomes(self):
+        """Every GET failure blocks before any real database ACK/INSERT."""
+        from decimal import Decimal
+        from app.t100_live_four_slot_mexc_readonly import (
+            inspect_staged_four_slot_prepared_get_only,
+        )
+        from tests.test_t100_live_four_slot_mexc_readonly import MockMexcGetOnly
+        from tests.test_t100_live_v40_protected_finalization import deal
+
+        entry = self.batch.entries[0]
+        positions = [dict(x) for x in self.position_rows]
+        stops = [dict(x) for x in self.stop_rows]
+        for row in positions:
+            row.update({"im": Decimal("10"), "unRealizedPnl": Decimal("0")})
+        baseline = await self.state()
+
+        for mode in ("missing_order", "no_deals", "partial_deal",
+                     "missing_stop", "timeout"):
+            with self.subTest(mode=mode):
+                client = MockMexcGetOnly([self.new_order], positions, stops)
+                client.deals[entry.order_id] = [deal()]
+                if mode == "missing_order":
+                    client.orders.clear()
+                elif mode == "no_deals":
+                    client.deals.clear()
+                elif mode == "partial_deal":
+                    client.deals[entry.order_id] = [
+                        deal(vol=Decimal("249")),
+                    ]
+                elif mode == "missing_stop":
+                    client.stops.pop()
+                else:
+                    client.fail_path = (
+                        "/api/v1/private/order/deal_details/" + entry.order_id
+                    )
+                observed = await inspect_staged_four_slot_prepared_get_only(
+                    stages=[entry.stage], intents=[entry.intent],
+                    pre_attempt_witness=self.witness, client=client,
+                )
+                self.assertIsNone(observed.prepared_batch)
+                self.assertNotEqual(
+                    observed.status,
+                    "PROTECTED_GET_BATCH_PREPARED_NONAUTHORIZING",
+                )
+                self.assertFalse(observed.entry_allowed)
+                self.assertFalse(observed.mexc_orders_sent)
+                self.assertEqual(await self.state(), baseline)
+                self.assertTrue(
+                    all("/private/" in path for path, _ in client.calls),
+                )
 
     async def test_restricted_postgres_plus_get_only_four_slot_recovery_and_missing_stop(self):
         """Exercise actual read-only DB SELECTs and MEXC GET contracts TOGETHER.
@@ -402,6 +1660,228 @@ class RealPostgresProtectedV40Tests(unittest.IsolatedAsyncioTestCase):
                 """)
                 await db.execute("DROP FUNCTION public.t100_ci_block_protected()")
         self.assertTrue((await self.finalize()).db_atomic_commit_observed)
+
+
+
+    async def test_real_postgres_reserve_stage_get_commit_and_restart_fourth_slot(self):
+        """One entire real-SQL 4th-slot lifecycle; exchange remains a GET mock.
+
+        Unlike the setup's pre-seeded SUBMITTING row, this test creates the
+        reservation + durable intent with the actual transaction writers.
+        It then proves a GET-only full fill/stop witness before real SQL
+        ACK/fill/checkpoint writes and read-only nonflat restart recovery.
+        """
+        from decimal import Decimal as D
+        from app.t100_live_execution import EntryIntent
+        from app.t100_live_four_slot_reservations import PostgresFourSlotReservations
+        from app.t100_live_four_slot_attempt_journal import PostgresFourSlotAttemptJournal
+        from app.t100_live_four_slot_ledger_reader import PostgresFourSlotLedgerReader
+        from app.t100_live_four_slot_mexc_readonly import (
+            inspect_existing_four_slots_get_only,
+            inspect_staged_four_slot_prepared_get_only,
+        )
+        from app.t100_live_four_slot_planner import plan_four_slot_v40
+        from app.t100_live_leader_fencing import LeaderLease
+        from tests.test_t100_live_four_slot_planner import prior, OPEN_TS
+        from tests.test_t100_live_four_slot_mexc_readonly import (
+            MockMexcGetOnly, prepare_rows,
+        )
+        from tests.test_t100_live_v40_protected_finalization import deal
+
+        setup_entry = self.batch.entries[0]
+        async with self.pool.acquire() as db:
+            await db.execute("""
+                DELETE FROM public.t100_live_v40_slot_reservations
+                WHERE signal_id=$1
+            """, setup_entry.intent.signal_id)
+            await db.execute("""
+                DELETE FROM public.t100_live_order_intents
+                WHERE signal_id=$1
+            """, setup_entry.intent.signal_id)
+        start = await self.state()
+        self.assertIsNone(start["slot"])
+        self.assertIsNone(start["new_intent"])
+        self.assertEqual(start["checkpoints"], 3)
+
+        # A real ledger witness MUST use the restricted, read-only DB role.
+        # Connecting with the administrative/migration role correctly fails.
+        from app.t100_live_role_preflight import TARGET_ROLE
+        async with self.pool.acquire() as db:
+            await db.execute("""
+                DO $ci$
+                BEGIN
+                  IF NOT EXISTS (
+                    SELECT 1 FROM pg_roles
+                    WHERE rolname='t100_live_executor_runtime'
+                  ) THEN
+                    CREATE ROLE t100_live_executor_runtime
+                    LOGIN PASSWORD 't100-ci-only-local-postgres'
+                    NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION;
+                  END IF;
+                END $ci$;
+            """)
+            await db.execute(
+                "GRANT CONNECT ON DATABASE mexc_exhaustion TO t100_live_executor_runtime"
+            )
+            await db.execute(
+                "GRANT USAGE ON SCHEMA public TO t100_live_executor_runtime"
+            )
+            await db.execute("""
+                GRANT SELECT ON
+                    public.t100_live_position_checkpoints,
+                    public.t100_live_position_checkpoint_revisions,
+                    public.t100_live_order_intents,
+                    public.t100_live_stop_amendments
+                TO t100_live_executor_runtime
+            """)
+        self.read_pool = await asyncpg.create_pool(
+            host="127.0.0.1", port=5432,
+            user=TARGET_ROLE, password=TEST_PASSWORD,
+            database=EXPECTED_DATABASE, min_size=1, max_size=1,
+            timeout=5,
+            server_settings={"default_transaction_read_only": "on"},
+        )
+        _, old_orders, old_positions, old_stops = prepare_rows(3)
+        ledger = PostgresFourSlotLedgerReader(self.read_pool)
+        client_before = MockMexcGetOnly(old_orders, old_positions, old_stops)
+        witness = await inspect_existing_four_slots_get_only(
+            ledger=ledger, client=client_before,
+        )
+        self.assertEqual(witness.status,
+                         "NONFLAT_PROVENANCE_MATCHED_NONAUTHORIZING")
+        self.assertEqual(witness.occupied_slots, 3)
+        self.assertFalse(witness.live_authorization)
+
+        plan = plan_four_slot_v40(
+            inventory=witness.inventory,
+            durable_recovery=witness.recovery,
+            symbol="FOURTH_USDT", prior_bars=prior(),
+            admission_open_ts=OPEN_TS,
+            stage1_atr7_pct=6., equity_usdt=10000.,
+            marked_existing_usdt=0.,
+        )
+        self.assertEqual(plan.action, "ADMIT")
+        leader = LeaderLease("t100-live-executor", "worker-A", 11, 45)
+        moment = datetime.now(timezone.utc)
+        reservation = await PostgresFourSlotReservations(self.pool).reserve(
+            plan=plan, witness=witness, observed_at=moment,
+            lease=leader, signal_id=setup_entry.intent.signal_id,
+            symbol="FOURTH_USDT",
+        )
+        self.assertEqual((await self.state())["slot"], "RESERVED")
+        entry = EntryIntent(
+            signal_id=reservation.signal_id, symbol=reservation.symbol,
+            reference_price=D("2"), notional_usdt=D("500"),
+            volume_contracts=D("250"), stop_price=D("3.5"),
+            external_oid=reservation.external_oid,
+        )
+        stage = await PostgresFourSlotAttemptJournal(self.pool).stage(
+            intent=entry, witness=witness, lease=leader,
+            observed_at=moment,
+            contract_size=D("1"), volume_step=D("1"),
+            price_tick=D("0.01"),
+        )
+        self.assertEqual(stage.state, "SUBMITTING")
+        staged_state = await self.state()
+        self.assertEqual(staged_state["slot"], "SUBMITTING")
+        self.assertEqual(staged_state["new_intent"], "SUBMITTING")
+        self.assertEqual(staged_state["fills"], 0)
+
+        after_positions = [dict(x) for x in self.position_rows]
+        after_stops = [dict(x) for x in self.stop_rows]
+        for row in after_positions:
+            row.update({"im": D("10"), "unRealizedPnl": D("0")})
+        simulated_order = dict(self.new_order)
+        simulated_order["externalOid"] = entry.external_oid
+        simulated_order["feeCurrency"] = "USDT"
+        client_after = MockMexcGetOnly(
+            [simulated_order], after_positions, after_stops,
+        )
+        client_after.deals[str(simulated_order["orderId"])] = [deal()]
+        observed = await inspect_staged_four_slot_prepared_get_only(
+            stages=[stage], intents=[entry],
+            pre_attempt_witness=witness, client=client_after,
+        )
+        self.assertEqual(
+            observed.status, "PROTECTED_GET_BATCH_PREPARED_NONAUTHORIZING",
+        )
+        self.assertEqual(await self.state(), staged_state)
+        self.assertFalse(observed.mexc_orders_sent)
+
+        saved = await self.executor.persist_offline_unclaimed(
+            batch=observed.prepared_batch,
+            pre_attempt_witness=witness, lease=leader, observed_at=moment,
+        )
+        self.assertTrue(saved.db_atomic_commit_observed)
+        self.assertFalse(saved.live_authorization)
+        self.assertEqual(await self.state(), {
+            "new_intent": "ACK", "slot": "PROTECTED",
+            "fills": 1, "fill_sets": 1, "checkpoints": 4, "revisions": 4,
+        })
+        # Read all durable rows from PostgreSQL, independently re-GET
+        # origins/positions/stops and reconstruct four owned protected slots.
+        old_orders.append(simulated_order)
+        client_restart = MockMexcGetOnly(
+            old_orders, after_positions, after_stops,
+        )
+        restored = await inspect_existing_four_slots_get_only(
+            ledger=ledger, client=client_restart,
+        )
+        self.assertEqual(
+            restored.status, "NONFLAT_PROVENANCE_MATCHED_NONAUTHORIZING",
+        )
+        self.assertEqual(restored.occupied_slots, 4)
+        self.assertFalse(restored.live_authorization)
+        self.assertTrue(
+            all("/private/" in path for path, _ in
+                [*client_before.calls, *client_after.calls,
+                 *client_restart.calls])
+        )
+
+    async def test_terminated_postgres_backend_rolls_back_partial_protected_commit(self):
+        """Kill only the CI backend mid-commit; another connection sees no ACK.
+
+        A database exception is not the same as losing its connection after
+        some writes. The single transaction must roll back the ACK/fills
+        even when a backend is terminated during checkpoint insertion.
+        This trigger is installed only in the guarded disposable CI DB.
+        """
+        require_isolated_ci()
+        async with self.pool.acquire() as db:
+            await db.execute("""
+                CREATE FUNCTION public.t100_ci_terminate_during_checkpoint()
+                RETURNS trigger LANGUAGE plpgsql AS $t100ci$
+                BEGIN
+                    PERFORM pg_terminate_backend(pg_backend_pid());
+                    RETURN NEW;
+                END
+                $t100ci$
+            """)
+            await db.execute("""
+                CREATE TRIGGER t100_ci_terminate_checkpoint
+                BEFORE INSERT ON public.t100_live_position_checkpoints
+                FOR EACH ROW
+                EXECUTE FUNCTION public.t100_ci_terminate_during_checkpoint()
+            """)
+        before = await self.state()
+        self.assertEqual(before["new_intent"], "SUBMITTING")
+        try:
+            with self.assertRaises(ProtectedCommitHalted):
+                await self.finalize()
+            # A fresh pool checkout must observe a fully rolled-back TX,
+            # not an ACK, fill or partially persisted stop/checkpoint.
+            self.assertEqual(await self.state(), before)
+        finally:
+            async with self.pool.acquire() as db:
+                await db.execute("""
+                    DROP TRIGGER IF EXISTS t100_ci_terminate_checkpoint
+                    ON public.t100_live_position_checkpoints
+                """)
+                await db.execute("""
+                    DROP FUNCTION IF EXISTS public.t100_ci_terminate_during_checkpoint()
+                """)
+        self.assertTrue((await self.finalize()).db_atomic_commit_observed)
+        self.assertEqual((await self.state())["new_intent"], "ACK")
 
     async def test_duplicate_after_ack_fails_closed_with_no_duplicate_fills(self):
         await self.finalize()

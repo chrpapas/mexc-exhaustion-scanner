@@ -258,7 +258,7 @@ class RealPostgresSharedManualV40Tests(unittest.IsolatedAsyncioTestCase):
                  fill_sets=0, fills=0, checkpoints=0, revisions=0),
         )
         batch, order = self.prepared(intent, stage)
-        committed = await self.commit_store.persist(
+        committed = await self.commit_store.persist_offline_unclaimed(
             batch=batch, pre_attempt_witness=self.pre,
             lease=lease(), observed_at=self.observed_at,
             shared_pre_positions=self.manual_positions,
@@ -314,6 +314,69 @@ class RealPostgresSharedManualV40Tests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(proof.production_restart_certified)
         self.assertFalse(proof.live_authorization)
 
+    async def assert_boundary_rollback(self, table, event, operation, oid):
+        # These names are fixed test constants, never external identifiers.
+        before = await self.snapshot_state(oid)
+        async with self.pool.acquire() as db:
+            await db.execute("""
+                CREATE FUNCTION public.t100_ci_attempt_abort()
+                RETURNS trigger LANGUAGE plpgsql AS $$
+                BEGIN
+                  RAISE EXCEPTION 'CI-only attempt boundary failure';
+                END $$
+            """)
+            await db.execute(f"""
+                CREATE TRIGGER t100_ci_attempt_abort BEFORE {event}
+                ON public.{table} FOR EACH ROW
+                EXECUTE FUNCTION public.t100_ci_attempt_abort()
+            """)
+        try:
+            with self.assertRaises(FourSlotAttemptHalted):
+                await operation()
+            self.assertEqual(await self.snapshot_state(oid), before)
+        finally:
+            async with self.pool.acquire() as db:
+                await db.execute(f"DROP TRIGGER t100_ci_attempt_abort ON public.{table}")
+                await db.execute("DROP FUNCTION public.t100_ci_attempt_abort()")
+
+    async def test_each_staging_write_failure_preserves_reserved_without_intent(self):
+        reserve = await self.reserve()
+        for table, event in (
+            ("t100_live_order_intents", "INSERT"),
+            ("t100_live_order_intents", "UPDATE"),
+            ("t100_live_v40_slot_reservations", "UPDATE"),
+        ):
+            with self.subTest(table=table, event=event):
+                await self.assert_boundary_rollback(
+                    table, event, lambda: self.stage(reserve), reserve.external_oid,
+                )
+        self.assertEqual((await self.snapshot_state(reserve.external_oid))["state"], None)
+        self.assertEqual((await self.snapshot_state(reserve.external_oid))["slot"], "RESERVED")
+        # No venue transport exists here; only this unsubmitted transaction may be restaged.
+        _, staged = await self.stage(reserve)
+        self.assertFalse(staged.post_attempted)
+        with self.assertRaises(FourSlotAttemptHalted):
+            await self.stage(reserve)
+
+    async def test_each_unknown_write_failure_preserves_submitting_and_blocks_restage(self):
+        reserve = await self.reserve()
+        await self.stage(reserve)
+        async def latch():
+            await self.journal.latch_unknown(
+                signal_id=reserve.signal_id, external_oid=reserve.external_oid, lease=lease(),
+            )
+        for table in ("t100_live_order_intents", "t100_live_v40_slot_reservations"):
+            with self.subTest(table=table):
+                await self.assert_boundary_rollback(table, "UPDATE", latch, reserve.external_oid)
+                with self.assertRaises(FourSlotAttemptHalted):
+                    await self.stage(reserve)
+        await latch()
+        state = await self.snapshot_state(reserve.external_oid)
+        self.assertEqual((state["state"], state["slot"]), ("UNKNOWN", "UNKNOWN"))
+        with self.assertRaises(FourSlotAttemptHalted):
+            await self.stage(reserve)
+        self.assertEqual((self.manual_positions, self.manual_stops), self.original_manual)
+
     async def test_actual_postgres_trigger_rollback_leaves_submitting(self):
         reserve = await self.reserve()
         intent, stage = await self.stage(reserve)
@@ -337,7 +400,7 @@ class RealPostgresSharedManualV40Tests(unittest.IsolatedAsyncioTestCase):
         before = await self.snapshot_state(reserve.external_oid)
         try:
             with self.assertRaises(ProtectedCommitHalted):
-                await self.commit_store.persist(
+                await self.commit_store.persist_offline_unclaimed(
                     batch=batch, pre_attempt_witness=self.pre,
                     lease=lease(), observed_at=self.observed_at,
                     shared_pre_positions=self.manual_positions,
@@ -378,7 +441,7 @@ class RealPostgresSharedManualV40Tests(unittest.IsolatedAsyncioTestCase):
         reservation = await self.reserve()
         intent, stage = await self.stage(reservation)
         batch, order = self.prepared(intent, stage)
-        await self.commit_store.persist(
+        await self.commit_store.persist_offline_unclaimed(
             batch=batch, pre_attempt_witness=self.pre,
             lease=lease(), observed_at=self.observed_at,
             shared_pre_positions=self.manual_positions,
@@ -602,7 +665,7 @@ class RealPostgresSharedManualV40Tests(unittest.IsolatedAsyncioTestCase):
             await self.stage(reserve)
         batch, _ = self.prepared(intent, stage)
         with self.assertRaises(ProtectedCommitHalted):
-            await self.commit_store.persist(
+            await self.commit_store.persist_offline_unclaimed(
                 batch=batch, pre_attempt_witness=self.pre,
                 lease=lease(), observed_at=self.observed_at,
                 shared_pre_positions=self.manual_positions,

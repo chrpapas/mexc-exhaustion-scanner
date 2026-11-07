@@ -1,0 +1,74 @@
+{
+  "observed_date": "2026-11-02",
+  "service": "mexc-t100-live-shadow",
+  "service_id": "srv-dbf5798m7kps73fqcuog",
+  "deployed_commit": "9073ce99d31ad86132db35335a54746d7d5a1ad3",
+  "deploy_id": "dep-dbh0qhmc6qcc73cq3kkg",
+  "auto_deploy": false,
+  "current_branch_certified": false,
+  "soak_certified": false,
+  "sampled_logs": [
+    {
+      "timestamp": "2026-11-02T12:52:12.469707201Z",
+      "message": "2026-11-02 12:52:12,469 INFO __main__ — T100 shadow cycle run_id=364e43466f88 cycle_index=4714 status=OBSERVING_KILL_LATCHED position_observed=True tpsl_observed=False critical_consistent=True continuity_status=REST_WS_REST_CONTINUITY_STABLE kill_tripped=True kill_reason=NATIVE_PROTECTION_LOST entry_allowed=false live_authorization=false"
+    },
+    {
+      "timestamp": "2026-11-02T12:53:42.905106399Z",
+      "message": "2026-11-02 12:53:42,904 INFO __main__ — T100 shadow cycle run_id=364e43466f88 cycle_index=4715 status=OBSERVING_KILL_LATCHED position_observed=True tpsl_observed=False critical_consistent=True continuity_status=REST_WS_REST_CONTINUITY_STABLE kill_tripped=True kill_reason=NATIVE_PROTECTION_LOST entry_allowed=false live_authorization=false"
+    },
+    {
+      "timestamp": "2026-11-02T12:55:12.704618074Z",
+      "message": "2026-11-02 12:55:12,701 INFO __main__ — T100 shadow cycle run_id=364e43466f88 cycle_index=4716 status=OBSERVING_KILL_LATCHED position_observed=True tpsl_observed=False critical_consistent=True continuity_status=REST_WS_REST_CONTINUITY_STABLE kill_tripped=True kill_reason=NATIVE_PROTECTION_LOST entry_allowed=false live_authorization=false"
+    },
+    {
+      "timestamp": "2026-11-02T12:56:43.175172666Z",
+      "message": "2026-11-02 12:56:43,174 INFO __main__ — T100 shadow cycle run_id=364e43466f88 cycle_index=4717 status=OBSERVING_KILL_LATCHED position_observed=True tpsl_observed=False critical_consistent=True continuity_status=REST_WS_REST_CONTINUITY_STABLE kill_tripped=True kill_reason=NATIVE_PROTECTION_LOST entry_allowed=false live_authorization=false"
+    },
+    {
+      "timestamp": "2026-11-02T12:58:12.66608846Z",
+      "message": "2026-11-02 12:58:12,665 INFO __main__ — T100 shadow cycle run_id=364e43466f88 cycle_index=4718 status=OBSERVING_KILL_LATCHED position_observed=True tpsl_observed=False critical_consistent=True continuity_status=REST_WS_REST_CONTINUITY_STABLE kill_tripped=True kill_reason=NATIVE_PROTECTION_LOST entry_allowed=false live_authorization=false"
+    },
+    {
+      "timestamp": "2026-11-02T12:59:43.035293844Z",
+      "message": "2026-11-02 12:59:43,035 INFO __main__ — T100 shadow cycle run_id=364e43466f88 cycle_index=4719 status=OBSERVING_KILL_LATCHED position_observed=True tpsl_observed=False critical_consistent=True continuity_status=REST_WS_REST_CONTINUITY_STABLE kill_tripped=True kill_reason=NATIVE_PROTECTION_LOST entry_allowed=false live_authorization=false"
+    },
+    {
+      "timestamp": "2026-11-02T13:01:13.277305311Z",
+      "message": "2026-11-02 13:01:13,277 INFO __main__ — T100 shadow cycle run_id=364e43466f88 cycle_index=4720 status=OBSERVING_KILL_LATCHED position_observed=True tpsl_observed=False critical_consistent=True continuity_status=REST_WS_REST_CONTINUITY_STABLE kill_tripped=True kill_reason=NATIVE_PROTECTION_LOST entry_allowed=false live_authorization=false"
+    },
+    {
+      "timestamp": "2026-11-02T13:02:43.005488805Z",
+      "message": "2026-11-02 13:02:43,004 INFO __main__ — T100 shadow cycle run_id=364e43466f88 cycle_index=4721 status=OBSERVING_KILL_LATCHED position_observed=True tpsl_observed=False critical_consistent=True continuity_status=REST_WS_REST_CONTINUITY_STABLE kill_tripped=True kill_reason=NATIVE_PROTECTION_LOST entry_allowed=false live_authorization=false"
+    },
+    {
+      "timestamp": "2026-11-02T13:04:12.735907727Z",
+      "message": "2026-11-02 13:04:12,735 INFO __main__ — T100 shadow cycle run_id=364e43466f88 cycle_index=4722 status=OBSERVING_KILL_LATCHED position_observed=True tpsl_observed=False critical_consistent=True continuity_status=REST_WS_REST_CONTINUITY_STABLE kill_tripped=True kill_reason=NATIVE_PROTECTION_LOST entry_allowed=false live_authorization=false"
+    },
+    {
+      "timestamp": "2026-11-02T13:05:43.053585048Z",
+      "message": "2026-11-02 13:05:43,053 INFO __main__ — T100 shadow cycle run_id=364e43466f88 cycle_index=4723 status=OBSERVING_KILL_LATCHED position_observed=True tpsl_observed=False critical_consistent=True continuity_status=REST_WS_REST_CONTINUITY_STABLE kill_tripped=True kill_reason=NATIVE_PROTECTION_LOST entry_allowed=false live_authorization=false"
+    },
+    {
+      "timestamp": "2026-11-02T13:07:13.040461816Z",
+      "message": "2026-11-02 13:07:13,040 INFO __main__ — T100 shadow cycle run_id=364e43466f88 cycle_index=4724 status=OBSERVING_KILL_LATCHED position_observed=True tpsl_observed=False critical_consistent=True continuity_status=REST_WS_REST_CONTINUITY_STABLE kill_tripped=True kill_reason=NATIVE_PROTECTION_LOST entry_allowed=false live_authorization=false"
+    },
+    {
+      "timestamp": "2026-11-02T13:08:43.80838863Z",
+      "message": "2026-11-02 13:08:43,808 INFO __main__ — T100 shadow cycle run_id=364e43466f88 cycle_index=4725 status=OBSERVING_KILL_LATCHED position_observed=True tpsl_observed=False critical_consistent=True continuity_status=REST_WS_REST_CONTINUITY_STABLE kill_tripped=True kill_reason=NATIVE_PROTECTION_LOST entry_allowed=false live_authorization=false"
+    },
+    {
+      "timestamp": "2026-11-02T13:10:13.531048255Z",
+      "message": "2026-11-02 13:10:13,530 INFO __main__ — T100 shadow cycle run_id=364e43466f88 cycle_index=4726 status=OBSERVING_KILL_LATCHED position_observed=True tpsl_observed=False critical_consistent=True continuity_status=REST_WS_REST_CONTINUITY_STABLE kill_tripped=True kill_reason=NATIVE_PROTECTION_LOST entry_allowed=false live_authorization=false"
+    },
+    {
+      "timestamp": "2026-11-02T13:11:43.52258982Z",
+      "message": "2026-11-02 13:11:43,522 INFO __main__ — T100 shadow cycle run_id=364e43466f88 cycle_index=4727 status=OBSERVING_KILL_LATCHED position_observed=True tpsl_observed=False critical_consistent=True continuity_status=REST_WS_REST_CONTINUITY_STABLE kill_tripped=True kill_reason=NATIVE_PROTECTION_LOST entry_allowed=false live_authorization=false"
+    },
+    {
+      "timestamp": "2026-11-02T13:13:15.33729239Z",
+      "message": "2026-11-02 13:13:15,336 INFO __main__ — T100 shadow cycle run_id=364e43466f88 cycle_index=4728 status=OBSERVING_KILL_LATCHED position_observed=True tpsl_observed=False critical_consistent=True continuity_status=REST_WS_REST_CONTINUITY_STABLE kill_tripped=True kill_reason=NATIVE_PROTECTION_LOST entry_allowed=false live_authorization=false"
+    }
+  ],
+  "limitation": "Recent bounded log sample, not uninterrupted whole-run attestation. Existing native-protection kill latch preserved.",
+  "live_authorization": false
+}

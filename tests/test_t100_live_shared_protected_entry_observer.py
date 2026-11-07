@@ -82,6 +82,9 @@ class SharedProtectedEntryTests(unittest.IsolatedAsyncioTestCase):
             "symbol": "NEW_USDT", "positionId": "390",
             "id": "930", "positionType": 2,
             "state": 1, "isFinished": 0,
+            "orderId": 0, "triggerSide": 0, "errorCode": 0,
+            "volType": 1, "profitLossVolType": "SAME",
+            "stopLossType": 0, "stopLossReverse": 2, "lossTrend": 1,
             "stopLossPrice": D("3.5"), "vol": D("250"),
         }]
         self.post_report = counts(3, 1)

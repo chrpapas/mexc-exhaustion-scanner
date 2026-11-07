@@ -1,5 +1,6 @@
 """Offline end-to-end tests for no-POST stop update persistence."""
 import unittest
+from dataclasses import replace
 from decimal import Decimal as D
 
 from app.t100_live_checkpoint_coordinator import (
@@ -99,7 +100,16 @@ def stop(**kw):
         "positionId": "10",
         "symbol": "SIREN_USDT",
         "state": 1,
+        "positionType": 2,
         "isFinished": 0,
+        "orderId": 0,
+        "triggerSide": 0,
+        "errorCode": 0,
+        "volType": 1,
+        "profitLossVolType": "SAME",
+        "stopLossType": 0,
+        "stopLossReverse": 2,
+        "lossTrend": 1,
         "stopLossPrice": D("175"),
         "vol": D("20"),
     }
@@ -217,6 +227,137 @@ class StopUpdatePipelineTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(recovered.checkpoint.stop_price, D("90"))
         self.assertEqual(recovered.checkpoint.checkpoint_version, 2)
+
+    async def test_undercovered_stop_never_marks_journal_verified(self):
+        for bad in (
+            stop(stopLossPrice=D("90"), vol=D("1")),
+            stop(stopLossPrice=D("90"), vol=D("0")),
+            stop(stopLossPrice=D("90"), isFinished=1),
+            stop(stopLossPrice=D("90"), state=2),
+            stop(stopLossPrice=D("90"), vol=None),
+            stop(stopLossPrice=D("90"), vol=D("19.99")),
+            stop(stopLossPrice=D("90"), positionType=1),
+            stop(stopLossPrice=D("90"), positionType=True),
+            stop(stopLossPrice=D("90"), positionType=None),
+        ):
+            with self.subTest(bad=bad):
+                await self.asyncSetUp()
+                with self.assertRaisesRegex(
+                    StopUpdatePipelineHalted,
+                    "STOP_NATIVE_FULL_VOLUME_PROTECTION_UNVERIFIED",
+                ):
+                    await self.pipeline.reconcile_observed_and_persist(
+                        cp(), self.amendment,
+                        before_stops=[stop()], after_stops=[bad],
+                        best_profit_pct=D("14"), armed=True,
+                        **gates(),
+                    )
+                self.assertEqual(
+                    self.journal.states[self.amendment.external_id],
+                    "SUBMITTING",
+                )
+                self.assertEqual(self.writer.calls, [])
+
+    async def test_invalid_market_stop_semantics_cannot_persist_checkpoint(self):
+        for field, value in (
+            ("stopLossType", 1), ("orderId", 55),
+            ("triggerSide", 2), ("errorCode", 9),
+            ("stopLossReverse", 1), ("lossTrend", 2),
+            ("profitLossVolType", "UNKNOWN"),
+        ):
+            with self.subTest(field=field, value=value):
+                await self.asyncSetUp()
+                with self.assertRaisesRegex(
+                    StopUpdatePipelineHalted,
+                    "STOP_NATIVE_FULL_VOLUME_PROTECTION_UNVERIFIED",
+                ):
+                    await self.pipeline.reconcile_observed_and_persist(
+                        cp(), self.amendment,
+                        before_stops=[stop()],
+                        after_stops=[stop(
+                            stopLossPrice=D("90"), **{field: value},
+                        )],
+                        best_profit_pct=D("14"), armed=True, **gates(),
+                    )
+                self.assertEqual(
+                    self.journal.states[self.amendment.external_id],
+                    "SUBMITTING",
+                )
+                self.assertEqual(self.writer.calls, [])
+
+    async def test_restart_undercovered_current_stop_stays_unknown(self):
+        await self.amendments.mark_unknown(self.amendment)
+        with self.assertRaisesRegex(
+            StopUpdatePipelineHalted,
+            "STOP_NATIVE_FULL_VOLUME_PROTECTION_UNVERIFIED",
+        ):
+            await self.pipeline.reconcile_current_and_persist(
+                cp(), self.amendment,
+                current_stops=[stop(stopLossPrice=D("90"), vol=D("3"))],
+                best_profit_pct=D("14"), armed=True,
+                **gates(),
+            )
+        self.assertEqual(
+            self.journal.states[self.amendment.external_id], "UNKNOWN",
+        )
+        self.assertEqual(self.writer.calls, [])
+
+    async def test_checkpoint_drift_never_marks_an_unowned_amendment_verified(self):
+        for different in (
+            replace(cp(), symbol="OTHER_USDT"),
+            replace(cp(), position_id="999"),
+            replace(cp(), stop_order_id="888"),
+            replace(cp(), stop_price=D("174")),
+            replace(cp(), lifecycle_state="REVIEW"),
+        ):
+            with self.subTest(different=different):
+                await self.asyncSetUp()
+                with self.assertRaisesRegex(
+                    StopUpdatePipelineHalted,
+                    "STOP_AMENDMENT_CHECKPOINT_PROVENANCE_MISMATCH",
+                ):
+                    await self.pipeline.reconcile_observed_and_persist(
+                        different, self.amendment,
+                        before_stops=[stop()],
+                        after_stops=[stop(stopLossPrice=D("90"))],
+                        best_profit_pct=D("14"), armed=True,
+                        **gates(),
+                    )
+                self.assertEqual(
+                    self.journal.states[self.amendment.external_id],
+                    "SUBMITTING",
+                )
+                self.assertEqual(self.writer.calls, [])
+
+    async def test_restart_drift_keeps_unknown_stop_unverified(self):
+        await self.amendments.mark_unknown(self.amendment)
+        with self.assertRaisesRegex(
+            StopUpdatePipelineHalted,
+            "STOP_AMENDMENT_CHECKPOINT_PROVENANCE_MISMATCH",
+        ):
+            await self.pipeline.reconcile_current_and_persist(
+                replace(cp(), position_id="999"), self.amendment,
+                current_stops=[stop(stopLossPrice=D("90"))],
+                best_profit_pct=D("14"), armed=True, **gates(),
+            )
+        self.assertEqual(
+            self.journal.states[self.amendment.external_id], "UNKNOWN",
+        )
+
+    async def test_previously_undercovered_stop_cannot_be_amended_as_owned(self):
+        with self.assertRaisesRegex(
+            StopUpdatePipelineHalted,
+            "STOP_NATIVE_FULL_VOLUME_PROTECTION_UNVERIFIED",
+        ):
+            await self.pipeline.reconcile_observed_and_persist(
+                cp(), self.amendment,
+                before_stops=[stop(vol=D("1"))],
+                after_stops=[stop(stopLossPrice=D("90"))],
+                best_profit_pct=D("14"), armed=True, **gates(),
+            )
+        self.assertEqual(
+            self.journal.states[self.amendment.external_id], "SUBMITTING",
+        )
 
     async def test_incomplete_inventory_blocks_checkpoint_after_verification(self):
         with self.assertRaisesRegex(

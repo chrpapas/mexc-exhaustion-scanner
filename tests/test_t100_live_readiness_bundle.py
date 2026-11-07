@@ -1,4 +1,5 @@
 """Offline combined dynamic readiness bundle tests."""
+from contextlib import asynccontextmanager
 import unittest
 
 from app.t100_live_readiness_bundle import run_dynamic_readiness_bundle
@@ -6,6 +7,33 @@ from app.t100_live_schema_gate import (
     LIVE_TABLE_COLUMNS, MUTABLE_TABLES, REQUIRED_INDEXES,
     REQUIRED_SEQUENCES,
 )
+
+
+class AuditConnection:
+    def __init__(self, pool):
+        self.pool = pool
+
+    @asynccontextmanager
+    async def transaction(self, *, isolation, readonly):
+        assert isolation == "repeatable_read"
+        assert readonly is True
+        yield self
+
+    async def fetchval(self, sql):
+        if "transaction_read_only" in sql:
+            return "on"
+        if "transaction_isolation" in sql:
+            return "repeatable read"
+        if "current_database()" in sql:
+            return "mexc_exhaustion"
+        if "current_user" in sql:
+            return self.pool.v40_role
+        raise AssertionError(sql)
+
+    async def fetchrow(self, sql):
+        if "t100_v40_dispatch_claim_immutable" in sql:
+            return dict(self.pool.v40_privileges)
+        raise AssertionError(sql)
 
 
 class Pool:
@@ -16,14 +44,43 @@ class Pool:
         }
         self.indexes = set(REQUIRED_INDEXES)
         self.sequences = set(REQUIRED_SEQUENCES)
+        self.v40_slots_present = True
+        self.v40_claims_present = True
+        self.v40_role = "t100_live_executor_runtime"
+        self.v40_privilege_read_failure = False
+        self.v40_privileges = {
+            "table_owner": "postgres",
+            "can_select": True, "can_insert": True,
+            "can_update": False, "can_delete": False,
+            "can_truncate": False, "can_trigger": False,
+            "can_create_schema_objects": False,
+            "can_create_database_objects": False,
+            "immutable_trigger_enabled": True,
+        }
+        self.v40_counts = {
+            "unresolved_reservations": 0,
+            "unresolved_dispatch_claims": 0,
+            "unclaimed_protected_reservations": 0,
+            "dispatch_claim_provenance_mismatches": 0,
+            "protected_reservations": 0,
+            "total_dispatch_claims": 0,
+        }
         self.unresolved = {
             "prepared_order_intents": 0,
             "submitting_order_intents": 0,
             "unknown_order_intents": 0,
+            "review_order_intents": 0,
+            "unprotected_ack_intents": 0,
             "unresolved_stop_amendments": 0,
             "review_checkpoints": 0,
             "closing_checkpoints": 0,
         }
+
+    @asynccontextmanager
+    async def acquire(self):
+        if self.v40_privilege_read_failure:
+            raise ConnectionError("do not leak DATABASE_URL")
+        yield AuditConnection(self)
 
     async def fetch(self, sql, values):
         if "information_schema.tables" in sql:
@@ -57,6 +114,13 @@ class Pool:
         raise AssertionError("unexpected fetch")
 
     async def fetchrow(self, sql):
+        if "to_regclass(" in sql:
+            return {
+                "slots_present": self.v40_slots_present,
+                "claims_present": self.v40_claims_present,
+            }
+        if "unclaimed_protected_reservations" in sql:
+            return dict(self.v40_counts)
         return dict(self.unresolved)
 
 
@@ -123,6 +187,88 @@ class DynamicReadinessTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn(
             "unresolved_mutations_absent",
             r["dynamic_blockers"],
+        )
+
+    async def test_missing_v40_migrations_blocks_otherwise_clean_dynamic_bundle(self):
+        p = Pool()
+        p.v40_claims_present = False
+        r = await run_dynamic_readiness_bundle(client=Client(), pool=p)
+        self.assertFalse(r["dynamic_readiness_verified"])
+        self.assertIn(
+            "v40_unresolved_dispatch_state_absent", r["dynamic_blockers"],
+        )
+        self.assertEqual(
+            r["v40_dispatch_state"]["status"],
+            "V40_DB_STATE_MIGRATIONS_NOT_OBSERVED",
+        )
+        self.assertFalse(r["live_authorization"])
+
+    async def test_unresolved_v40_claim_blocks_clean_legacy_journals(self):
+        for kind in (
+            "unresolved_reservations",
+            "unresolved_dispatch_claims",
+            "unclaimed_protected_reservations",
+            "dispatch_claim_provenance_mismatches",
+        ):
+            with self.subTest(kind=kind):
+                p = Pool()
+                p.v40_counts[kind] = 1
+                r = await run_dynamic_readiness_bundle(
+                    client=Client(), pool=p,
+                )
+                self.assertFalse(r["dynamic_readiness_verified"])
+                self.assertFalse(
+                    r["v40_unresolved_dispatch_state_absent"],
+                )
+                self.assertIn(
+                    "v40_unresolved_dispatch_state_absent",
+                    r["dynamic_blockers"],
+                )
+                self.assertFalse(r["entry_allowed"])
+                self.assertFalse(r["live_authorization"])
+
+    async def test_missing_or_dangerous_claim_role_privileges_block(self):
+        for key, value in (
+            ("can_insert", False),
+            ("can_delete", True),
+            ("can_truncate", True),
+            ("can_update", True),
+            ("immutable_trigger_enabled", False),
+            ("table_owner", "t100_live_executor_runtime"),
+        ):
+            with self.subTest(key=key):
+                p = Pool()
+                p.v40_privileges[key] = value
+                r = await run_dynamic_readiness_bundle(
+                    client=Client(), pool=p,
+                )
+                self.assertFalse(r["dynamic_readiness_verified"])
+                self.assertIn(
+                    "v40_dispatch_claim_privileges_verified",
+                    r["dynamic_blockers"],
+                )
+                self.assertFalse(r["live_authorization"])
+
+    async def test_wrong_role_or_unavailable_privilege_reader_blocks(self):
+        p = Pool()
+        p.v40_role = "postgres"
+        r = await run_dynamic_readiness_bundle(client=Client(), pool=p)
+        self.assertFalse(r["v40_dispatch_claim_privileges_verified"])
+        self.assertFalse(r["dynamic_readiness_verified"])
+        self.assertEqual(
+            r["v40_dispatch_privileges"]["status"],
+            "V40_DISPATCH_RESTRICTED_CONTEXT_UNVERIFIED",
+        )
+
+        p = Pool()
+        p.v40_privilege_read_failure = True
+        r = await run_dynamic_readiness_bundle(client=Client(), pool=p)
+        self.assertFalse(r["dynamic_readiness_verified"])
+        self.assertFalse(r["v40_dispatch_claim_privileges_verified"])
+        self.assertNotIn("DATABASE_URL", str(r))
+        self.assertEqual(
+            r["v40_dispatch_privileges"]["status"],
+            "V40_DISPATCH_PRIVILEGE_AUDIT_UNAVAILABLE",
         )
 
     async def test_nonflat_requires_durable_recovery(self):

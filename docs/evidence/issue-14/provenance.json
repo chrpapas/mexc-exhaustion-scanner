@@ -1,0 +1,64 @@
+{
+  "date": "2026-11-02",
+  "code_revision": "ff40c29064385b552912d35954f711a6c5550e24",
+  "fetched_handoff_revision": "2669da62c6fc5bd7d7b25b1c681197914fedc629",
+  "python_version": "3.12.16",
+  "original_simulator_sha256": "bf8ba6a08332abdb5bdddd38356249a08b8c3e85d4d695a426bbd51b3d51867c",
+  "frozen_archive_sha256": "2918f4589e8d564ca55b6f24aa2e9a868b5d214653ad7d92acaf1729fd1e4cb5",
+  "public_filter_sha256": "cf27297d34b92e8a9d55b4904561761cc42c302577201a849419e92e6969482e",
+  "original_module_hashes": {
+    "ablation_v15.py": "5f687580a02626185bcca6540dbd4741f66f95ecbaf9b895551cb77003ede4ba",
+    "adaptive_v14.py": "df4a635e8c974af41529cbc0ffa6e73df65e6af1d727b887fb497c3b181d610a",
+    "atr_floor_v16.py": "8d81f8f5bb24fdd5993874da747a3a397e7e97ce86994db114eddd588eefe27d",
+    "buffer_v8.py": "29d8acc1418dff272f8e127836a805a4c50d0ae7dd59a7c6ef4b7f4f37455662",
+    "combined_v32.py": "ad2db652a97dc51bf297f9ba30ac70ee61e29fd73389c910dc7a9f1209cc7219",
+    "contract_lots_v37.py": "fae003cb2e5b29416da2fedcf8c3295b8ac3657555eaa8366131db0a4fd99742",
+    "contract_replay_v39.py": "6e73af4b3358e0c36a9d73f9d8e12076408658f9af74dc6e3d3c7bae57a0b2c1",
+    "contract_replay_v40_scale.py": "bf8ba6a08332abdb5bdddd38356249a08b8c3e85d4d695a426bbd51b3d51867c",
+    "deleverage_v7.py": "613ec6a2348751f17319e15f7d70be8de87f11b39c15c1b3abee8f7433756fe4",
+    "economics_v23.py": "c3c6f42479f3207240f1922b501b4de02bbc105ed7141b1f42865faaaefb3f55",
+    "exit_horizon_v31.py": "52d158fcf9a8e20e4066b6a60055dd29db8c5d33b5dc70e1d03bcf9a05083f5e",
+    "preentry_v26.py": "5c98a8cc7a006b3a3c7bc8cebc9173c8a3a89543abb39b93a885d1c9f9fd2f49",
+    "prior_v9.py": "5ba99f199e8450a19f5c4cfebf982c05c9a9fa390c8ca6240fd2ac1823a1a947",
+    "replay_v12.py": "66eb4648e264d3abf1b63c233ffdc26a1fedffc41a4eeb95ce1f80eab4a5c428",
+    "research_shock.py": "7f148d72706542d7e5a88d09787b89382a3c0938d3fe9b9e994f694b5e1e2e1d",
+    "stage_reference.py": "7ff24d0bb4e55344698bfe9d96f1611f09edce62733835b9927105ed4c97c2fe",
+    "test_contract_replay_v39.py": "a7b743d08d6f965fb9355e5686a1f58aefb87fa25786d0b9e73517d997856d8e",
+    "turnover_v10.py": "359f1a25822ed6efea6a27da7c2ac5f1144178be5ecd17e56d50df886fa976ad",
+    "v40_make_scaling_runner.py": "42fa8337c8243ac28f7de51a3222ea49cc0637d21055a1b9f908df8bdd1e162f",
+    "volatility_v28.py": "56dddf4f55cc719f53fdee5ac8a91a2a67cb9dddeea834ee468fbc975d9bc8b7"
+  },
+  "fresh_replay_output_sha256": {
+    "fresh_baseline": {
+      "audit.json": "a38f9a9a00d96b5c7e746bd9cb4c5509a6de2a1c999e91157671aefce8e4afbe",
+      "current_lot_child_orders.csv": "16c60160dca18b9f66076583d67d2f24ad18f6d4fa73b07d39805e3731f44e5b",
+      "entries.csv": "04b47a459205162503daa554bc30f41cd29e468b6ce165b70091e8a695ad9428",
+      "exits.csv": "dc63143add6eef9fb443b8cd3a1cc065fbc80a3296d29ed3789038c5f8055a48",
+      "fills.csv": "ee4e7630e7abb6f0ca8d8ea7f05b4b43f9571d9054dc416677f23572e20c3f82",
+      "gate_decisions.csv": "793bc812752fb3c5a6bf4581de92f48e81c7e1f833558962038025afbdcb450f",
+      "metrics.csv": "04b31ae7cec6d0da8ef1d64f118f3a7dc5d32e97885d552b0823f13ce9530340",
+      "monthly_equity.csv": "b3013b078318706dfd835563758eaa1c8d24c65fd409a83c193d5fe596e69044"
+    },
+    "fresh_filtered": {
+      "audit.json": "54d41214304401a5e05b8a8cd74387bb5d184c52e9afdc3afd045fea8e67f665",
+      "current_lot_child_orders.csv": "209879e0ae8beb1dfc604aac9cce1064c2efbe3baf3320a9251cafc8b76e880f",
+      "entries.csv": "1f5aa92db1fc79b100125a39995d0c2a43cc648a4bb23d126ef5931ba7e020eb",
+      "exits.csv": "d012600973660aad1b6bbe170013dd88d4083107f49d1eeb1cf248701d88f889",
+      "fills.csv": "8bbc1b4b8c3ee9b2ceee8b492c2ab3b1a5eb1eec6e1b2496ea4d3f774b8bfb83",
+      "gate_decisions.csv": "15296fbb872b53ac71f9a9f3252bfe6a9128c22c80de31d80f9e4268db837702",
+      "metrics.csv": "509047d62cd238ead9a8c80082569317714e595926e1c481654688b5e352694e",
+      "monthly_equity.csv": "60e47396530c5656ee70a822ec30186ff1bece50d648afa48b1d0560fd0d2ce9"
+    }
+  },
+  "entry_allowed": false,
+  "live_authorization": false,
+  "mexc_orders_sent": false,
+  "boxwave_modified": false,
+  "limitations": [
+    "Public filter is dated 2026-11-01; no current account permissions inferred.",
+    "Funding source warns WAL format without WAL file; prior uncheckpointed transactions cannot be recovered.",
+    "Original simulator independently rerun; simulator source itself is not an independent implementation.",
+    "Frozen archive contains entries, gate decisions and metrics, not full exit/fill paths.",
+    "Private credentials, DATABASE_URL, Docker and postgres executable unavailable in this environment."
+  ]
+}
