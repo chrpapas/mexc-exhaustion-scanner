@@ -87,6 +87,34 @@ def _quantity_mode_status(raw: Any) -> str:
     }.get(raw, "UNRECOGNIZED_VALUE")
 
 
+def _limited_error_code(value: Any) -> int | None:
+    """A single MEXC numeric code is not an account/order identifier."""
+    return (
+        value if type(value) is int and 0 <= value <= 999999
+        else None
+    )
+
+
+def _loss_quantity_check(
+    stop_row: dict[str, Any], closed_contracts: Decimal,
+) -> str:
+    """Finished record quantity is historical evidence, not live protection.
+
+    For SEPARATE quantity mode, 'vol' alone does not establish actual SL
+    coverage; MEXC explicitly exposes stopLossVol for that leg.
+    """
+    qty = _positive(stop_row.get("stopLossVol"))
+    if stop_row.get("profitLossVolType") != "SEPARATE":
+        return "NOT_SEPARATE_MODE"
+    if qty is None:
+        return "SL_QUANTITY_MISSING_OR_NONPOSITIVE"
+    if qty < closed_contracts:
+        return "SL_QUANTITY_BELOW_ENTRY_FILL"
+    if qty > closed_contracts:
+        return "SL_QUANTITY_EXCEEDS_ENTRY_FILL"
+    return "SL_QUANTITY_MATCHES_ENTRY_FILL_HISTORICALLY"
+
+
 def _is_flat(book: Any) -> bool:
     return (
         type(book) is dict
@@ -263,6 +291,32 @@ def assess_closed_pilot_finished_stop(
     )
     base["no_error_reported"] = (
         base["error_code_status"] == "ZERO_NORMAL"
+    )
+    error_value = _limited_error_code(row.get("errorCode"))
+    base["error_code_value"] = error_value
+    base["error_code_documented_meaning"] = {
+        0: "NORMAL",
+        8912: "AUTOMATICALLY_CANCELED_AS_POSITION_CLOSED",
+        8913: "MANUALLY_CANCELED_BY_USER",
+    }.get(error_value, "UNKNOWN_OR_NOT_REPORTED")
+    base["historical_stop_loss_quantity_check"] = _loss_quantity_check(
+        row, Decimal(1),
+    )
+    # Independent observation of a completed record does NOT prove the
+    # stop covered this quantity continuously while the position was open.
+    base["live_stop_full_coverage_certified"] = False
+    base["historical_volume_equal_one_contract"] = (
+        _positive(row.get("vol")) == Decimal(1)
+    )
+    base["historical_stop_loss_volume_equal_one_contract"] = (
+        _positive(row.get("stopLossVol")) == Decimal(1)
+    )
+    # No TP was requested in the journal. Do not infer that the venue
+    # executed one or that an unknown/missing historic field proves no TP.
+    take_profit = _positive(row.get("takeProfitPrice"))
+    base["take_profit_price_status"] = (
+        "POSITIVE_REPORTED" if take_profit is not None
+        else "NOT_POSITIVE_OR_NOT_REPORTED"
     )
 
     if row["state"] in (2, 4) and row["triggerSide"] == 0:
