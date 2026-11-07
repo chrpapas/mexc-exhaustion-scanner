@@ -84,6 +84,7 @@ def fake_client(*, st=None, secondary=None, second_type=None):
         "_private_get": AsyncMock(),
         "_private_post": AsyncMock(return_value={"success": True}),
         "_public_get": AsyncMock(),
+        "close": AsyncMock(),
     })()
     current = st or stop()
     other = secondary or stop(stop_type=second_type)
@@ -350,6 +351,7 @@ async def test_duplicate_existing_journal_blocks_new_entry_before_real_order(
                          "fourth_journal_exists": True,
                      })),
         patch.object(pilot, "_send", new=AsyncMock()) as send,
+        patch.object(pilot4, "_allow_real_mode_env"),
         patch.object(pilot4, "read_pilot_keychain_credentials",
                      return_value=("scoped-fake-key", "not-real")),
         patch.object(pilot4, "MexcTradeClient", return_value=c),
