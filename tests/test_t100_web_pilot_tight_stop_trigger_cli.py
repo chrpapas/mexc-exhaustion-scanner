@@ -176,6 +176,72 @@ def test_existing_15bp_journal_will_not_be_repurposed():
     assert old["stop_bps"] != "5"
 
 
+def test_legacy_15bp_journal_can_be_read_without_reusing_for_entry(journal_path):
+    older = journal()
+    older["stop_bps"] = "15"
+    older["stop_price"] = "76034.7"
+    m._write_first(older)
+    loaded = m._load(FP)
+    assert loaded["stop_bps"] == "15"
+    assert loaded["stop_price"] == "76034.7"
+    # An old journal always fences any new 5bp --send, regardless of whether
+    # the old HTTP outcome is known. Recovery must use GET or exact close.
+    assert journal_path.exists()
+
+
+@pytest.mark.asyncio
+async def test_legacy_15bp_journal_status_reads_original_stop_only(
+    journal_path,
+):
+    older = journal()
+    older["stop_bps"] = "15"
+    older["stop_price"] = "76034.7"
+    m._write_first(older)
+    client = fake_client()
+    s = stop()
+    s["stopLossPrice"] = "76034.7"
+    client._private_get.side_effect = [
+        entry(), [position()], [s], counts(1), [],
+    ]
+    result = await m._status(client, FP)
+    assert result["status"] == "ONE_SHORT_WITH_ATTACHED_SL_FIELDS_OBSERVED_NONCERTIFYING"
+    assert result["journal_original_stop_bps"] == "15"
+    assert result["journal_is_legacy_15bp"] is True
+    assert result["stop_count"] == 1
+    client._private_post.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_legacy_15bp_existing_journal_blocks_new_5bp_post(journal_path):
+    older = journal()
+    older["stop_bps"] = "15"
+    older["stop_price"] = "76034.7"
+    m._write_first(older)
+    client = fake_client()
+    with pytest.raises(m.TriggerPilotHalted, match="ALREADY_JOURNALED"):
+        await m._send(client, FP)
+    client._private_get.assert_not_awaited()
+    client._private_post.assert_not_awaited()
+
+
+def test_main_reports_allowlisted_dry_run_reason_without_secret(capsys):
+    with (
+        patch.object(m, "OneShotProcessLock"),
+        patch.object(m.asyncio, "run", side_effect=m.PilotDryRunHalted(
+            "NEW_SUBACCOUNT_CURRENT_INVENTORY_NOT_FLAT",
+        )),
+        patch.object(m.sys, "argv", [
+            "t100_web_pilot_tight_stop_trigger_cli", "--check",
+        ]),
+    ):
+        with pytest.raises(SystemExit) as err:
+            m.main()
+    assert err.value.code == 2
+    output = capsys.readouterr().out
+    assert "PILOT_HALTED=NEW_SUBACCOUNT_CURRENT_INVENTORY_NOT_FLAT" in output
+    assert "DO_NOT_REPEAT" not in output
+
+
 def test_reject_other_oid():
     with pytest.raises(m.TriggerPilotHalted, match="ORIGIN"):
         m._entry_body(preview(), "BAD")
