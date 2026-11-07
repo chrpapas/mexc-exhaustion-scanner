@@ -55,8 +55,10 @@ STATUS_EDITED = "SUPERVISED_ONE_STOP_PRICE_EDIT_SAME_ID_GET_OBSERVED_NONAUTHORIZ
 
 def _read_journal(fp: str) -> dict[str, Any]:
     row = native._check_journal(fp)
-    if row.get("experiment_kind") != "FOURTH_SUPERVISED_OMITTED_SL_TYPE":
-        raise pilot.TriggerPilotHalted("FOURTH_JOURNAL_EXPERIMENT_PROFILE_INVALID")
+    # The immutable, separately named FOURTH_JOURNAL is the experiment pin.
+    # Existing pilot._send deliberately journals the canonical v1 schema.
+    if pilot.JOURNAL != FOURTH_JOURNAL:
+        raise pilot.TriggerPilotHalted("FOURTH_JOURNAL_SCOPE_INVALID")
     if row.get("stop_bps") != "50":
         raise pilot.TriggerPilotHalted("FOURTH_JOURNAL_STOP_PROFILE_INVALID")
     return row
@@ -176,10 +178,13 @@ async def _observe_stop(
         out["status"] = "FOURTH_EXACT_NATIVE_STOP_INVARIANT_FAILED"
         out["failed_strict_fields"] = nonmarket_failures
         return out, None, None
-    if stop.get("stopLossType") not in (None, 0):
+    stop_type = stop.get("stopLossType")
+    if not (stop_type is None or (
+        type(stop_type) is int and stop_type == 0
+    )):
         out["status"] = "FOURTH_STOP_NOT_MARKET_OR_UNKNOWN_TYPE_UNSAFE"
         return out, None, None
-    if type(stop.get("stopLossType")) is int and stop["stopLossType"] == 0:
+    if type(stop_type) is int and stop_type == 0:
         out["market_type_explicit_from_api"] = True
     else:
         out["market_type_missing_accepted_only_for_supervised_experiment"] = True
