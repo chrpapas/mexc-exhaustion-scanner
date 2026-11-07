@@ -46,6 +46,11 @@ FULL_REPLAY_REQUIRED_ZERO = (
 )
 
 
+def _exact_count(value: Any, expected: int) -> bool:
+    # JSON booleans and floating-point counts are not audit counters.
+    return type(value) is int and value == expected
+
+
 def assess_strategy_parity_report(report: Any) -> dict[str, Any]:
     result: dict[str, Any] = {
         "historical_entry_parity_verified": False,
@@ -72,11 +77,10 @@ def assess_strategy_parity_report(report: Any) -> dict[str, Any]:
         report.get("status")
         == "V40_ENTRY_FILTER_AND_REFERENCE_CAPACITY_PARITY_PASS",
         archive_sha == FROZEN_V40_ARCHIVE_SHA256,
-        report.get("candidates") == EXPECTED_CANDIDATES,
-        report.get("prior_candles") == EXPECTED_PRIOR_CANDLES,
-        report.get("reference_entry_notionals_exact")
-        == EXPECTED_REFERENCE_NOTIONALS,
-        report.get("discrepancies") == 0,
+        _exact_count(report.get("candidates"), EXPECTED_CANDIDATES),
+        _exact_count(report.get("prior_candles"), EXPECTED_PRIOR_CANDLES),
+        _exact_count(report.get("reference_entry_notionals_exact"), EXPECTED_REFERENCE_NOTIONALS),
+        _exact_count(report.get("discrepancies"), 0),
     ))
     result["historical_entry_parity_verified"] = entry_ok
 
@@ -90,16 +94,16 @@ def assess_strategy_parity_report(report: Any) -> dict[str, Any]:
         return result
 
     true_claims = all(full.get(field) is True for field in FULL_REPLAY_REQUIRED_TRUE)
-    zero_claims = all(full.get(field) == 0 for field in FULL_REPLAY_REQUIRED_ZERO)
+    zero_claims = all(_exact_count(full.get(field), 0) for field in FULL_REPLAY_REQUIRED_ZERO)
 
     anchor = full.get("frozen_anchor")
     anchor_ok = (
         isinstance(anchor, dict)
-        and anchor.get("stage_rows") == 27776
-        and anchor.get("episodes") == 21838
-        and anchor.get("multi_stage_ge2") == 4314
-        and anchor.get("multi_stage_ge3") == 1172
-        and anchor.get("candidate_count") == EXPECTED_CANDIDATES
+        and _exact_count(anchor.get("stage_rows"), 27776)
+        and _exact_count(anchor.get("episodes"), 21838)
+        and _exact_count(anchor.get("multi_stage_ge2"), 4314)
+        and _exact_count(anchor.get("multi_stage_ge3"), 1172)
+        and _exact_count(anchor.get("candidate_count"), EXPECTED_CANDIDATES)
     )
     result["full_chronological_replay_verified"] = all((
         entry_ok,

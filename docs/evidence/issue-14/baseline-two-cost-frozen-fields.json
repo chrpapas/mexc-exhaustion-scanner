@@ -1,0 +1,30 @@
+{
+  "100": {
+    "entries.csv": {
+      "rows": 108,
+      "all_frozen_fields_match": true
+    },
+    "metrics.csv": {
+      "rows": 1,
+      "all_frozen_fields_match": true
+    },
+    "gate_decisions.csv": {
+      "rows": 132,
+      "all_frozen_fields_match": true
+    }
+  },
+  "200": {
+    "entries.csv": {
+      "rows": 108,
+      "all_frozen_fields_match": true
+    },
+    "metrics.csv": {
+      "rows": 1,
+      "all_frozen_fields_match": true
+    },
+    "gate_decisions.csv": {
+      "rows": 132,
+      "all_frozen_fields_match": true
+    }
+  }
+}

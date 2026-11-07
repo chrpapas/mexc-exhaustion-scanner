@@ -31,6 +31,7 @@ async def test_extreme_risk_is_suppressed_before_episode_or_signal_pipeline(monk
     worker = ScannerWorker.__new__(ScannerWorker)
     worker.settings = SimpleNamespace(
         excluded_symbols=frozenset(),
+        snapshot_audit_enabled=False,
         signal_eval_concurrency=1,
         signal_eval_progress_every=1,
         diagnostic_symbols=frozenset(),

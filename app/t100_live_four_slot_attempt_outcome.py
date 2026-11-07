@@ -20,6 +20,7 @@ from app.t100_live_four_slot_snapshot_coordinator import (
 )
 
 from app.t100_live_active_tpsl import effective_protective_quantity
+from app.t100_live_native_stop_execution_audit import assess_native_short_market_stop_row
 from app.t100_live_execution import EntryIntent
 from app.t100_live_four_slot_attempt_journal import DurableAttemptStage
 from app.t100_live_four_slot_snapshot_coordinator import FourSlotSnapshotResult
@@ -58,6 +59,10 @@ def _pos(value: Any) -> D:
     if not result.is_finite() or result <= 0:
         raise ValueError("INVALID_DECIMAL")
     return result
+
+
+def _enum(value: Any, expected: int) -> bool:
+    return type(value) is int and value == expected
 
 
 def _identity(value: Any) -> str:
@@ -220,9 +225,11 @@ def assess_staged_protected_attempts(
                 or _pos(p.get("holdAvgPrice")) != previous.entry_price
                 or _pos(s.get("stopLossPrice")) != previous.stop_price
                 or _identity(s.get("id")) != previous.stop_order_id
-                or p.get("positionType") != 2 or p.get("state") != 1
-                or s.get("state") != 1 or s.get("isFinished") != 0
-                or s.get("positionType") != 2
+                or not _enum(p.get("positionType"), 2)
+                or not _enum(p.get("openType"), 2)
+                or not _enum(p.get("state"), 1)
+                or not _enum(s.get("state"), 1) or not _enum(s.get("isFinished"), 0)
+                or not _enum(s.get("positionType"), 2)
                 or effective_protective_quantity(s, position_quantity=previous.contracts) != previous.contracts
             ):
                 return block("ATTEMPT_PREEXISTING_POSITION_CHANGED", **common)
@@ -231,8 +238,8 @@ def assess_staged_protected_attempts(
             order = oid_map[intent.external_oid]
             if (
                 order.get("symbol") != intent.symbol
-                or order.get("side") != 3
-                or order.get("state") != 3
+                or not _enum(order.get("side"), 3)
+                or not _enum(order.get("state"), 3)
                 or _identity(order.get("orderId")) in {
                     _identity(o.get("orderId")) for o in orders
                     if o is not order
@@ -248,15 +255,33 @@ def assess_staged_protected_attempts(
                 return block("ATTEMPT_FILLED_POSITION_OR_STOP_MISSING", **common)
             if (
                 p.get("symbol") != intent.symbol or s.get("symbol") != intent.symbol
-                or p.get("positionType") != 2 or p.get("openType") != 2
-                or p.get("state") != 1 or s.get("state") != 1
-                or s.get("positionType") != 2 or s.get("isFinished") != 0
+                or not _enum(p.get("positionType"), 2) or not _enum(p.get("openType"), 2)
+                or not _enum(p.get("state"), 1) or not _enum(s.get("state"), 1)
+                or not _enum(s.get("positionType"), 2) or not _enum(s.get("isFinished"), 0)
                 or _pos(p.get("holdVol")) != deal
                 or _pos(p.get("holdAvgPrice")) != _pos(order.get("dealAvgPrice"))
                 or _pos(s.get("stopLossPrice")) > _pos(intent.stop_price)
                 or effective_protective_quantity(s, position_quantity=deal) != deal
             ):
                 return block("ATTEMPT_NATIVE_STOP_OR_POSITION_UNVERIFIED", **common)
+            native_market = assess_native_short_market_stop_row(
+                stop=s,
+                symbol=intent.symbol,
+                position_id=pid,
+                position_quantity=deal,
+                maximum_short_stop_price=intent.stop_price,
+            )
+            if (
+                native_market.status
+                != "NATIVE_MARKET_SHORT_SL_ROW_OBSERVED_NONAUTHORIZING"
+                or native_market.active_native_full_volume_market_sl_observed
+                is not True
+                or native_market.stop_execution_certified is not False
+            ):
+                return block(
+                    "ATTEMPT_NATIVE_MARKET_STOP_SEMANTICS_UNVERIFIED",
+                    **common,
+                )
         if {p.symbol for p in old} | expected_new_symbols != {
             p.get("symbol") for p in positions
         }:

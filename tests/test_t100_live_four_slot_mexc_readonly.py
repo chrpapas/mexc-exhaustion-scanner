@@ -9,11 +9,12 @@ import copy
 import json
 from decimal import Decimal as D
 import unittest
+from unittest.mock import patch
 
 from app.t100_live_four_slot_mexc_readonly import (
-    FourSlotMexcReadVenue, FourSlotMexcCompleteness,
     inspect_existing_four_slots_get_only,
     inspect_staged_four_slot_fill_get_only,
+    inspect_staged_four_slot_prepared_get_only,
 )
 from app.t100_live_readonly_probe import ReadOnlyMexcProbe, VenueReadHalted
 from tests.test_t100_live_four_slot_snapshot_coordinator import (
@@ -34,6 +35,7 @@ class MockMexcGetOnly:
         self.orders = {
             (r["symbol"], r["externalOid"]): copy.deepcopy(r) for r in orders
         }
+        self.deals = {}
         self.calls = []
         self.fail_path = None
         self.fail_filtered_stop_symbol = None
@@ -74,6 +76,8 @@ class MockMexcGetOnly:
                 return _wire(order)
         if path.startswith("/api/v1/private/order/external/"):
             return None
+        if path.startswith("/api/v1/private/order/deal_details/"):
+            return _wire(self.deals.get(path.rsplit("/", 1)[-1], []))
         raise AssertionError("unexpected exchange endpoint")
 
     async def _private_post(self, *a, **kw):
@@ -107,6 +111,22 @@ class ReadOnlyFourSlotGetTests(unittest.IsolatedAsyncioTestCase):
                 for path, _ in client.calls), 3,
         )
         self.assertTrue(all("/private/" in path for path, _ in client.calls))
+
+    async def test_same_counts_from_different_inventory_cannot_certify_snapshot(self):
+        from app.t100_live_inventory_completeness_probe import run_current_inventory_completeness_probe
+        snap, orders, positions, stops = prepare_rows(1)
+        client = MockMexcGetOnly(orders, positions, stops)
+        peer_positions, peer_stops = copy.deepcopy(positions), copy.deepcopy(stops)
+        peer_positions[0]["positionId"] = "999001"
+        peer_stops[0]["positionId"] = "999001"
+        peer = MockMexcGetOnly(orders, peer_positions, peer_stops)
+        witness = await run_current_inventory_completeness_probe(ReadOnlyMexcProbe(peer))
+        self.assertTrue(witness["account_wide_completeness_verified"])
+        with patch("app.t100_live_four_slot_mexc_readonly.run_current_inventory_completeness_probe",
+                   return_value=witness):
+            result = await inspect_existing_four_slots_get_only(ledger=Ledger(snap), client=client)
+        self.assertEqual(result.status, "INVENTORY_READ_OR_FORMAT_FAILED")
+        self.assertFalse(result.live_authorization)
 
     async def test_flat_clean_research_observation_is_not_entry_authorization(self):
         snap, orders, positions, stops = prepare_rows(0)
@@ -230,6 +250,50 @@ class ReadOnlyFourSlotGetTests(unittest.IsolatedAsyncioTestCase):
             self.assertFalse(result.all_staged_attempts_fully_filled_and_protected)
             self.assertFalse(result.mexc_orders_sent)
             self.assertTrue(all("/private/" in path for path, _ in client.calls))
+
+
+    async def test_signed_get_only_batch_preparation_never_persists_a_checkpoint(self):
+        from tests.test_t100_live_v40_protected_finalization import deal
+        existing = ProtectedOutcomeTests()
+        await existing.asyncSetUp()
+        positions = copy.deepcopy(existing.venue.first_positions)
+        stops = copy.deepcopy(existing.venue.first_stops)
+        for p in positions:
+            p.update({"im": D("10"), "unRealizedPnl": D("0")})
+        new = copy.deepcopy(existing.venue.orders[
+            ("FOURTH_USDT", existing.intent.external_oid)
+        ])
+        new["feeCurrency"] = "USDT"
+        client = MockMexcGetOnly([new], positions, stops)
+        client.deals["990"] = [deal()]
+        result = await inspect_staged_four_slot_prepared_get_only(
+            stages=[existing.stage],
+            intents=[existing.intent],
+            pre_attempt_witness=existing.before,
+            client=client,
+        )
+        self.assertEqual(
+            result.status, "PROTECTED_GET_BATCH_PREPARED_NONAUTHORIZING"
+        )
+        self.assertEqual(result.deal_histories_observed, 1)
+        self.assertEqual(result.prepared_batch.entries[0].position_id, "900")
+        self.assertTrue(all("/private/" in p for p, _ in client.calls))
+        self.assertEqual(sum("/deal_details/" in p for p, _ in client.calls), 2)
+        self.assertFalse(result.durable_ack_persisted)
+        self.assertFalse(result.live_authorization)
+        self.assertFalse(result.mexc_orders_sent)
+
+        client.calls.clear()
+        client.deals["990"][0]["vol"] = D("249")
+        rejected = await inspect_staged_four_slot_prepared_get_only(
+            stages=[existing.stage], intents=[existing.intent],
+            pre_attempt_witness=existing.before, client=client,
+        )
+        self.assertEqual(
+            rejected.status, "PROTECTED_GET_FILL_OR_NATIVE_STOP_UNVERIFIED_NO_RETRY"
+        )
+        self.assertIsNone(rejected.prepared_batch)
+        self.assertTrue(all("/private/" in p for p, _ in client.calls))
 
     def test_integration_has_no_live_order_adapter_or_db_writer(self):
         import inspect

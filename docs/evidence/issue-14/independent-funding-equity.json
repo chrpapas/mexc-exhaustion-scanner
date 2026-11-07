@@ -1,0 +1,30 @@
+{
+  "baseline_100": {
+    "funding_difference": "-0.000004352197202052800397",
+    "funding_events": 2536,
+    "reported_events": "2536",
+    "final_equity_difference": "0.00000400700279794719960",
+    "recomputed_final_equity": "14476.81238816700279794719960"
+  },
+  "baseline_200": {
+    "funding_difference": "-0.000002123707202052800397",
+    "funding_events": 2535,
+    "reported_events": "2535",
+    "final_equity_difference": "0.000001401892797947199601",
+    "recomputed_final_equity": "9030.375553101892797947199601"
+  },
+  "filtered_100": {
+    "funding_difference": "0.000001139970",
+    "funding_events": 2266,
+    "reported_events": "2266",
+    "final_equity_difference": "0.00000437797000000000000",
+    "recomputed_final_equity": "13356.20798998797000000000000"
+  },
+  "filtered_200": {
+    "funding_difference": "0.000002822710",
+    "funding_events": 2266,
+    "reported_events": "2266",
+    "final_equity_difference": "0.000003692309999999999998",
+    "recomputed_final_equity": "8089.534480032309999999999998"
+  }
+}

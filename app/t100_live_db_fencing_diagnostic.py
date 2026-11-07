@@ -21,6 +21,9 @@ import asyncio
 import getpass
 import json
 import os
+import ssl
+import subprocess
+import sys
 import uuid
 from typing import Any
 
@@ -40,6 +43,48 @@ class FencingDiagnosticHalted(RuntimeError):
 
 LEASE_PREFIX = "t100-fencing-diagnostic-"
 CONFIRMATION = "TEST RESTRICTED T100 LEADER FENCING"
+
+
+def _runtime_password_from_mac_keychain() -> str:
+    """Look up only the dedicated executor role; never reuse monitoring passwords.
+
+    The known monitoring Keychain service stores witness/sentinel credentials,
+    which must not be substituted for the separate executor login. Access
+    prompts (if any) are handled by macOS. Never print a password or a
+    subprocess error.
+    """
+    if sys.platform != "darwin":
+        raise FencingDiagnosticHalted("MAC_KEYCHAIN_ONLY")
+    candidates = (
+        ("-s", "t100-render-monitoring-db-roles-v1", "-a", TARGET_ROLE),
+        ("-s", TARGET_ROLE, "-a", TARGET_ROLE),
+        ("-a", TARGET_ROLE),
+        ("-s", TARGET_ROLE),
+    )
+    for args in candidates:
+        try:
+            probe = subprocess.run(
+                ("/usr/bin/security", "find-generic-password", *args, "-w"),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                text=True,
+                check=False,
+                timeout=10,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            raise FencingDiagnosticHalted(
+                "MAC_KEYCHAIN_LOOKUP_UNAVAILABLE"
+            ) from None
+        if probe.returncode == 0:
+            password = probe.stdout.rstrip("\r\n")
+            if not password:
+                raise FencingDiagnosticHalted(
+                    "MAC_KEYCHAIN_EXECUTOR_PASSWORD_EMPTY"
+                )
+            return password
+    raise FencingDiagnosticHalted(
+        "MAC_KEYCHAIN_EXECUTOR_PASSWORD_NOT_FOUND"
+    )
 
 
 async def _expect_stale(coordinator: LeaderLeaseCoordinator, lease: Any) -> None:
@@ -175,13 +220,19 @@ async def exercise_test_fencing(
                 ) from None
 
 
-async def _main() -> None:
+async def _main(*, keychain: bool = False) -> None:
     if os.getenv("T100_EXECUTION_MODE", "paper").strip().lower() != "paper":
         raise FencingDiagnosticHalted("PAPER_MODE_REQUIRED")
+    # Check Keychain before asking for DB-write consent: absent credentials
+    # must stop without unnecessarily prompting the operator.
+    password = _runtime_password_from_mac_keychain() if keychain else ""
     typed = input(f"Type '{CONFIRMATION}' to run isolated DB test: ")
     if typed.strip() != CONFIRMATION:
         raise FencingDiagnosticHalted("OPERATOR_CONFIRMATION_MISSING")
-    password = getpass.getpass("Restricted T100 runtime DB password (hidden): ")
+    if not keychain:
+        password = getpass.getpass(
+            "Restricted T100 runtime DB password (hidden): "
+        )
     if not password:
         raise FencingDiagnosticHalted("RUNTIME_PASSWORD_REQUIRED")
     owner_url = getpass.getpass(
@@ -197,7 +248,7 @@ async def _main() -> None:
                 dsn=owner_url,
                 user=TARGET_ROLE,
                 password=password,
-                ssl="require",
+                ssl=ssl.create_default_context(),
                 timeout=10,
                 command_timeout=20,
             )
@@ -242,9 +293,11 @@ def cli() -> None:
     parser = argparse.ArgumentParser(
         description="Isolated real-Postgres T100 leader fencing diagnostic"
     )
-    parser.parse_args()
+    parser.add_argument("--keychain", action="store_true",
+                        help="Find executor login in macOS Keychain; fail if absent")
+    args = parser.parse_args()
     try:
-        asyncio.run(_main())
+        asyncio.run(_main(keychain=args.keychain))
     except FencingDiagnosticHalted as exc:
         print(json.dumps({
             "status": "FENCING_DIAGNOSTIC_BLOCKED",

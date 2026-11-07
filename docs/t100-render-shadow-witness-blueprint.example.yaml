@@ -1,0 +1,78 @@
+# REVIEW-ONLY example; NOT the root render.yaml; DO NOT auto-sync.
+# Requires migration 031 AND 032 plus a separate sentinel DB account
+# with SELECT on witness and narrow SELECT/INSERT/UPDATE on sentinel outbox.
+# No auto-deploy, no live orders, never reuse live-trader DB credentials.
+# New independent workers are deliberately disabled for auto-deploy.
+# The live-shadow worker currently deployed on Render stays unchanged.
+services:
+  - type: worker
+    name: mexc-t100-shadow-durable-candidate
+    runtime: python
+    plan: starter
+    region: frankfurt
+    repo: https://github.com/chrpapas/mexc-exhaustion-scanner
+    branch: codex/t100-readiness-issue-14
+    buildCommand: pip install .
+    startCommand: python -m app.t100_render_shadow_witness_runtime
+    autoDeployTrigger: off
+    numInstances: 1
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.12.11"
+      - key: T100_EXECUTION_MODE
+        value: paper
+      - key: T100_LIVE_ORDER_API_ENABLED
+        value: "false"
+      - key: T100_LIVE_KILL_SWITCH
+        value: "true"
+      - key: T100_RENDER_SHADOW_WITNESS_ENABLED
+        value: "true"
+      # Current observed Render worker is kill-latched for native stop loss.
+      # This is a PIN, not a reset. A matching pre-existing DB row is mandatory.
+      - key: T100_RENDER_SHADOW_EXPECTED_HISTORICAL_KILL_REASON
+        value: NATIVE_PROTECTION_LOST
+      - key: T100_RENDER_SHADOW_SCOPE_SHA256
+        sync: false
+      - key: T100_RENDER_SHADOW_WITNESS_DATABASE_URL
+        sync: false
+      - key: MEXC_API_KEY
+        sync: false
+      - key: MEXC_API_SECRET
+        sync: false
+      - key: DISCORD_TRADER_EVENTS_WEBHOOK_URL
+        sync: false
+
+  - type: worker
+    name: mexc-t100-shadow-sentinel-candidate
+    runtime: python
+    plan: starter
+    region: frankfurt
+    repo: https://github.com/chrpapas/mexc-exhaustion-scanner
+    branch: codex/t100-readiness-issue-14
+    buildCommand: pip install .
+    startCommand: python -m app.t100_render_shadow_sentinel_durable
+    autoDeployTrigger: off
+    numInstances: 1
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.12.11"
+      - key: T100_EXECUTION_MODE
+        value: paper
+      - key: T100_LIVE_ORDER_API_ENABLED
+        value: "false"
+      - key: T100_LIVE_KILL_SWITCH
+        value: "true"
+      - key: T100_RENDER_SENTINEL_ENABLED
+        value: "true"
+      - key: T100_RENDER_SENTINEL_DURABLE_OUTBOX_ENABLED
+        value: "true"
+      - key: T100_RENDER_SHADOW_SCOPE_SHA256
+        sync: false
+      - key: T100_RENDER_SENTINEL_DATABASE_URL
+        sync: false
+      - key: T100_RENDER_SENTINEL_DISCORD_WEBHOOK_URL
+        sync: false
+      - key: T100_RENDER_SENTINEL_STALE_SECONDS
+        value: "240"
+      - key: T100_RENDER_SENTINEL_POLL_SECONDS
+        value: "45"

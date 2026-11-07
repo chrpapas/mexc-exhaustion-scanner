@@ -303,6 +303,10 @@ class MexcTradeClient:
                 "vol": contracts,
                 "stopLossPrice": stop_price,
                 "priceProtect": 0,
+                # Current MEXC reference documents these optional fields and
+                # stopLossType (conditional requirement), but prior pilot
+                # rejected this combination. DO NOT use this method for a
+                # live pilot until its venue semantics are verified.
                 "profitLossVolType": "SAME",
                 "volType": 2,
                 "stopLossReverse": 2,

@@ -18,6 +18,8 @@ def test_v155_current_research_builder_only_replays_promoted_admission():
     allowed["confirmed_at"] = DAILY_BULL_PERSISTENCE_V1_FREEZE_AT + timedelta(minutes=2)
     allowed["target_5_at"] = allowed["confirmed_at"] + timedelta(hours=1)
 
+    # Isolate persistence admission with a valid current ATR witness.
+    allowed["feature_snapshot"]["atr_15m"] = allowed["entry_price"] * 0.03
     report = build_current_strategy_research(
         [vetoed, allowed],
         generated_at=DAILY_BULL_PERSISTENCE_V2_FREEZE_AT + timedelta(days=1),

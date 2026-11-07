@@ -19,6 +19,8 @@ import asyncio
 import getpass
 import json
 import os
+import re
+import ssl
 from typing import Any, Mapping
 
 from app.t100_live_cross_risk_diagnostic import (
@@ -105,8 +107,26 @@ def _report(
     return result
 
 
+_INVENTORY_GET_ROUTES = frozenset({
+    "/api/v1/private/position/open_positions",
+    "/api/v1/private/stoporder/open_orders",
+    "/api/v1/private/account/assets",
+    "/api/v1/private/order/open_order_total_count",
+})
+_EXACT_ORDER_GET_ROUTES = (
+    re.compile(r"/api/v1/private/order/external/[A-Z0-9]+_USDT/[A-Za-z0-9_-]{1,128}"),
+    re.compile(r"/api/v1/private/order/deal_details/[1-9][0-9]*"),
+)
+
+
 class _PrivateGetOnly:
-    """Expose only the signed GET transport, no mutation interface."""
+    """Allowlisted signed GET transport, exposing no mutation method.
+
+    The general client also offers POST. This diagnostic facade allows only
+    currently reviewed inventory and exact immutable order-origin GETs.
+    """
+
+    __slots__ = ("_client",)
 
     def __init__(self, client: Any) -> None:
         self._client = client
@@ -114,6 +134,27 @@ class _PrivateGetOnly:
     async def _private_get(
         self, path: str, params: dict[str, Any] | None = None,
     ) -> Any:
+        if path in _INVENTORY_GET_ROUTES:
+            if path in {
+                "/api/v1/private/account/assets",
+                "/api/v1/private/order/open_order_total_count",
+            }:
+                if params is not None:
+                    raise RuntimeError("FOUR_SLOT_GET_FILTER_NOT_ALLOWED")
+            elif params is not None and (
+                type(params) is not dict
+                or set(params) != {"symbol"}
+                or type(params["symbol"]) is not str
+                or re.fullmatch(r"[A-Z0-9]+_USDT", params["symbol"]) is None
+            ):
+                raise RuntimeError("FOUR_SLOT_GET_SYMBOL_FILTER_INVALID")
+        elif (
+            type(path) is not str
+            or not any(pattern.fullmatch(path)
+                       for pattern in _EXACT_ORDER_GET_ROUTES)
+            or params is not None
+        ):
+            raise RuntimeError("FOUR_SLOT_GET_ENDPOINT_NOT_ALLOWED")
         return await self._client._private_get(path, params)
 
 
@@ -184,7 +225,17 @@ async def run_readonly_four_slot_audit(
 async def _main(
     env: Mapping[str, str], *,
     shared_manual_observation: bool = False,
+    restart_preflight: bool = False,
+    pending_origin_audit: bool = False,
 ) -> dict[str, Any]:
+    # These are different diagnostics with distinct refusal rules.
+    if (
+        type(restart_preflight) is not bool
+        or type(pending_origin_audit) is not bool
+        or (restart_preflight and pending_origin_audit)
+        or (pending_origin_audit and shared_manual_observation)
+    ):
+        return _report("FOUR_SLOT_READONLY_MODE_CONFLICT")
     try:
         require_readonly_controls(env)
     except CrossRiskDiagnosticHalted:
@@ -205,22 +256,85 @@ async def _main(
     from app.t100_live_role_preflight import TARGET_ROLE
     from app.t100_live_four_slot_ledger_reader import PostgresFourSlotLedgerReader
     import asyncpg
-    from app.mexc_trade import MexcTradeClient
 
     pool = None
     mexc = None
     try:
         pool = await asyncpg.create_pool(
             dsn=dsn, user=TARGET_ROLE, password=db_password,
-            ssl="require", timeout=10, command_timeout=12,
+            ssl=ssl.create_default_context(), timeout=10, command_timeout=12,
             min_size=1, max_size=1,
             server_settings={"default_transaction_read_only": "on"},
         )
+        ledger = PostgresFourSlotLedgerReader(pool)
+        triage = None
+        pre_client_origins = None
+        if restart_preflight or pending_origin_audit:
+            # Validate restricted SQL before importing/constructing the
+            # trading-capable client, with NO POST in either opt-in flow.
+            from app.t100_live_four_slot_restart_triage import (
+                PostgresFourSlotRestartTriage,
+            )
+            from app.t100_live_four_slot_restart_supervisor import (
+                _triage_contract_verified, inspect_restart_db_gate,
+            )
+            triage = PostgresFourSlotRestartTriage(pool)
+            if restart_preflight:
+                blocked = await inspect_restart_db_gate(
+                    triage=triage, env=env,
+                )
+                if type(blocked) is dict:
+                    return blocked
+            else:
+                pre_client_origins = await triage.inspect()
+                if (
+                    not _triage_contract_verified(pre_client_origins)
+                    or pre_client_origins.status !=
+                    "RESTART_TRIAGE_UNRESOLVED_RECONCILE_ONLY"
+                    or pre_client_origins.pending_attempts < 1
+                ):
+                    return _report("PENDING_ORIGIN_SQL_TRIAGE_REQUIRED")
+        from app.mexc_trade import MexcTradeClient
         mexc = MexcTradeClient(
             "https://api.mexc.com", api_key=key, api_secret=secret,
         )
+        if restart_preflight:
+            from app.t100_live_four_slot_restart_supervisor import (
+                run_four_slot_restart_readonly_cycle,
+            )
+            return await run_four_slot_restart_readonly_cycle(
+                triage=triage, ledger=ledger, client=mexc, env=env,
+                # Re-read the DB after client construction to reject drift.
+                shared_manual_observation=True,
+            )
+        if pending_origin_audit:
+            # A second restricted DB read catches in-flight journal
+            # changes between triage and client construction. It is NOT
+            # an exchange/database atomicity certificate.
+            fresh_origins = await triage.inspect()
+            if (
+                not _triage_contract_verified(fresh_origins)
+                or fresh_origins != pre_client_origins
+            ):
+                return _report("PENDING_ORIGIN_SQL_CHANGED_NO_RETRY")
+            from app.t100_live_four_slot_pending_origin_get import (
+                observe_pending_origins_get_only,
+            )
+            report = await observe_pending_origins_get_only(
+                triage=fresh_origins, client=_PrivateGetOnly(mexc),
+            )
+            # A third restricted SQL bookend prevents a journal update
+            # during the GET window from being displayed as stable.
+            # No bookend can establish cross-system atomicity.
+            post_get_origins = await triage.inspect()
+            if (
+                not _triage_contract_verified(post_get_origins)
+                or post_get_origins != fresh_origins
+            ):
+                return _report("PENDING_ORIGIN_SQL_CHANGED_DURING_GET_NO_RETRY")
+            return report.safe_summary()
         return await run_readonly_four_slot_audit(
-            ledger=PostgresFourSlotLedgerReader(pool), client=mexc, env=env,
+            ledger=ledger, client=mexc, env=env,
             shared_manual_observation=shared_manual_observation,
         )
     except Exception:
@@ -239,11 +353,25 @@ def main() -> None:
         help="GET/SELECT-only account partition with independent manual "
              "positions; NEVER authorizes cross-margin trading",
     )
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument(
+        "--restart-preflight", action="store_true",
+        help="Opt-in restricted SQL + GET-only V40 restart triage; "
+             "never sends an order, requires migrations 031/032 and "
+             "observes manual positions without adopting them",
+    )
+    mode.add_argument(
+        "--pending-origin-audit", action="store_true",
+        help="Separate nonauthorizing two-bookend PRIVATE GET of exact "
+             "unresolved V40 order origins; never retries or certifies fills",
+    )
     args = parser.parse_args()
     try:
         output = asyncio.run(_main(
             os.environ,
             shared_manual_observation=args.shared_manual_observation,
+            restart_preflight=args.restart_preflight,
+            pending_origin_audit=args.pending_origin_audit,
         ))
     except Exception:
         output = _report("FOUR_SLOT_READONLY_DIAGNOSTIC_HALTED")

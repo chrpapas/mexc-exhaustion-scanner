@@ -91,7 +91,13 @@ async def run_current_inventory_completeness_probe(
             position_margin_witness=margin,
             symbol_scoped_crosscheck=crosscheck,
         )
+        # Internal provenance binding for consumers of this exact witness.
+        # Import lazily to avoid coupling module initialization paths.
+        from app.t100_live_four_slot_snapshot_coordinator import _venue_digest
         result.update({
+            "critical_inventory_sha256": (
+                _venue_digest(after_positions, after_stops) if critical_stable else None
+            ),
             "before_positions": len(before_positions),
             "after_positions": len(after_positions),
             "before_current_tpsl": len(before_stops),

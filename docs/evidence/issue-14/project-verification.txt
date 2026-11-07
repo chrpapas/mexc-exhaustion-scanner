@@ -1,0 +1,7 @@
+PROJECT VERIFICATION PASSED
+- render.yaml: OK
+- pyproject.toml: OK
+- .gitignore: OK
+- .python-version: OK
+- app/worker.py: OK
+- migrations/001_init.sql: OK

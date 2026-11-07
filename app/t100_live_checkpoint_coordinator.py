@@ -23,6 +23,7 @@ from app.t100_live_checkpoint_journal import (
     build_verified_stop_checkpoint,
 )
 from app.t100_live_durable_recovery import PositionCheckpoint
+from app.t100_live_native_stop_execution_audit import assess_native_short_market_stop_row
 from app.t100_live_position_accounting import (
     VerifiedClosedPositionAccounting,
 )
@@ -58,6 +59,30 @@ def _require_evidence_gate(
         raise CheckpointCoordinatorHalted("CHECKPOINT_POSITIONS_INCOMPLETE")
     if type(stops_complete) is not bool or stops_complete is not True:
         raise CheckpointCoordinatorHalted("CHECKPOINT_STOPS_INCOMPLETE")
+
+
+def _require_native_market_position_stop(
+    checkpoint: PositionCheckpoint, stop: dict[str, Any],
+) -> None:
+    """Independent final stop-shape gate before any durable checkpoint write.
+
+    This is not proof of exchange execution, only current GET compatibility.
+    """
+    report = assess_native_short_market_stop_row(
+        stop=stop, symbol=checkpoint.symbol,
+        position_id=checkpoint.position_id,
+        position_quantity=checkpoint.contracts,
+        maximum_short_stop_price=checkpoint.stop_price,
+    )
+    if (
+        report.status != "NATIVE_MARKET_SHORT_SL_ROW_OBSERVED_NONAUTHORIZING"
+        or report.active_native_full_volume_market_sl_observed is not True
+        or report.stop_execution_certified is not False
+        or report.live_authorization is not False
+    ):
+        raise CheckpointCoordinatorHalted(
+            "CHECKPOINT_NATIVE_POSITION_MARKET_SL_UNVERIFIED"
+        )
 
 
 class CheckpointPersistenceCoordinator:
@@ -137,6 +162,7 @@ class CheckpointPersistenceCoordinator:
                 position=matching_positions[0],
                 stop=matching_stops[0],
             )
+            _require_native_market_position_stop(current, matching_stops[0])
             await self.writer.create_initial(current)
         except CheckpointJournalHalted as exc:
             raise CheckpointCoordinatorHalted(
@@ -196,6 +222,7 @@ class CheckpointPersistenceCoordinator:
                 best_profit_pct=best_profit_pct,
                 armed=armed,
             )
+            _require_native_market_position_stop(current, matching[0])
             await self.writer.advance(
                 previous, current, reason=STOP_VERIFIED
             )

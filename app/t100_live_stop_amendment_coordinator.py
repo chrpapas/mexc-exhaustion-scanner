@@ -13,7 +13,10 @@ that would be indistinguishable from manual/external drift.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from decimal import Decimal
 from typing import Any
+
+from app.t100_live_native_stop_execution_audit import assess_native_short_market_stop_row
 
 from app.t100_live_expected_stop_transition import (
     ExpectedStopTransition,
@@ -44,6 +47,62 @@ class StopReconciliationOutcome:
 class StopAmendmentLifecycleCoordinator:
     def __init__(self, journal: StopJournal):
         self.journal = journal
+
+    @staticmethod
+    def _require_native_short_stop_coverage(
+        amendment: StopAmendment,
+        stops: Any,
+        *,
+        position_quantity: Decimal,
+    ) -> None:
+        """An exchange price match without complete native SL is not VERIFIED.
+
+        The journal must never claim a native-stop mutation succeeded unless
+        the resulting active short-side stop protects the FULL owned position.
+        This guard also applies to direct coordinator callers that bypass
+        the higher-level checkpoint persistence pipeline.
+        """
+        if (
+            type(position_quantity) is not Decimal
+            or not position_quantity.is_finite()
+            or position_quantity <= 0
+            or not isinstance(stops, list)
+            or any(type(row) is not dict for row in stops)
+        ):
+            raise StopAmendmentCoordinatorHalted(
+                "STOP_RECONCILIATION_COVERAGE_EVIDENCE_INVALID"
+            )
+        matching = [
+            row for row in stops
+            if str(row.get("positionId") or "") == amendment.position_id
+            and row.get("symbol") == amendment.symbol
+        ]
+        if not matching:
+            raise StopAmendmentCoordinatorHalted(
+                "PROTECTION_GAP_NOT_ACCEPTED"
+            )
+        if len(matching) != 1:
+            raise StopAmendmentCoordinatorHalted(
+                "STOP_RECONCILIATION_STOP_NOT_UNIQUE"
+            )
+        # State/quantity alone cannot certify a stop: MEXC also supports
+        # order-attached and limit SL rows. This is a static GET witness
+        # only, and never certifies market execution or live authorization.
+        report = assess_native_short_market_stop_row(
+            stop=matching[0], symbol=amendment.symbol,
+            position_id=amendment.position_id,
+            position_quantity=position_quantity,
+            maximum_short_stop_price=amendment.previous_stop,
+        )
+        if (
+            report.status
+            != "NATIVE_MARKET_SHORT_SL_ROW_OBSERVED_NONAUTHORIZING"
+            or report.active_native_full_volume_market_sl_observed is not True
+            or report.stop_execution_certified is not False
+        ):
+            raise StopAmendmentCoordinatorHalted(
+                "STOP_RECONCILIATION_NATIVE_FULL_COVERAGE_UNVERIFIED"
+            )
 
     async def prepare(
         self,
@@ -81,8 +140,14 @@ class StopAmendmentLifecycleCoordinator:
 
     async def mark_submitting(self, amendment: StopAmendment) -> str:
         state = await self._state(amendment)
+        # Never regard an already-SUBMITTING journal as our CAS victory.
+        # Another worker may have changed PREPARED -> SUBMITTING between the
+        # caller's first read and this one. Returning success would allow a
+        # second real stop mutation POST for the same durable amendment.
         if state == "SUBMITTING":
-            return "SUBMITTING"
+            raise StopAmendmentCoordinatorHalted(
+                "STOP_SUBMISSION_ALREADY_STARTED_RECONCILE_ONLY"
+            )
         if state != "PREPARED":
             raise StopAmendmentCoordinatorHalted(
                 "STOP_SUBMISSION_REQUIRES_PREPARED"
@@ -133,6 +198,7 @@ class StopAmendmentLifecycleCoordinator:
         *,
         before_stops: Any,
         after_stops: Any,
+        position_quantity: Decimal,
         finished_stops: Any | None = None,
     ) -> StopReconciliationOutcome:
         state = await self._state(amendment)
@@ -152,6 +218,12 @@ class StopAmendmentLifecycleCoordinator:
             previous_stop_order_id=amendment.stop_order_id,
             previous_stop=amendment.previous_stop,
             proposed_stop=amendment.proposed_stop,
+        )
+        self._require_native_short_stop_coverage(
+            amendment, before_stops, position_quantity=position_quantity,
+        )
+        self._require_native_short_stop_coverage(
+            amendment, after_stops, position_quantity=position_quantity,
         )
         report = assess_expected_stop_transition(
             before_stops=before_stops,
@@ -176,6 +248,7 @@ class StopAmendmentLifecycleCoordinator:
         amendment: StopAmendment,
         *,
         current_stops: Any,
+        position_quantity: Decimal,
         finished_stops: Any | None = None,
     ) -> StopReconciliationOutcome:
         """Reconcile after restart without a pre-mutation REST snapshot.
@@ -201,6 +274,9 @@ class StopAmendmentLifecycleCoordinator:
             previous_stop_order_id=amendment.stop_order_id,
             previous_stop=amendment.previous_stop,
             proposed_stop=amendment.proposed_stop,
+        )
+        self._require_native_short_stop_coverage(
+            amendment, current_stops, position_quantity=position_quantity,
         )
         report = assess_expected_stop_current_outcome(
             current_stops=current_stops,

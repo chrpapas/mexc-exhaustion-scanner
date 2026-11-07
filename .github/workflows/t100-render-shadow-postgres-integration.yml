@@ -1,0 +1,77 @@
+name: T100 Render shadow witness isolated PostgreSQL
+
+on:
+  pull_request:
+    paths:
+      - 'migrations/031_t100_render_shadow_witness.sql'
+      - 'migrations/032_t100_render_shadow_sentinel_outbox.sql'
+      - 'migrations/033_t100_owned_emergency_close_intents.sql'
+      - 'migrations/034_t100_guardian_account_enrollments.sql'
+      - 'migrations/035_t100_guardian_incident_outbox.sql'
+      - 'app/t100_live_guardian_incident_outbox.py'
+      - 'app/t100_live_guardian_durable_worker.py'
+      - 'tests/test_t100_guardian_incident_postgres_integration.py'
+      - 'tests/test_t100_guardian_durable_incidents.py'
+      - 'tools/t100_mexc_history_shape_probe_local.py'
+      - 'tests/test_t100_mexc_history_shape_probe_local.py'
+      - 'tests/test_t100_live_guardian_checkpoint_reader.py'
+      - 'app/t100_live_owned_emergency_guardian.py'
+      - 'app/t100_live_owned_close_pg_ledger.py'
+      - 'tests/test_t100_live_owned_emergency_guardian.py'
+      - 'tests/test_t100_owned_emergency_close_postgres_integration.py'
+      - 'tests/test_t100_guardian_reader_postgres_integration.py'
+      - 'app/t100_live_guardian_checkpoint_reader.py'
+      - 'app/t100_live_guardian_readonly_once.py'
+      - 'app/t100_render_shadow_witness.py'
+      - 'app/t100_render_shadow_sentinel.py'
+      - 'app/t100_render_shadow_sentinel_durable.py'
+      - 'app/t100_render_shadow_alert_outbox.py'
+      - 'tests/test_t100_render_shadow_postgres_integration.py'
+      - '.github/workflows/t100-render-shadow-postgres-integration.yml'
+  push:
+    branches:
+      - codex/t100-readiness-issue-14
+
+permissions:
+  contents: read
+
+jobs:
+  isolated-postgres-real-ddl:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U postgres"
+          --health-interval=3s
+          --health-timeout=2s
+          --health-retries=20
+    env:
+      T100_RENDER_TEST_LOCAL_POSTGRES: 'YES'
+      T100_EXECUTION_MODE: paper
+      T100_LIVE_ORDER_API_ENABLED: 'false'
+      T100_LIVE_KILL_SWITCH: 'true'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install runtime and test dependencies
+        run: python -m pip install '.[dev]'
+      - name: Actual PostgreSQL 17 witness trigger, lock and sentinel
+        run: python -m unittest -v tests.test_t100_render_shadow_postgres_integration
+
+      - name: Actual PostgreSQL 17 owned close intent immutability and role boundaries
+        run: python -m unittest -v tests.test_t100_owned_emergency_close_postgres_integration
+      - name: PostgreSQL 17 guardian SELECT-only role and readonly transaction
+        run: python -m unittest -v tests.test_t100_guardian_reader_postgres_integration
+
+      - name: PostgreSQL 17 guardian durable incident outbox and separate writer role
+        run: python -m unittest -v tests.test_t100_guardian_incident_postgres_integration

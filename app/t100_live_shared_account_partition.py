@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
+import re
 from typing import Any, Sequence
 
 from app.t100_live_durable_recovery import PositionCheckpoint
@@ -34,12 +35,31 @@ class SharedAccountPartition:
 
 
 def _id(raw: Any) -> str:
-    if raw is None or isinstance(raw, bool):
+    """Require the same positive ASCII venue identity as the durable journal.
+
+    Do not silently normalize whitespace, signs, leading zeroes, Unicode
+    digits, floats or booleans into apparent ownership. Missing/conflicting
+    external identities are a failed observation, never "manual" proof.
+    """
+    if type(raw) not in (str, int):
         raise SharedPartitionHalted("SHARED_ACCOUNT_IDENTITY_AMBIGUOUS")
-    value = str(raw).strip()
-    if not value or value in {"0", "None", "null"}:
+    value = str(raw)
+    if re.fullmatch(r"[1-9][0-9]*", value) is None:
         raise SharedPartitionHalted("SHARED_ACCOUNT_IDENTITY_AMBIGUOUS")
     return value
+
+
+def _venue_id(row: dict[str, Any], primary: str, alternate: str | None = None) -> str:
+    """Reject a malformed primary instead of falling back to a valid alias."""
+    if primary in row:
+        value = _id(row[primary])
+        if alternate is not None and alternate in row:
+            if _id(row[alternate]) != value:
+                raise SharedPartitionHalted("SHARED_ACCOUNT_IDENTITY_CONFLICT")
+        return value
+    if alternate is not None and alternate in row:
+        return _id(row[alternate])
+    raise SharedPartitionHalted("SHARED_ACCOUNT_IDENTITY_AMBIGUOUS")
 
 
 def _positive(raw: Any) -> bool:
@@ -79,7 +99,7 @@ def partition_shared_account(
     managed_positions: list[dict[str, Any]] = []
     manual_position_ids: set[str] = set()
     for row in positions:
-        pid = _id(row.get("positionId") or row.get("id"))
+        pid = _venue_id(row, "positionId")
         symbol = row.get("symbol")
         if pid in by_position or not isinstance(symbol, str) or not symbol:
             raise SharedPartitionHalted("SHARED_POSITION_IDENTITY_AMBIGUOUS")
@@ -105,8 +125,8 @@ def partition_shared_account(
     manual_with_positive_sl: set[str] = set()
     seen_stop_ids: set[str] = set()
     for row in stops:
-        sid = _id(row.get("id") or row.get("stopPlanOrderId"))
-        pid = _id(row.get("positionId"))
+        sid = _venue_id(row, "id", "stopPlanOrderId")
+        pid = _venue_id(row, "positionId")
         if sid in seen_stop_ids or pid not in by_position:
             raise SharedPartitionHalted("SHARED_TPSL_DUPLICATE_OR_ORPHAN")
         seen_stop_ids.add(sid)

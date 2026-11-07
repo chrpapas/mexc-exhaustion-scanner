@@ -237,7 +237,7 @@ class SharedReservationAttemptTests(unittest.IsolatedAsyncioTestCase):
             setattr(self.pg, table, {})
         self.pg.failure = None
         committing = PostgresProtectedV40Commit(CommitPool(self.pg))
-        outcome = await committing.persist(
+        outcome = await committing.persist_offline_unclaimed(
             batch=candidate, pre_attempt_witness=self.witness,
             lease=lease(), observed_at=self.observed_at,
             shared_pre_positions=self.positions,

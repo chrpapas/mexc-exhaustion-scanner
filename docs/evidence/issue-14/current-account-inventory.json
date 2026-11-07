@@ -1,0 +1,39 @@
+{
+  "status": "CURRENT_ACCOUNT_INVENTORY_COMPLETENESS_VERIFIED_NONATOMIC",
+  "failure_type": "none",
+  "read_only": true,
+  "mexc_private_get_only": true,
+  "mexc_orders_sent": false,
+  "entry_allowed": false,
+  "live_authorization": false,
+  "account_wide_completeness_verified": true,
+  "account_reconciliation_status": "UNRELATED_INFLIGHT_ORDERS_PRESENT",
+  "account_reconciled": false,
+  "observed_nonflat_without_current_tpsl": true,
+  "reconciliation_blockers": [
+    "NONFLAT_WITHOUT_OBSERVED_CURRENT_TPSL",
+    "UNRELATED_INFLIGHT_ORDERS_PRESENT",
+    "DURABLE_NONFLAT_RECOVERY_UNVERIFIED"
+  ],
+  "highest_priority_blocker": "NONFLAT_WITHOUT_OBSERVED_CURRENT_TPSL",
+  "observed_unrelated_limit_orders": 1,
+  "exchange_atomicity_verified": false,
+  "before_positions": 1,
+  "after_positions": 1,
+  "before_current_tpsl": 0,
+  "after_current_tpsl": 0,
+  "critical_inventory_equal_across_witness_window": true,
+  "current_tpsl_count_matches": true,
+  "position_margin_witness_verified": true,
+  "symbol_scoped_redundancy_verified": true,
+  "reported_open_order_counts": {
+    "sumCount": 1,
+    "limitOrderCount": 1,
+    "stopOrderCount": 0,
+    "planOrderCount": 0,
+    "trackOrderCount": 0
+  },
+  "completeness_contract_review_date": "2026-10-26",
+  "durable_nonflat_recovery_verified": false,
+  "native_stop_protectiveness_independently_verified": false
+}

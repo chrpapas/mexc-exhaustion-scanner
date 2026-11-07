@@ -45,10 +45,12 @@ class TraderNotifier:
                 self.webhook_url, json={"embeds": [embed]}
             )
             if response.status_code >= 400:
+                # A remote error body is untrusted and could echo the
+                # webhook URL/token or private request data. Log status
+                # code only, never response text/URL/headers.
                 LOGGER.error(
-                    "Trader Discord webhook failed status=%s body=%s",
+                    "Trader Discord webhook failed status=%s",
                     response.status_code,
-                    response.text[:500],
                 )
             response.raise_for_status()
             return True

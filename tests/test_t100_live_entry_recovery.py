@@ -105,6 +105,8 @@ def stop():
         "positionType": 2,
         "state": 1,
         "isFinished": 0,
+        "orderId": 0, "triggerSide": 0, "errorCode": 0,
+        "stopLossType": 0, "stopLossReverse": 2, "lossTrend": 1,
         "stopLossPrice": D("175"),
         "vol": D("0"),
         "volType": 2,

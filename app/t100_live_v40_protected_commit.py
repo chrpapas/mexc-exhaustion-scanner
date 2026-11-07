@@ -16,6 +16,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
+import os
 from typing import Any
 
 from app.t100_live_checkpoint_journal import (
@@ -48,6 +49,14 @@ SELECT external_oid, state FROM public.t100_live_order_intents
 WHERE state IN ('PREPARED','SUBMITTING','UNKNOWN','REVIEW')
 ORDER BY external_oid FOR UPDATE
 """
+
+CLAIMS_FOR_COMMIT_SQL = """
+SELECT signal_id, external_oid, holder_id, fencing_token, state
+FROM public.t100_live_v40_dispatch_claims
+WHERE signal_id = ANY($1::bigint[])
+ORDER BY signal_id FOR SHARE
+"""
+
 
 CURRENT_INTENT_SQL = """
 SELECT id,signal_id,symbol,external_oid,exchange_order_id,
@@ -345,7 +354,7 @@ class PostgresProtectedV40Commit:
             raise ValueError("PROTECTED_COMMIT_POOL_MISSING")
         self.pool = pool
 
-    async def persist(
+    async def persist_claimed(
         self, *,
         batch: PreparedProtectedBatch,
         pre_attempt_witness: FourSlotSnapshotResult,
@@ -354,6 +363,79 @@ class PostgresProtectedV40Commit:
         shared_pre_positions: list[dict[str, Any]] | None = None,
         shared_pre_stops: list[dict[str, Any]] | None = None,
     ) -> ProtectedCommitResult:
+        """Only claim-bound entry point for future reviewed DB integration.
+
+        Rechecks every immutable dispatch claim INSIDE the same transaction
+        as ACK/fill/checkpoint writes. Still nonauthorizing and disconnected
+        from real venue transport and production database.
+        """
+        return await self._persist(
+            batch=batch, pre_attempt_witness=pre_attempt_witness,
+            lease=lease, observed_at=observed_at,
+            shared_pre_positions=shared_pre_positions,
+            shared_pre_stops=shared_pre_stops,
+            _require_dispatch_claims=True,
+        )
+
+    async def persist(self, **_kwargs: Any) -> ProtectedCommitResult:
+        """Disabled legacy public commit API; never silently skip claim."""
+        raise ProtectedCommitHalted(
+            "V40_UNCLAIMED_PROTECTED_COMMIT_API_FORBIDDEN"
+        )
+
+    async def persist_offline_unclaimed(
+        self, *,
+        batch: PreparedProtectedBatch,
+        pre_attempt_witness: FourSlotSnapshotResult,
+        lease: LeaderLease,
+        observed_at: datetime,
+        shared_pre_positions: list[dict[str, Any]] | None = None,
+        shared_pre_stops: list[dict[str, Any]] | None = None,
+    ) -> ProtectedCommitResult:
+        """ONLY for offline fixtures: never run on a connected live account.
+
+        This intentionally named bypass preserves existing simulated/CI
+        historical tests. It is prohibited when a production DB URL,
+        exchange credentials, live mode or live-order switch is present.
+        Future release code must use persist_claimed with exact durable
+        claims, not this fixture path.
+        """
+        mode = os.getenv("T100_EXECUTION_MODE", "paper").strip().lower()
+        live_flag = os.getenv(
+            "T100_LIVE_ORDER_API_ENABLED", "false"
+        ).strip().lower()
+        if (
+            mode != "paper"
+            or live_flag not in ("", "0", "false", "no", "off")
+            or os.getenv("DATABASE_URL")
+            or os.getenv("MEXC_API_KEY")
+            or os.getenv("MEXC_API_SECRET")
+        ):
+            raise ProtectedCommitHalted(
+                "V40_OFFLINE_UNCLAIMED_COMMIT_ENVIRONMENT_UNSAFE"
+            )
+        return await self._persist(
+            batch=batch, pre_attempt_witness=pre_attempt_witness,
+            lease=lease, observed_at=observed_at,
+            shared_pre_positions=shared_pre_positions,
+            shared_pre_stops=shared_pre_stops,
+            _require_dispatch_claims=False,
+        )
+
+    async def _persist(
+        self, *,
+        batch: PreparedProtectedBatch,
+        pre_attempt_witness: FourSlotSnapshotResult,
+        lease: LeaderLease,
+        observed_at: datetime,
+        shared_pre_positions: list[dict[str, Any]] | None = None,
+        shared_pre_stops: list[dict[str, Any]] | None = None,
+        _require_dispatch_claims: bool = False,
+    ) -> ProtectedCommitResult:
+        # Legacy offline fixture path is not a live release-approved API.
+        # The claim-bound variant must be used for any future integration.
+        if type(_require_dispatch_claims) is not bool:
+            raise ProtectedCommitHalted("PROTECTED_CLAIM_REQUIREMENT_INVALID")
         mixed = (
             shared_pre_positions is not None or shared_pre_stops is not None
         )
@@ -478,6 +560,33 @@ class PostgresProtectedV40Commit:
                             or _number(current["stop_price"]) != intent.stop_price
                         ):
                             raise ProtectedCommitHalted("STAGED_INTENT_OR_SLOT_DRIFT")
+                    if _require_dispatch_claims:
+                        ids = sorted(x.intent.signal_id for x in batch.entries)
+                        claim_rows = await conn.fetch(
+                            CLAIMS_FOR_COMMIT_SQL, ids,
+                        )
+                        exact = {
+                            (x.intent.signal_id, x.intent.external_oid)
+                            for x in batch.entries
+                        }
+                        if (
+                            type(claim_rows) not in (list, tuple)
+                            or len(claim_rows) != len(batch.entries)
+                            or {
+                                (row["signal_id"], row["external_oid"])
+                                for row in claim_rows
+                            } != exact
+                            or any(
+                                row["state"] != "POST_POSSIBLE_UNRESOLVED"
+                                or row["holder_id"] != lease.holder_id
+                                or row["fencing_token"] != lease.fencing_token
+                                for row in claim_rows
+                            )
+                        ):
+                            raise ProtectedCommitHalted(
+                                "PROTECTED_COMMIT_DISPATCH_CLAIM_UNVERIFIED"
+                            )
+
                     for entry in batch.entries:
                         intent, cp, fills = (
                             entry.intent, entry.checkpoint, entry.fill_set,
