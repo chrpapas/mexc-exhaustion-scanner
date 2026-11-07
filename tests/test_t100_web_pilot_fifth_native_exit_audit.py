@@ -123,3 +123,12 @@ def test_nonzero_stop_error_blocks_strict_sl_certification(monkeypatch):
     assert report["native_attached_exit_execution_correlated"] is True
     assert report["native_sl_trigger_certified"] is False
     assert report["live_authorization"] is False
+
+
+def test_real_tp_price_cannot_be_called_sl_classification_conflict(monkeypatch):
+    client = _setup(monkeypatch, trigger_side=1, tp="99.95")
+    report = asyncio.run(audit.audit_fifth(client, "synthetic"))
+    assert report["status"] == (
+        "FIFTH_NATIVE_ATTACHED_EXIT_TP_LEG_POSSIBLE_NONAUTHORIZING"
+    )
+    assert report["native_sl_trigger_certified"] is False
