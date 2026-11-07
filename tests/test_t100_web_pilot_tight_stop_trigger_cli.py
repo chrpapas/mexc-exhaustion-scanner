@@ -352,6 +352,7 @@ async def test_close_one_post_fenced_and_never_repeat(journal_path):
     m._write_first(journal())
     client = fake_client()
     client._private_get.side_effect = [entry(), [position()], [position()]]
+    client._private_post.return_value = {"orderId": "123457"}
     with (
         patch.object(m, "_confirm"),
         patch.object(m.secrets, "token_hex", return_value="b" * 24),
@@ -403,4 +404,55 @@ async def test_watch_read_only_finishes_on_evidenced_trigger():
         "actual_sl_trigger_and_market_close_verified": True,
     })):
         await m._watch(client, FP)
+    client._private_post.assert_not_awaited()
+
+
+
+@pytest.mark.parametrize("field,value", [
+    ("stopLossType", 1), ("errorCode", 51), ("stopLossReverse", 1),
+])
+def test_active_stop_with_conflicting_native_fields_is_unverified(field,value):
+    row = stop()
+    row[field] = value
+    result = m._open_stop(row,pid="87654",oid="123456",price=m.D("76034.7"))
+    assert not result["active_attached_sl_quantity_and_price_observed"]
+
+
+@pytest.mark.asyncio
+async def test_triggered_row_with_error_cannot_be_verified(journal_path):
+    m._write_first(journal())
+    client = fake_client()
+    bad_stop = terminal()
+    bad_stop["errorCode"] = 8912
+    client._private_get.side_effect = [entry(), [], [], counts(0), [bad_stop]]
+    with patch.object(m,"run_inventory",new=AsyncMock(return_value=flat())):
+        result = await m._status(client,FP)
+    assert result["status"] == "SL_TRIGGER_SEEN_LINKED_CLOSE_ID_OR_FIELDS_MISSING"
+    assert not result["actual_sl_trigger_and_market_close_verified"]
+    client._private_post.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_open_status_with_unrelated_limit_order_fails_closed(journal_path):
+    m._write_first(journal())
+    client = fake_client()
+    extra = counts(1)
+    extra["sumCount"] = 2
+    extra["limitOrderCount"] = 1
+    client._private_get.side_effect = [entry(), [position()], [stop()], extra, []]
+    result = await m._status(client, FP)
+    assert result["status"] == "UNRELATED_PENDING_ORDERS_CHECK_UI_NOW"
+    assert not result["actual_sl_trigger_and_market_close_verified"]
+    client._private_post.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_entry_order_ack_identity_drift_halts(journal_path):
+    m._write_first(journal())
+    client = fake_client()
+    changed = entry()
+    changed["orderId"] = "5566"
+    client._private_get.return_value = changed
+    with pytest.raises(m.TriggerPilotHalted, match="JOURNALED_ENTRY"):
+        await m._status(client,FP)
     client._private_post.assert_not_awaited()
