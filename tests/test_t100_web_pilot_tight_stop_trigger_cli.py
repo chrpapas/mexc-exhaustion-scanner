@@ -176,7 +176,11 @@ async def test_realistic_preview_recomputes_15bps_from_contract_tick():
         "reference_last_price": "75920.8",
         "indicative_notional_usdt": "7.5921",
     }
-    client._public_get.return_value = {"symbol": "BTC_USDT", "priceUnit": "0.1"}
+    client._public_get.side_effect = [
+        {"symbol": "BTC_USDT", "priceUnit": "0.1"},
+        {"symbol": "BTC_USDT", "lastPrice": "75920.8",
+         "ask1": "75922", "timestamp": int(m.time.time() * 1000)},
+    ]
     with patch.object(m, "preflight", new=AsyncMock(return_value=raw)):
         result = await m._preview(client)
     assert result["status"] == "TIGHT_STOP_GET_ONLY_PREVIEW_NOT_AUTHORIZED"
@@ -198,7 +202,11 @@ async def test_oversized_notional_blocks_before_real_order():
         "reference_last_price": "75920.8",
         "indicative_notional_usdt": "13.01",
     }
-    client._public_get.return_value = {"symbol": "BTC_USDT", "priceUnit": "0.1"}
+    client._public_get.side_effect = [
+        {"symbol": "BTC_USDT", "priceUnit": "0.1"},
+        {"symbol": "BTC_USDT", "lastPrice": "75920.8",
+         "ask1": "75922", "timestamp": int(m.time.time() * 1000)},
+    ]
     with patch.object(m, "preflight", new=AsyncMock(return_value=raw)):
         with pytest.raises(m.TriggerPilotHalted, match="NOTIONAL"):
             await m._preview(client)
@@ -455,4 +463,53 @@ async def test_entry_order_ack_identity_drift_halts(journal_path):
     client._private_get.return_value = changed
     with pytest.raises(m.TriggerPilotHalted, match="JOURNALED_ENTRY"):
         await m._status(client,FP)
+    client._private_post.assert_not_awaited()
+
+
+
+@pytest.mark.asyncio
+async def test_quote_ask_too_close_to_sl_fails_before_post():
+    client = fake_client()
+    raw = {
+        "status": "GET_ONLY_PREVIEW_READY_NOT_AUTHORIZED",
+        "credential_scope": "T100_WEB_PILOT_SUBACCOUNT",
+        "notional_le_25_pct_observed_available": True,
+        "contracts": 1, "margin": "ISOLATED", "leverage": "1x",
+        "entry_allowed": False, "live_authorization": False,
+        "mexc_orders_sent": 0,
+        "reference_last_price": "75920.8",
+        "indicative_notional_usdt": "7.5921",
+    }
+    client._public_get.side_effect = [
+        {"symbol": "BTC_USDT", "priceUnit": "0.1"},
+        {"symbol": "BTC_USDT", "lastPrice": "75920.8",
+         "ask1": "76012", "timestamp": int(m.time.time() * 1000)},
+    ]
+    with patch.object(m, "preflight", new=AsyncMock(return_value=raw)):
+        with pytest.raises(m.TriggerPilotHalted, match="TICK_OR_MARKET"):
+            await m._preview(client)
+    client._private_post.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_second_market_quote_staleness_blocks_live_send():
+    client = fake_client()
+    raw = {
+        "status": "GET_ONLY_PREVIEW_READY_NOT_AUTHORIZED",
+        "credential_scope": "T100_WEB_PILOT_SUBACCOUNT",
+        "notional_le_25_pct_observed_available": True,
+        "contracts": 1, "margin": "ISOLATED", "leverage": "1x",
+        "entry_allowed": False, "live_authorization": False,
+        "mexc_orders_sent": 0,
+        "reference_last_price": "75920.8",
+        "indicative_notional_usdt": "7.5921",
+    }
+    client._public_get.side_effect = [
+        {"symbol": "BTC_USDT", "priceUnit": "0.1"},
+        {"symbol": "BTC_USDT", "lastPrice": "75920.8",
+         "ask1": "75922", "timestamp": int(m.time.time() * 1000) - 10000},
+    ]
+    with patch.object(m, "preflight", new=AsyncMock(return_value=raw)):
+        with pytest.raises(m.TriggerPilotHalted, match="SECOND_MARKET_QUOTE_STALE"):
+            await m._preview(client)
     client._private_post.assert_not_awaited()
