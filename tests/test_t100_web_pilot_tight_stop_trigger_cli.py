@@ -479,6 +479,138 @@ async def test_report_explicit_nonzero_stop_error_code_but_does_not_certify(
 
 
 @pytest.mark.asyncio
+async def test_real_market_close_fill_with_tp_side_conflict_is_confirmed_not_sl(
+    journal_path,
+):
+    m._write_first(journal())
+    client = fake_client()
+    tp_classified = terminal(state=3, side=1)
+    client._private_get.side_effect = [
+        entry(), [], [], counts(0), [tp_classified],
+        generated_close(),
+        [{
+            "id": "555555", "orderId": "123457",
+            "symbol": "BTC_USDT", "side": 2,
+            "vol": 1, "price": "75974.6",
+            "timestamp": 1794050000000, "taker": True,
+        }],
+    ]
+    with patch.object(m, "run_inventory", new=AsyncMock(return_value=flat())):
+        result = await m._status(client, FP)
+    assert result["account_stably_flat_verified"]
+    assert result["status"] == (
+        "FULL_MARKET_CLOSE_CONFIRMED_BUT_TRIGGER_SIDE_TP_CONFLICT"
+    )
+    assert result["finished_stop_state"] == "EXECUTED"
+    assert result["finished_trigger_side"] == "TP"
+    assert result["generated_close_order_get_verification"] == (
+        "EXACT_FILLED_SHORT_MARKET_CLOSE"
+    )
+    assert result["generated_close_fills_get_verification"] == (
+        "EXACT_ORDER_AND_FULL_CONTRACT_DEALS"
+    )
+    assert result["generated_close_market_fill_verified"] is True
+    assert result["generated_close_taker_execution_observed"] is True
+    assert result["sl_origin_certified_by_close"] is False
+    assert result["actual_sl_trigger_and_market_close_verified"] is False
+    assert result["live_authorization"] is False
+    assert "75974.6" not in str(result)
+    assert "123457" not in str(result)
+    client._private_post.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_tp_classified_exit_without_deal_details_is_not_market_fill_cert(
+    journal_path,
+):
+    m._write_first(journal())
+    client = fake_client()
+    client._private_get.side_effect = [
+        entry(), [], [], counts(0), [terminal(state=3, side=1)],
+        generated_close(), [],
+    ]
+    with patch.object(m, "run_inventory", new=AsyncMock(return_value=flat())):
+        result = await m._status(client, FP)
+    assert result["status"] == "FLAT_NOT_VENUE_VERIFIED_SL_TRIGGER"
+    assert result["generated_close_fills_get_verification"] == (
+        "DEAL_RESPONSE_MISSING_OR_INVALID"
+    )
+    assert result["generated_close_market_fill_verified"] is False
+    assert result["actual_sl_trigger_and_market_close_verified"] is False
+    client._private_post.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_tp_classified_close_with_wrong_venue_position_is_rejected(
+    journal_path,
+):
+    m._write_first(journal())
+    client = fake_client()
+    bad = generated_close()
+    bad["positionId"] = "123456789"
+    client._private_get.side_effect = [
+        entry(), [], [], counts(0), [terminal(state=3, side=1)], bad,
+    ]
+    with patch.object(m, "run_inventory", new=AsyncMock(return_value=flat())):
+        result = await m._status(client, FP)
+    assert result["status"] == "FLAT_NOT_VENUE_VERIFIED_SL_TRIGGER"
+    assert result["generated_close_order_get_verification"] == (
+        "NOT_EXACT_FULL_CONTRACT_MARKET_CLOSE"
+    )
+    assert not result["generated_close_market_fill_verified"]
+    assert not result["actual_sl_trigger_and_market_close_verified"]
+    client._private_post.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_tp_conflicting_exit_with_wrong_trade_order_id_is_not_fill_cert(
+    journal_path,
+):
+    m._write_first(journal())
+    client = fake_client()
+    client._private_get.side_effect = [
+        entry(), [], [], counts(0), [terminal(state=3, side=1)],
+        generated_close(),
+        [{
+            "id": "555555", "orderId": "999",
+            "symbol": "BTC_USDT", "side": 2,
+            "vol": 1, "price": "75974.6",
+            "timestamp": 1794050000000, "taker": True,
+        }],
+    ]
+    with patch.object(m, "run_inventory", new=AsyncMock(return_value=flat())):
+        result = await m._status(client, FP)
+    assert result["status"] == "FLAT_NOT_VENUE_VERIFIED_SL_TRIGGER"
+    assert result["generated_close_fills_get_verification"] == (
+        "DEAL_ORIGIN_OR_SHAPE_UNVERIFIED"
+    )
+    assert not result["generated_close_market_fill_verified"]
+    assert not result["actual_sl_trigger_and_market_close_verified"]
+    client._private_post.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_tp_conflicting_close_get_failure_does_not_claim_sl_success(
+    journal_path,
+):
+    m._write_first(journal())
+    client = fake_client()
+    client._private_get.side_effect = [
+        entry(), [], [], counts(0), [terminal(state=3, side=1)],
+        TimeoutError("mock venue unavailable"),
+    ]
+    with patch.object(m, "run_inventory", new=AsyncMock(return_value=flat())):
+        result = await m._status(client, FP)
+    assert result["generated_close_order_get_verification"] == (
+        "VENUE_GET_UNAVAILABLE"
+    )
+    assert not result["generated_close_market_fill_verified"]
+    assert not result["actual_sl_trigger_and_market_close_verified"]
+    assert result["status"] == "FLAT_NOT_VENUE_VERIFIED_SL_TRIGGER"
+    client._private_post.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_trigger_without_filled_market_close_is_not_success(journal_path):
     m._write_first(journal())
     client = fake_client()
