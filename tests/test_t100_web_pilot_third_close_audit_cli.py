@@ -140,6 +140,74 @@ async def test_real_one_contract_full_exit_verified_from_signed_order_and_fills(
 
 
 @pytest.mark.asyncio
+async def test_actual_signed_close_evidence_sink_binds_exact_ids_and_fills_without_report_leak():
+    client = fake_client()
+    evidence: dict = {}
+    with (
+        patch.object(native, "_check_journal", return_value=journal()),
+        patch.object(audit, "run_inventory", new=AsyncMock(return_value=flat())),
+    ):
+        result = await audit.audit_third_pilot(
+            client, FP, evidence_sink=evidence,
+        )
+    assert result["status"] == (
+        "THIRD_ONE_CONTRACT_REAL_CLOSE_AND_FLAT_VERIFIED_NONAUTHORIZING"
+    )
+    assert evidence["close_order_id"] == CLOSE_ID
+    assert evidence["position_id"] == POSITION_ID
+    assert evidence["entry_order_id"] == ENTRY_ID
+    assert evidence["entry_external_oid"] == OID
+    assert evidence["account_fingerprint_sha256"] == FP
+    assert evidence["close_deals"][0]["deal_id"] == "45677"
+    assert evidence["close_deals"][0]["fill_price"] == "75221.1"
+    assert evidence["close_deals"][0]["qty"] == "1"
+    assert evidence["journal_amend_post_attempted"] is False
+    assert CLOSE_ID not in str(result)
+    assert POSITION_ID not in str(result)
+    assert "75221.1" not in str(result)
+    client._private_post.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_unexpected_venue_fill_cannot_leave_recovery_evidence_sink():
+    client = fake_client(fills=[{
+        "id": "45677", "orderId": "888888",
+        "symbol": "BTC_USDT", "side": 2, "vol": 1,
+        "price": "75221.1", "timestamp": 1794050000000, "taker": True,
+    }])
+    evidence: dict = {}
+    with (
+        patch.object(native, "_check_journal", return_value=journal()),
+        patch.object(audit, "run_inventory", new=AsyncMock(return_value=flat())),
+    ):
+        result = await audit.audit_third_pilot(
+            client, FP, evidence_sink=evidence,
+        )
+    assert result["status"] == "THIRD_CLOSE_FILL_NOT_INDEPENDENTLY_VERIFIED"
+    assert evidence == {}
+    client._private_post.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_flat_second_bookend_drift_clears_private_recovery_evidence():
+    client = fake_client()
+    unsafe = flat()
+    unsafe["after_current_tpsl"] = 1
+    evidence: dict = {}
+    with (
+        patch.object(native, "_check_journal", return_value=journal()),
+        patch.object(audit, "run_inventory",
+                     new=AsyncMock(side_effect=[flat(), unsafe])),
+    ):
+        result = await audit.audit_third_pilot(
+            client, FP, evidence_sink=evidence,
+        )
+    assert result["status"] == "ACCOUNT_FLAT_DRIFTED_DURING_AUDIT"
+    assert evidence == {}
+    client._private_post.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_operator_recorded_close_owned_external_oid_identified():
     client = fake_client()
     item = closed_order()
