@@ -414,6 +414,71 @@ async def test_canceled_stop_and_flat_not_mistaken_for_trigger(journal_path):
 
 
 @pytest.mark.asyncio
+async def test_flat_untriggered_audit_explains_exact_boolean_failure_without_raw_id(
+    journal_path,
+):
+    m._write_first(journal())
+    client = fake_client()
+    client._private_get.side_effect = [
+        entry(), [], [], counts(0), [terminal(state=2, side=0)],
+    ]
+    with patch.object(m, "run_inventory", new=AsyncMock(return_value=flat())):
+        result = await m._status(client, FP)
+    assert result["status"] == "FLAT_NOT_VENUE_VERIFIED_SL_TRIGGER"
+    assert result["finished_stop_state"] == "CANCELED"
+    assert result["finished_trigger_side"] == "NOT_TRIGGERED"
+    assert result["historical_stop_state_field"] == 2
+    assert result["historical_trigger_side_field"] == 0
+    assert result["historical_stop_price_matches_journal"] is True
+    assert result["historical_stop_generated_order_id_present"] is True
+    assert result["historical_stop_error_code_status"] == "ZERO_NORMAL"
+    assert result["historical_stop_terminal_flag_verified"] is True
+    assert result["historical_stop_separate_leg_quantity_matches"] is True
+    assert result["actual_sl_trigger_and_market_close_verified"] is False
+    assert "123457" not in str(result)
+    assert "760" not in str(result)
+    client._private_post.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_string_encoded_stop_states_are_not_accepted_as_native_execution(
+    journal_path,
+):
+    m._write_first(journal())
+    client = fake_client()
+    row = terminal()
+    row["state"] = "3"
+    row["triggerSide"] = "2"
+    client._private_get.side_effect = [entry(), [], [], counts(0), [row]]
+    with patch.object(m, "run_inventory", new=AsyncMock(return_value=flat())):
+        result = await m._status(client, FP)
+    assert result["status"] == "FLAT_NOT_VENUE_VERIFIED_SL_TRIGGER"
+    assert result["historical_state_field_type"] == "STRING"
+    assert result["historical_trigger_field_type"] == "STRING"
+    assert result["historical_stop_state_field"] == "NOT_REPORTED_OR_UNRECOGNIZED"
+    assert result["historical_trigger_side_field"] == "NOT_REPORTED_OR_UNRECOGNIZED"
+    assert not result["actual_sl_trigger_and_market_close_verified"]
+    client._private_post.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_report_explicit_nonzero_stop_error_code_but_does_not_certify(
+    journal_path,
+):
+    m._write_first(journal())
+    client = fake_client()
+    row = terminal(state=2, side=0)
+    row["errorCode"] = 8912
+    client._private_get.side_effect = [entry(), [], [], counts(0), [row]]
+    with patch.object(m, "run_inventory", new=AsyncMock(return_value=flat())):
+        result = await m._status(client, FP)
+    assert result["historical_stop_error_code_status"] == "NONZERO_REPORTED"
+    assert not result["actual_sl_trigger_and_market_close_verified"]
+    assert not result["live_authorization"]
+    client._private_post.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_trigger_without_filled_market_close_is_not_success(journal_path):
     m._write_first(journal())
     client = fake_client()
