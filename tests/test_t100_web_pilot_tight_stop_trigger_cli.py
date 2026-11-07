@@ -1,4 +1,4 @@
-"""All-fake safety tests for the dedicated live 15bps stop-trigger pilot."""
+"""All-fake safety tests for the dedicated live 5bps stop-trigger pilot."""
 from __future__ import annotations
 
 from copy import deepcopy
@@ -18,9 +18,9 @@ def preview():
     return {
         "status": "TIGHT_STOP_GET_ONLY_PREVIEW_NOT_AUTHORIZED",
         "reference_last_price": "75920.8",
-        "stop_loss_price": "76034.7",
+        "stop_loss_price": "75958.8",
         "tick": "0.1",
-        "stop_bps": "15",
+        "stop_bps": "5",
         "notional_usdt": "7.5921",
         "contracts": 1,
         "margin": "ISOLATED",
@@ -55,7 +55,7 @@ def stop():
         "positionId": "87654", "symbol": "BTC_USDT",
         "state": 1, "isFinished": 0, "triggerSide": 0,
         "positionType": 2, "lossTrend": 1,
-        "stopLossPrice": "76034.7",
+        "stopLossPrice": "75958.8",
         "volType": 1, "profitLossVolType": "SEPARATE",
         "stopLossVol": 1, "errorCode": 0,
         "stopLossType": 0, "stopLossReverse": 2,
@@ -100,7 +100,7 @@ def journal():
         "version": 1, "credential_scope": "T100_WEB_PILOT_SUBACCOUNT",
         "key_sha256": FP, "symbol": "BTC_USDT", "external_oid": OID,
         "contracts": 1, "open_type": 1,
-        "stop_price": "76034.7", "stop_bps": "15",
+        "stop_price": "75958.8", "stop_bps": "5",
         "reference_last_price": "75920.8",
         "entry_post_attempted": True, "entry_ack_verified": True,
         "entry_order_id": "123456",
@@ -153,9 +153,27 @@ def test_exact_open_body_and_embedded_stop_but_no_tp():
         "symbol": "BTC_USDT", "price": "75920.8", "vol": 1,
         "leverage": 1, "side": 3, "type": 5, "openType": 1,
         "positionMode": 1, "externalOid": OID,
-        "stopLossPrice": "76034.7", "lossTrend": 1,
+        "stopLossPrice": "75958.8", "lossTrend": 1,
     }
     assert "takeProfitPrice" not in body
+
+
+def test_five_basis_point_stop_is_tighter_than_prior_pilot():
+    data = preview()
+    last = m.D(data["reference_last_price"])
+    stop = m.D(data["stop_loss_price"])
+    bps = (stop / last - 1) * m.D(10000)
+    assert m.STOP_BPS == m.D(5)
+    assert m.MAX_BPS == m.D(7)
+    assert m.D(5) <= bps <= m.D(7)
+    assert stop - last < last * m.D("0.0015")
+    assert m._entry_body(data, OID)["stopLossPrice"] == "75958.8"
+
+
+def test_existing_15bp_journal_will_not_be_repurposed():
+    old = journal()
+    old["stop_bps"] = "15"
+    assert old["stop_bps"] != "5"
 
 
 def test_reject_other_oid():
@@ -184,8 +202,8 @@ async def test_realistic_preview_recomputes_15bps_from_contract_tick():
     with patch.object(m, "preflight", new=AsyncMock(return_value=raw)):
         result = await m._preview(client)
     assert result["status"] == "TIGHT_STOP_GET_ONLY_PREVIEW_NOT_AUTHORIZED"
-    assert result["stop_loss_price"] == "76034.7"
-    assert result["stop_bps"] == "15"
+    assert result["stop_loss_price"] == "75958.8"
+    assert result["stop_bps"] == "5"
     client._private_post.assert_not_awaited()
 
 
@@ -231,7 +249,7 @@ async def test_one_entry_post_with_fsync_fenced_journal(journal_path):
         await m._send(client, FP)
         assert client._private_post.await_count == 1
         assert client._private_post.await_args.args[0] == m.OPEN_PATH
-        assert client._private_post.await_args.args[1]["stopLossPrice"] == "76034.7"
+        assert client._private_post.await_args.args[1]["stopLossPrice"] == "75958.8"
         assert m._load(FP)["entry_ack_verified"] is True
         with pytest.raises(m.TriggerPilotHalted, match="ALREADY_JOURNALED"):
             await m._send(client, FP)
@@ -270,7 +288,7 @@ async def test_confirmation_declined_never_journals_or_sends(journal_path):
 
 
 def test_partial_separate_leg_qty_1_qualifies_not_market_cert():
-    result = m._open_stop(stop(), pid="87654", oid="123456", price=m.D("76034.7"))
+    result = m._open_stop(stop(), pid="87654", oid="123456", price=m.D("75958.8"))
     assert result["active_attached_sl_quantity_and_price_observed"]
     assert result["origin_is_order_attached"]
     assert result["stop_loss_type"] == "MARKET"
@@ -278,13 +296,13 @@ def test_partial_separate_leg_qty_1_qualifies_not_market_cert():
 
 
 @pytest.mark.parametrize("field,value", [
-    ("stopLossVol", "0.5"), ("stopLossPrice", "76035"),
+    ("stopLossVol", "0.5"), ("stopLossPrice", "75959"),
     ("positionId", "2"), ("orderId", "4"), ("state", 5),
 ])
 def test_open_stop_identity_or_quantity_changes_fail(field, value):
     s = stop()
     s[field] = value
-    result = m._open_stop(s, pid="87654", oid="123456", price=m.D("76034.7"))
+    result = m._open_stop(s, pid="87654", oid="123456", price=m.D("75958.8"))
     assert not result["active_attached_sl_quantity_and_price_observed"]
 
 
@@ -422,7 +440,7 @@ async def test_watch_read_only_finishes_on_evidenced_trigger():
 def test_active_stop_with_conflicting_native_fields_is_unverified(field,value):
     row = stop()
     row[field] = value
-    result = m._open_stop(row,pid="87654",oid="123456",price=m.D("76034.7"))
+    result = m._open_stop(row,pid="87654",oid="123456",price=m.D("75958.8"))
     assert not result["active_attached_sl_quantity_and_price_observed"]
 
 
