@@ -158,6 +158,7 @@ def test_original_fixture_reports_explicit_verified_fields():
 def test_documented_auto_cancel_code_maps_without_claiming_stop_executed():
     s = stop()
     s["errorCode"] = 8912
+    s["profitLossVolType"] = "SEPARATE"
     s["stopLossVol"] = 1
     result = assess(finished_rows=[s])
     assert result["error_code_status"] == "NONZERO_REPORTED"
@@ -187,6 +188,7 @@ def test_separate_stop_loss_quantity_uses_stop_loss_vol_not_vol(
 ):
     s = stop()
     s["vol"] = 1
+    s["profitLossVolType"] = "SEPARATE"
     s["stopLossVol"] = quantity
     result = assess(finished_rows=[s])
     assert result["historical_stop_loss_quantity_check"] == expected
@@ -196,6 +198,7 @@ def test_separate_stop_loss_quantity_uses_stop_loss_vol_not_vol(
 def test_fully_attached_stop_history_may_omit_market_stop_type():
     s = stop()
     s.pop("stopLossType")
+    s["profitLossVolType"] = "SEPARATE"
     s["stopLossVol"] = 1
     s["errorCode"] = 8912
     result = assess(finished_rows=[s])
