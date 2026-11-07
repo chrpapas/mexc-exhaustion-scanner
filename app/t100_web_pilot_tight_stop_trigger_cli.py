@@ -546,6 +546,54 @@ async def _status(client: Any, fingerprint: str) -> dict[str, Any]:
         else "NOT_TRIGGERED" if sl.get("triggerSide") == 0
         else "UNVERIFIED"
     )
+    # GET-only redacted diagnostics: the UI may display an SL closure
+    # even when the finished stop-list endpoint returns missing, stale, or
+    # differently encoded state/trigger values. Never silently coerce a
+    # string or boolean into a documented integer for live certification.
+    # No exchange IDs, prices or raw venue responses leave this report.
+    state_raw = sl.get("state")
+    side_raw = sl.get("triggerSide")
+    result["historical_stop_state_field"] = (
+        state_raw if type(state_raw) is int and state_raw in range(0, 6)
+        else "NOT_REPORTED_OR_UNRECOGNIZED"
+    )
+    result["historical_trigger_side_field"] = (
+        side_raw if type(side_raw) is int and side_raw in range(0, 3)
+        else "NOT_REPORTED_OR_UNRECOGNIZED"
+    )
+    result["historical_state_field_type"] = (
+        "INTEGER" if type(state_raw) is int
+        else "STRING" if type(state_raw) is str
+        else "MISSING" if state_raw is None
+        else "OTHER"
+    )
+    result["historical_trigger_field_type"] = (
+        "INTEGER" if type(side_raw) is int
+        else "STRING" if type(side_raw) is str
+        else "MISSING" if side_raw is None
+        else "OTHER"
+    )
+    result["historical_stop_price_matches_journal"] = (
+        positive(sl.get("stopLossPrice")) == D(body["stop_price"])
+    )
+    result["historical_stop_generated_order_id_present"] = (
+        id_string(sl.get("placeOrderId")) is not None
+    )
+    result["historical_stop_error_code_status"] = (
+        "ZERO_NORMAL" if type(sl.get("errorCode")) is int
+        and sl["errorCode"] == 0
+        else "NONZERO_REPORTED" if type(sl.get("errorCode")) is int
+        and sl["errorCode"] > 0
+        else "NOT_REPORTED_OR_INVALID"
+    )
+    result["historical_stop_separate_leg_quantity_matches"] = (
+        sl.get("profitLossVolType") == "SEPARATE"
+        and positive(sl.get("stopLossVol")) == D(1)
+    )
+    result["historical_stop_terminal_flag_verified"] = (
+        type(sl.get("isFinished")) is int
+        and sl.get("isFinished") == 1
+    )
     if sl.get("state") != 3 or sl.get("triggerSide") != 2:
         result["status"] = "FLAT_NOT_VENUE_VERIFIED_SL_TRIGGER"
         return result
