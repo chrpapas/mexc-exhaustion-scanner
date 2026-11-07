@@ -20,6 +20,11 @@ def private():
         "entry_order_id": "101",
         "position_id": "202",
         "close_order_id": "303",
+        "close_deals": [{
+            "deal_id": "505", "order_id": "303",
+            "timestamp_ms": 1794050000000, "qty": "1",
+            "fill_price": "75200", "taker": True,
+        }],
     }
 
 
@@ -41,6 +46,7 @@ def finished(**overrides):
         "stopLossType": 0, "stopLossPrice": "75375",
         "stopLossVol": 1, "profitLossVolType": "SEPARATE",
         "stopLossReverse": 2, "errorCode": 0,
+        "updateTime": 1794050000200,
     }
     record.update(overrides)
     return record
@@ -96,6 +102,67 @@ async def test_exact_market_sl_terminal_generated_close_is_a_strict_witness():
     assert result["nonflat_restart_recovery_certified"] is False
     assert result["live_authorization"] is False
     assert "303" not in str(result)
+
+
+@pytest.mark.asyncio
+async def test_real_canceled_stop_with_nonzero_code_reports_exact_enum_and_sequence():
+    result = await get_result(
+        client(),
+        [finished(
+            state=2, triggerSide=0, placeOrderId=0, stopLossType=None,
+            errorCode=5002, updateTime=1794050000400,
+        )],
+    )
+    assert result["status"] == "THIRD_FINISHED_STOP_FORENSICS_OBSERVED_NONAUTHORIZING"
+    assert result["finished_stop_state"] == "CANCELED"
+    assert result["finished_stop_error_code"] == "NONZERO"
+    assert result["finished_stop_error_code_value"] == 5002
+    assert result["finished_stop_terminal_cancellation_observed"] is True
+    assert result["finished_stop_update_vs_actual_close_fills"] == (
+        "STOP_TERMINAL_UPDATE_AFTER_LAST_CLOSE_FILL"
+    )
+    assert result["stop_cancellation_caused_by_market_close_certified"] is False
+    assert result["native_sl_trigger_origin_certified"] is False
+    assert result["native_stop_market_type_certified"] is False
+    assert result["mexc_orders_sent"] == 0
+
+
+@pytest.mark.asyncio
+async def test_stop_canceled_before_exit_cannot_be_described_as_after_close():
+    result = await get_result(
+        client(),
+        [finished(
+            state=2, triggerSide=0, placeOrderId=0,
+            errorCode=3016, updateTime=1794049999000,
+        )],
+    )
+    assert result["finished_stop_update_vs_actual_close_fills"] == (
+        "STOP_TERMINAL_UPDATE_BEFORE_FIRST_CLOSE_FILL"
+    )
+    assert result["stop_cancellation_caused_by_market_close_certified"] is False
+    assert result["native_sl_trigger_origin_certified"] is False
+
+
+@pytest.mark.asyncio
+async def test_missing_stop_update_time_cannot_infer_cancellation_chronology():
+    result = await get_result(
+        client(),
+        [finished(state=2, triggerSide=0, updateTime=None)],
+    )
+    assert result["finished_stop_update_vs_actual_close_fills"] == (
+        "CHRONOLOGY_NOT_VERIFIABLE_FROM_VENUE_FIELDS"
+    )
+    assert result["stop_cancellation_caused_by_market_close_certified"] is False
+
+
+@pytest.mark.asyncio
+async def test_unknown_nonnegative_cancel_code_exposed_without_fake_interpretation():
+    result = await get_result(
+        client(), [finished(errorCode=73421, state=2, triggerSide=0)]
+    )
+    assert result["finished_stop_error_code_value"] == 73421
+    assert result["finished_stop_error_code"] == "NONZERO"
+    assert result["native_sl_trigger_origin_certified"] is False
 
 
 @pytest.mark.asyncio
