@@ -324,6 +324,9 @@ class _GetOnly:
                 path,
             ) is None
             and re.fullmatch(r"/api/v1/private/order/get/[1-9][0-9]*", path) is None
+            and re.fullmatch(
+                r"/api/v1/private/order/deal_details/[1-9][0-9]*", path
+            ) is None
             and path != "/api/v1/private/stoporder/list/orders"
         ):
             raise TriggerPilotHalted("PRIVATE_GET_ENDPOINT_NOT_ALLOWED")
@@ -416,6 +419,108 @@ def _open_stop(stop: dict[str, Any], *, pid: str, oid: str, price: D) -> dict[st
         "origin_is_order_attached": True,
         "sl_execution_verified": False,
     }
+
+
+async def _diagnose_generated_close(
+    safe: _GetOnly, *,
+    generated_order_id: str,
+    exact_position_id: str,
+    exact_stop_price: D,
+) -> dict[str, Any]:
+    """Signed GET-only evidence for an exit, not proof of the trigger leg.
+
+    Even an exact 1-contract market close linked from a TP/SL record does
+    not override MEXC's `triggerSide=1` (TP) or certify native SL execution.
+    Detailed fills must match the order and volume. Never expose exchange
+    IDs, balances, raw responses, or absolute fill prices.
+    """
+    out: dict[str, Any] = {
+        "generated_close_order_get_verification": "UNVERIFIED",
+        "generated_close_fills_get_verification": "UNVERIFIED",
+        "generated_close_market_fill_verified": False,
+        "sl_origin_certified_by_close": False,
+        "generated_close_taker_execution_observed": False,
+        "generated_close_fill_above_sl_bps": None,
+        "generated_close_deal_count": 0,
+    }
+    order = await safe.get(
+        f"/api/v1/private/order/get/{generated_order_id}",
+    )
+    if type(order) is not dict or not (
+        id_string(order.get("orderId")) == generated_order_id
+        and id_string(order.get("positionId")) == exact_position_id
+        and order.get("symbol") == SYMBOL
+        and type(order.get("side")) is int and order["side"] == 2
+        and type(order.get("state")) is int and order["state"] == 3
+        and type(order.get("orderType")) is int
+        and order["orderType"] == 5
+        and positive(order.get("dealVol")) == D(1)
+        and (order.get("errorCode") is None or (
+            type(order.get("errorCode")) is int
+            and order["errorCode"] == 0
+        ))
+    ):
+        out["generated_close_order_get_verification"] = (
+            "NOT_EXACT_FULL_CONTRACT_MARKET_CLOSE"
+        )
+        return out
+    out["generated_close_order_get_verification"] = (
+        "EXACT_FILLED_SHORT_MARKET_CLOSE"
+    )
+    rows = await safe.get(
+        f"/api/v1/private/order/deal_details/{generated_order_id}",
+    )
+    if type(rows) is not list or not rows or len(rows) > 100 or any(
+        type(row) is not dict for row in rows
+    ):
+        out["generated_close_fills_get_verification"] = (
+            "DEAL_RESPONSE_MISSING_OR_INVALID"
+        )
+        return out
+
+    total = D(0)
+    weighted = D(0)
+    trade_ids: set[str] = set()
+    seen_taker = False
+    for row in rows:
+        trade_id = id_string(row.get("id"))
+        volume = positive(row.get("vol"))
+        price = positive(row.get("price"))
+        if (
+            trade_id is None or trade_id in trade_ids
+            or id_string(row.get("orderId")) != generated_order_id
+            or row.get("symbol") != SYMBOL
+            or type(row.get("side")) is not int or row["side"] != 2
+            or volume is None or price is None
+            or type(row.get("timestamp")) is not int
+            or row["timestamp"] <= 0
+            or type(row.get("taker", row.get("isTaker"))) is not bool
+        ):
+            out["generated_close_fills_get_verification"] = (
+                "DEAL_ORIGIN_OR_SHAPE_UNVERIFIED"
+            )
+            return out
+        trade_ids.add(trade_id)
+        total += volume
+        weighted += volume * price
+        seen_taker |= row.get("taker", row.get("isTaker"))
+    out["generated_close_deal_count"] = len(trade_ids)
+    if total != D(1):
+        out["generated_close_fills_get_verification"] = (
+            "DEAL_VOLUME_DOES_NOT_EQUAL_FULL_CONTRACT"
+        )
+        return out
+    out["generated_close_fills_get_verification"] = (
+        "EXACT_ORDER_AND_FULL_CONTRACT_DEALS"
+    )
+    out["generated_close_market_fill_verified"] = True
+    out["generated_close_taker_execution_observed"] = seen_taker
+    # Share a small signed difference, never actual venue prices or IDs.
+    slippage_bps = (weighted / total / exact_stop_price - D(1)) * D(10000)
+    out["generated_close_fill_above_sl_bps"] = str(
+        slippage_bps.quantize(D("0.01"))
+    )
+    return out
 
 
 async def _status(client: Any, fingerprint: str) -> dict[str, Any]:
@@ -594,8 +699,39 @@ async def _status(client: Any, fingerprint: str) -> dict[str, Any]:
         type(sl.get("isFinished")) is int
         and sl.get("isFinished") == 1
     )
+    result["historical_take_profit_price_positive"] = (
+        positive(sl.get("takeProfitPrice")) is not None
+    )
+    # Treat an independently verified market close as fill evidence only.
+    # The TP/SL triggerSide remains an exchange-side classification:
+    # 1=TP, 2=SL. Do not overwrite this provenance from a price match.
+    generated_id = id_string(sl.get("placeOrderId"))
+    if (
+        sl.get("state") == 3
+        and sl.get("isFinished") == 1
+        and generated_id is not None
+        and positive(sl.get("stopLossPrice")) == D(body["stop_price"])
+    ):
+        try:
+            result.update(await _diagnose_generated_close(
+                safe, generated_order_id=generated_id,
+                exact_position_id=position_id,
+                exact_stop_price=D(body["stop_price"]),
+            ))
+        except Exception:
+            # GET failures do not establish absence or failed execution.
+            # The existing strict SL verifier remains non-authorizing.
+            result["generated_close_order_get_verification"] = (
+                "VENUE_GET_UNAVAILABLE"
+            )
+            result["generated_close_market_fill_verified"] = False
     if sl.get("state") != 3 or sl.get("triggerSide") != 2:
-        result["status"] = "FLAT_NOT_VENUE_VERIFIED_SL_TRIGGER"
+        result["status"] = (
+            "FULL_MARKET_CLOSE_CONFIRMED_BUT_TRIGGER_SIDE_TP_CONFLICT"
+            if sl.get("state") == 3 and sl.get("triggerSide") == 1
+            and result.get("generated_close_market_fill_verified") is True
+            else "FLAT_NOT_VENUE_VERIFIED_SL_TRIGGER"
+        )
         return result
     close_id = id_string(sl.get("placeOrderId"))
     if (
