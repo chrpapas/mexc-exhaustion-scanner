@@ -138,7 +138,7 @@ def _load(fingerprint: str) -> dict[str, Any]:
         or not OID_RE.fullmatch(body["external_oid"])
         or body.get("contracts") != 1
         or body.get("open_type") != 1
-        or body.get("stop_bps") not in ("5", "15")
+        or body.get("stop_bps") not in ("5", "15", "50")
         or positive(body.get("stop_price")) is None
         or type(body.get("entry_post_attempted")) is not bool
         or type(body.get("close_post_attempted")) is not bool
