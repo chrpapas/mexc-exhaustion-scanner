@@ -132,21 +132,18 @@ def _check_journal(fingerprint: str) -> dict[str, Any]:
         if name in journal and type(journal[name]) is not bool:
             raise pilot.TriggerPilotHalted("AMENDMENT_JOURNAL_SHAPE_INVALID")
     if journal.get("amend_post_attempted") is True:
+        target = pilot.positive(journal.get("amend_target_price"))
+        old = pilot.positive(journal.get("amend_previous_price"))
         if (
             pilot.id_string(journal.get("amend_stop_order_id")) is None
-            or pilot.positive(journal.get("amend_target_price")) is None
-            or pilot.positive(journal.get("amend_previous_price")) is None
-            or journal["amend_target_price"] >= journal["amend_previous_price"]
+            or target is None or old is None
+            or target >= old
+            or old != D(journal["stop_price"])
+            or type(journal.get("amend_ack_verified")) is not bool
         ):
-            # Compare numeric values rather than text sorting below.
-            target = pilot.positive(journal.get("amend_target_price"))
-            old = pilot.positive(journal.get("amend_previous_price"))
-            if target is None or old is None or target >= old:
-                raise pilot.TriggerPilotHalted("AMENDMENT_JOURNAL_PRICE_INVALID")
-        if journal.get("amend_ack_verified") is not None and type(
-            journal.get("amend_ack_verified")
-        ) is not bool:
-            raise pilot.TriggerPilotHalted("AMENDMENT_JOURNAL_ACK_INVALID")
+            raise pilot.TriggerPilotHalted("AMENDMENT_JOURNAL_PRICE_INVALID")
+    elif journal.get("amend_ack_verified") is True:
+        raise pilot.TriggerPilotHalted("AMENDMENT_ACK_WITHOUT_POST_FENCE")
     return journal
 
 
@@ -256,8 +253,8 @@ async def inspect(client: Any, fingerprint: str) -> dict[str, Any]:
         or type(position.get("openType")) is not int
         or position["openType"] != 1
         or pilot.positive(position.get("holdVol")) != D(1)
-        or type(position.get("leverage")) not in (int, float)
-        or D(str(position.get("leverage"))) != D(1)
+        or type(position.get("leverage")) not in (int, float, str)
+        or pilot.positive(position.get("leverage")) != D(1)
         or pilot.id_string(stop.get("id")) is None
         or pilot.id_string(stop.get("positionId")) != position_id
         or pilot.id_string(stop.get("orderId")) != order_id
@@ -350,6 +347,18 @@ async def amend_once(client: Any, fingerprint: str) -> dict[str, Any]:
         != pilot.id_string(entry.get("orderId"))
         or pilot.positive(stops[0].get("stopLossPrice"))
         != D(journal["stop_price"])
+        or type(stops[0].get("state")) is not int
+        or stops[0]["state"] != 1
+        or type(stops[0].get("isFinished")) is not int
+        or stops[0]["isFinished"] != 0
+        or type(stops[0].get("stopLossType")) is not int
+        or stops[0]["stopLossType"] != 0
+        or type(stops[0].get("stopLossReverse")) is not int
+        or stops[0]["stopLossReverse"] != 2
+        or stops[0].get("profitLossVolType") != "SEPARATE"
+        or pilot.positive(stops[0].get("stopLossVol")) != D(1)
+        or type(stops[0].get("triggerSide")) is not int
+        or stops[0]["triggerSide"] != 0
     ):
         raise pilot.TriggerPilotHalted("AMENDMENT_FINAL_STOP_IDENTITY_CHANGED")
     stop_id = pilot.id_string(stops[0].get("id"))
