@@ -138,7 +138,6 @@ def test_older_and_newer_journals_are_distinct(journal_scope):
 def test_current_50bp_journal_readable_without_new_real_order(journal_scope):
     result = m._check_journal(FP)
     assert result["stop_bps"] == "50"
-    assert result["amend_post_attempted"] is True if False else True
     assert not result.get("amend_post_attempted", False)
 
 
