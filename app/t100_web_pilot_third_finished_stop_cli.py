@@ -111,6 +111,35 @@ async def inspect_real_third_finished_stop(
     trigger = row.get("triggerSide")
     is_finished = row.get("isFinished")
     sl_type = row.get("stopLossType")
+    error_code = row.get("errorCode")
+    # The enum is public venue metadata, not a credential or trade ID.
+    # Report the exact bounded integer without guessing what it means.
+    safe_error_code = (
+        error_code if type(error_code) is int
+        and 0 <= error_code <= 999999 else None
+    )
+    # Actual deal timestamps are validated by the independent close audit;
+    # compare them to the finished TP/SL updateTime without exposing times.
+    close_deals = private.get("close_deals")
+    close_times = [
+        x.get("timestamp_ms") for x in close_deals
+    ] if type(close_deals) is list and close_deals and all(
+        type(x) is dict for x in close_deals
+    ) else []
+    stop_update = row.get("updateTime")
+    if (
+        type(stop_update) is int and stop_update > 0
+        and close_times
+        and all(type(t) is int and t > 0 for t in close_times)
+    ):
+        if stop_update < min(close_times):
+            stop_vs_close = "STOP_TERMINAL_UPDATE_BEFORE_FIRST_CLOSE_FILL"
+        elif stop_update > max(close_times):
+            stop_vs_close = "STOP_TERMINAL_UPDATE_AFTER_LAST_CLOSE_FILL"
+        else:
+            stop_vs_close = "STOP_TERMINAL_UPDATE_WITHIN_CLOSE_FILL_WINDOW"
+    else:
+        stop_vs_close = "CHRONOLOGY_NOT_VERIFIABLE_FROM_VENUE_FIELDS"
     out.update({
         "finished_stop_state": (
             _FINISHED_STATE.get(state, "UNRECOGNIZED")
@@ -129,11 +158,18 @@ async def inspect_real_third_finished_stop(
             if type(sl_type) is int else "FIELD_NOT_REPORTED"
         ),
         "finished_stop_error_code": (
-            "ZERO" if type(row.get("errorCode")) is int
-            and row["errorCode"] == 0
-            else "NONZERO" if type(row.get("errorCode")) is int
-            else "NOT_REPORTED"
+            "ZERO" if safe_error_code == 0
+            else "NONZERO" if safe_error_code is not None
+            and safe_error_code != 0 else "NOT_REPORTED_OR_OUT_OF_RANGE"
         ),
+        "finished_stop_error_code_value": safe_error_code,
+        "finished_stop_update_vs_actual_close_fills": stop_vs_close,
+        "finished_stop_terminal_cancellation_observed": (
+            state == 2 and type(state) is int
+            and type(is_finished) is int and is_finished == 1
+            and type(trigger) is int and trigger == 0
+        ),
+        "stop_cancellation_caused_by_market_close_certified": False,
         "finished_stop_price_matches_original_entry": (
             pilot.positive(row.get("stopLossPrice")) ==
             pilot.positive(journal["stop_price"])
@@ -152,6 +188,8 @@ async def inspect_real_third_finished_stop(
         ),
         "third_close_origin": close.get("close_origin", "UNVERIFIED"),
     })
+    # STOP cancellation and a market-close fill are separate events.
+    # Chronology alone cannot prove that the close *caused* cancellation.
     out["native_stop_market_type_certified"] = (
         out["finished_stop_loss_type"] == "MARKET"
         and out["finished_terminal_flag"] == "TERMINAL"
