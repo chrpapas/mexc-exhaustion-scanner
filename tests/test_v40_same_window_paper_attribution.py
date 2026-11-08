@@ -68,6 +68,14 @@ def test_reproduces_closed_paper_contribution_with_entry_cost_and_funding():
     assert out["group_summary"]["V40_ENTERED"]["paper_contribution_usdt"]==12.5
     assert out["paper_contributions_reconcile_to_snapshot"]
     assert out["paper_snapshot_vs_trade_attribution_gap_usdt"]==0.0
+    components=out["return_gap_attribution_usdt"]
+    assert components["paper_pnl_on_five_vol30_skipped_signals"]==0
+    assert components["paper_minus_v40_on_retained_signals"]==pytest.approx(
+        out["summed_paper_trade_contributions_usdt"]
+        -out["v40_proxy_return_pct"]*20,
+        abs=.10,
+    )
+    assert components["CAUSAL_DECOMPOSITION_CERTIFIED"] is False
     assert out["v40_proxy_contribution_crosscheck_usdt"]==pytest.approx(0,abs=.05)
 
 
@@ -83,6 +91,7 @@ def test_vol30_skipped_profitable_paper_trade_is_counted_as_missed():
     assert out["group_summary"]["V40_VOL30_SKIP"]["paper_contribution_usdt"]==40
     assert out["group_summary"]["V40_ENTERED"]["signals"]==0
     assert out["status"]=="DATED_PAPER_V40_ATTRIBUTION_RECONCILED_PROXY_ONLY"
+    assert out["return_gap_attribution_usdt"]["paper_pnl_on_five_vol30_skipped_signals"]==40.
 
 
 def test_position_closed_after_cutoff_uses_past_candle_not_future_exit():
