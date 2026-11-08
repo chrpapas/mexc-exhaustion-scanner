@@ -373,6 +373,23 @@ def explain_gap(
         paper_attribution_gap is not None
         and abs(paper_attribution_gap) <= max(2.0, initial_equity*.005)
     )
+    # Decompose the date-matched P&L difference into paper profits/losses
+    # from rejected signals, versus the combined sizing/execution/exit
+    # effect on the nine V40-selected signals. These are NOT causal
+    # counterfactual components, because keeping/skipping trades can
+    # change subsequent portfolio equity and available capacity.
+    kept=groups["V40_ENTERED"]
+    skipped=groups["V40_VOL30_SKIP"]
+    other=groups["V40_OTHER_OR_UNVERIFIED"]
+    skipped_effect=skipped["paper_contribution_usdt"]
+    kept_effect=(
+        kept["paper_contribution_usdt"]
+        - kept["v40_proxy_contribution_usdt"]
+    )
+    other_effect=other["paper_contribution_usdt"]
+    explanation_total=skipped_effect+kept_effect+other_effect
+    overall_attributed_gap=paper_contrib_total-v40_total
+
     # Aggregate funding can be missing due DB retention, and the paper
     # snapshot may differ from the Discord mark at 18:05. Do not force
     # contributions into equality with the dashboard's +96.88%.
@@ -404,6 +421,27 @@ def explain_gap(
         "all_eligible_signals_in_paper_positions":all_paper_positions_seen,
         "missing_attribution_evidence":gaps,
         "group_summary":groups,
+        "return_gap_attribution_usdt":{
+            "paper_minus_v40_proxy_total":round(overall_attributed_gap,2),
+            "paper_pnl_on_five_vol30_skipped_signals":round(skipped_effect,2),
+            "paper_minus_v40_on_retained_signals":round(kept_effect,2),
+            "paper_pnl_on_other_unexplained_signals":round(other_effect,2),
+            "rounded_decomposition_residual_usdt":round(
+                overall_attributed_gap-explanation_total,3
+            ),
+            "CAUSAL_DECOMPOSITION_CERTIFIED":False,
+        },
+        "paper_asof_return_pct":round(
+            100*(paper_curve_asof/initial_equity-1),2
+        ) if paper_curve_asof is not None else None,
+        "v40_200bps_minus_100bps_return_points":(
+            round(
+                next(x["return_pct"] for x in scenarios
+                     if x["cost_bps_per_side"]==200 and x["lot_mode"]==mode)
+                -next(x["return_pct"] for x in scenarios
+                     if x["cost_bps_per_side"]==100 and x["lot_mode"]==mode),2
+            )
+        ),
         "signals":rows,
         "limitations":[
             "V40 exit and funding are indicative Min30 proxy, not full original V40 partial/delayed H4 and pooled risk-trim path.",
@@ -463,6 +501,9 @@ def main() -> None:
     print("PAPER_PEAK_EXPOSURE="+str(result["paper_half_hour_history"]["peak_gross_exposure_pct"]))
     print("V40_PROXY_PEAK_EXPOSURE="+str(result["v40_proxy_peak_gross_exposure_pct"]))
     print("COHORT_SUMMARY="+json.dumps(result["group_summary"],sort_keys=True))
+    print("RETURN_GAP_ATTRIBUTION="+json.dumps(
+        result["return_gap_attribution_usdt"],sort_keys=True,
+    ))
     print("PAPER_ATTRIBUTION_VS_SNAPSHOT_GAP_USDT="+str(
         result["paper_snapshot_vs_trade_attribution_gap_usdt"]
     ))
