@@ -17,7 +17,6 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
-import math
 import os
 from collections import defaultdict
 from datetime import datetime, timezone
@@ -358,14 +357,30 @@ def explain_gap(
     all_paper_positions_seen=len(paper_by_signal)==len(signals)
     paper_contrib_total=sum(r["paper_contribution_usdt"] or 0 for r in rows)
     paper_curve_asof=paper_curve.get("last_snapshot_equity_usdt")
-    paper_equity_delta=paper_curve_asof-initial_equity if paper_equity_delta_is_safe(paper_equity_delta=None, equity=paper_curve_asof) else None
+    paper_equity_delta=(
+        paper_curve_asof-initial_equity
+        if paper_curve_asof is not None else None
+    )
+    paper_attribution_gap=(
+        paper_equity_delta-paper_contrib_total
+        if paper_equity_delta is not None else None
+    )
+    paper_curve_current=(
+        bool(paper["equity_series"])
+        and cutoff-int(paper["equity_series"][-1]["t"]) <= 35*60
+    )
+    paper_contributions_match=(
+        paper_attribution_gap is not None
+        and abs(paper_attribution_gap) <= max(2.0, initial_equity*.005)
+    )
     # Aggregate funding can be missing due DB retention, and the paper
     # snapshot may differ from the Discord mark at 18:05. Do not force
     # contributions into equality with the dashboard's +96.88%.
     return {
         "status": (
             "DATED_PAPER_V40_ATTRIBUTION_RECONCILED_PROXY_ONLY"
-            if all_paper_positions_seen and not gaps
+            if all_paper_positions_seen and not gaps and paper_curve_current
+               and paper_contributions_match
                and abs(v40_total-v40_expected)<.05
             else "DATED_PAPER_V40_ATTRIBUTION_INCOMPLETE_DO_NOT_CLAIM"
         ),
@@ -381,8 +396,10 @@ def explain_gap(
         if paper_equity_delta is not None else None,
         "summed_paper_trade_contributions_usdt":round(paper_contrib_total,2),
         "paper_snapshot_vs_trade_attribution_gap_usdt":round(
-            paper_equity_delta-paper_contrib_total,2
-        ) if paper_equity_delta is not None else None,
+            paper_attribution_gap,2
+        ) if paper_attribution_gap is not None else None,
+        "paper_snapshot_recent_enough_for_cutoff":paper_curve_current,
+        "paper_contributions_reconcile_to_snapshot":paper_contributions_match,
         "v40_proxy_contribution_crosscheck_usdt":round(v40_total-v40_expected,4),
         "all_eligible_signals_in_paper_positions":all_paper_positions_seen,
         "missing_attribution_evidence":gaps,
@@ -398,11 +415,6 @@ def explain_gap(
             "The V40 scenario's stronger execution-cost assumption is already deducted from its contribution.",
         ],
     }
-
-
-def paper_equity_delta_is_safe(*, paper_equity_delta: None, equity: Any) -> bool:
-    # Avoid null/truthy fallback in the benchmark; missing snapshots remain missing.
-    return equity is not None and math.isfinite(float(equity))
 
 
 def _parse_args():
