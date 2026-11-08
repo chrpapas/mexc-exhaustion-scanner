@@ -251,3 +251,18 @@ def test_valid_empty_batch_is_non_authorizing():
     x=read(conn)
     assert x.candidates == ()
     assert x.status=="FROZEN_V40_STAGE2_SOURCE_VALIDATED_NONAUTHORIZING"
+
+
+def test_subsecond_signal_and_candle_clocks_are_not_silently_truncated():
+    signal,history=fixtures()
+    signal["p2_at"]=signal["p2_at"]+timedelta(microseconds=100)
+    with pytest.raises(V40SignalIntakeHalted,match="SUBSECOND"):
+        inspect_stage2_candidate(
+            signal,history,observed_at=T+timedelta(seconds=25),
+        )
+    signal,history=fixtures()
+    history[0]["open_time"]+=timedelta(microseconds=1)
+    with pytest.raises(V40SignalIntakeHalted,match="SUBSECOND"):
+        inspect_stage2_candidate(
+            signal,history,observed_at=T+timedelta(seconds=25),
+        )
