@@ -285,6 +285,7 @@ class LiveMexcAdapterContractTests(unittest.IsolatedAsyncioTestCase):
                 {
                     "stopPlanOrderId": 99,
                     "lossTrend": 1,
+                    "stopLossReverse": 2,
                     "stopLossPrice": "90",
                 },
             )],
