@@ -128,3 +128,51 @@ async def test_privileged_inventory_claims_block_restart(alter):
     assert report["live_authorization"] is False
     assert report["mexc_orders_sent"] is False
     assert report["database_writes_sent"] is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status,owned,expected", [
+    ("FLAT_OBSERVED_NONAUTHORIZING", 0,
+     "RESTART_PROTECTED_SLOT_INVENTORY_MISMATCH_NO_RETRY"),
+    ("NONFLAT_PROVENANCE_MATCHED_NONAUTHORIZING", 0,
+     "RESTART_PROTECTED_SLOT_INVENTORY_MISMATCH_NO_RETRY"),
+    ("SHARED_ACCOUNT_MANUAL_ONLY_NONAUTHORIZING", 0,
+     "RESTART_PROTECTED_SLOT_INVENTORY_MISMATCH_NO_RETRY"),
+    ("NONFLAT_PROVENANCE_MATCHED_NONAUTHORIZING", 1,
+     "RESTART_OBSERVED_NONAUTHORIZING"),
+])
+async def test_protected_slot_requires_owned_venue_position(
+    status, owned, expected,
+):
+    durable_snapshot = _triage(_protected())
+    inventory = {
+        "status": status,
+        "owned_four_slot_positions_observed": owned,
+        "manual_positions_observed": 0,
+        "entry_allowed": False,
+        "live_authorization": False,
+        "mexc_orders_sent": False,
+        "database_writes_sent": False,
+        "read_only": True,
+        "native_stop_exchange_atomicity_certified": False,
+        "durable_entry_executor_certified": False,
+    }
+    triage = PostgresFourSlotRestartTriage(FakePool([]))
+    with (
+        patch.object(
+            PostgresFourSlotRestartTriage, "inspect",
+            new=AsyncMock(return_value=durable_snapshot),
+        ),
+        patch(
+            "app.t100_live_four_slot_restart_supervisor.run_readonly_four_slot_audit",
+            new=AsyncMock(return_value=inventory),
+        ),
+    ):
+        result = await run_four_slot_restart_readonly_cycle(
+            triage=triage, ledger=object(), client=object(),
+            env=PAPER_KILLED, shared_manual_observation=False,
+        )
+    assert result["status"] == expected
+    assert result["order_retry_allowed"] is False
+    assert result["entry_allowed"] is False
+    assert result["live_authorization"] is False
