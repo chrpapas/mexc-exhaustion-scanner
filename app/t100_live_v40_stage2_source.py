@@ -102,6 +102,13 @@ def _timestamp(value: Any) -> int:
     return int(value.timestamp())
 
 
+def _exact_candle_timestamp(value: Any) -> int:
+    ts = _timestamp(value)
+    if value.microsecond != 0 or value.timestamp() != ts:
+        raise V40SignalIntakeHalted("SOURCE_SUBSECOND_CANDLE_CLOCK_INVALID")
+    return ts
+
+
 def _positive_float(value: Any) -> float:
     if type(value) is bool or type(value) not in (int, float):
         raise V40SignalIntakeHalted("SOURCE_INVALID_NUMBER")
@@ -124,8 +131,8 @@ def inspect_stage2_candidate(
     try:
         identifier = signal["id"]
         symbol = signal["symbol"]
-        p2_at = _timestamp(signal["p2_at"])
-        feature_at = _timestamp(signal["feature_at"])
+        p2_at = _exact_candle_timestamp(signal["p2_at"])
+        feature_at = _exact_candle_timestamp(signal["feature_at"])
         created_at = _timestamp(signal["created_at"])
         episode = signal["physical_episode_seq"]
         tier = signal["t100_tier"]
@@ -170,7 +177,7 @@ def inspect_stage2_candidate(
         if not isinstance(raw, dict):
             raise V40SignalIntakeHalted("SOURCE_CANDLE_SHAPE_INVALID")
         try:
-            open_ts = _timestamp(raw["open_time"])
+            open_ts = _exact_candle_timestamp(raw["open_time"])
             high = _positive_float(raw["high"])
             close = _positive_float(raw["close"])
             amount = _positive_float(raw["amount"])
