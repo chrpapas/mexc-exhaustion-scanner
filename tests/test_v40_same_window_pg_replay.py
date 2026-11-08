@@ -173,3 +173,53 @@ def test_repeated_signal_id_is_a_hard_data_error():
     snap["signals"].append(dict(snap["signals"][0]))
     with pytest.raises(ReplayDataError,match="DUPLICATE_STAGE2_SIGNAL_ID"):
         run_scenario(snap,cost_bps=100,mode="REFERENCE")
+
+
+def test_readonly_query_error_reports_stage_and_sqlstate_without_secrets(monkeypatch):
+    import asyncio
+    import sys
+    from types import SimpleNamespace
+    from scripts.v40_same_window_pg_replay import fetch_snapshot
+
+    class UndefinedFunctionError(Exception):
+        sqlstate = "42883"
+
+    class Tx:
+        async def __aenter__(self):
+            return self
+        async def __aexit__(self, *args):
+            return False
+
+    class Conn:
+        closed = False
+        def transaction(self, *, isolation, readonly):
+            assert isolation == "repeatable_read" and readonly is True
+            return Tx()
+        async def fetchval(self, sql):
+            if "transaction_read_only" in sql:
+                return "on"
+            if "current_database" in sql:
+                return "mexc_exhaustion"
+            raise AssertionError("Unexpected read-only query")
+        async def fetch(self, sql, *args):
+            assert "FROM public.t100_p2_signals" in sql
+            raise UndefinedFunctionError("secret-query-message")
+        async def close(self):
+            self.closed = True
+
+    conn = Conn()
+    async def connect(*, dsn, ssl, timeout, command_timeout):
+        assert dsn == "SECRET_DB_URL"
+        assert ssl == "require"
+        return conn
+    monkeypatch.setitem(sys.modules, "asyncpg", SimpleNamespace(connect=connect))
+    with pytest.raises(ReplayDataError) as err:
+        asyncio.run(fetch_snapshot(
+            "SECRET_DB_URL", start=epoch(DEFAULT_START), end=epoch(DEFAULT_END)
+        ))
+    assert "DB_QUERY_STAGE=STAGE2_SIGNALS" in str(err.value)
+    assert "SQLSTATE=42883" in str(err.value)
+    assert "ERROR_TYPE=UndefinedFunctionError" in str(err.value)
+    assert "SECRET_DB_URL" not in str(err.value)
+    assert "secret-query-message" not in str(err.value)
+    assert conn.closed is True
