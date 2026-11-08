@@ -159,3 +159,17 @@ def test_zero_volume_prior_bar_cannot_create_frozen_admission():
     out=run_scenario(snap,cost_bps=100,mode="REFERENCE")
     assert out["counts"].get("v40_entered",0)==0
     assert out["counts"]["v40_MISSING_causal_49_bar_history_incomplete"]==1
+
+
+def test_non_aligned_signal_timestamps_are_not_silently_dropped():
+    snap=sample()
+    snap["signals"][0]["t"] += 1
+    with pytest.raises(ReplayDataError,match="NONALIGNED_STAGE2_EVENT_TIMESTAMP"):
+        run_scenario(snap,cost_bps=100,mode="REFERENCE")
+
+
+def test_repeated_signal_id_is_a_hard_data_error():
+    snap=sample()
+    snap["signals"].append(dict(snap["signals"][0]))
+    with pytest.raises(ReplayDataError,match="DUPLICATE_STAGE2_SIGNAL_ID"):
+        run_scenario(snap,cost_bps=100,mode="REFERENCE")
