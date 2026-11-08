@@ -258,18 +258,26 @@ class LiveMexcAdapterContractTests(unittest.IsolatedAsyncioTestCase):
                 )
         self.assertEqual(self.client.posts, [])
 
-    async def test_entry_payload_side_type_sell_is_required(self):
+    async def test_entry_payload_matches_documented_mexc_order_create(self):
         self.client.post_result = {"orderId": "101"}
         await self.adapter.submit_short_with_stop(
             intent(), permit=permit(),
         )
         path, body = self.client.posts[0]
         self.assertEqual(path, "/api/v1/private/order/create")
-        self.assertEqual(body["sideType"], "sell")
-        self.assertEqual(body["positionType"], "short")
+        self.assertEqual(set(body), {
+            "symbol", "price", "vol", "leverage", "side", "type",
+            "openType", "positionMode", "externalOid",
+            "stopLossPrice", "lossTrend",
+        })
         self.assertEqual(body["side"], 3)
+        self.assertEqual(body["type"], 5)
         self.assertEqual(body["openType"], 2)
+        self.assertEqual(body["positionMode"], 1)
+        self.assertEqual(body["leverage"], 1)
         self.assertEqual(body["externalOid"], intent().external_oid)
+        self.assertNotIn("sideType", body)
+        self.assertNotIn("positionType", body)
 
     async def test_one_shot_stop_tightening_contract(self):
         await self.adapter.submit_native_short_stop_tightening(
