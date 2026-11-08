@@ -276,6 +276,10 @@ class V40OneShotCoordinator:
         lease=await self.leaders.acquire(holder_id)
         selected: V40PreparedEntry | None=None
         pre: FourSlotSnapshotResult | None=None
+        # A reservation INSERT can commit before its network ACK arrives.
+        # Once attempted, avoid voluntarily releasing the leader fence;
+        # expiry and recovery, never automatic resubmission, follow.
+        reservation_mutation_may_exist=False
         try:
             pre=await self.snapshots.inspect()
             if type(pre) is not FourSlotSnapshotResult or pre.status not in (
@@ -296,6 +300,7 @@ class V40OneShotCoordinator:
             # Fresh lease and critical account after GET-heavy selection.
             await self.leaders.require_current(lease)
             observed_at=datetime.now(timezone.utc)
+            reservation_mutation_may_exist=True
             reserved=await self.reservations.reserve(
                 plan=selected.plan,witness=pre,lease=lease,
                 observed_at=observed_at,
@@ -339,6 +344,32 @@ class V40OneShotCoordinator:
             if terms_new!=selected.terms:
                 return V40OneShotReport(
                     "V40_CONTRACT_TERMS_CHANGED_AFTER_STAGE_NO_POST",
+                    signal_id=selected.signal.signal_id,
+                    reserved=True,staged=True,
+                )
+            # Recalculate frozen V40 admission using *current* equity and
+            # marked exposure; the earlier reservation does NOT entitle us
+            # to the old notional after adverse portfolio changes.
+            if type(refreshed) is not V40CurrentRiskEvidence:
+                return V40OneShotReport(
+                    "V40_REFRESHED_RISK_EVIDENCE_INVALID_NO_POST",
+                    signal_id=selected.signal.signal_id,
+                    reserved=True,staged=True,
+                )
+            try:
+                revised=prepare_candidate(
+                    signal=selected.signal,witness=pre,
+                    risk=refreshed,terms=terms_new,cost_bps=cost_bps,
+                )
+            except V40CoordinatorHalted:
+                revised=None
+            if (
+                revised is None
+                or selected.intent.notional_usdt >
+                   D(str(revised.plan.modeled_notional_usdt))
+            ):
+                return V40OneShotReport(
+                    "V40_REFRESHED_V40_CAPACITY_OR_COLLATERAL_REJECTS_POST",
                     signal_id=selected.signal.signal_id,
                     reserved=True,staged=True,
                 )
@@ -401,10 +432,12 @@ class V40OneShotCoordinator:
                 independently_recovered_after_commit=True,
             )
         finally:
-            # Release is a DB mutation unrelated to POST identity; an
-            # exception here must never trigger automatic re-dispatch.
-            # Do not override the exception if lease was lost or stale.
-            try:
-                await self.leaders.release(lease)
-            except Exception:
-                pass
+            # Do not voluntarily unlock after a possibly durable reservation:
+            # an UNKNOWN DB reply can have committed; an operator/recovery
+            # process must reconcile that immutable identity. The leader
+            # lease expires automatically without being falsely renewed.
+            if not reservation_mutation_may_exist:
+                try:
+                    await self.leaders.release(lease)
+                except Exception:
+                    pass
