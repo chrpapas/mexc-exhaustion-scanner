@@ -148,7 +148,7 @@ def test_naive_timestamp_and_inconsistent_ohlc_fail_closed():
     with pytest.raises(ReplayDataError):
         epoch("2026-11-07T18:05:00")
     snap=sample()
-    snap["candles"][-1]["high"]=99
+    snap["candles"][-1]["open"]=102
     with pytest.raises(ReplayDataError,match="OHLC_INCONSISTENCY"):
         run_scenario(snap,cost_bps=100,mode="REFERENCE")
 
