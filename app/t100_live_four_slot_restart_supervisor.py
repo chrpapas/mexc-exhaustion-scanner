@@ -260,6 +260,26 @@ async def run_four_slot_restart_readonly_cycle(
             inventory_status=inv_status if type(inv_status) is str else None,
             **fields,
         )
+    # A durable PROTECTED V40 slot cannot be reconciled by a flat or
+    # manual-only exchange snapshot. A missing owned position is exposure/
+    # provenance drift, even if the independent observer otherwise found a
+    # self-consistent account. Legacy owned checkpoints may exist without
+    # V40 slot records, so the reverse implication is not assumed.
+    if result.active_slots:
+        observed_owned = inventory.get("owned_four_slot_positions_observed")
+        if (
+            inv_status in (
+                "FLAT_OBSERVED_NONAUTHORIZING",
+                "SHARED_ACCOUNT_MANUAL_ONLY_NONAUTHORIZING",
+            )
+            or type(observed_owned) is not int
+            or observed_owned < result.active_slots
+            or observed_owned > 4
+        ):
+            return _blocked(
+                "RESTART_PROTECTED_SLOT_INVENTORY_MISMATCH_NO_RETRY",
+                inventory_status=inv_status, **fields,
+            )
     return _blocked(
         "RESTART_OBSERVED_NONAUTHORIZING",
         inventory_status=inv_status, **fields,
