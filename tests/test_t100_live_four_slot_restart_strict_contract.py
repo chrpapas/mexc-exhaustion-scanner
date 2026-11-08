@@ -2,6 +2,7 @@
 
 No exchange client, DB credentials, POST or SQL writes are used.
 """
+import asyncio
 from dataclasses import replace
 from unittest.mock import AsyncMock, patch
 
@@ -91,7 +92,6 @@ def test_reserved_slot_cannot_claim_or_have_intent():
         assert not _triage_contract_verified(altered)
 
 
-@pytest.mark.asyncio
 @pytest.mark.parametrize("alter", [
     {"read_only": False},
     {"native_stop_exchange_atomicity_certified": True},
@@ -102,7 +102,7 @@ def test_reserved_slot_cannot_claim_or_have_intent():
     {"mexc_orders_sent": True},
     {"database_writes_sent": True},
 ])
-async def test_privileged_inventory_claims_block_restart(alter):
+def test_privileged_inventory_claims_block_restart(alter):
     inventory = {
         "status": "FLAT_OBSERVED_NONAUTHORIZING",
         "entry_allowed": False,
@@ -119,10 +119,10 @@ async def test_privileged_inventory_claims_block_restart(alter):
         "app.t100_live_four_slot_restart_supervisor.run_readonly_four_slot_audit",
         new=AsyncMock(return_value=inventory),
     ):
-        report = await run_four_slot_restart_readonly_cycle(
+        report = asyncio.run(run_four_slot_restart_readonly_cycle(
             triage=triage, ledger=object(), client=object(),
             env=PAPER_KILLED, shared_manual_observation=False,
-        )
+        ))
     assert report["status"] == "RESTART_READONLY_INVENTORY_CONTRACT_UNVERIFIED"
     assert report["order_retry_allowed"] is False
     assert report["live_authorization"] is False
@@ -130,7 +130,6 @@ async def test_privileged_inventory_claims_block_restart(alter):
     assert report["database_writes_sent"] is False
 
 
-@pytest.mark.asyncio
 @pytest.mark.parametrize("status,owned,expected", [
     ("FLAT_OBSERVED_NONAUTHORIZING", 0,
      "RESTART_PROTECTED_SLOT_INVENTORY_MISMATCH_NO_RETRY"),
@@ -141,7 +140,7 @@ async def test_privileged_inventory_claims_block_restart(alter):
     ("NONFLAT_PROVENANCE_MATCHED_NONAUTHORIZING", 1,
      "RESTART_OBSERVED_NONAUTHORIZING"),
 ])
-async def test_protected_slot_requires_owned_venue_position(
+def test_protected_slot_requires_owned_venue_position(
     status, owned, expected,
 ):
     durable_snapshot = _triage(_protected())
@@ -168,10 +167,10 @@ async def test_protected_slot_requires_owned_venue_position(
             new=AsyncMock(return_value=inventory),
         ),
     ):
-        result = await run_four_slot_restart_readonly_cycle(
+        result = asyncio.run(run_four_slot_restart_readonly_cycle(
             triage=triage, ledger=object(), client=object(),
             env=PAPER_KILLED, shared_manual_observation=False,
-        )
+        ))
     assert result["status"] == expected
     assert result["order_retry_allowed"] is False
     assert result["entry_allowed"] is False
