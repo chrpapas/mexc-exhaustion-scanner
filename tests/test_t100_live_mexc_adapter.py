@@ -171,10 +171,11 @@ class LiveMexcAdapterContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(path, "/api/v1/private/order/create")
         self.assertEqual(body["symbol"], "SIREN_USDT")
         self.assertEqual(body["side"], 3)
-        # MEXC documentation changed on 2026-10-23: sideType is
-        # required and positionType now explicitly declares direction.
-        self.assertEqual(body["sideType"], "sell")
-        self.assertEqual(body["positionType"], "short")
+        # Current MEXC order/create schema and the supervised live pilot
+        # use numeric side=3; these extra keys are not present in either
+        # observed contract and must not be invented by the V40 adapter.
+        self.assertNotIn("sideType", body)
+        self.assertNotIn("positionType", body)
         self.assertEqual(body["type"], 5)
         self.assertEqual(body["openType"], 2)  # mandatory CROSS pilot
         self.assertEqual(body["positionMode"], 1)
@@ -258,18 +259,26 @@ class LiveMexcAdapterContractTests(unittest.IsolatedAsyncioTestCase):
                 )
         self.assertEqual(self.client.posts, [])
 
-    async def test_entry_payload_side_type_sell_is_required(self):
+    async def test_entry_payload_matches_documented_mexc_order_create(self):
         self.client.post_result = {"orderId": "101"}
         await self.adapter.submit_short_with_stop(
             intent(), permit=permit(),
         )
         path, body = self.client.posts[0]
         self.assertEqual(path, "/api/v1/private/order/create")
-        self.assertEqual(body["sideType"], "sell")
-        self.assertEqual(body["positionType"], "short")
+        self.assertEqual(set(body), {
+            "symbol", "price", "vol", "leverage", "side", "type",
+            "openType", "positionMode", "externalOid",
+            "stopLossPrice", "lossTrend",
+        })
         self.assertEqual(body["side"], 3)
+        self.assertEqual(body["type"], 5)
         self.assertEqual(body["openType"], 2)
+        self.assertEqual(body["positionMode"], 1)
+        self.assertEqual(body["leverage"], 1)
         self.assertEqual(body["externalOid"], intent().external_oid)
+        self.assertNotIn("sideType", body)
+        self.assertNotIn("positionType", body)
 
     async def test_one_shot_stop_tightening_contract(self):
         await self.adapter.submit_native_short_stop_tightening(
@@ -285,6 +294,7 @@ class LiveMexcAdapterContractTests(unittest.IsolatedAsyncioTestCase):
                 {
                     "stopPlanOrderId": 99,
                     "lossTrend": 1,
+                    "stopLossReverse": 2,
                     "stopLossPrice": "90",
                 },
             )],

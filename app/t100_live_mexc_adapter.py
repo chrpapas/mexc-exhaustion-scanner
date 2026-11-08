@@ -1,4 +1,10 @@
-"""Concrete MEXC futures POST/GET adapter. POST sends real orders; nothing runs on import."""
+"""Concrete MEXC futures POST/GET adapter. POST sends real orders; import is inert.
+
+Order/create payload contains only documented MEXC fields, matching the
+successful supervised one-shot pilot's request shape. Unlike that isolated
+1x pilot, V40 openType=2 remains CROSS and is NOT venue-certified. The
+typed live permit and durable one-shot journal requirements remain intact.
+"""
 from __future__ import annotations
 import re
 from typing import Any, TYPE_CHECKING
@@ -64,8 +70,6 @@ class LiveMexcAdapter:
                 "vol": str(intent.volume_contracts),
                 "leverage": 1,
                 "side": 3,
-                "sideType": "sell",
-                "positionType": "short",
                 "type": 5,
                 "openType": self.open_type,
                 "positionMode": 1,
@@ -97,6 +101,9 @@ class LiveMexcAdapter:
     ) -> None:
         """Send exactly one native TP/SL price amendment request.
 
+        The explicit stopLossReverse=2 matches the one supervised
+        isolated-margin MEXC price edit observed in pilot 4 (no reversal).
+        It is NOT independent proof for the V40 cross-margin adapter.
         This transport method never retries and never interprets an exception
         as proof the exchange did not mutate. Durable callers must journal
         SUBMITTING before invoking it and reconcile UNKNOWN outcomes by GET.
@@ -132,6 +139,7 @@ class LiveMexcAdapter:
             {
                 "stopPlanOrderId": stop_order_id,
                 "lossTrend": 1,
+                "stopLossReverse": 2,
                 "stopLossPrice": str(requested),
             },
         )
