@@ -86,7 +86,9 @@ def test_vol30_skipped_profitable_paper_trade_is_counted_as_missed():
 
 
 def test_position_closed_after_cutoff_uses_past_candle_not_future_exit():
-    snap=sample()
+    # V40 position must be closed inside the synthetic test window;
+    # the paper position deliberately closes only *after* the cutoff.
+    snap=sample(stop_gap=True)
     paper=paper_fixture(snap,closed=True,close_after=True,net_pnl=999.)
     out=explain_gap(snap,paper)
     assert out["signals"][0]["paper_status_at_cutoff"]=="OPEN_AT_CUTOFF_MARKED_COMPLETE_MIN30"
