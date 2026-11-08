@@ -157,7 +157,7 @@ def test_clean_mocked_submission_is_one_post_and_requires_get_reconciliation(mon
     ({"plan": "not-a-plan"}, "V40_DISPATCH_ORIGIN_OR_CROSS_MODE_INVALID"),
     ({"stage": DurableAttemptStage(signal_id=99, external_oid="other")},
         "V40_DISPATCH_ORIGIN_OR_CROSS_MODE_INVALID"),
-    ({"price_tick": D("1")}, "V40_FROZEN_STOP_OR_MODELED_NOTIONAL_MISMATCH"),
+    ({"price_tick": D("0.3")}, "V40_FROZEN_STOP_OR_MODELED_NOTIONAL_MISMATCH"),
     ({"risk": None}, "V40_DISPATCH_ORIGIN_OR_CROSS_MODE_INVALID"),
 ])
 def test_invalid_preclaim_evidence_never_claims_or_posts(monkeypatch, changed, code):
