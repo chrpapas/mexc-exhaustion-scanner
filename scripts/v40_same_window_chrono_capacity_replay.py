@@ -368,6 +368,9 @@ def run_chronological(
                 counts["missing_49_prior_bars"]+=1
                 continue
             basis=positive(sig["price"])
+            if bars[symbol].get(now) is None:
+                counts["missing_entry_bar_open"]+=1
+                continue
             if abs(basis-positive(raw[-1]["close"]))>max(1e-8,basis*1e-6):
                 counts["signal_candle_price_mismatch"]+=1
                 continue
@@ -382,7 +385,7 @@ def run_chronological(
                 break
             modeled=admission(
                 prior_bars=prior49,admission_open_ts=now,equity_usdt=e,
-                marked_existing_usdt=sum(marked.values()) if False else sum(
+                marked_existing_usdt=sum(
                     p.remaining*p.mark/p.entry for p in positions.values()
                 ),
                 stage1_atr7_pct=finite(sig["atr7"]),
@@ -486,9 +489,11 @@ def run_chronological(
                 if q is not None and 0<=end-int(q["t"])<=900:
                     p.mark=positive(q["price"])
                 else:
-                    # Prior completed candle close is at now, 5 minutes
-                    # before the requested dashboard cutoff in this window.
-                    if end-now>35*60:
+                    # A position entered during this unfinished 30-minute
+                    # candle has no completed close to mark against. It
+                    # requires a near-cutoff ticker, never an assumed flat
+                    # mark at its entry price.
+                    if p.started>=now or end-now>35*60:
                         near_term_incomplete=True
                     counts["terminal_prior_close_proxy_marks"]+=1
             if not near_term_incomplete:
