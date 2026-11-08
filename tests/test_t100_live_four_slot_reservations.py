@@ -203,7 +203,7 @@ class FourSlotReservationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(outcome.journal_state, "RESERVED")
         self.assertEqual(outcome.occupied_after_reservation, 1)
         self.assertEqual(outcome.modeled_notional_usdt, 6250)
-        self.assertTrue(outcome.external_oid.startswith("t100v40r"))
+        self.assertTrue(outcome.external_oid.startswith("t100v1e"))
         self.assertFalse(outcome.post_attempted)
         self.assertFalse(outcome.entry_allowed)
         self.assertFalse(outcome.live_authorization)
