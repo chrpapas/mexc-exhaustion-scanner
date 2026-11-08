@@ -11,6 +11,7 @@ credentials, schedule work, alert Discord, or deploy to Render.
 """
 from __future__ import annotations
 
+import re
 from typing import Any, Mapping
 
 from app.t100_live_cross_risk_diagnostic import (
@@ -80,6 +81,51 @@ def _triage_contract_verified(status: FourSlotRestartTriage) -> bool:
         for item in status.attempts
     ):
         return False
+    # A correctly typed snapshot can still be contradictory. Validate
+    # every identity and state relation before any exchange GET. In
+    # particular a fabricated PROTECTED slot without an ACK and durable
+    # dispatch claim must never appear as a clean restart.
+    ids: set[int] = set()
+    origins: set[str] = set()
+    symbols: set[str] = set()
+    for item in status.attempts:
+        if (
+            type(item.signal_id) is not int
+            or item.signal_id <= 0
+            or type(item.symbol) is not str
+            or re.fullmatch(r"[A-Z0-9]+_USDT", item.symbol) is None
+            or type(item.external_oid) is not str
+            or re.fullmatch(r"[A-Za-z0-9_-]{1,128}", item.external_oid) is None
+            or item.slot_state not in (
+                "RESERVED", "SUBMITTING", "UNKNOWN",
+                "ACK", "PROTECTED", "HALTED",
+            )
+            or item.signal_id in ids
+            or item.external_oid in origins
+            or item.symbol in symbols
+        ):
+            return False
+        ids.add(item.signal_id)
+        origins.add(item.external_oid)
+        symbols.add(item.symbol)
+        if item.slot_state == "RESERVED":
+            if item.intent_state is not None or item.claim_present:
+                return False
+        else:
+            if item.intent_state not in (
+                "SUBMITTING", "UNKNOWN", "ACK", "REVIEW", "CLOSED",
+            ):
+                return False
+        if (
+            item.slot_state in ("ACK", "PROTECTED")
+            and not item.claim_present
+        ):
+            return False
+        if item.slot_state == "PROTECTED" and item.intent_state != "ACK":
+            return False
+        if item.slot_state == "SUBMITTING" and item.intent_state != "SUBMITTING":
+            return False
+
     expected_pending = sum(
         item.slot_state != "PROTECTED" for item in status.attempts
     )
@@ -185,6 +231,10 @@ async def run_four_slot_restart_readonly_cycle(
         or inventory.get("live_authorization") is not False
         or inventory.get("mexc_orders_sent") is not False
         or inventory.get("database_writes_sent") is not False
+        or inventory.get("read_only") is not True
+        or inventory.get("native_stop_exchange_atomicity_certified") is not False
+        or inventory.get("durable_entry_executor_certified") is not False
+        or inventory.get("manual_positions_adopted_by_t100") is True
     ):
         return _blocked("RESTART_READONLY_INVENTORY_CONTRACT_UNVERIFIED", **fields)
 
