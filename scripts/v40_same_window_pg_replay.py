@@ -169,7 +169,7 @@ async def fetch_snapshot(dsn: str, *, start: int, end: int) -> dict[str, Any]:
             symbol=str(r["symbol"]),t=epoch(r["open_time"]),
             open=positive(r["open"]),high=positive(r["high"]),
             low=positive(r["low"]),close=positive(r["close"]),
-            amount=positive(r["amount"]),
+            amount=finite(r["amount"]),
         ) for r in raw_candles
     ]
     specs: dict[str, dict[str, Any]] = {}
