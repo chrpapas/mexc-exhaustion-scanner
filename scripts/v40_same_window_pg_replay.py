@@ -22,6 +22,7 @@ import asyncio
 import json
 import math
 import os
+import re
 from collections import Counter, defaultdict
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -88,14 +89,18 @@ async def fetch_snapshot(dsn: str, *, start: int, end: int) -> dict[str, Any]:
     if end <= start or end-start > 45*86400:
         raise ReplayDataError("WINDOW_MUST_BE_POSITIVE_AND_AT_MOST_45_DAYS")
     conn = await asyncpg.connect(dsn=dsn, ssl="require", timeout=20, command_timeout=45)
+    stage = "TRANSACTION_BEGIN"
     try:
         async with conn.transaction(isolation="repeatable_read", readonly=True):
+            stage = "VERIFY_READ_ONLY"
             if await conn.fetchval("SELECT current_setting('transaction_read_only')") != "on":
                 raise ReplayDataError("READ_ONLY_TRANSACTION_NOT_ENFORCED")
+            stage = "VERIFY_DATABASE"
             if await conn.fetchval("SELECT current_database()") != FROZEN_DB_NAME:
                 raise ReplayDataError("WRONG_DATABASE")
             start_dt = datetime.fromtimestamp(start, timezone.utc)
             end_dt = datetime.fromtimestamp(end, timezone.utc)
+            stage = "STAGE2_SIGNALS"
             raw_signals = await conn.fetch(
                 """SELECT id,symbol,p2_at,entry_price,stage1_atr7_pct,
                           stage1_return_24h,stage1_strict365,stage1_eligible,
@@ -117,17 +122,19 @@ async def fetch_snapshot(dsn: str, *, start: int, end: int) -> dict[str, Any]:
             raw_tickers = []
             paper = None
             if symbols:
+                stage = "MIN30_CANDLES"
                 raw_candles = await conn.fetch(
                     """SELECT symbol,open_time,open,high,low,close,amount
                        FROM public.candles
                        WHERE symbol=ANY($1::text[]) AND interval='Min30'
-                         AND open_time >= $2 - interval '26 hours'
+                         AND open_time >= $2::timestamptz - interval '26 hours'
                          AND open_time < $3
                        ORDER BY symbol,open_time""",
                     symbols,start_dt,end_dt,
                 )
                 if len(raw_candles) > MAX_CANDLE_ROWS:
                     raise ReplayDataError("TOO_MANY_CANDLES")
+                stage = "FUNDING_HISTORY"
                 raw_funding = await conn.fetch(
                     """SELECT symbol,settle_time,funding_rate
                        FROM public.funding_rates
@@ -136,23 +143,26 @@ async def fetch_snapshot(dsn: str, *, start: int, end: int) -> dict[str, Any]:
                        ORDER BY symbol,settle_time""",
                     symbols,start_dt,end_dt,
                 )
+                stage = "CONTRACT_METADATA"
                 raw_contracts = await conn.fetch(
                     """SELECT symbol,metadata,first_seen_at,last_seen_at
                        FROM public.contracts WHERE symbol=ANY($1::text[])""",
                     symbols,
                 )
+                stage = "LAST_TICKER"
                 raw_tickers = await conn.fetch(
                     """SELECT DISTINCT ON(symbol) symbol,observed_at,last_price
                        FROM public.ticker_snapshots
                        WHERE symbol=ANY($1::text[]) AND observed_at <= $2
-                         AND observed_at >= $2 - interval '35 minutes'
+                         AND observed_at >= $2::timestamptz - interval '35 minutes'
                        ORDER BY symbol,observed_at DESC""",
                     symbols,end_dt,
                 )
+            stage = "PAPER_EQUITY_SNAPSHOT"
             paper_row = await conn.fetchrow(
                 """SELECT snapshot_at,equity_usdt,open_positions
                    FROM public.t100_equity_snapshots
-                   WHERE snapshot_at <= $1 AND snapshot_at >= $1 - interval '45 minutes'
+                   WHERE snapshot_at <= $1 AND snapshot_at >= $1::timestamptz - interval '45 minutes'
                    ORDER BY snapshot_at DESC LIMIT 1""",
                 end_dt,
             )
@@ -162,6 +172,16 @@ async def fetch_snapshot(dsn: str, *, start: int, end: int) -> dict[str, Any]:
                     "equity_usdt": float(paper_row["equity_usdt"]),
                     "open_positions": int(paper_row["open_positions"]),
                 }
+    except ReplayDataError:
+        raise
+    except Exception as exc:
+        # Keep diagnostics useful but safe to paste: never print SQL text,
+        # parameter values, DSN, database credentials or returned rows.
+        sqlstate = getattr(exc, "sqlstate", None)
+        state = sqlstate if isinstance(sqlstate, str) and re.fullmatch(r"[0-9A-Z]{5}", sqlstate) else "UNKNOWN"
+        raise ReplayDataError(
+            f"DB_QUERY_STAGE={stage} SQLSTATE={state} ERROR_TYPE={type(exc).__name__}"
+        ) from None
     finally:
         await conn.close()
     candle_rows = [
@@ -553,6 +573,8 @@ def main() -> None:
             )
         try:
             snap=asyncio.run(fetch_snapshot(dsn,start=start,end=end))
+        except ReplayDataError as exc:
+            raise SystemExit("READ_ONLY_EXTRACTION_FAILED: "+str(exc)) from None
         except Exception as exc:
             raise SystemExit("READ_ONLY_EXTRACTION_FAILED: "+type(exc).__name__) from None
         snapshot_file=Path(args.snapshot_out).expanduser()
