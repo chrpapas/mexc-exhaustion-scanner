@@ -1,4 +1,10 @@
-"""Concrete MEXC futures POST/GET adapter. POST sends real orders; nothing runs on import."""
+"""Concrete MEXC futures POST/GET adapter. POST sends real orders; import is inert.
+
+Order/create payload contains only documented MEXC fields, matching the
+successful supervised one-shot pilot's request shape. Unlike that isolated
+1x pilot, V40 openType=2 remains CROSS and is NOT venue-certified. The
+typed live permit and durable one-shot journal requirements remain intact.
+"""
 from __future__ import annotations
 import re
 from typing import Any, TYPE_CHECKING
@@ -64,8 +70,6 @@ class LiveMexcAdapter:
                 "vol": str(intent.volume_contracts),
                 "leverage": 1,
                 "side": 3,
-                "sideType": "sell",
-                "positionType": "short",
                 "type": 5,
                 "openType": self.open_type,
                 "positionMode": 1,
