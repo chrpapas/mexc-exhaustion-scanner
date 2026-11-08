@@ -47,6 +47,24 @@ class LiveCaps:
             raise ValueError("cross-margin tiny pilot requires CROSS 1x only")
 
 
+def deterministic_t100_entry_oid(signal_id: int, symbol: str) -> str:
+    """Single immutable externalOid function for reserve, stage and POST.
+
+    WARNING: Reusing a prior signal ID always yields the SAME origin. A
+    missing exchange GET never permits a second POST for that origin.
+    """
+    if (
+        type(signal_id) is not int or signal_id <= 0
+        or type(symbol) is not str
+        or re.fullmatch(r"[A-Z0-9]+_USDT", symbol) is None
+        or symbol in {"BTC_USDT", "ETH_USDT"}
+    ):
+        raise ValueError("invalid V40 entry origin")
+    return "t100v1e" + hashlib.sha256(
+        f"{signal_id}:{symbol}".encode("utf-8")
+    ).hexdigest()[:20]
+
+
 @dataclass(frozen=True)
 class EntryIntent:
     signal_id: int
@@ -78,9 +96,14 @@ class EntryIntent:
         vol = (notional / (price * size) / step).to_integral_value(rounding=ROUND_DOWN) * step
         if vol < minimum or vol > maximum:
             raise ValueError("order below minimum or above maximum; no silent clip")
-        oid = "t100v1e" + hashlib.sha256(f"{signal_id}:{symbol}".encode()).hexdigest()[:20]
+        oid = deterministic_t100_entry_oid(signal_id, symbol)
         stop = (price * Decimal("1.75") / tick).to_integral_value(rounding=ROUND_UP) * tick
-        return cls(signal_id, symbol, price, notional, vol, stop, oid)
+        # The durable journal requires that the intended notional EXACTLY
+        # equals the executable integer lot quantity * price * contractSize.
+        # Retaining the unrounded strategy target here makes staging fail
+        # (or would understate real filled risk if later validations weaken).
+        executable_notional = price * size * vol
+        return cls(signal_id, symbol, price, executable_notional, vol, stop, oid)
 
 
 def displayed_vwap(*, levels: list[list[Any]], contract_size: Decimal,
