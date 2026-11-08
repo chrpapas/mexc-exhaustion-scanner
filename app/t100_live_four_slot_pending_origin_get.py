@@ -19,7 +19,9 @@ from typing import Any, Protocol
 from app.t100_live_four_slot_restart_supervisor import (
     _triage_contract_verified,
 )
-from app.t100_live_four_slot_restart_triage import FourSlotRestartTriage
+from app.t100_live_four_slot_restart_triage import (
+    FourSlotRestartTriage, RecoveryAttempt,
+)
 from app.t100_live_readonly_probe import ReadOnlyMexcProbe
 
 
@@ -73,6 +75,23 @@ async def observe_pending_origins_get_only(
     """No venue request until ALL supplied durable origins validate."""
     def halt(code: str) -> PendingOriginGetReport:
         return PendingOriginGetReport(status=code)
+
+    # Classify malformed order origins before the stricter general triage
+    # contract. Both errors block *all* GETs, but the established origin-
+    # specific diagnostic must remain stable for operator reconciliation.
+    if (
+        type(triage) is FourSlotRestartTriage
+        and type(triage.attempts) is tuple
+        and all(type(a) is RecoveryAttempt for a in triage.attempts)
+        and any(
+            type(a.symbol) is not str
+            or re.fullmatch(r"[A-Z0-9]+_USDT", a.symbol) is None
+            or type(a.external_oid) is not str
+            or re.fullmatch(r"[A-Za-z0-9_-]{1,128}", a.external_oid) is None
+            for a in triage.attempts
+        )
+    ):
+        return halt("PENDING_ORIGIN_IDENTITIES_INVALID_NO_RETRY")
 
     if (
         not _triage_contract_verified(triage)
