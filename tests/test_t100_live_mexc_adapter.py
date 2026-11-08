@@ -171,10 +171,11 @@ class LiveMexcAdapterContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(path, "/api/v1/private/order/create")
         self.assertEqual(body["symbol"], "SIREN_USDT")
         self.assertEqual(body["side"], 3)
-        # MEXC documentation changed on 2026-10-23: sideType is
-        # required and positionType now explicitly declares direction.
-        self.assertEqual(body["sideType"], "sell")
-        self.assertEqual(body["positionType"], "short")
+        # Current MEXC order/create schema and the supervised live pilot
+        # use numeric side=3; these extra keys are not present in either
+        # observed contract and must not be invented by the V40 adapter.
+        self.assertNotIn("sideType", body)
+        self.assertNotIn("positionType", body)
         self.assertEqual(body["type"], 5)
         self.assertEqual(body["openType"], 2)  # mandatory CROSS pilot
         self.assertEqual(body["positionMode"], 1)
