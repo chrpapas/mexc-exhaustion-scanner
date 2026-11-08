@@ -283,9 +283,18 @@ def run_scenario(
             raise ReplayDataError("OHLC_INCONSISTENCY")
         bars[symbol][t] = row
     signals: dict[int, list[dict[str, Any]]] = defaultdict(list)
+    seen_signal_ids: set[int] = set()
     for s in snapshot["signals"]:
-        if start <= int(s["t"]) <= end:
-            signals[int(s["t"])].append(s)
+        signal_id, signal_ts = int(s["id"]), int(s["t"])
+        if signal_id in seen_signal_ids:
+            raise ReplayDataError("DUPLICATE_STAGE2_SIGNAL_ID")
+        seen_signal_ids.add(signal_id)
+        # The archived V40 entry clock is a 30-minute boundary. Silent
+        # omission of nonaligned scanner events would falsely show 0 trades.
+        if signal_ts % BAR:
+            raise ReplayDataError("NONALIGNED_STAGE2_EVENT_TIMESTAMP")
+        if start <= signal_ts <= end:
+            signals[signal_ts].append(s)
     for rows in signals.values():
         rows.sort(key=lambda x: int(x["id"]))
     funding: dict[str, list[dict[str, Any]]] = defaultdict(list)
@@ -450,10 +459,6 @@ def run_scenario(
                 p.last_price=positive(q["price"])
                 used_ticker += 1
     final=equity()
-    holding_funding_missing=sum(
-        p.symbol not in funding and end-p.entry_ts>86400
-        for p in positions
-    )
     return {
         "status":"INDICATIVE_V40_ENTRY_AND_MIN30_EXIT_PROXY_NOT_FULL_REPLAY",
         "cost_bps_per_side":cost_bps,
@@ -471,7 +476,8 @@ def run_scenario(
         "funding_usdt":round(funding_total,4),
         "fees_usdt":round(fee_total,4),
         "slippage_usdt":round(slip_total,4),
-        "funding_coverage_not_certified":bool(holding_funding_missing or not snapshot["funding"]),
+        "funding_coverage_not_certified":True,
+        "funding_records_present":bool(snapshot["funding"]),
         "current_contract_specs_not_historical":True,
         "v40_stressed_exit_partials_and_risk_trims_modeled":False,
         "terminal_prices_using_fresh_tickers":used_ticker,
