@@ -335,3 +335,38 @@ def test_signed_get_timeout_keeps_readonly_restart_uncertified():
     assert out.status=="POST_COMMIT_SIGNED_NATIVE_STOP_GET_UNVERIFIED_FREEZE"
     assert "SECRET" not in out.status
     assert out.exchange_posts==0
+
+
+def test_restarted_exact_filled_origin_attached_market_sl_can_be_observed():
+    # Four-slot coordinator has already verified that the durable entry
+    # order was filled, exact-owned and full-volume; its exact ID is the
+    # sole permitted exception to position-origin orderId=0.
+    cp_filled=replace(expected(),exchange_order_id="123456")
+    auditor,calls=inspect([result(cp_filled),result(cp_filled)])
+    async def typed_ledger_read():
+        calls.append("LEDGER_READBACK")
+        return ledger_snapshot(cp_filled)
+    auditor.snapshot.ledger.read_snapshot=typed_ledger_read
+    client=with_signed_native_market_stop(auditor)
+    client.stops[0]["orderId"]="123456"
+    out=execute(auditor,cp_filled)
+    assert out.status=="POST_COMMIT_NATIVE_MARKET_SL_GETS_STABLE_READONLY_NONAUTHORIZING"
+    assert out.native_market_stop_type_verified_after_restart
+    assert out.entry_allowed is False
+    assert out.exchange_posts==0
+    assert out.db_writes==0
+
+
+def test_restarted_entry_attached_sl_unmatched_origin_remains_blocked():
+    cp_filled=replace(expected(),exchange_order_id="123456")
+    auditor,calls=inspect([result(cp_filled),result(cp_filled)])
+    async def typed_ledger_read():
+        calls.append("LEDGER_READBACK")
+        return ledger_snapshot(cp_filled)
+    auditor.snapshot.ledger.read_snapshot=typed_ledger_read
+    client=with_signed_native_market_stop(auditor)
+    client.stops[0]["orderId"]="999999"
+    out=execute(auditor,cp_filled)
+    assert out.status=="POST_COMMIT_SIGNED_NATIVE_STOP_GET_UNVERIFIED_FREEZE"
+    assert not out.native_market_stop_type_verified_after_restart
+    assert not out.live_authorization
