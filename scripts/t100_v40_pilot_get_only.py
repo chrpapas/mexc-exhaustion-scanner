@@ -192,14 +192,16 @@ def evaluate_pilot_flat_bookends(
         if any(k not in a for k in needed):
             raise PilotPreflightHalted("PILOT_USDT_ASSET_FIELDS_MISSING")
         vals={k:_nonnegative(a[k]) for k in needed}
-        if (
-            vals["equity"]<=0
-            or vals["availableBalance"]>vals["equity"]
-            or vals["positionMargin"]!=0
-            or vals["unrealized"]!=0
-            or vals["debtAmount"]!=0
-        ):
-            raise PilotPreflightHalted("PILOT_USDT_ECONOMICS_INCONSISTENT")
+        if vals["equity"]<=0:
+            raise PilotPreflightHalted("PILOT_USDT_EQUITY_NONPOSITIVE_HALT")
+        if vals["availableBalance"]>vals["equity"]:
+            raise PilotPreflightHalted("PILOT_AVAILABLE_ABOVE_EQUITY_HALT")
+        if vals["positionMargin"]!=0:
+            raise PilotPreflightHalted("PILOT_POSITION_MARGIN_NONZERO_HALT")
+        if vals["unrealized"]!=0:
+            raise PilotPreflightHalted("PILOT_UNREALIZED_PNL_NONZERO_HALT")
+        if vals["debtAmount"]!=0:
+            raise PilotPreflightHalted("PILOT_DEBT_NONZERO_HALT")
         try:
             frozen=json.dumps({
                 "positions":s.positions,"stops":s.stops,
