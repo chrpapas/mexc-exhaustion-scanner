@@ -11,6 +11,8 @@ def fourth():
         "fourth_amendment_ack_journaled": True,
         "manual_market_close_exactly_verified": True,
         "finished_stop_exact_identity_verified": True,
+        "operator_ui_trigger_market_sl_confirmed_before_amend": True,
+        "supervised_native_stop_full_one_contract_volume_observed": True,
         "finished_stop_price_matches_amended_target": True,
         "finished_stop_canceled_not_triggered": True,
         "live_authorization": False,
@@ -48,6 +50,10 @@ def test_verified_live_native_exit_not_misrepresented_as_sl_certification():
         "FOURTH_AND_FIFTH_LIVE_VENUE_OBSERVATIONS_RECONCILED"
     )
     assert r["one_supervised_native_stop_price_edit_observed"]
+    assert r["supervised_native_stop_full_position_quantity_verified"]
+    assert r["supervised_trigger_market_sl_confirmed_in_exchange_ui"]
+    assert r["supervised_full_position_native_market_sl_observed"]
+    assert r["supervised_native_market_type_api_field_verified"] is False
     assert r["fifth_native_attached_exit_full_market_fill_verified"]
     assert r["fifth_attached_stop_exit_correlated_without_tp_price"]
     assert r["fifth_historical_trigger_side"] == "TP_CONFLICT"
@@ -159,3 +165,33 @@ def test_bad_fourth_amendment_provenance_blocks_historical_exception():
     assert r["fifth_probable_sl_label_conflict_observed"] is False
     assert r["fifth_historical_exit_accounting_accepted_despite_label"] is False
     assert r["entry_allowed"] is False
+
+
+def test_ui_confirmed_native_market_stop_is_recorded_without_claiming_unattended_safety():
+    result=matrix.evaluate_exchange_observations(fourth(),fifth())
+    assert result["supervised_full_position_native_market_sl_observed"] is True
+    assert result["supervised_native_market_type_api_field_verified"] is False
+    assert result["continuous_protection_during_amendment_certified"] is False
+    assert result["main_t100_restart_recovery_certified_by_these_pilots"] is False
+    assert result["live_authorization"] is False
+    assert result["entry_allowed"] is False
+
+
+def test_missing_exchange_ui_market_stop_confirmation_does_not_erase_volume_evidence():
+    f=fourth()
+    f["operator_ui_trigger_market_sl_confirmed_before_amend"]=False
+    result=matrix.evaluate_exchange_observations(f,fifth())
+    assert result["fourth_pilot_exact_manual_market_close_verified"] is True
+    assert result["supervised_native_stop_full_position_quantity_verified"] is True
+    assert result["supervised_trigger_market_sl_confirmed_in_exchange_ui"] is False
+    assert result["supervised_full_position_native_market_sl_observed"] is False
+    assert result["live_authorization"] is False
+
+
+def test_missing_full_stop_quantity_evidence_does_not_infer_market_stop_from_ui():
+    f=fourth()
+    f["supervised_native_stop_full_one_contract_volume_observed"]=False
+    result=matrix.evaluate_exchange_observations(f,fifth())
+    assert result["supervised_native_stop_full_position_quantity_verified"] is False
+    assert result["supervised_full_position_native_market_sl_observed"] is False
+    assert result["live_authorization"] is False
