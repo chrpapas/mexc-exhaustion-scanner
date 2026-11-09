@@ -292,3 +292,54 @@ def test_actual_material_profit_does_not_create_unbounded_equity_exception():
         row["availableBalance"]="85.10"
     with pytest.raises(PilotPreflightHalted,match="EXCEEDS_DISPLAY_PRECISION"):
         evaluate_pilot_flat_bookends(a,b)
+
+
+def test_symbol_scoped_risk_limit_get_signs_exact_urlencoded_parameters(monkeypatch):
+    import hashlib
+    import hmac
+    from scripts.t100_v40_pilot_get_only import KeychainSignedGetOnly
+    import scripts.t100_v40_pilot_get_only as pilot
+
+    class Response:
+        def raise_for_status(self):pass
+        def json(self):return {"success":True,"code":0,"data":{"BTC_USDT":[]}}
+
+    class Client:
+        def __init__(self):self.calls=[]
+        async def get(self,path,*,params=None,headers=None):
+            self.calls.append((path,params,headers))
+            return Response()
+        async def aclose(self):pass
+
+    monkeypatch.setattr(pilot.time,"time",lambda:1712345.678)
+    client=KeychainSignedGetOnly(key="fakekey",secret="fakesecret")
+    mock=Client()
+    client._client=mock
+
+    async def invoke():
+        try:
+            result=await client._private_get(
+                "/api/v1/private/account/risk_limit",
+                {"symbol":"BTC_USDT"},
+            )
+            assert result=={"BTC_USDT":[]}
+            for path,params in (
+                ("/api/v1/private/account/risk_limit",{"symbol":"BTC_USDT","other":"x"}),
+                ("/api/v1/private/account/assets",{"symbol":"BTC_USDT"}),
+                ("/api/v1/private/order/submit",{"symbol":"BTC_USDT"}),
+            ):
+                with pytest.raises(PilotPreflightHalted,match="GET_ONLY_PATH_NOT_ALLOWLISTED"):
+                    await client._private_get(path,params)
+        finally:
+            await client.close()
+    asyncio.run(invoke())
+    assert len(mock.calls)==1
+    path,params,headers=mock.calls[0]
+    assert path=="/api/v1/private/account/risk_limit"
+    assert params=={"symbol":"BTC_USDT"}
+    stamp=str(int(1712345.678*1000))
+    expected=hmac.new(
+        b"fakesecret",f"fakekey{stamp}symbol=BTC_USDT".encode(),hashlib.sha256,
+    ).hexdigest()
+    assert headers["Signature"]==expected
+    assert headers["Request-Time"]==stamp
