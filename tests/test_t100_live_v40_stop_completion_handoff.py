@@ -70,6 +70,9 @@ def fixture(*,price="86.5",old_stop=False,replacement=False):
                     "limitOrderCount":0,"planOrderCount":0,
                     "trackOrderCount":0,
                 },
+                "/api/v1/private/position/position_mode":{
+                    "positionMode":1,
+                },
             }
             return deepcopy(values[path])
 
@@ -139,7 +142,7 @@ def test_mocked_in_place_readback_can_commit_journal_and_checkpoint_once(monkeyp
     assert new.checkpoint_version==2
     assert new.best_profit_pct==D("14")
     assert new.armed is True
-    assert len(x[7].calls)==6
+    assert len(x[7].calls)==8
     assert all("private" in p for p in x[7].calls)
 
 
