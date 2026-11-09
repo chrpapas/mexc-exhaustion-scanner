@@ -177,7 +177,8 @@ def test_second_recovery_must_not_be_a_different_position_or_stop():
     assert out.status=="POST_COMMIT_RECOVERED_CHECKPOINT_DRIFT_FREEZE"
     assert out.exchange_posts==0
     assert calls==[
-        "READ_ONLY_SNAPSHOT","LEDGER_READBACK","READ_ONLY_SNAPSHOT",
+        "READ_ONLY_SNAPSHOT","LEDGER_READBACK",
+        "READ_ONLY_SNAPSHOT","LEDGER_READBACK",
     ]
 
 
