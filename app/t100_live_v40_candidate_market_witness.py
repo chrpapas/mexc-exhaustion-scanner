@@ -93,7 +93,18 @@ def _asset(assets: Any) -> tuple[D,D]:
         raise V40CandidateMarketHalted("MARKET_USDT_ASSET_NOT_UNIQUE")
     equity=_decimal(rows[0].get("equity"))
     available=_decimal(rows[0].get("availableBalance"),positive=False)
-    if available>equity or any(
+    if available>equity:
+        # MEXC's official account/assets example reports
+        # 32.80984793658 available and 32.80984793 equity, with no
+        # positions/margin. Admit ONLY a <=1e-8 USDT precision delta
+        # if the cash/equity readings agree. Never use the excess
+        # precision as spendable collateral or certify cross margin.
+        gap=available-equity
+        cash=_decimal(rows[0].get("cashBalance"))
+        if gap>D("0.00000001") or abs(cash-equity)>D("0.00000001"):
+            raise V40CandidateMarketHalted("MARKET_USDT_COLLATERAL_DRIFT")
+        available=equity
+    if any(
         _decimal(rows[0].get(field),positive=False)!=0
         for field in ("positionMargin","unrealized")
     ):
