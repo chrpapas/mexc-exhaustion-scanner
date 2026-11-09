@@ -25,9 +25,11 @@ class Private:
         self.positions=[]
         self.stops=[]
         self.assets=[{
-            "currency":"USDT","cashBalance":"50",
-            "equity":"50","availableBalance":"49.9",
+            "currency":"USDT","cashBalance":"5000",
+            "equity":"5000","availableBalance":"4900",
             "positionMargin":"0","unrealized":"0",
+            "frozenBalance":"0","bonus":"0",
+            "debtAmount":"0","contributeMarginAmount":"0",
         }]
         self.counts={
             "sumCount":0,"stopOrderCount":0,"limitOrderCount":0,
@@ -129,8 +131,8 @@ def test_signed_get_bookends_flat_account_and_public_market_without_approval():
     c,private,public=setup()
     out=run(c)
     assert out.status=="V40_GET_ONLY_FLAT_ACCOUNT_AND_MARKET_QUOTED_NONAUTHORIZING"
-    assert out.account_equity_usdt==D("50")
-    assert out.account_available_usdt==D("49.9")
+    assert out.account_equity_usdt==D("5000")
+    assert out.account_available_usdt==D("4900")
     assert out.book_age_ms==200
     assert out.bookended_flat_account
     assert out.hedge_mode_observed
@@ -255,3 +257,60 @@ def test_invalid_contract_lot_grid_never_rounds_up():
     pub.contract["minVol"]="0.4"
     with pytest.raises(V40CandidateMarketHalted,match="CONTRACT_LOT_GRID"):
         run(c)
+
+
+def test_insufficient_available_margin_does_not_pass_quantity_quote():
+    c,private,_=setup()
+    private.assets[0]["availableBalance"]="100"
+    with pytest.raises(
+        V40CandidateMarketHalted,
+        match="ONE_X_MARGIN_WITH_FEE_BUFFER_INSUFFICIENT",
+    ):
+        asyncio.run(c.quote_exact_intent(candidate(),intent(notional="500")))
+
+
+def test_risk_preliminary_inspect_cannot_forge_sized_vwap_or_live_permit():
+    # Real timestamp is supplied so signal age is within 900 seconds.
+    signal=candidate()
+    now=signal.admission_open_ts*1000+25_000
+    p=Private()
+    pub=Public()
+    # Public depth and current signed GET frame are timestamped together.
+    pub.depth["timestamp"]=now+100
+    witness=MexcV40CandidateMarketWitness(
+        private=ReadOnlyMexcProbe(p),public=pub,
+        clock_ms=Clock(now,now+300,now+500),
+    )
+    risk,terms=asyncio.run(witness.inspect(signal))
+    assert risk.observed_sell_vwap==D(0)
+    assert risk.current_account_equity_usdt==D("5000")
+    assert risk.cross_collateral_verified is False
+    assert risk.private_risk_tier_verified is False
+    assert risk.contract_trading_access_verified is False
+    assert risk.no_unresolved_mutations is False
+    assert terms.private_order_permission_verified is False
+    assert risk.inventory_bookended_complete is True
+
+
+def test_changed_collateral_component_even_with_same_equity_blocks():
+    # A bookended account transfer/freeze cannot be treated as stable
+    # merely because equity and availableBalance happened not to change.
+    p=Private()
+    public=Public()
+
+    class DriftingPrivate(Private):
+        async def _private_get(self,path,params=None):
+            result=await super()._private_get(path,params)
+            if path=="/api/v1/private/account/assets":
+                self._assets_read=getattr(self,"_assets_read",0)+1
+                if self._assets_read==2:
+                    result[0]["cashBalance"]="4990"
+            return result
+
+    private=DriftingPrivate()
+    w=MexcV40CandidateMarketWitness(
+        private=ReadOnlyMexcProbe(private),public=public,
+        clock_ms=Clock(START,END),
+    )
+    with pytest.raises(V40CandidateMarketHalted,match="COLLATERAL_COMPONENT_DRIFT"):
+        run(w)
