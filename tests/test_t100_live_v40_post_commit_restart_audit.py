@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import replace
+from dataclasses import asdict,replace
 from decimal import Decimal as D
 
 import pytest
@@ -10,6 +10,7 @@ import pytest
 from app.t100_live_durable_recovery import DurableRecoveryReport
 from app.t100_live_four_slot_snapshot_coordinator import (
     FourSlotSnapshotCoordinator,FourSlotSnapshotResult,
+    LedgerSnapshot,_ledger_digest,
 )
 from app.t100_live_supervisor import ManagedShort
 from app.t100_live_v40_post_commit_restart_audit import (
@@ -34,7 +35,14 @@ def recovered(x):
     )
 
 
-def result(x=None, *, ledger="a"*64,venue="b"*64):
+def ledger_snapshot(x=None):
+    return LedgerSnapshot(
+        checkpoints=[asdict(x or expected())],revisions=[],
+        intents=[],stop_amendments=[],readonly_repeatable_read=True,
+    )
+
+
+def result(x=None, *, ledger=None,venue="b"*64):
     x=x or expected()
     recovery=DurableRecoveryReport(
         recovered=(recovered(x),),
@@ -44,17 +52,24 @@ def result(x=None, *, ledger="a"*64,venue="b"*64):
     return FourSlotSnapshotResult(
         status="NONFLAT_PROVENANCE_MATCHED_NONAUTHORIZING",
         occupied_slots=1,recovery=recovery,
-        ledger_hash=ledger,critical_inventory_hash=venue,
+        ledger_hash=(
+            _ledger_digest(ledger_snapshot(x)) if ledger is None else ledger
+        ),
+        critical_inventory_hash=venue,
     )
 
 
 def inspect(results):
     # This audit is deliberately only a consumer of the preexisting
     # read-only 4-slot coordinator; mock no exchange or DB mutation method.
-    snap=FourSlotSnapshotCoordinator(
-        ledger=object(),venue=object(),completeness=object(),
-    )
     calls=[]
+    class Ledger:
+        async def read_snapshot(self):
+            calls.append("LEDGER_READBACK")
+            return ledger_snapshot()
+    snap=FourSlotSnapshotCoordinator(
+        ledger=Ledger(),venue=object(),completeness=object(),
+    )
     it=iter(results)
     async def read(*,shared_manual_observation=False):
         assert shared_manual_observation is False
@@ -86,7 +101,10 @@ def test_two_independent_full_account_restart_snapshots_stable_no_authorization(
     assert not out.live_authorization
     assert out.exchange_posts==0
     assert out.db_writes==0
-    assert calls==["READ_ONLY_SNAPSHOT"]*2
+    assert calls==[
+        "READ_ONLY_SNAPSHOT","LEDGER_READBACK",
+        "READ_ONLY_SNAPSHOT","LEDGER_READBACK",
+    ]
 
 
 @pytest.mark.parametrize("fault",[
@@ -155,4 +173,35 @@ def test_second_recovery_must_not_be_a_different_position_or_stop():
     out=execute(auditor)
     assert out.status=="POST_COMMIT_RECOVERED_CHECKPOINT_DRIFT_FREEZE"
     assert out.exchange_posts==0
-    assert len(calls)==2
+    assert calls==[
+        "READ_ONLY_SNAPSHOT","LEDGER_READBACK","READ_ONLY_SNAPSHOT",
+    ]
+
+
+def test_identical_recovered_stop_but_stale_durable_checkpoint_version_freezes():
+    # ManagedShort has no revision number. Exact ledger reread must still
+    # reject revision=1 even when all stop and quantity values are identical.
+    auditor,calls=inspect([result(),result()])
+    x=replace(expected(),checkpoint_version=3)
+    out=execute(auditor,x)
+    assert out.status=="POST_COMMIT_EXPECTED_REVISION_NOT_DURABLE_FREEZE"
+    assert out.db_writes==0
+    assert out.exchange_posts==0
+
+
+def test_ledger_checksum_changes_after_completed_full_account_snapshot_freezes():
+    auditor,calls=inspect([result(ledger="f"*64)])
+    out=execute(auditor)
+    assert out.status=="POST_COMMIT_LEDGER_READBACK_CHANGED_FREEZE"
+    assert out.db_writes==0
+
+
+def test_direct_durable_ledger_readback_failure_is_redacted():
+    auditor,calls=inspect([result()])
+    async def failed():
+        raise TimeoutError("SECRET_DATABASE_DSN")
+    auditor.snapshot.ledger.read_snapshot=failed
+    out=execute(auditor)
+    assert out.status=="POST_COMMIT_LEDGER_READBACK_UNVERIFIED_FREEZE"
+    assert "SECRET" not in out.status
+    assert out.db_writes==0
