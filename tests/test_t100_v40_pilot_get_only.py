@@ -80,8 +80,29 @@ def test_nonflat_or_ambiguous_pilot_halts(fault):
         b.assets[0]["debtAmount"]="0.1"
     if fault=="nonfinite_equity":b.assets[0]["equity"]="NaN"
     if fault=="boolean_account_value":b.assets[0]["equity"]=True
-    with pytest.raises(PilotPreflightHalted):
+    with pytest.raises(PilotPreflightHalted) as error:
         evaluate_pilot_flat_bookends(a,b)
+    expected={
+        "open_position":"PILOT_OPEN_POSITIONS_PRESENT_HALT",
+        "open_stop":"PILOT_ACTIVE_STOP_ORDERS_PRESENT_HALT",
+        "pending_order":"PILOT_PENDING_ORDERS_PRESENT_HALT",
+        "one_way_mode":"PILOT_HEDGE_MODE_NOT_OBSERVED_HALT",
+        "negative_equity":"PILOT_USDT_ASSET_FIELD_INVALID",
+        "missing_usdt":"PILOT_USDT_ASSET_MISSING_OR_DUPLICATE",
+        "duplicate_usdt":"PILOT_USDT_ASSET_MISSING_OR_DUPLICATE",
+        "missing_collateral_component":"PILOT_USDT_ASSET_FIELDS_MISSING",
+        "available_above_equity":"PILOT_USDT_ECONOMICS_INCONSISTENT",
+        "nonzero_position_margin":"PILOT_USDT_ECONOMICS_INCONSISTENT",
+        "nonzero_unrealized":"PILOT_USDT_ECONOMICS_INCONSISTENT",
+        "nonzero_debt":"PILOT_USDT_ECONOMICS_INCONSISTENT",
+        "nonfinite_equity":"USDT_ASSET_FIELD_INVALID",
+        "boolean_account_value":"USDT_ASSET_FIELD_INVALID",
+    }
+    assert str(error.value) in (
+        expected[fault],
+        "USDT_ASSET_FIELD_INVALID",
+    )
+    assert "SECRET" not in str(error.value)
 
 
 def test_same_flat_count_but_changed_collateral_between_books_halts():
@@ -155,3 +176,34 @@ def test_non_allowlisted_signed_endpoint_rejected_before_http():
         finally:
             await client.close()
     asyncio.run(test())
+
+
+def test_multiple_unsafe_conditions_prioritize_open_position_over_mode_or_orders():
+    a=sample()
+    b=replace(
+        deepcopy(a),
+        positions=[{"positionId":"PRIVATE_ID_NOT_FOR_OUTPUT"}],
+        stops=[{"id":"PRIVATE_STOP_ID_NOT_FOR_OUTPUT"}],
+        position_mode=2,
+    )
+    with pytest.raises(PilotPreflightHalted) as exc:
+        evaluate_pilot_flat_bookends(a,b)
+    assert str(exc.value)=="PILOT_OPEN_POSITIONS_PRESENT_HALT"
+    assert "PRIVATE_" not in str(exc.value)
+
+
+def test_active_stop_diagnosed_before_pending_order_counts():
+    a=sample()
+    b=replace(deepcopy(a),stops=[{"id":"PRIVATE_STOP_ID"}])
+    b.counts["stopOrderCount"]=1
+    b.counts["sumCount"]=1
+    with pytest.raises(PilotPreflightHalted,match="ACTIVE_STOP_ORDERS_PRESENT"):
+        evaluate_pilot_flat_bookends(a,b)
+
+
+def test_malformed_order_count_sum_is_not_interpreted_as_flat():
+    a=sample()
+    b=deepcopy(a)
+    b.counts["sumCount"]=1
+    with pytest.raises(PilotPreflightHalted,match="COUNT_SUM_MISMATCH"):
+        evaluate_pilot_flat_bookends(a,b)
