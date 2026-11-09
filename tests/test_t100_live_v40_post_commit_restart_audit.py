@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+from copy import deepcopy
 from dataclasses import asdict,replace
 from decimal import Decimal as D
 
@@ -13,6 +14,9 @@ from app.t100_live_four_slot_snapshot_coordinator import (
     LedgerSnapshot,_ledger_digest,
 )
 from app.t100_live_supervisor import ManagedShort
+from app.t100_live_readonly_probe import ReadOnlyMexcProbe
+from tests.test_t100_live_stop_update_pipeline import stop
+from tests.test_t100_live_v40_native_stop_recovery import position
 from app.t100_live_v40_post_commit_restart_audit import (
     V40PostCommitRestartAuditor,
 )
@@ -209,3 +213,125 @@ def test_direct_durable_ledger_readback_failure_is_redacted():
     assert out.status=="POST_COMMIT_LEDGER_READBACK_UNVERIFIED_FREEZE"
     assert "SECRET" not in out.status
     assert out.db_writes==0
+
+
+def with_signed_native_market_stop(auditor):
+    class PrivateGetOnly:
+        def __init__(self):
+            self.calls=[]
+            self.positions=[position()]
+            self.stops=[stop(stopLossPrice=D("86.5"))]
+            self.counts={
+                "sumCount":1,"stopOrderCount":1,
+                "limitOrderCount":0,"planOrderCount":0,"trackOrderCount":0,
+            }
+            self.mode={"positionMode":1}
+            self.drift_extra_stop_field=False
+            self.stop_reads=0
+        async def _private_get(self,path,params=None):
+            assert params is None
+            self.calls.append(path)
+            if path=="/api/v1/private/position/open_positions":
+                return deepcopy(self.positions)
+            if path=="/api/v1/private/stoporder/open_orders":
+                self.stop_reads+=1
+                out=deepcopy(self.stops)
+                if self.drift_extra_stop_field:
+                    out[0]["previously_unmodelled_exchange_field"]=self.stop_reads
+                return out
+            if path=="/api/v1/private/order/open_order_total_count":
+                return deepcopy(self.counts)
+            if path=="/api/v1/private/position/position_mode":
+                return deepcopy(self.mode)
+            raise AssertionError("UNAPPROVED_GET_ROUTE")
+    client=PrivateGetOnly()
+    auditor.probe=ReadOnlyMexcProbe(client)
+    return client
+
+
+def test_native_market_stop_valid_for_exact_cross_one_x_after_restart_is_nonauthorizing():
+    auditor,calls=inspect([result(),result()])
+    client=with_signed_native_market_stop(auditor)
+    out=execute(auditor)
+    assert out.status=="POST_COMMIT_NATIVE_MARKET_SL_GETS_STABLE_READONLY_NONAUTHORIZING"
+    assert out.native_market_stop_type_verified_after_restart
+    assert out.expected_checkpoint_recovered
+    assert out.two_independent_full_account_snapshots_matched
+    assert out.independent_process_restart_verified is False
+    assert out.signed_get_transport_provenance_verified is False
+    assert out.exchange_stop_atomicity_verified is False
+    assert out.entry_allowed is False
+    assert out.stop_mutation_allowed is False
+    assert out.live_authorization is False
+    assert out.exchange_posts==0
+    assert out.db_writes==0
+    assert len(client.calls)==8
+    assert all(path.startswith("/api/v1/private/") for path in client.calls)
+
+
+@pytest.mark.parametrize("fault",[
+    "missing_stop_type","limit_stop","wrong_stop_quantity","wrong_stop_id",
+    "wrong_margin_mode","wrong_leverage","wrong_position_qty",
+    "hedge_disabled","open_limit_order","duplicate_stop","foreign_position",
+    "stop_error","wrong_stop_reverse","stop_wrong_origin",
+])
+def test_native_stop_cross_restart_mismatch_fails_closed(fault):
+    auditor,calls=inspect([result(),result()])
+    client=with_signed_native_market_stop(auditor)
+    if fault=="missing_stop_type":
+        client.stops[0].pop("stopLossType")
+    elif fault=="limit_stop":
+        client.stops[0]["stopLossType"]=1
+    elif fault=="wrong_stop_quantity":
+        client.stops[0]["vol"]="19"
+    elif fault=="wrong_stop_id":
+        client.stops[0]["id"]="100"
+    elif fault=="wrong_margin_mode":
+        client.positions[0]["openType"]=1
+    elif fault=="wrong_leverage":
+        client.positions[0]["leverage"]=2
+    elif fault=="wrong_position_qty":
+        client.positions[0]["holdVol"]="19"
+    elif fault=="hedge_disabled":
+        client.mode={"positionMode":2}
+    elif fault=="open_limit_order":
+        client.counts={"sumCount":2,"stopOrderCount":1,
+            "limitOrderCount":1,"planOrderCount":0,"trackOrderCount":0}
+    elif fault=="duplicate_stop":
+        client.stops.append(deepcopy(client.stops[0]))
+    elif fault=="foreign_position":
+        client.positions.append(dict(position(),positionId="11"))
+    elif fault=="stop_error":
+        client.stops[0]["errorCode"]=5
+    elif fault=="wrong_stop_reverse":
+        client.stops[0]["stopLossReverse"]=1
+    elif fault=="stop_wrong_origin":
+        client.stops[0]["orderId"]=123
+    out=execute(auditor)
+    assert out.status=="POST_COMMIT_SIGNED_NATIVE_STOP_GET_UNVERIFIED_FREEZE"
+    assert out.native_market_stop_type_verified_after_restart is False
+    assert not out.live_authorization
+    assert out.exchange_posts==0
+    assert out.db_writes==0
+
+
+def test_new_exchange_stop_field_drifts_even_if_all_known_protection_fields_stable():
+    auditor,calls=inspect([result(),result()])
+    client=with_signed_native_market_stop(auditor)
+    client.drift_extra_stop_field=True
+    out=execute(auditor)
+    assert out.status=="POST_COMMIT_NATIVE_STOP_GET_BOOKENDS_DRIFT_FREEZE"
+    assert not out.live_authorization
+    assert out.db_writes==0
+
+
+def test_signed_get_timeout_keeps_readonly_restart_uncertified():
+    auditor,calls=inspect([result(),result()])
+    client=with_signed_native_market_stop(auditor)
+    async def outage(path,params=None):
+        raise TimeoutError("MEXC_PRIVATE_SECRET_NOT_REPORTABLE")
+    client._private_get=outage
+    out=execute(auditor)
+    assert out.status=="POST_COMMIT_SIGNED_NATIVE_STOP_GET_UNVERIFIED_FREEZE"
+    assert "SECRET" not in out.status
+    assert out.exchange_posts==0
