@@ -161,6 +161,11 @@ class V40PostCommitRestartAuditor:
                     stop=sl,symbol=cp.symbol,position_id=cp.position_id,
                     position_quantity=cp.contracts,
                     maximum_short_stop_price=cp.stop_price,
+                    # 4-slot durable recovery has already reconciled
+                    # this exact entry order and its full filled deals.
+                    # An otherwise valid stop attached to that filled
+                    # entry is protective too; arbitrary IDs remain invalid.
+                    verified_filled_entry_order_id=cp.exchange_order_id,
                 ).active_native_full_volume_market_sl_observed is not True
             ):
                 raise ValueError("POST_COMMIT_NATIVE_MARKET_SL_NOT_VERIFIED")
