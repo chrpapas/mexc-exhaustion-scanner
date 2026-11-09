@@ -1,0 +1,256 @@
+"""Guarded V40 in-place native-stop completion -> durable checkpoint journal.
+
+This is a deliberately unregistered and OFF-by-default mutation-capable
+component. It sends NO exchange orders. The sole potential mutation is the
+existing durable journal/checkpoint pipeline, reachable ONLY after a typed
+certified transport permit (currently unavailable in production), a
+positive read-only whole-account recovery result, a complete signed-fill
+trailing state and two independent signed MEXC GET bookends.
+
+The component never grants that permit, signs a synthetic one, installs a
+Render runtime, or enables the native stop POST adapter. It does not claim
+exchange atomicity or position protection through a market gap.
+
+Replacement stop identities require a separate terminal-history and
+checkpoint-signature protocol. Those are intentionally blocked here.
+Unknown/unchanged stops and unexpected account inventory stay unresolved.
+"""
+from __future__ import annotations
+
+import time
+from dataclasses import dataclass
+from decimal import Decimal as D
+from typing import Any, Callable
+
+from app.t100_live_authorization import (
+    LiveMutationPermit,require_certified_transport_permit,
+)
+from app.t100_live_durable_recovery import PositionCheckpoint
+from app.t100_live_native_stop_execution_audit import (
+    assess_native_short_market_stop_row,
+)
+from app.t100_live_readonly_probe import ReadOnlyMexcProbe
+from app.t100_live_stop_journal import StopAmendment
+from app.t100_live_stop_update_pipeline import StopUpdatePersistencePipeline
+from app.t100_live_v40_native_stop_recovery import (
+    V40NativeStopRecoveryAuditor,V40StopRecoveryObservation,
+)
+from app.t100_live_v40_trailing_restart import V40TrailingRestartView
+
+
+class V40StopCompletionHalted(RuntimeError):
+    """No raw exchange/database errors or secret identifiers."""
+
+
+@dataclass(frozen=True)
+class V40StopCompletionResult:
+    status: str
+    journal_checkpoint_committed: bool=False
+    needs_post_commit_independent_restart_check: bool=True
+    exchange_posts: int=0
+    live_authorization: bool=False
+    entry_allowed: bool=False
+
+
+class V40NativeStopCompletionHandoff:
+    """Never re-submit an amendment; never touch live without permit."""
+
+    def __init__(
+        self,*,auditor:V40NativeStopRecoveryAuditor,
+        probe:ReadOnlyMexcProbe,
+        pipeline:StopUpdatePersistencePipeline,
+        clock_ms:Callable[[],int]|None=None,
+    ):
+        if (
+            type(auditor) is not V40NativeStopRecoveryAuditor
+            or type(probe) is not ReadOnlyMexcProbe
+            or type(pipeline) is not StopUpdatePersistencePipeline
+        ):
+            raise ValueError("STOP_COMPLETION_REQUIRES_TYPED_READERS_AND_JOURNAL")
+        self.auditor=auditor
+        self.probe=probe
+        self.pipeline=pipeline
+        self.clock_ms=clock_ms or (lambda:int(time.time()*1000))
+
+    async def commit_in_place_if_verified(
+        self,*,amendment:StopAmendment,
+        previous:PositionCheckpoint,
+        trailing:V40TrailingRestartView,
+        permit:LiveMutationPermit,
+    ) -> V40StopCompletionResult:
+        # The live adapter is NOT_IMPLEMENTED at this release. Even a
+        # perfect GET result cannot activate durable writes from shadow
+        # mode. The typed permit must be independently issued first.
+        require_certified_transport_permit(permit)
+
+        if not (
+            type(amendment) is StopAmendment
+            and type(previous) is PositionCheckpoint
+            and type(trailing) is V40TrailingRestartView
+            and previous.lifecycle_state=="OPEN"
+            and previous.position_id==amendment.position_id==trailing.position_id
+            and previous.symbol==amendment.symbol==trailing.symbol
+            and previous.stop_order_id==amendment.stop_order_id
+            and previous.stop_price==amendment.previous_stop
+            and trailing.checkpoint_version==previous.checkpoint_version
+            and trailing.recovered_stop_price==previous.stop_price
+            and trailing.recovered_best_profit_pct==previous.best_profit_pct
+            and trailing.recovered_armed==previous.armed
+            and trailing.durable_revision_history_verified is True
+            and trailing.post_fill_low_stream_complete is True
+            and trailing.status=="V40_TRAILING_RESTART_CANDIDATE_REBUILT_NONAUTHORIZING"
+            and trailing.next_best_profit_pct>=previous.best_profit_pct
+            and trailing.next_armed is True
+            and trailing.next_best_profit_pct>=D(14)
+            and trailing.proposed_stop_price<=amendment.proposed_stop
+            and amendment.proposed_stop<previous.stop_price
+        ):
+            raise V40StopCompletionHalted(
+                "STOP_COMPLETION_TRAILING_CHECKPOINT_ORIGIN_UNVERIFIED"
+            )
+        if trailing.live_authorization is not False or trailing.stop_amendment_authorized is not False:
+            raise V40StopCompletionHalted(
+                "STOP_COMPLETION_UNEXPECTED_TRAILING_AUTHORITY"
+            )
+
+        audit=await self.auditor.observe(amendment)
+        if not (
+            type(audit) is V40StopRecoveryObservation
+            and audit.status==(
+                "V40_AMENDMENT_OUTCOME_OBSERVED_NATIVE_PROTECTION_NONAUTHORIZING"
+            )
+            and audit.journal_state in ("SUBMITTING","UNKNOWN","VERIFIED")
+            and audit.position_id==previous.position_id
+            and audit.symbol==previous.symbol
+            and audit.target_stop_order_id==amendment.stop_order_id
+            and audit.outcome_price_tightened is True
+            and audit.all_owned_native_stops_observed is True
+            and audit.ledger_bookends_stable is True
+            and audit.venue_bookends_stable is True
+            and audit.account_wide_completeness_observed is True
+        ):
+            return V40StopCompletionResult(
+                "STOP_COMPLETION_WHOLE_ACCOUNT_RECOVERY_UNVERIFIED_FREEZE"
+            )
+
+        # The auditor has checked its ledger and two venue snapshots. Read
+        # the actual signed venue again *through an independent strict
+        # GET-only probe*, in two complete account bookends, and require
+        # stable exact static position/native SL identity.
+        snapshots=[]
+        try:
+            begin=self.clock_ms()
+            for _ in range(2):
+                positions=await self.probe.raw_open_positions()
+                stops=await self.probe.raw_open_stops()
+                counts=await self.probe.raw_open_order_counts()
+                if (
+                    type(positions) is not list
+                    or type(stops) is not list
+                    or type(counts) is not dict
+                    or len(positions)!=audit.owned_positions
+                    or len(stops)!=audit.active_native_market_stops
+                    or counts.get("stopOrderCount")!=len(stops)
+                    or counts.get("sumCount")!=len(stops)
+                    or any(
+                        counts.get(k)!=0 for k in (
+                            "limitOrderCount","planOrderCount","trackOrderCount",
+                        )
+                    )
+                ):
+                    return V40StopCompletionResult(
+                        "STOP_COMPLETION_SIGNED_INVENTORY_INCOMPLETE_FREEZE"
+                    )
+                target=[
+                    row for row in stops
+                    if row.get("symbol")==previous.symbol
+                    and str(row.get("positionId") or "")==previous.position_id
+                ]
+                own=[
+                    row for row in positions
+                    if row.get("symbol")==previous.symbol
+                    and str(row.get("positionId") or "")==previous.position_id
+                ]
+                if len(target)!=1 or len(own)!=1 or (
+                    str(target[0].get("id") or "")!=amendment.stop_order_id
+                ):
+                    return V40StopCompletionResult(
+                        "STOP_COMPLETION_NATIVE_ID_OR_POSITION_DRIFT_FREEZE"
+                    )
+                row=target[0]
+                qty=own[0].get("holdVol")
+                if (
+                    D(str(qty))!=previous.contracts
+                    or own[0].get("positionType")!=2
+                    or own[0].get("openType")!=2
+                    or own[0].get("leverage")!=1
+                    or own[0].get("state")!=1
+                    or assess_native_short_market_stop_row(
+                        stop=row,symbol=previous.symbol,
+                        position_id=previous.position_id,
+                        position_quantity=previous.contracts,
+                        maximum_short_stop_price=amendment.proposed_stop,
+                    ).active_native_full_volume_market_sl_observed is not True
+                ):
+                    return V40StopCompletionResult(
+                        "STOP_COMPLETION_SIGNED_NATIVE_FULL_COVERAGE_UNVERIFIED_FREEZE"
+                    )
+                snapshots.append((
+                    tuple(sorted(
+                        (str(x.get("positionId")),str(x.get("symbol")),
+                         str(x.get("holdVol")),str(x.get("positionType")),
+                         str(x.get("openType")),str(x.get("leverage")),
+                         str(x.get("state")))
+                        for x in positions
+                    )),
+                    tuple(sorted(
+                        (str(x.get("positionId")),str(x.get("symbol")),
+                         str(x.get("id")),str(x.get("stopLossPrice")),
+                         str(x.get("stopLossType")),str(x.get("state")),
+                         str(x.get("errorCode")),str(x.get("triggerSide")),
+                         str(x.get("vol")))
+                        for x in stops
+                    )),
+                ))
+            end=self.clock_ms()
+        except Exception:
+            return V40StopCompletionResult(
+                "STOP_COMPLETION_SIGNED_GET_FAILED_FREEZE"
+            )
+        if (
+            type(begin) is not int or type(end) is not int
+            or end<begin or end-begin>1500
+            or snapshots[0]!=snapshots[1]
+        ):
+            return V40StopCompletionResult(
+                "STOP_COMPLETION_BOOKEND_STALE_OR_DRIFT_FREEZE"
+            )
+
+        # The pipeline owns the journal CAS and checkpoint version CAS.
+        # A journal VERIFIED + failed checkpoint write remains a durable
+        # recovery blocker. Never send another stop POST to repair it.
+        try:
+            outcome=await self.pipeline.reconcile_current_and_persist(
+                previous,amendment,
+                current_stops=stops,
+                best_profit_pct=trailing.next_best_profit_pct,
+                armed=trailing.next_armed,
+                evidence_fresh=True,account_reconciled=True,
+                positions_complete=True,stops_complete=True,
+            )
+        except Exception:
+            return V40StopCompletionResult(
+                "STOP_COMPLETION_DURABLE_JOURNAL_OR_CHECKPOINT_UNVERIFIED_FREEZE"
+            )
+        if (
+            outcome.checkpoint.checkpoint_version
+            !=previous.checkpoint_version+1
+            or outcome.checkpoint.stop_price>amendment.proposed_stop
+        ):
+            return V40StopCompletionResult(
+                "STOP_COMPLETION_COMMITTED_CHECKPOINT_SHAPE_UNVERIFIED_FREEZE"
+            )
+        return V40StopCompletionResult(
+            "STOP_COMPLETION_JOURNAL_CHECKPOINT_PERSISTED_RESTART_REQUIRED",
+            journal_checkpoint_committed=True,
+        )
