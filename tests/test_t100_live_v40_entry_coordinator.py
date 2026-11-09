@@ -15,7 +15,7 @@ import pytest
 
 import app.t100_live_v40_entry_coordinator as m
 from app.t100_live_authorization import LiveAuthorizationHalted
-from app.t100_live_execution import LiveCaps,deterministic_t100_entry_oid
+from app.t100_live_execution import EntryIntent,LiveCaps,deterministic_t100_entry_oid
 from app.t100_live_four_slot_reservations import SlotReservation
 from app.t100_live_four_slot_attempt_journal import DurableAttemptStage
 from app.t100_live_four_slot_snapshot_coordinator import FourSlotSnapshotResult
