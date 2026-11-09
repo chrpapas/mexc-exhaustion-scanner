@@ -196,6 +196,8 @@ class DummyDepth:
 
     async def quote_exact_intent(self,signal,intent,*,max_slippage_bps):
         self.log.append("depth")
+        if self.fault=="timeout":
+            raise TimeoutError("SENSITIVE_MEXC_CLIENT_RESPONSE")
         assert max_slippage_bps==D("100")
         assert intent.symbol==signal.symbol
         assert intent.volume_contracts==D("50")
@@ -281,13 +283,14 @@ class DummyJournal:
 
 
 def controller(log, *, events=None, second_risk=None, second_terms=None,
-               corrupt_oid=False, after_status=None, depth_fault=None):
+               corrupt_oid=False, after_status=None, depth_fault=None,
+               clock_ms=None):
     return m.V40OneShotCoordinator(
         source=DummySource([candidate()] if events is None else events,log),
         snapshots=DummySnapshots(log,after_status or "NONFLAT_PROVENANCE_MATCHED_NONAUTHORIZING"),
         witness=DummyRiskProvider(log,second_risk,second_terms),
         depth=DummyDepth(log,fault=depth_fault),
-        clock_ms=lambda: 1_000_000,
+        clock_ms=clock_ms if clock_ms is not None else lambda: 1_000_000,
         leaders=DummyLeaders(log),
         reservations=DummyReservations(log,corrupt_oid=corrupt_oid),
         journal=DummyJournal(log),
@@ -411,7 +414,7 @@ def test_no_stage2_signal_exits_before_leader_acquisition(monkeypatch):
 
 @pytest.mark.parametrize("fault",[
     "stale","wrong_symbol","equity","margin","contract",
-    "quantity","slippage",
+    "quantity","slippage","timeout",
 ])
 def test_exact_quantity_market_witness_failure_never_claims_or_posts(
     monkeypatch,fault,
@@ -463,3 +466,66 @@ def test_exact_depth_mandatory_at_constructor():
             transport=None,get_venue=None,
             completeness=None,commit_writer=None,
         )
+
+
+def test_depth_becomes_stale_during_lease_renewal_and_never_posts(monkeypatch):
+    log=[]
+    patch_release_gates_and_mutations(monkeypatch,log)
+    readings=iter((1_000_000,1_002_000))
+    result=asyncio.run(controller(
+        log,clock_ms=lambda:next(readings),
+    ).run_one(
+        permit=None,caps=caps(),parity_report={},holder_id="mock-holder",
+    ))
+    assert result.status=="V40_EXACT_EXECUTABLE_DEPTH_STALE_AFTER_LEASE_FREEZE"
+    assert result.staged is True
+    assert result.post_attempted is False
+    assert "lease_renew" in log and "dispatch" not in log
+
+
+def test_exact_depth_verification_never_upgrades_uncertified_risk_flags():
+    import app.t100_live_v40_candidate_market_witness as market
+    signal=candidate()
+    intent=EntryIntent.build(
+        signal_id=signal.signal_id,symbol=signal.symbol,
+        reference_price=D("100"),notional_usdt=D("5000"),
+        contract_size=D("1"),volume_step=D("1"),
+        min_volume=D("1"),max_volume=D("10000"),
+        price_tick=D(".01"),
+    )
+    original=replace(
+        risk(),cross_collateral_verified=False,
+        private_risk_tier_verified=False,
+        contract_trading_access_verified=False,
+        no_unresolved_mutations=False,
+        observed_sell_vwap=D("0"),
+    )
+    public_contract=replace(terms(),private_order_permission_verified=False)
+    quote=market.V40CandidateQuote(
+        status="V40_GET_ONLY_FLAT_ACCOUNT_AND_MARKET_QUOTED_NONAUTHORIZING",
+        symbol=signal.symbol,observed_at_ms=999_900,book_age_ms=100,
+        account_equity_usdt=D("10000"),account_available_usdt=D("10000"),
+        candidate_contract=public_contract,
+        current_private_short_max_vol=D("1000"),
+        top_bid=D("101"),top_ask=D("102"),
+        bookended_flat_account=True,hedge_mode_observed=True,
+        private_risk_row_observed=True,
+    )
+    depth=market.V40ExactDepth(
+        status="V40_EXECUTABLE_LOT_DISPLAYED_DEPTH_NONAUTHORIZING",
+        symbol=signal.symbol,signal_id=signal.signal_id,
+        contracts=intent.volume_contracts,sell_vwap=D("99"),
+        adverse_slippage_bps=D("100"),age_ms=100,
+        order_fits_depth=True,
+    )
+    merged=m.verify_fresh_exact_depth(
+        signal=signal,intent=intent,risk=original,
+        terms=terms(),caps=caps(),quote=quote,
+        depth=depth,now_ms=1_000_000,
+    )
+    assert merged.observed_sell_vwap==D("99")
+    assert not merged.cross_collateral_verified
+    assert not merged.private_risk_tier_verified
+    assert not merged.contract_trading_access_verified
+    assert not merged.no_unresolved_mutations
+    assert original.observed_sell_vwap==D("0")
