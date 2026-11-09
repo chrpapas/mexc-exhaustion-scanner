@@ -177,7 +177,10 @@ def run_mac_restart_drill(
         return _fail("PILOT_RESTART_MAC_PAPER_KILL_OR_SCOPE_REQUIRED_HALT")
     # Strongly preserve the user's execution mode and kill switch, even
     # if another local process changed environment after validation.
-    child_env=dict(env)
+    # Do not inherit unrelated MEXC, Render, PostgreSQL or BOXWAVE
+    # credentials the operator may have exported in their shell.
+    inherited_keys=("HOME","PATH","LANG","LC_ALL","TMPDIR")
+    child_env={k:env[k] for k in inherited_keys if k in env}
     child_env.update(SAFE_ENV)
     with tempfile.TemporaryDirectory(prefix="t100-v40-readonly-restart-") as tmp:
         first=run_child(service,Path(tmp)/"first.json",child_env)
