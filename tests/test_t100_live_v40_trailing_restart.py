@@ -122,6 +122,7 @@ def test_revision_inconsistency_halts_without_synthetic_restart_fix(mutation):
     if mutation=="disarm":
         revisions[0]["armed"]=True
         revisions[0]["best_profit_pct"]=D(14)
+        revisions[1]["armed"]=False
     if mutation=="version_gap":
         revisions[1]["checkpoint_version"]=3
     with pytest.raises(V40TrailingRestartHalted,match="DURABLE_HISTORY"):
