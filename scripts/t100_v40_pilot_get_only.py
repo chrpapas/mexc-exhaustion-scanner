@@ -40,6 +40,14 @@ class PilotPreflightHalted(RuntimeError):
     """A short stable code, never a raw secret, API payload or URL."""
 
 
+# MEXC's current official assets GET example has
+# availableBalance=32.80984793658 and equity=32.80984793 despite no
+# position/margin/unrealized: a 0.00000000658 USDT rounding discrepancy.
+# Tolerate ONLY one USDT 8-decimal display quantum, require cash/equity
+# parity in a flat hedge-mode account, and NEVER upgrade live permits.
+ASSET_PRECISION_USDT=D("0.00000001")
+
+
 class KeychainSignedGetOnly:
     """No POST method and no exposed low-level HTTP client."""
 
@@ -117,6 +125,7 @@ class PilotGetOnlyResult:
     available_balance_usdt: str | None=None
     hedge_mode_observed: bool=False
     inventory_bookends_equal: bool=False
+    available_equity_roundoff_observed: bool=False
     account_scope_independently_verified: bool=False
     cross_margin_collateral_verified: bool=False
     private_post_permission_verified: bool=False
@@ -162,7 +171,7 @@ def evaluate_pilot_flat_bookends(
         "planOrderCount","trackOrderCount",
     )
 
-    def normalized(s: PilotInventory) -> tuple[str,D,D]:
+    def normalized(s: PilotInventory) -> tuple[str,D,D,bool]:
         # Diagnose the blocker without printing position IDs, asset
         # identifiers, symbols, API responses or any Keychain secrets.
         # Priority is inventory first: an active position must never be
@@ -211,8 +220,15 @@ def evaluate_pilot_flat_bookends(
         }
         if vals["equity"]<=0:
             raise PilotPreflightHalted("PILOT_USDT_EQUITY_NONPOSITIVE_HALT")
-        if vals["availableBalance"]>vals["equity"]:
-            raise PilotPreflightHalted("PILOT_AVAILABLE_ABOVE_EQUITY_HALT")
+        gap=vals["availableBalance"]-vals["equity"]
+        if gap>ASSET_PRECISION_USDT:
+            raise PilotPreflightHalted(
+                "PILOT_AVAILABLE_EQUITY_GAP_EXCEEDS_DISPLAY_PRECISION_HALT"
+            )
+        if gap>0 and abs(vals["cashBalance"]-vals["equity"])>ASSET_PRECISION_USDT:
+            raise PilotPreflightHalted(
+                "PILOT_CASH_EQUITY_PRECISION_CROSSCHECK_FAILED"
+            )
         if vals["positionMargin"]!=0:
             raise PilotPreflightHalted("PILOT_POSITION_MARGIN_NONZERO_HALT")
         if vals["unrealized"]!=0:
@@ -227,11 +243,11 @@ def evaluate_pilot_flat_bookends(
             },sort_keys=True,separators=(",",":"),allow_nan=False)
         except (ValueError,TypeError):
             raise PilotPreflightHalted("PILOT_BOOKEND_NONCANONICAL") from None
-        return frozen,vals["equity"],vals["availableBalance"]
+        return frozen,vals["equity"],vals["availableBalance"],gap>0
 
-    key_a,e_a,a_a=normalized(first)
-    key_b,e_b,a_b=normalized(second)
-    if key_a!=key_b or e_a!=e_b or a_a!=a_b:
+    key_a,e_a,a_a,roundoff_a=normalized(first)
+    key_b,e_b,a_b,roundoff_b=normalized(second)
+    if key_a!=key_b or e_a!=e_b or a_a!=a_b or roundoff_a!=roundoff_b:
         raise PilotPreflightHalted("PILOT_SIGNED_GET_BOOKEND_CHANGED")
     return PilotGetOnlyResult(
         status="PILOT_FLAT_HEDGE_SIGNED_GET_BOOKENDS_NONAUTHORIZING",
@@ -240,6 +256,7 @@ def evaluate_pilot_flat_bookends(
         available_balance_usdt=str(a_b),
         hedge_mode_observed=True,
         inventory_bookends_equal=True,
+        available_equity_roundoff_observed=roundoff_b,
     )
 
 
