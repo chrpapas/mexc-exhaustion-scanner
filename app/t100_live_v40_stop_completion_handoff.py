@@ -310,6 +310,21 @@ class V40NativeStopCompletionHandoff:
                 "STOP_COMPLETION_BOOKEND_STALE_OR_DRIFT_FREEZE"
             )
 
+        # Re-read durable amendment state AFTER the independent signed GET
+        # bookends. A concurrent worker may have committed or modified the
+        # journal since the first read-only recovery audit. Never persist
+        # based on an observation of a different journal state.
+        try:
+            current_journal_state=await self.pipeline.amendments.state(amendment)
+        except Exception:
+            return V40StopCompletionResult(
+                "STOP_COMPLETION_POST_GET_JOURNAL_UNAVAILABLE_FREEZE"
+            )
+        if current_journal_state!=audit.journal_state:
+            return V40StopCompletionResult(
+                "STOP_COMPLETION_JOURNAL_DRIFT_AFTER_GET_FREEZE"
+            )
+
         # The pipeline owns the journal CAS and checkpoint version CAS.
         # A journal VERIFIED + failed checkpoint write remains a durable
         # recovery blocker. Never send another stop POST to repair it.
