@@ -314,3 +314,33 @@ def test_changed_collateral_component_even_with_same_equity_blocks():
     )
     with pytest.raises(V40CandidateMarketHalted,match="COLLATERAL_COMPONENT_DRIFT"):
         run(w)
+
+
+def test_documented_mexc_available_above_equity_micro_gap_is_capped_not_spent():
+    c,private,_=setup()
+    for row in private.assets:
+        if row.get("currency")=="USDT":
+            row["cashBalance"]="5000"
+            row["equity"]="5000"
+            row["availableBalance"]="5000.00000000658"
+    quote=run(c)
+    assert quote.account_equity_usdt==D("5000")
+    assert quote.account_available_usdt==D("5000")
+    assert quote.candidate_contract.private_order_permission_verified is False
+    assert not quote.live_authorization
+
+
+def test_material_available_above_equity_is_still_rejected():
+    c,private,_=setup()
+    private.assets[0]["cashBalance"]="5000"
+    private.assets[0]["availableBalance"]="5000.000001"
+    with pytest.raises(V40CandidateMarketHalted,match="USDT_COLLATERAL_DRIFT"):
+        run(c)
+
+
+def test_micro_available_gap_with_different_cash_equity_is_rejected():
+    c,private,_=setup()
+    private.assets[0]["cashBalance"]="4999"
+    private.assets[0]["availableBalance"]="5000.00000000658"
+    with pytest.raises(V40CandidateMarketHalted,match="USDT_COLLATERAL_DRIFT"):
+        run(c)
