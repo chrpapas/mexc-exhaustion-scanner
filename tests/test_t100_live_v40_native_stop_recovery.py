@@ -361,5 +361,5 @@ def test_bad_first_stop_market_semantics_cannot_be_hidden_by_second_get():
 
     venue.open_stop_orders=first_bad_second_good
     result=observe(a,reader)
-    assert result.status=="V40_STOP_RECOVERY_NATIVE_MARKET_FULL_VOLUME_UNVERIFIED_FREEZE"
+    assert result.status=="V40_STOP_RECOVERY_LEDGER_OR_VENUE_DRIFT_FREEZE"
     assert not result.outcome_price_tightened
