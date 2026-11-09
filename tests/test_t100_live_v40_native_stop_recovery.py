@@ -323,3 +323,43 @@ def test_verified_replacement_record_does_not_bypass_finished_history():
     result=observe(a,reader)
     assert result.status=="V40_STOP_REPLACEMENT_HISTORY_REQUIRED_FREEZE"
     assert not result.live_authorization
+
+
+def test_bad_first_stop_error_code_cannot_be_hidden_by_good_second_get():
+    a,reader,ledger,venue,complete,journal=make()
+    original=venue.open_stop_orders
+    calls=[0]
+
+    async def first_bad_second_good():
+        calls[0]+=1
+        rows=await original()
+        if calls[0]==1:
+            rows[0]["errorCode"]=2030
+        return rows
+
+    venue.open_stop_orders=first_bad_second_good
+    result=observe(a,reader)
+    # Native stop errorCode is intentionally absent from the shared
+    # critical inventory hash, so each bookend requires a separate
+    # full-volume MARKET SL audit.
+    assert result.status=="V40_STOP_RECOVERY_NATIVE_MARKET_FULL_VOLUME_UNVERIFIED_FREEZE"
+    assert result.outcome_price_tightened is False
+    assert journal.state_value=="UNKNOWN"
+
+
+def test_bad_first_stop_market_semantics_cannot_be_hidden_by_second_get():
+    a,reader,ledger,venue,complete,journal=make()
+    original=venue.open_stop_orders
+    calls=[0]
+
+    async def first_bad_second_good():
+        calls[0]+=1
+        rows=await original()
+        if calls[0]==1:
+            rows[0]["stopLossType"]=1
+        return rows
+
+    venue.open_stop_orders=first_bad_second_good
+    result=observe(a,reader)
+    assert result.status=="V40_STOP_RECOVERY_NATIVE_MARKET_FULL_VOLUME_UNVERIFIED_FREEZE"
+    assert not result.outcome_price_tightened
