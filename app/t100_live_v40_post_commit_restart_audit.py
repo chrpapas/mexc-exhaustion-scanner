@@ -18,10 +18,10 @@ import re
 from dataclasses import dataclass
 
 from app.t100_live_durable_recovery import (
-    DurableRecoveryReport,PositionCheckpoint,
+    DurableRecoveryReport,PositionCheckpoint,checkpoint_from_row,
 )
 from app.t100_live_four_slot_snapshot_coordinator import (
-    FourSlotSnapshotCoordinator,FourSlotSnapshotResult,
+    FourSlotSnapshotCoordinator,FourSlotSnapshotResult,_ledger_digest,
 )
 from app.t100_live_supervisor import ManagedShort
 
@@ -120,6 +120,26 @@ class V40PostCommitRestartAuditor:
                 return halt("POST_COMMIT_RESTART_POSITION_RECOVERY_INVALID_FREEZE")
             if result.occupied_slots!=len(identities):
                 return halt("POST_COMMIT_RESTART_SLOT_COUNT_INVALID_FREEZE")
+            # Recovery returns ManagedShort but omits the checkpoint's
+            # actual durable version. Without a direct ledger reread,
+            # an equal stop/quantity could be mistakenly accepted from an
+            # older revision. Compare the complete independently read-only
+            # ledger digest with the snapshot and the full typed checkpoint,
+            # including checkpoint_version and immutable order origin.
+            try:
+                ledger=await self.snapshot.ledger.read_snapshot()
+                if _ledger_digest(ledger)!=result.ledger_hash:
+                    return halt("POST_COMMIT_LEDGER_READBACK_CHANGED_FREEZE")
+                checkpoints=[
+                    checkpoint_from_row(row) for row in ledger.checkpoints
+                ]
+            except Exception:
+                return halt("POST_COMMIT_LEDGER_READBACK_UNVERIFIED_FREEZE")
+            if (
+                len(checkpoints)!=result.occupied_slots
+                or sum(cp==expected for cp in checkpoints)!=1
+            ):
+                return halt("POST_COMMIT_EXPECTED_REVISION_NOT_DURABLE_FREEZE")
             matching=[
                 r for r in result.recovery.recovered
                 if r.symbol==expected.symbol and r.position_id==expected.position_id
