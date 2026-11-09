@@ -16,13 +16,17 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from decimal import Decimal as D,InvalidOperation
+from typing import Any
 
 from app.t100_live_durable_recovery import (
     DurableRecoveryReport,PositionCheckpoint,checkpoint_from_row,
 )
 from app.t100_live_four_slot_snapshot_coordinator import (
-    FourSlotSnapshotCoordinator,FourSlotSnapshotResult,_ledger_digest,
+    FourSlotSnapshotCoordinator,FourSlotSnapshotResult,_ledger_digest,_hash_rows,
 )
+from app.t100_live_native_stop_execution_audit import assess_native_short_market_stop_row
+from app.t100_live_readonly_probe import ReadOnlyMexcProbe
 from app.t100_live_supervisor import ManagedShort
 
 
@@ -68,13 +72,106 @@ def _recovered_identity(report: DurableRecoveryReport) -> tuple:
     ))
 
 
+def _positive_quantity(raw: Any)->D:
+    if raw is None or type(raw) is bool:
+        raise ValueError("POST_COMMIT_QUANTITY_INVALID")
+    try:
+        result=D(str(raw))
+    except (InvalidOperation,TypeError,ValueError):
+        raise ValueError("POST_COMMIT_QUANTITY_INVALID") from None
+    if not result.is_finite() or result<=0:
+        raise ValueError("POST_COMMIT_QUANTITY_INVALID")
+    return result
+
+
 class V40PostCommitRestartAuditor:
     """Read-only historical revision check; NEVER unlock live transport."""
 
-    def __init__(self, snapshot: FourSlotSnapshotCoordinator):
+    def __init__(
+        self,snapshot: FourSlotSnapshotCoordinator,
+        *,probe:ReadOnlyMexcProbe|None=None,
+    ):
         if type(snapshot) is not FourSlotSnapshotCoordinator:
             raise ValueError("POST_COMMIT_TYPED_SNAPSHOT_REQUIRED")
+        if probe is not None and type(probe) is not ReadOnlyMexcProbe:
+            raise ValueError("POST_COMMIT_TYPED_GET_ONLY_PROBE_REQUIRED")
         self.snapshot=snapshot
+        self.probe=probe
+
+    async def _strict_native_stop_bookend(self,checkpoints:list[PositionCheckpoint])->str:
+        """Independent account-wide signed GET witness, never a trade permit."""
+        if self.probe is None:
+            raise ValueError("POST_COMMIT_GET_ONLY_PROBE_MISSING")
+        positions=await self.probe.raw_open_positions()
+        stops=await self.probe.raw_open_stops()
+        counts=await self.probe.raw_open_order_counts()
+        mode=await self.probe.raw_position_mode()
+        n=len(checkpoints)
+        required_counts=("sumCount","limitOrderCount","stopOrderCount",
+                         "planOrderCount","trackOrderCount")
+        if (
+            type(positions) is not list or type(stops) is not list
+            or type(counts) is not dict
+            or len(positions)!=n or len(stops)!=n
+            or type(mode) is not int or mode!=1
+            or any(type(counts.get(k)) is not int or counts[k]<0
+                   for k in required_counts)
+            or counts["sumCount"]!=n or counts["stopOrderCount"]!=n
+            or any(counts[k]!=0 for k in (
+                "limitOrderCount","planOrderCount","trackOrderCount"
+            ))
+            or any(type(x) is not dict for x in positions+stops)
+        ):
+            raise ValueError("POST_COMMIT_SIGNED_ACCOUNT_TOPOLOGY_INVALID")
+        position_by_id={}
+        stop_by_id={}
+        for item in positions:
+            pid=str(item.get("positionId") or "")
+            if not re.fullmatch(r"[1-9][0-9]*",pid) or pid in position_by_id:
+                raise ValueError("POST_COMMIT_SIGNED_POSITION_IDENTITY_INVALID")
+            position_by_id[pid]=item
+        for item in stops:
+            pid=str(item.get("positionId") or "")
+            if not re.fullmatch(r"[1-9][0-9]*",pid) or pid in stop_by_id:
+                raise ValueError("POST_COMMIT_SIGNED_STOP_IDENTITY_INVALID")
+            stop_by_id[pid]=item
+        ids={cp.position_id for cp in checkpoints}
+        if (
+            len(ids)!=n
+            or set(position_by_id)!=ids
+            or set(stop_by_id)!=ids
+        ):
+            raise ValueError("POST_COMMIT_UNOWNED_SIGNED_INVENTORY")
+        for cp in checkpoints:
+            position=position_by_id[cp.position_id]
+            sl=stop_by_id[cp.position_id]
+            if (
+                position.get("symbol")!=cp.symbol
+                or type(position.get("positionType")) is not int
+                or position["positionType"]!=2
+                or type(position.get("state")) is not int
+                or position["state"]!=1
+                or type(position.get("openType")) is not int
+                or position["openType"]!=2
+                or type(position.get("leverage")) is not int
+                or position["leverage"]!=1
+                or _positive_quantity(position.get("holdVol"))!=cp.contracts
+                or str(sl.get("id") or "")!=cp.stop_order_id
+                or assess_native_short_market_stop_row(
+                    stop=sl,symbol=cp.symbol,position_id=cp.position_id,
+                    position_quantity=cp.contracts,
+                    maximum_short_stop_price=cp.stop_price,
+                ).active_native_full_volume_market_sl_observed is not True
+            ):
+                raise ValueError("POST_COMMIT_NATIVE_MARKET_SL_NOT_VERIFIED")
+        # Full order/position rows are hashed, not just selected critical
+        # fields. Every static observation must stay unchanged across the
+        # two complete recoveries, including venue-introduced stop fields.
+        return _hash_rows({
+            "positions":positions,"stops":stops,
+            "order_counts":[counts],
+            "hedge_mode":[{"positionMode":mode}],
+        })
 
     async def observe(
         self,*,expected: PositionCheckpoint,
@@ -96,6 +193,7 @@ class V40PostCommitRestartAuditor:
             return halt("POST_COMMIT_EXPECTED_CHECKPOINT_INVALID_FREEZE")
 
         observations=[]
+        native_stop_checksums=[]
         for _ in range(2):
             try:
                 result=await self.snapshot.inspect(shared_manual_observation=False)
@@ -140,6 +238,13 @@ class V40PostCommitRestartAuditor:
                 or sum(cp==expected for cp in checkpoints)!=1
             ):
                 return halt("POST_COMMIT_EXPECTED_REVISION_NOT_DURABLE_FREEZE")
+            if self.probe is not None:
+                try:
+                    native_stop_checksums.append(
+                        await self._strict_native_stop_bookend(checkpoints)
+                    )
+                except Exception:
+                    return halt("POST_COMMIT_SIGNED_NATIVE_STOP_GET_UNVERIFIED_FREEZE")
             matching=[
                 r for r in result.recovery.recovered
                 if r.symbol==expected.symbol and r.position_id==expected.position_id
@@ -162,9 +267,21 @@ class V40PostCommitRestartAuditor:
             ))
         if observations[0]!=observations[1]:
             return halt("POST_COMMIT_INDEPENDENT_SNAPSHOT_DRIFT_FREEZE")
+        if self.probe is not None and (
+            len(native_stop_checksums)!=2
+            or native_stop_checksums[0]!=native_stop_checksums[1]
+        ):
+            return halt("POST_COMMIT_NATIVE_STOP_GET_BOOKENDS_DRIFT_FREEZE")
         return V40PostCommitRestartObservation(
-            status="POST_COMMIT_DURABLE_EXCHANGE_RECOVERED_READONLY_NONAUTHORIZING",
+            status=(
+                "POST_COMMIT_NATIVE_MARKET_SL_GETS_STABLE_READONLY_NONAUTHORIZING"
+                if self.probe is not None else
+                "POST_COMMIT_DURABLE_EXCHANGE_RECOVERED_READONLY_NONAUTHORIZING"
+            ),
             recovered_slots=len(observations[1][2]),
             expected_checkpoint_recovered=True,
             two_independent_full_account_snapshots_matched=True,
+            native_market_stop_type_verified_after_restart=(
+                self.probe is not None
+            ),
         )
