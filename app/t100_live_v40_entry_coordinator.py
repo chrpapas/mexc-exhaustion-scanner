@@ -25,10 +25,11 @@ POST, and no self-certification of exchange/DB atomicity.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace as dataclass_replace
 from datetime import datetime, timezone
 from decimal import Decimal as D
-from typing import Any, Protocol, Sequence
+import time
+from typing import Any, Callable, Protocol, Sequence
 
 from app.t100_live_authorization import (
     LiveMutationPermit, require_certified_transport_permit,
@@ -119,6 +120,115 @@ class AccountAndContractWitness(Protocol):
     async def inspect(
         self, signal: V40SourceCandidate,
     ) -> tuple[V40CurrentRiskEvidence,V40ContractTerms]: ...
+
+
+class ExactMarketDepthWitness(Protocol):
+    async def quote_exact_intent(
+        self, signal: V40SourceCandidate, intent: EntryIntent,
+        *, max_slippage_bps: D,
+    ) -> tuple[Any,Any]: ...
+
+
+def verify_fresh_exact_depth(
+    *,
+    signal: V40SourceCandidate,
+    intent: EntryIntent,
+    risk: V40CurrentRiskEvidence,
+    terms: V40ContractTerms,
+    caps: LiveCaps,
+    quote: Any,
+    depth: Any,
+    now_ms: int,
+) -> V40CurrentRiskEvidence:
+    """Merge ONLY verified sized VWAP/age; never upgrade permission flags.
+
+    A top-of-book price is insufficient. Validate both independent sources
+    agree on economics and immutable lot grid before any dispatch claim.
+    Strictly isolated FLAT canary only until non-flat depth is supported.
+    """
+    # Local import breaks the module dependency cycle: the standalone
+    # GET-only market witness reuses this coordinator's V40ContractTerms.
+    from app.t100_live_v40_candidate_market_witness import (
+        V40CandidateQuote, V40ExactDepth,
+    )
+    if not (
+        type(signal) is V40SourceCandidate
+        and type(intent) is EntryIntent
+        and type(risk) is V40CurrentRiskEvidence
+        and type(terms) is V40ContractTerms
+        and type(caps) is LiveCaps
+        and type(quote) is V40CandidateQuote
+        and type(depth) is V40ExactDepth
+        and type(now_ms) is int
+        and now_ms > 0
+    ):
+        raise V40CoordinatorHalted("V40_EXACT_DEPTH_SOURCE_INVALID")
+
+    qt=quote.candidate_contract
+    grid=("contract_size","volume_step","min_volume","max_volume","price_tick")
+    if not (
+        quote.status=="V40_GET_ONLY_FLAT_ACCOUNT_AND_MARKET_QUOTED_NONAUTHORIZING"
+        and depth.status=="V40_EXECUTABLE_LOT_DISPLAYED_DEPTH_NONAUTHORIZING"
+        and quote.symbol==depth.symbol==signal.symbol==intent.symbol
+        and depth.signal_id==intent.signal_id==signal.signal_id
+        and quote.bookended_flat_account is True
+        and quote.hedge_mode_observed is True
+        and quote.private_risk_row_observed is True
+        and depth.order_fits_depth is True
+        and quote.entry_allowed is False
+        and quote.live_authorization is False
+        and depth.entry_allowed is False
+        and depth.live_authorization is False
+        and type(qt) is V40ContractTerms
+        and all(getattr(qt,field)==getattr(terms,field) for field in grid)
+        and qt.market_state_and_country_verified is True
+        and risk.current_owned_positions==0
+        and all(type(value) is D and value.is_finite() and value>0 for value in (
+            intent.volume_contracts,intent.notional_usdt,
+            risk.current_account_equity_usdt,quote.account_equity_usdt,
+            quote.current_private_short_max_vol,depth.sell_vwap,
+        ))
+        and type(quote.account_available_usdt) is D
+        and quote.account_available_usdt.is_finite()
+        and quote.account_available_usdt>=0
+        and type(risk.available_margin_usdt) is D
+        and risk.available_margin_usdt.is_finite()
+        and risk.available_margin_usdt>=0
+        and quote.account_equity_usdt==risk.current_account_equity_usdt
+        and risk.available_margin_usdt<=quote.account_available_usdt
+        and intent.volume_contracts==depth.contracts
+        and intent.volume_contracts<=quote.current_private_short_max_vol
+        and intent.volume_contracts<=terms.max_volume
+        and intent.volume_contracts>=terms.min_volume
+        and intent.volume_contracts%terms.volume_step==0
+        and intent.notional_usdt*D("1.02")<=quote.account_available_usdt
+        and type(depth.adverse_slippage_bps) is D
+        and depth.adverse_slippage_bps.is_finite()
+        and depth.adverse_slippage_bps<=caps.max_slippage_bps
+    ):
+        raise V40CoordinatorHalted("V40_EXACT_DEPTH_OR_ACCOUNT_DRIFT_NO_POST")
+
+    # The depth was sampled before any subsequent claim; check at the
+    # final boundary with an independent monotonic-now wall clock.
+    if not (
+        type(quote.observed_at_ms) is int
+        and type(quote.book_age_ms) is int
+        and type(depth.age_ms) is int
+        and 0<=quote.book_age_ms==depth.age_ms<=caps.max_book_age_ms
+        and 0<=now_ms-quote.observed_at_ms<=caps.max_book_age_ms
+    ):
+        raise V40CoordinatorHalted("V40_EXACT_DEPTH_TOO_OLD_NO_POST")
+
+    # This does NOT prove full cross-margin collateral or private key POST
+    # privilege, and cannot grant those permissions. Never copy or flip
+    # any of the original independent risk certification booleans.
+    return dataclass_replace(
+        risk,observed_sell_vwap=depth.sell_vwap,
+        book_age_ms=max(
+            quote.book_age_ms,depth.age_ms,
+            now_ms-quote.observed_at_ms,
+        ),
+    )
 
 
 def prepare_candidate(
@@ -220,6 +330,7 @@ class V40OneShotCoordinator:
         source: PostgresV40Stage2Source,
         snapshots: FourSlotSnapshotCoordinator,
         witness: AccountAndContractWitness,
+        depth: ExactMarketDepthWitness,
         leaders: LeaderLeaseCoordinator,
         reservations: PostgresFourSlotReservations,
         journal: PostgresFourSlotAttemptJournal,
@@ -229,10 +340,15 @@ class V40OneShotCoordinator:
         get_venue: Any,
         completeness: Any,
         commit_writer: Any,
+        clock_ms: Callable[[],int] | None = None,
     ) -> None:
+        if depth is None:
+            raise ValueError("V40_EXACT_DEPTH_WITNESS_REQUIRED")
         self.source=source
         self.snapshots=snapshots
         self.witness=witness
+        self.depth=depth
+        self.clock_ms=clock_ms if clock_ms is not None else lambda: int(time.time()*1000)
         self.leaders=leaders
         self.reservations=reservations
         self.journal=journal
@@ -373,12 +489,48 @@ class V40OneShotCoordinator:
                     signal_id=selected.signal.signal_id,
                     reserved=True,staged=True,
                 )
+            # The exact *already staged* contract quantity is quoted on
+            # fresh MEXC signed/public GET data, never substituted with
+            # the previous top-of-book bid. The source currently requires
+            # a completely flat account and never certifies authority.
+            # No new SQL mutation or exchange POST is allowed if the
+            # quantity-sized quote cannot be independently verified.
+            try:
+                quote,depth = await self.depth.quote_exact_intent(
+                    selected.signal,selected.intent,
+                    max_slippage_bps=caps.max_slippage_bps,
+                )
+                sized_risk=verify_fresh_exact_depth(
+                    signal=selected.signal,intent=selected.intent,
+                    risk=refreshed,terms=selected.terms,caps=caps,
+                    quote=quote,depth=depth,now_ms=self.clock_ms(),
+                )
+            except Exception:
+                return V40OneShotReport(
+                    "V40_EXACT_EXECUTABLE_DEPTH_OR_ACCOUNT_UNVERIFIED_FREEZE",
+                    signal_id=selected.signal.signal_id,
+                    reserved=True,staged=True,
+                )
             # After SUBMITTING, a lost lease is an ambiguity requiring
             # reconciliation; NEVER run a second entry attempt.
             await self.leaders.renew(lease)
+            # Revalidate age at the *last* no-write boundary. If the
+            # fencing/renew path took too long, never claim a new POST.
+            try:
+                sized_risk=verify_fresh_exact_depth(
+                    signal=selected.signal,intent=selected.intent,
+                    risk=refreshed,terms=selected.terms,caps=caps,
+                    quote=quote,depth=depth,now_ms=self.clock_ms(),
+                )
+            except V40CoordinatorHalted:
+                return V40OneShotReport(
+                    "V40_EXACT_EXECUTABLE_DEPTH_STALE_AFTER_LEASE_FREEZE",
+                    signal_id=selected.signal.signal_id,
+                    reserved=True,staged=True,
+                )
             dispatch=await dispatch_one_staged_v40(
                 plan=selected.plan,intent=selected.intent,stage=stage,
-                lease=lease,risk=refreshed,caps=caps,permit=permit,
+                lease=lease,risk=sized_risk,caps=caps,permit=permit,
                 price_tick=selected.terms.price_tick,
                 parity_report=parity_report,
                 claims=self.claims,journal=self.journal,
