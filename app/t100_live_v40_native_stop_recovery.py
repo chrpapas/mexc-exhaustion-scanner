@@ -225,6 +225,18 @@ class V40NativeStopRecoveryAuditor:
             matched_rows[0],amendment,state,
         ):
             return observed("V40_STOP_RECOVERY_DURABLE_AMENDMENT_MISMATCH_FREEZE")
+        # Do not clear one amendment while a second unresolved action
+        # could independently replace/cancel the same or another stop.
+        # In particular, a later exchange GET is not proof that two
+        # competing SUBMITTING requests have been resolved.
+        unresolved_elsewhere=[
+            row for row in before_ledger.stop_amendments
+            if type(row) is dict
+            and row.get("external_id")!=amendment.external_id
+            and row.get("state") in ("SUBMITTING","UNKNOWN")
+        ]
+        if unresolved_elsewhere:
+            return observed("V40_STOP_RECOVERY_COMPETING_UNKNOWN_MUTATION_FREEZE")
 
         by_positions={}
         by_stops={}
@@ -300,6 +312,10 @@ class V40NativeStopRecoveryAuditor:
         )
         current_stop=by_stops[amendment.position_id]
         current_id=str(current_stop.get("id") or "")
+        if state=="VERIFIED" and (
+            str(matched_rows[0].get("verified_stop_order_id") or "")!=current_id
+        ):
+            return observed("V40_STOP_RECOVERY_VERIFIED_ID_DRIFT_FREEZE")
         historical=None
         if current_id!=amendment.stop_order_id:
             if self.finished_stops is None:
