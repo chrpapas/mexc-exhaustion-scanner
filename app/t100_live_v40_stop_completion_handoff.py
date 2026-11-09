@@ -17,6 +17,8 @@ Unknown/unchanged stops and unexpected account inventory stay unresolved.
 """
 from __future__ import annotations
 
+import json
+import math
 import time
 from dataclasses import dataclass
 from decimal import Decimal as D
@@ -40,6 +42,49 @@ from app.t100_live_v40_trailing_restart import V40TrailingRestartView
 
 class V40StopCompletionHalted(RuntimeError):
     """No raw exchange/database errors or secret identifiers."""
+
+
+def _strict_bookend_fingerprint(
+    positions: list[dict[str,Any]],
+    stops: list[dict[str,Any]],
+    counts: dict[str,int],
+    position_mode: int,
+) -> str:
+    """Compare the ENTIRE validated signed GET inventory, not selected fields.
+
+    The earlier positional projection omitted volume-mode, stop origin,
+    stopLossVol, stopLossReverse, lossTrend and other protective data.
+    Drift in any exchange field must freeze checkpoint persistence even
+    when the two snapshots separately look safe. No raw account data
+    is returned or logged. Unsupported object/NaN types fail closed.
+    """
+    def canonical(value: Any) -> Any:
+        if value is None or type(value) in (bool,int,str):
+            return value
+        if type(value) is float:
+            if not math.isfinite(value):
+                raise ValueError("NONFINITE_SIGNED_GET_VALUE")
+            return value
+        if type(value) is D:
+            if not value.is_finite():
+                raise ValueError("NONFINITE_SIGNED_GET_DECIMAL")
+            return {"decimal":str(value)}
+        if type(value) is list:
+            return [canonical(item) for item in value]
+        if type(value) is dict:
+            if any(type(k) is not str for k in value):
+                raise ValueError("SIGNED_GET_NONSTRING_KEY")
+            return {k:canonical(v) for k,v in value.items()}
+        raise ValueError("SIGNED_GET_NONCANONICAL_VALUE")
+    return json.dumps(
+        canonical({
+            "positions":positions,
+            "stops":stops,
+            "counts":counts,
+            "position_mode":position_mode,
+        }),
+        sort_keys=True,separators=(",",":"),allow_nan=False,
+    )
 
 
 @dataclass(frozen=True)
@@ -248,22 +293,8 @@ class V40NativeStopCompletionHandoff:
                     return V40StopCompletionResult(
                         "STOP_COMPLETION_SIGNED_NATIVE_FULL_COVERAGE_UNVERIFIED_FREEZE"
                     )
-                snapshots.append((
-                    tuple(sorted(
-                        (str(x.get("positionId")),str(x.get("symbol")),
-                         str(x.get("holdVol")),str(x.get("positionType")),
-                         str(x.get("openType")),str(x.get("leverage")),
-                         str(x.get("state")))
-                        for x in positions
-                    )),
-                    tuple(sorted(
-                        (str(x.get("positionId")),str(x.get("symbol")),
-                         str(x.get("id")),str(x.get("stopLossPrice")),
-                         str(x.get("stopLossType")),str(x.get("state")),
-                         str(x.get("errorCode")),str(x.get("triggerSide")),
-                         str(x.get("vol")))
-                        for x in stops
-                    )),
+                snapshots.append(_strict_bookend_fingerprint(
+                    positions,stops,counts,position_mode,
                 ))
             end=self.clock_ms()
         except Exception:
