@@ -112,6 +112,7 @@ _INVENTORY_GET_ROUTES = frozenset({
     "/api/v1/private/stoporder/open_orders",
     "/api/v1/private/account/assets",
     "/api/v1/private/order/open_order_total_count",
+    "/api/v1/private/position/position_mode",
 })
 _EXACT_ORDER_GET_ROUTES = (
     re.compile(r"/api/v1/private/order/external/[A-Z0-9]+_USDT/[A-Za-z0-9_-]{1,128}"),
@@ -138,6 +139,7 @@ class _PrivateGetOnly:
             if path in {
                 "/api/v1/private/account/assets",
                 "/api/v1/private/order/open_order_total_count",
+                "/api/v1/private/position/position_mode",
             }:
                 if params is not None:
                     raise RuntimeError("FOUR_SLOT_GET_FILTER_NOT_ALLOWED")
@@ -227,6 +229,7 @@ async def _main(
     shared_manual_observation: bool = False,
     restart_preflight: bool = False,
     pending_origin_audit: bool = False,
+    v40_post_commit_position_id: str | None = None,
 ) -> dict[str, Any]:
     # These are different diagnostics with distinct refusal rules.
     if (
@@ -234,8 +237,17 @@ async def _main(
         or type(pending_origin_audit) is not bool
         or (restart_preflight and pending_origin_audit)
         or (pending_origin_audit and shared_manual_observation)
+        or (v40_post_commit_position_id is not None and (
+            restart_preflight or pending_origin_audit
+            or shared_manual_observation
+        ))
     ):
         return _report("FOUR_SLOT_READONLY_MODE_CONFLICT")
+    if v40_post_commit_position_id is not None and (
+        type(v40_post_commit_position_id) is not str
+        or re.fullmatch(r"[1-9][0-9]*",v40_post_commit_position_id) is None
+    ):
+        return _report("POST_COMMIT_EXPECTED_POSITION_ID_INVALID_HALT")
     try:
         require_readonly_controls(env)
     except CrossRiskDiagnosticHalted:
@@ -298,6 +310,14 @@ async def _main(
         mexc = MexcTradeClient(
             "https://api.mexc.com", api_key=key, api_secret=secret,
         )
+        if v40_post_commit_position_id is not None:
+            from app.t100_live_v40_post_commit_restart_readonly import (
+                run_readonly_v40_post_commit_restart_audit,
+            )
+            return await run_readonly_v40_post_commit_restart_audit(
+                ledger=ledger,client=_PrivateGetOnly(mexc),
+                env=env,position_id=v40_post_commit_position_id,
+            )
         if restart_preflight:
             from app.t100_live_four_slot_restart_supervisor import (
                 run_four_slot_restart_readonly_cycle,
@@ -365,6 +385,12 @@ def main() -> None:
         help="Separate nonauthorizing two-bookend PRIVATE GET of exact "
              "unresolved V40 order origins; never retries or certifies fills",
     )
+    mode.add_argument(
+        "--v40-post-commit-position-id",
+        help="EXPLICIT owned nonflat durable V40 checkpoint position ID; "
+             "signed GET plus restricted SELECT-only native MARKET stop "
+             "readback, never a live-trade or autonomous-restart permit",
+    )
     args = parser.parse_args()
     try:
         output = asyncio.run(_main(
@@ -372,6 +398,7 @@ def main() -> None:
             shared_manual_observation=args.shared_manual_observation,
             restart_preflight=args.restart_preflight,
             pending_origin_audit=args.pending_origin_audit,
+            v40_post_commit_position_id=args.v40_post_commit_position_id,
         ))
     except Exception:
         output = _report("FOUR_SLOT_READONLY_DIAGNOSTIC_HALTED")
