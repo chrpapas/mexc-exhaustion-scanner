@@ -168,7 +168,10 @@ def test_invalid_expected_restarted_checkpoint_does_not_read_database(field,valu
 def test_second_recovery_must_not_be_a_different_position_or_stop():
     auditor,calls=inspect([
         result(),
-        result(replace(expected(),stop_order_id="101")),
+        result(
+            replace(expected(),stop_order_id="101"),
+            ledger=_ledger_digest(ledger_snapshot(expected())),
+        ),
     ])
     out=execute(auditor)
     assert out.status=="POST_COMMIT_RECOVERED_CHECKPOINT_DRIFT_FREEZE"
