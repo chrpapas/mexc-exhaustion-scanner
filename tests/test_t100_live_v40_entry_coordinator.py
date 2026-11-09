@@ -22,6 +22,7 @@ from app.t100_live_four_slot_snapshot_coordinator import FourSlotSnapshotResult
 from app.t100_live_leader_fencing import LeaderLease
 from app.t100_live_v40_dispatch_executor import V40CurrentRiskEvidence
 from app.t100_live_v40_stage2_source import V40SourceBatch,inspect_stage2_candidate
+from app.t100_live_v40_candidate_market_witness import V40CandidateQuote,V40ExactDepth
 from tests.test_t100_live_v40_stage2_source import fixtures,T
 
 
@@ -188,6 +189,46 @@ class DummyRiskProvider:
         )
 
 
+class DummyDepth:
+    def __init__(self,log,*,fault=None):
+        self.log=log
+        self.fault=fault
+
+    async def quote_exact_intent(self,signal,intent,*,max_slippage_bps):
+        self.log.append("depth")
+        assert max_slippage_bps==D("100")
+        assert intent.symbol==signal.symbol
+        assert intent.volume_contracts==D("50")
+        real_terms=terms()
+        public_terms=replace(real_terms,private_order_permission_verified=False)
+        quote=V40CandidateQuote(
+            status="V40_GET_ONLY_FLAT_ACCOUNT_AND_MARKET_QUOTED_NONAUTHORIZING",
+            symbol="OTHER_USDT" if self.fault=="wrong_symbol" else signal.symbol,
+            observed_at_ms=998000 if self.fault=="stale" else 999900,
+            book_age_ms=100,
+            account_equity_usdt=D("9999") if self.fault=="equity" else D("10000"),
+            account_available_usdt=D("4500") if self.fault=="margin" else D("10000"),
+            candidate_contract=(
+                replace(public_terms,contract_size=D("2"))
+                if self.fault=="contract" else public_terms
+            ),
+            current_private_short_max_vol=D("1000"),
+            top_bid=D("100"),top_ask=D("101"),
+            bookended_flat_account=True,
+            hedge_mode_observed=True,private_risk_row_observed=True,
+        )
+        depth=V40ExactDepth(
+            status="V40_EXECUTABLE_LOT_DISPLAYED_DEPTH_NONAUTHORIZING",
+            symbol=signal.symbol,
+            signal_id=signal.signal_id,
+            contracts=D("49") if self.fault=="quantity" else intent.volume_contracts,
+            sell_vwap=D("99") if self.fault=="slippage" else D("100"),
+            adverse_slippage_bps=D("200") if self.fault=="slippage" else D(0),
+            age_ms=100,order_fits_depth=True,
+        )
+        return quote,depth
+
+
 class DummyLeaders:
     def __init__(self,log):
         self.log=log
@@ -240,11 +281,13 @@ class DummyJournal:
 
 
 def controller(log, *, events=None, second_risk=None, second_terms=None,
-               corrupt_oid=False, after_status=None):
+               corrupt_oid=False, after_status=None, depth_fault=None):
     return m.V40OneShotCoordinator(
         source=DummySource([candidate()] if events is None else events,log),
         snapshots=DummySnapshots(log,after_status or "NONFLAT_PROVENANCE_MATCHED_NONAUTHORIZING"),
         witness=DummyRiskProvider(log,second_risk,second_terms),
+        depth=DummyDepth(log,fault=depth_fault),
+        clock_ms=lambda: 1_000_000,
         leaders=DummyLeaders(log),
         reservations=DummyReservations(log,corrupt_oid=corrupt_oid),
         journal=DummyJournal(log),
@@ -301,7 +344,7 @@ def test_injected_one_shot_ordered_durable_path_with_fresh_recovery(monkeypatch)
     assert log==[
         "source","lease_acquire","snapshot_1","risk_1",
         "lease_require","reserve","stage","risk_2",
-        "lease_renew","dispatch","reconcile","snapshot_2",
+        "depth","lease_renew","dispatch","reconcile","snapshot_2",
     ]
     assert "lease_release" not in log
 
@@ -364,3 +407,59 @@ def test_no_stage2_signal_exits_before_leader_acquisition(monkeypatch):
     ))
     assert outcome.status=="V40_NO_CURRENT_STAGE2_SIGNALS"
     assert log==["source"]
+
+
+@pytest.mark.parametrize("fault",[
+    "stale","wrong_symbol","equity","margin","contract",
+    "quantity","slippage",
+])
+def test_exact_quantity_market_witness_failure_never_claims_or_posts(
+    monkeypatch,fault,
+):
+    log=[]
+    patch_release_gates_and_mutations(monkeypatch,log)
+    outcome=asyncio.run(controller(log,depth_fault=fault).run_one(
+        permit=None,caps=caps(),parity_report={},holder_id="mock-holder",
+    ))
+    assert outcome.status=="V40_EXACT_EXECUTABLE_DEPTH_OR_ACCOUNT_UNVERIFIED_FREEZE"
+    assert outcome.reserved and outcome.staged
+    assert outcome.post_attempted is False
+    assert "depth" in log
+    assert "dispatch" not in log
+    assert "lease_release" not in log
+
+
+def test_exact_vwap_is_passed_to_dispatch_not_preliminary_top_bid(monkeypatch):
+    log=[]
+    patch_release_gates_and_mutations(monkeypatch,log)
+
+    async def dispatch(**kwargs):
+        log.append("dispatch")
+        assert kwargs["risk"].observed_sell_vwap==D("100")
+        assert kwargs["risk"].cross_collateral_verified is True
+        assert kwargs["risk"].private_risk_tier_verified is True
+        assert kwargs["risk"].no_unresolved_mutations is True
+        assert kwargs["risk"].book_age_ms==100
+        return SimpleNamespace(must_reconcile_external_oid=True)
+
+    monkeypatch.setattr(m,"dispatch_one_staged_v40",dispatch)
+    result=asyncio.run(controller(log).run_one(
+        permit=None,caps=caps(),parity_report={},holder_id="mock-holder",
+    ))
+    assert result.independently_recovered_after_commit
+    assert log.count("depth")==1
+
+
+def test_exact_depth_mandatory_at_constructor():
+    log=[]
+    with pytest.raises((TypeError,ValueError)):
+        m.V40OneShotCoordinator(
+            source=DummySource([],log),snapshots=DummySnapshots(log),
+            witness=DummyRiskProvider(log),depth=None,
+            leaders=DummyLeaders(log),
+            reservations=DummyReservations(log),
+            journal=DummyJournal(log),
+            claims=None,claim_reader=None,
+            transport=None,get_venue=None,
+            completeness=None,commit_writer=None,
+        )
