@@ -91,9 +91,14 @@ def test_no_favorable_complete_bar_never_invents_a_stop():
         last_completed_open_ts=EXPECTED_FIRST-1800,
         complete_bars=0,observed_low=None,
     )
-    res=invoke(Read(x))
+    # A position opened seconds ago cannot have a completed post-fill
+    # half-hour candle. This must not be confused with missing older data.
+    res=invoke(Read(x),filled_at=OBS-timedelta(seconds=20))
     assert res.proposed_stop_price is None
     assert res.status=="V40_TRAILING_NO_COMPLETE_POST_FILL_CANDLES_NONAUTHORIZING"
+
+    with pytest.raises(V40TrailingReviewHalted,match="EXPECTED_BARS_MISSING"):
+        invoke(Read(x),filled_at=FILL)
 
 
 @pytest.mark.parametrize("fault",[
