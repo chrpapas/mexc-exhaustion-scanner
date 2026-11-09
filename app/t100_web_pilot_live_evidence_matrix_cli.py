@@ -76,6 +76,18 @@ def evaluate_exchange_observations(
         fifth_result.get("no_take_profit_price_observed") is True
     )
     live_amendment_observed = fourth_ok
+    supervised_full_position_stop = (
+        fourth_ok
+        and fourth_result.get(
+            "supervised_native_stop_full_one_contract_volume_observed"
+        ) is True
+    )
+    supervised_ui_market_stop = (
+        supervised_full_position_stop
+        and fourth_result.get(
+            "operator_ui_trigger_market_sl_confirmed_before_amend"
+        ) is True
+    )
     native_attached_exit_observed = fifth_ok
     corroborated_sl_like_exit = fifth_ok and no_tp_price_observed
     # Venue history labels the completed stop-linked market exit as TP,
@@ -99,6 +111,23 @@ def evaluate_exchange_observations(
         ),
         "credential_scope": "T100_WEB_PILOT_SUBACCOUNT",
         "fourth_pilot_exact_manual_market_close_verified": fourth_ok,
+        # Already verified in the supervised pilot: one owned short
+        # contract had one exactly sized attached native protective stop;
+        # the operator independently confirmed Trigger Market SL in UI.
+        # MEXC did not reliably expose stopLossType=MARKET via API.
+        # These facts must not be conflated with future unattended
+        # exchange-side protection, replacement/atomic amendment or
+        # restart safety.
+        "supervised_native_stop_full_position_quantity_verified": (
+            supervised_full_position_stop
+        ),
+        "supervised_trigger_market_sl_confirmed_in_exchange_ui": (
+            supervised_ui_market_stop
+        ),
+        "supervised_full_position_native_market_sl_observed": (
+            supervised_ui_market_stop
+        ),
+        "supervised_native_market_type_api_field_verified": False,
         "one_supervised_native_stop_price_edit_observed": live_amendment_observed,
         "fifth_native_attached_exit_full_market_fill_verified": (
             native_attached_exit_observed
