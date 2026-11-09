@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 from copy import deepcopy
+from dataclasses import replace
 
 import pytest
 
@@ -59,13 +60,13 @@ def test_two_flat_hedged_signed_get_bookends_not_live_authorization():
 def test_nonflat_or_ambiguous_pilot_halts(fault):
     a=sample()
     b=deepcopy(a)
-    if fault=="open_position":b.positions=[{"positionId":"10"}]
-    if fault=="open_stop":b.stops=[{"id":"20"}]
+    if fault=="open_position":b=replace(b,positions=[{"positionId":"10"}])
+    if fault=="open_stop":b=replace(b,stops=[{"id":"20"}])
     if fault=="pending_order":
         b.counts["sumCount"]=b.counts["stopOrderCount"]=1
-    if fault=="one_way_mode":b.position_mode=2
+    if fault=="one_way_mode":b=replace(b,position_mode=2)
     if fault=="negative_equity":b.assets[0]["equity"]="-1"
-    if fault=="missing_usdt":b.assets=[]
+    if fault=="missing_usdt":b=replace(b,assets=[])
     if fault=="duplicate_usdt":b.assets.append(deepcopy(b.assets[0]))
     if fault=="missing_collateral_component":
         del b.assets[0]["frozenBalance"]
