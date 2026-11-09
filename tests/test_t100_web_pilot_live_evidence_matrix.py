@@ -51,6 +51,12 @@ def test_verified_live_native_exit_not_misrepresented_as_sl_certification():
     assert r["fifth_native_attached_exit_full_market_fill_verified"]
     assert r["fifth_attached_stop_exit_correlated_without_tp_price"]
     assert r["fifth_historical_trigger_side"] == "TP_CONFLICT"
+    assert r["fifth_historical_trigger_interpretation"] == (
+        "PROBABLE_SL_TRIGGER_API_LABEL_CONFLICT"
+    )
+    assert r["fifth_probable_sl_label_conflict_observed"] is True
+    assert r["fifth_historical_tp_label_standalone_release_blocker"] is False
+    assert r["fifth_historical_exit_accounting_accepted_despite_label"] is True
     assert r["native_sl_trigger_strictly_certified"] is False
     assert r["continuous_protection_during_amendment_certified"] is False
     assert r["live_authorization"] is False
@@ -84,3 +90,72 @@ def test_missing_positive_tp_price_is_not_proof_of_tp_absence():
     assert r["fifth_native_attached_exit_full_market_fill_verified"] is True
     assert r["fifth_attached_stop_exit_correlated_without_tp_price"] is False
     assert r["native_sl_trigger_strictly_certified"] is False
+
+
+def test_historical_tp_label_exception_does_not_grant_market_stop_certification():
+    r = matrix.evaluate_exchange_observations(fourth(), fifth())
+    assert r["fifth_probable_sl_label_conflict_observed"]
+    assert not r["fifth_historical_tp_label_standalone_release_blocker"]
+    assert r["fifth_explicit_stop_market_type"] == "MISSING_OR_UNKNOWN"
+    for key in (
+        "native_sl_trigger_strictly_certified",
+        "continuous_protection_during_amendment_certified",
+        "entire_finished_stop_history_certified",
+        "main_t100_restart_recovery_certified_by_these_pilots",
+        "main_t100_trailing_stop_certified_by_these_pilots",
+        "main_t100_cross_margin_transport_certified_by_these_pilots",
+        "main_t100_production_adapter_certified_by_these_pilots",
+        "live_authorization",
+        "entry_allowed",
+    ):
+        assert r[key] is False, key
+
+
+def test_positive_tp_price_keeps_conflict_blocking_historical_exit_accounting():
+    f = fifth()
+    f["no_take_profit_price_observed"] = False
+    r = matrix.evaluate_exchange_observations(fourth(), f)
+    assert r["fifth_historical_trigger_side"] == "TP_CONFLICT"
+    assert r["fifth_probable_sl_label_conflict_observed"] is False
+    assert r["fifth_historical_tp_label_standalone_release_blocker"] is True
+    assert r["fifth_historical_exit_accounting_accepted_despite_label"] is False
+    assert r["fifth_historical_trigger_interpretation"] == "UNVERIFIED"
+    assert r["live_authorization"] is False
+
+
+def test_explicit_limit_stop_cannot_claim_probable_sl_label_exception():
+    f = fifth()
+    f["historical_stop_loss_type"] = "LIMIT"
+    r = matrix.evaluate_exchange_observations(fourth(), f)
+    assert r["fifth_probable_sl_label_conflict_observed"] is False
+    assert r["fifth_historical_tp_label_standalone_release_blocker"] is True
+    assert r["native_sl_trigger_strictly_certified"] is False
+
+
+def test_incomplete_native_full_close_never_gets_historical_exception():
+    f = fifth()
+    f["generated_close_full_quantity_deals_verified"] = False
+    r = matrix.evaluate_exchange_observations(fourth(), f)
+    assert r["status"] == "PILOT_EVIDENCE_INCOMPLETE_REVIEW_BEFORE_ADVANCING"
+    assert r["fifth_historical_trigger_interpretation"] == "UNVERIFIED"
+    assert r["fifth_historical_exit_accounting_accepted_despite_label"] is False
+    assert r["entry_allowed"] is False
+
+
+def test_manual_close_fifth_never_gets_label_exception():
+    f = fifth()
+    f["manual_close_attempted_in_fifth_journal"] = True
+    r = matrix.evaluate_exchange_observations(fourth(), f)
+    assert r["fifth_probable_sl_label_conflict_observed"] is False
+    assert r["fifth_historical_exit_accounting_accepted_despite_label"] is False
+    assert r["live_authorization"] is False
+
+
+def test_bad_fourth_amendment_provenance_blocks_historical_exception():
+    f = fourth()
+    f["fourth_amendment_ack_journaled"] = False
+    r = matrix.evaluate_exchange_observations(f, fifth())
+    assert r["fifth_native_attached_exit_full_market_fill_verified"] is True
+    assert r["fifth_probable_sl_label_conflict_observed"] is False
+    assert r["fifth_historical_exit_accounting_accepted_despite_label"] is False
+    assert r["entry_allowed"] is False
