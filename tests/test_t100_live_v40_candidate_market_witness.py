@@ -188,7 +188,7 @@ def test_unverified_exchange_economics_are_rejected(fault,expect):
         pub.counts["sumCount"]=pub.counts["limitOrderCount"]=1
     if fault=="one_way":pub.mode={"positionMode":2}
     if fault=="bad_asset":pub.assets[0]["positionMargin"]="5"
-    if fault=="available_above_equity":pub.assets[0]["availableBalance"]="51"
+    if fault=="available_above_equity":pub.assets[0]["availableBalance"]="5001"
     if fault=="offline":public.contract["state"]=3
     if fault=="no_public_api":public.contract["apiAllowed"]=False
     if fault=="isolated_only":public.contract["positionOpenType"]=1
