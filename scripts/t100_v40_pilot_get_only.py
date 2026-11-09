@@ -149,19 +149,39 @@ def evaluate_pilot_flat_bookends(
     )
 
     def normalized(s: PilotInventory) -> tuple[str,D,D]:
-        if (
-            type(s.position_mode) is not int
-            or s.position_mode!=1
-            or type(s.positions) is not list
-            or type(s.stops) is not list
-            or s.positions or s.stops
-            or type(s.counts) is not dict
-            or any(type(s.counts.get(k)) is not int or s.counts[k]!=0
-                   for k in required)
-            or type(s.assets) is not list
-            or any(type(x) is not dict for x in s.assets)
+        # Diagnose the blocker without printing position IDs, asset
+        # identifiers, symbols, API responses or any Keychain secrets.
+        # Priority is inventory first: an active position must never be
+        # disguised as only a position-mode or USDT accounting issue.
+        if type(s.positions) is not list or any(
+            type(row) is not dict for row in s.positions
         ):
-            raise PilotPreflightHalted("PILOT_NOT_FLAT_HEDGE_WITH_ZERO_ORDERS")
+            raise PilotPreflightHalted("PILOT_POSITIONS_RESPONSE_SHAPE_INVALID")
+        if s.positions:
+            raise PilotPreflightHalted("PILOT_OPEN_POSITIONS_PRESENT_HALT")
+        if type(s.stops) is not list or any(
+            type(row) is not dict for row in s.stops
+        ):
+            raise PilotPreflightHalted("PILOT_STOPS_RESPONSE_SHAPE_INVALID")
+        if s.stops:
+            raise PilotPreflightHalted("PILOT_ACTIVE_STOP_ORDERS_PRESENT_HALT")
+        if type(s.counts) is not dict or any(
+            type(s.counts.get(k)) is not int or s.counts[k]<0
+            for k in required
+        ):
+            raise PilotPreflightHalted("PILOT_OPEN_ORDER_COUNT_SCHEMA_INVALID")
+        if s.counts["sumCount"]!=sum(
+            s.counts[k] for k in required if k!="sumCount"
+        ):
+            raise PilotPreflightHalted("PILOT_OPEN_ORDER_COUNT_SUM_MISMATCH")
+        if any(s.counts[k]!=0 for k in required):
+            raise PilotPreflightHalted("PILOT_PENDING_ORDERS_PRESENT_HALT")
+        if type(s.position_mode) is not int or s.position_mode!=1:
+            raise PilotPreflightHalted("PILOT_HEDGE_MODE_NOT_OBSERVED_HALT")
+        if type(s.assets) is not list or any(
+            type(row) is not dict for row in s.assets
+        ):
+            raise PilotPreflightHalted("PILOT_ACCOUNT_ASSET_SCHEMA_INVALID")
         records=[r for r in s.assets if r.get("currency")=="USDT"]
         if len(records)!=1:
             raise PilotPreflightHalted("PILOT_USDT_ASSET_MISSING_OR_DUPLICATE")
