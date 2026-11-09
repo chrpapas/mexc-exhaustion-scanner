@@ -264,6 +264,24 @@ class MexcV40CandidateMarketWitness:
         before_equity,before_available=_asset(before[3])
         if equity!=before_equity or available!=before_available:
             raise V40CandidateMarketHalted("MARKET_ASSET_BOOKEND_DRIFT")
+        # A transfer or order-margin freeze might not appear in equity or
+        # availableBalance immediately. Require all reported collateral
+        # components to agree between signed GET bookends as well.
+        cash_fields=(
+            "cashBalance","frozenBalance","bonus","debtAmount",
+            "contributeMarginAmount","positionMargin","unrealized",
+        )
+        for field in cash_fields:
+            before_usdt=next(x for x in before[3]
+                             if type(x) is dict and x.get("currency")=="USDT")
+            after_usdt=next(x for x in after[3]
+                            if type(x) is dict and x.get("currency")=="USDT")
+            if field not in before_usdt or field not in after_usdt:
+                raise V40CandidateMarketHalted("MARKET_COLLATERAL_COMPONENT_MISSING")
+            if _decimal(before_usdt[field],positive=False) != _decimal(
+                after_usdt[field],positive=False
+            ):
+                raise V40CandidateMarketHalted("MARKET_COLLATERAL_COMPONENT_DRIFT")
         if (
             public.get("symbol")!=signal.symbol
             or public.get("apiAllowed") is not True
@@ -362,6 +380,17 @@ class MexcV40CandidateMarketWitness:
         ):
             raise V40CandidateMarketHalted("MARKET_EXECUTION_QUOTE_INPUT_INVALID")
         quote,depth=await self._observe(signal)
+        # The venue has only a sampled, not guaranteed, spendable balance.
+        # Nevertheless, a 1x order already exceeding that sample cannot
+        # be marketed as a depth-executable candidate. Include a one-sided
+        # conservative fee buffer even though the final risk gate will make
+        # a separate collateral determination.
+        if (
+            intent.notional_usdt*D("1.02")>quote.account_available_usdt
+        ):
+            raise V40CandidateMarketHalted(
+                "MARKET_ONE_X_MARGIN_WITH_FEE_BUFFER_INSUFFICIENT"
+            )
         if (
             intent.volume_contracts>quote.candidate_contract.max_volume
             or intent.volume_contracts>quote.current_private_short_max_vol
@@ -419,7 +448,10 @@ class MexcV40CandidateMarketWitness:
             current_owned_positions=0,
             signal_age_seconds=age,
             book_age_ms=quote.book_age_ms,
-            observed_sell_vwap=quote.top_bid,
+            # No sized order was supplied to inspect(); top-of-book is
+            # not an executable-order VWAP. Zero deliberately cannot pass
+            # the dispatch preclaim validation.
+            observed_sell_vwap=D(0),
             inventory_bookended_complete=True,
             no_unowned_positions_or_orders=True,
             cross_collateral_verified=False,
