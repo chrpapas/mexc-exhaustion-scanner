@@ -22,6 +22,7 @@ import json
 import re
 import subprocess
 import time
+from urllib.parse import urlencode
 from dataclasses import asdict,dataclass
 from decimal import Decimal as D,InvalidOperation
 from pathlib import Path
@@ -67,25 +68,34 @@ class KeychainSignedGetOnly:
     async def _private_get(
         self, path: str, params: dict[str,Any]|None=None,
     ) -> Any:
-        if (
-            path not in (
-                "/api/v1/private/position/open_positions",
-                "/api/v1/private/stoporder/open_orders",
-                "/api/v1/private/order/open_order_total_count",
-                "/api/v1/private/account/assets",
-                "/api/v1/private/position/position_mode",
-            )
-            or params is not None
+        normal_paths=(
+            "/api/v1/private/position/open_positions",
+            "/api/v1/private/stoporder/open_orders",
+            "/api/v1/private/order/open_order_total_count",
+            "/api/v1/private/account/assets",
+            "/api/v1/private/position/position_mode",
+        )
+        risk_path="/api/v1/private/account/risk_limit"
+        if path in normal_paths and params is None:
+            query=""
+        elif (
+            path==risk_path
+            and type(params) is dict
+            and set(params)=={"symbol"}
+            and type(params["symbol"]) is str
+            and re.fullmatch(r"[A-Z0-9]+_USDT",params["symbol"])
         ):
+            query=urlencode(sorted(params.items()))
+        else:
             raise PilotPreflightHalted("GET_ONLY_PATH_NOT_ALLOWLISTED")
         stamp=str(int(time.time()*1000))
-        message=(self._key+stamp).encode()
+        message=(self._key+stamp+query).encode()
         signature=hmac.new(
             self._secret.encode(),message,hashlib.sha256,
         ).hexdigest()
         try:
             response=await self._client.get(
-                path,headers={
+                path,params=params,headers={
                     "ApiKey":self._key,
                     "Request-Time":stamp,
                     "Signature":signature,
