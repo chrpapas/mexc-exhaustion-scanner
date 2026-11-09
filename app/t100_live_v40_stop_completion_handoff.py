@@ -144,6 +144,7 @@ class V40NativeStopCompletionHandoff:
                 positions=await self.probe.raw_open_positions()
                 stops=await self.probe.raw_open_stops()
                 counts=await self.probe.raw_open_order_counts()
+                position_mode=await self.probe.raw_position_mode()
                 if (
                     type(positions) is not list
                     or type(stops) is not list
@@ -157,10 +158,62 @@ class V40NativeStopCompletionHandoff:
                             "limitOrderCount","planOrderCount","trackOrderCount",
                         )
                     )
+                    or position_mode!=1
                 ):
                     return V40StopCompletionResult(
                         "STOP_COMPLETION_SIGNED_INVENTORY_INCOMPLETE_FREEZE"
                     )
+                # Independently validate *all* currently open native
+                # MARKET stops, not just this amendment's target. The
+                # earlier auditor checked checkpoint prices for the same
+                # account; this signed GET rechecks current full coverage.
+                pos_by_id={}
+                stop_by_id={}
+                for row in positions:
+                    pid=str(row.get("positionId") or "")
+                    if not pid or pid in pos_by_id:
+                        return V40StopCompletionResult(
+                            "STOP_COMPLETION_SIGNED_POSITION_ORIGIN_AMBIGUOUS_FREEZE"
+                        )
+                    pos_by_id[pid]=row
+                for row in stops:
+                    pid=str(row.get("positionId") or "")
+                    if not pid or pid in stop_by_id:
+                        return V40StopCompletionResult(
+                            "STOP_COMPLETION_SIGNED_STOP_ORIGIN_AMBIGUOUS_FREEZE"
+                        )
+                    stop_by_id[pid]=row
+                if set(pos_by_id)!=set(stop_by_id):
+                    return V40StopCompletionResult(
+                        "STOP_COMPLETION_SIGNED_UNPROTECTED_POSITION_FREEZE"
+                    )
+                for pid,pos in pos_by_id.items():
+                    sl=stop_by_id[pid]
+                    if (
+                        pos.get("symbol")!=sl.get("symbol")
+                        or pos.get("positionType")!=2
+                        or pos.get("openType")!=2
+                        or pos.get("leverage")!=1
+                        or pos.get("state")!=1
+                    ):
+                        return V40StopCompletionResult(
+                            "STOP_COMPLETION_SIGNED_POSITION_MODE_UNVERIFIED_FREEZE"
+                        )
+                    contracts=D(str(pos.get("holdVol")))
+                    price=D(str(sl.get("stopLossPrice")))
+                    if (
+                        not contracts.is_finite() or contracts<=0
+                        or not price.is_finite() or price<=0
+                        or assess_native_short_market_stop_row(
+                            stop=sl,symbol=pos["symbol"],
+                            position_id=pid,
+                            position_quantity=contracts,
+                            maximum_short_stop_price=price,
+                        ).active_native_full_volume_market_sl_observed is not True
+                    ):
+                        return V40StopCompletionResult(
+                            "STOP_COMPLETION_SIGNED_NATIVE_FULL_COVERAGE_UNVERIFIED_FREEZE"
+                        )
                 target=[
                     row for row in stops
                     if row.get("symbol")==previous.symbol
