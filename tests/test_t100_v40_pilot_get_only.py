@@ -87,21 +87,18 @@ def test_nonflat_or_ambiguous_pilot_halts(fault):
         "open_stop":"PILOT_ACTIVE_STOP_ORDERS_PRESENT_HALT",
         "pending_order":"PILOT_PENDING_ORDERS_PRESENT_HALT",
         "one_way_mode":"PILOT_HEDGE_MODE_NOT_OBSERVED_HALT",
-        "negative_equity":"PILOT_USDT_ASSET_FIELD_INVALID",
+        "negative_equity":"USDT_ASSET_FIELD_INVALID",
         "missing_usdt":"PILOT_USDT_ASSET_MISSING_OR_DUPLICATE",
         "duplicate_usdt":"PILOT_USDT_ASSET_MISSING_OR_DUPLICATE",
         "missing_collateral_component":"PILOT_USDT_ASSET_FIELDS_MISSING",
-        "available_above_equity":"PILOT_USDT_ECONOMICS_INCONSISTENT",
-        "nonzero_position_margin":"PILOT_USDT_ECONOMICS_INCONSISTENT",
-        "nonzero_unrealized":"PILOT_USDT_ECONOMICS_INCONSISTENT",
-        "nonzero_debt":"PILOT_USDT_ECONOMICS_INCONSISTENT",
+        "available_above_equity":"PILOT_AVAILABLE_ABOVE_EQUITY_HALT",
+        "nonzero_position_margin":"PILOT_POSITION_MARGIN_NONZERO_HALT",
+        "nonzero_unrealized":"PILOT_UNREALIZED_PNL_NONZERO_HALT",
+        "nonzero_debt":"PILOT_DEBT_NONZERO_HALT",
         "nonfinite_equity":"USDT_ASSET_FIELD_INVALID",
         "boolean_account_value":"USDT_ASSET_FIELD_INVALID",
     }
-    assert str(error.value) in (
-        expected[fault],
-        "USDT_ASSET_FIELD_INVALID",
-    )
+    assert str(error.value)==expected[fault]
     assert "SECRET" not in str(error.value)
 
 
@@ -207,3 +204,26 @@ def test_malformed_order_count_sum_is_not_interpreted_as_flat():
     b.counts["sumCount"]=1
     with pytest.raises(PilotPreflightHalted,match="COUNT_SUM_MISMATCH"):
         evaluate_pilot_flat_bookends(a,b)
+
+
+def test_zero_equity_reports_specific_non_authorizing_reason():
+    a=sample()
+    b=deepcopy(a)
+    b.assets[0]["equity"]="0"
+    with pytest.raises(PilotPreflightHalted,match="PILOT_USDT_EQUITY_NONPOSITIVE_HALT"):
+        evaluate_pilot_flat_bookends(a,b)
+
+
+@pytest.mark.parametrize("field,expected",[
+    ("positionMargin","PILOT_POSITION_MARGIN_NONZERO_HALT"),
+    ("unrealized","PILOT_UNREALIZED_PNL_NONZERO_HALT"),
+    ("debtAmount","PILOT_DEBT_NONZERO_HALT"),
+])
+def test_after_position_close_residual_account_fields_stay_blocking(field,expected):
+    a=sample()
+    b=deepcopy(a)
+    b.assets[0][field]="0.00000001"
+    with pytest.raises(PilotPreflightHalted) as exc:
+        evaluate_pilot_flat_bookends(a,b)
+    assert str(exc.value)==expected
+    assert "0.00000001" not in str(exc.value)
