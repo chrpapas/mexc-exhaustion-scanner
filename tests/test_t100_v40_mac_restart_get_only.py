@@ -222,3 +222,18 @@ def test_real_child_uses_fixed_module_not_shell_and_never_returns_raw_stdout(
     assert calls[0][1]["check"] is False
     assert "shell" not in calls[0][1]
     assert "PRIVATE_NOT_RETURNED" not in str(out)
+
+
+def test_first_process_nonflat_status_short_circuits_second(monkeypatch):
+    monkeypatch.setattr(m.sys,"platform","darwin")
+    called=[]
+    def one(service,path,env):
+        called.append(path)
+        return sample(status="PILOT_OPEN_POSITIONS_PRESENT_HALT")
+    monkeypatch.setattr(m,"run_child",one)
+    out=m.run_mac_restart_drill(
+        service=m.WEB_PILOT_KEYCHAIN_SERVICE,env=dict(m.SAFE_ENV),
+    )
+    assert out.status=="PILOT_RESTART_FIRST_PROCESS_PREFLIGHT_FAILED_HALT"
+    assert len(called)==1
+    assert not out.live_authorization
