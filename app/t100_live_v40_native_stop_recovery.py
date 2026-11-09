@@ -272,34 +272,55 @@ class V40NativeStopRecoveryAuditor:
         ):
             return observed("V40_STOP_RECOVERY_STALE_CHECKPOINT_ORIGIN_FREEZE")
 
-        for cp in checkpoints:
-            pos=by_positions[cp.position_id]
-            stop=by_stops[cp.position_id]
-            try:
-                qty=_nonzero(pos,"holdVol")
-            except V40StopRecoveryHalted:
-                return observed("V40_STOP_RECOVERY_POSITION_QUANTITY_INVALID_FREEZE")
-            if not (
-                cp.lifecycle_state=="OPEN"
-                and qty==cp.contracts
-                and pos.get("symbol")==cp.symbol
-                and type(pos.get("positionType")) is int
-                and pos["positionType"]==2
-                and type(pos.get("state")) is int
-                and pos["state"]==1
-                and type(pos.get("openType")) is int
-                and pos["openType"]==2
-                and type(pos.get("leverage")) is int
-                and pos["leverage"]==1
-            ):
-                return observed("V40_STOP_RECOVERY_POSITION_MODE_OR_QUANTITY_DRIFT_FREEZE")
-            report=assess_native_short_market_stop_row(
-                stop=stop,symbol=cp.symbol,
-                position_id=cp.position_id,position_quantity=cp.contracts,
-                maximum_short_stop_price=cp.stop_price,
-            )
-            if report.active_native_full_volume_market_sl_observed is not True:
-                return observed("V40_STOP_RECOVERY_NATIVE_MARKET_FULL_VOLUME_UNVERIFIED_FREEZE")
+        # A shared inventory hash deliberately omits some fields, such as
+        # native stop errorCode. Validate BOTH GET bookends directly so a
+        # bad first stop cannot be masked by a healthy second stop.
+        for positions,stops in (
+            (before_positions,before_stops),
+            (after_positions,after_stops),
+        ):
+            pos_ids={}
+            stop_ids={}
+            for pos in positions:
+                pid=str(pos.get("positionId") or "")
+                if not pid or pid in pos_ids:
+                    return observed("V40_STOP_RECOVERY_POSITION_ORIGIN_AMBIGUOUS_FREEZE")
+                pos_ids[pid]=pos
+            for order in stops:
+                pid=str(order.get("positionId") or "")
+                if not pid or pid in stop_ids:
+                    return observed("V40_STOP_RECOVERY_STOP_ORIGIN_AMBIGUOUS_FREEZE")
+                stop_ids[pid]=order
+            if set(pos_ids)!=owner_ids or set(stop_ids)!=owner_ids:
+                return observed("V40_STOP_RECOVERY_UNOWNED_OR_UNPROTECTED_SLOT_FREEZE")
+            for cp in checkpoints:
+                pos=pos_ids[cp.position_id]
+                native_stop=stop_ids[cp.position_id]
+                try:
+                    qty=_nonzero(pos,"holdVol")
+                except V40StopRecoveryHalted:
+                    return observed("V40_STOP_RECOVERY_POSITION_QUANTITY_INVALID_FREEZE")
+                if not (
+                    cp.lifecycle_state=="OPEN"
+                    and qty==cp.contracts
+                    and pos.get("symbol")==cp.symbol
+                    and type(pos.get("positionType")) is int
+                    and pos["positionType"]==2
+                    and type(pos.get("state")) is int
+                    and pos["state"]==1
+                    and type(pos.get("openType")) is int
+                    and pos["openType"]==2
+                    and type(pos.get("leverage")) is int
+                    and pos["leverage"]==1
+                ):
+                    return observed("V40_STOP_RECOVERY_POSITION_MODE_OR_QUANTITY_DRIFT_FREEZE")
+                report=assess_native_short_market_stop_row(
+                    stop=native_stop,symbol=cp.symbol,
+                    position_id=cp.position_id,position_quantity=cp.contracts,
+                    maximum_short_stop_price=cp.stop_price,
+                )
+                if report.active_native_full_volume_market_sl_observed is not True:
+                    return observed("V40_STOP_RECOVERY_NATIVE_MARKET_FULL_VOLUME_UNVERIFIED_FREEZE")
 
         # The exact old journal identity (not merely a tightened price)
         # must match the current or verifiably canceled prior native stop.
