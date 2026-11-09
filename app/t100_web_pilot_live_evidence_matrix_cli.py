@@ -78,6 +78,18 @@ def evaluate_exchange_observations(
     live_amendment_observed = fourth_ok
     native_attached_exit_observed = fifth_ok
     corroborated_sl_like_exit = fifth_ok and no_tp_price_observed
+    # Venue history labels the completed stop-linked market exit as TP,
+    # despite a complete full-market close and no positive TP price.
+    # Treat that ONE historical label inconsistency as nonblocking for
+    # historical close accounting. Do not rewrite triggerSide or grant
+    # any authority to attach/modify future stops.
+    historical_label_exception = all((
+        fourth_ok,
+        fifth_ok,
+        corroborated_sl_like_exit,
+        fifth_result.get("historical_stop_loss_type") != "LIMIT",
+        fifth_result.get("native_sl_trigger_certified") is False,
+    ))
     return {
         "status": (
             "FOURTH_AND_FIFTH_LIVE_VENUE_OBSERVATIONS_RECONCILED"
@@ -97,6 +109,20 @@ def evaluate_exchange_observations(
         ),
         "fifth_historical_trigger_side": (
             "TP_CONFLICT" if fifth_ok else "UNVERIFIED"
+        ),
+        "fifth_historical_trigger_interpretation": (
+            "PROBABLE_SL_TRIGGER_API_LABEL_CONFLICT"
+            if historical_label_exception
+            else "UNVERIFIED"
+        ),
+        "fifth_probable_sl_label_conflict_observed": historical_label_exception,
+        # This exception applies ONLY to historical exit accounting, not
+        # stop-protection provenance or entry/mutation release gates.
+        "fifth_historical_tp_label_standalone_release_blocker": (
+            fifth_ok and not historical_label_exception
+        ),
+        "fifth_historical_exit_accounting_accepted_despite_label": (
+            historical_label_exception
         ),
         "fifth_explicit_stop_market_type": (
             fifth_result.get("historical_stop_loss_type")
