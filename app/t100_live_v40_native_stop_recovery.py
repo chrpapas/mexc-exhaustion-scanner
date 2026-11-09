@@ -210,8 +210,10 @@ class V40NativeStopRecoveryAuditor:
             ]
         except Exception:
             return observed("V40_STOP_RECOVERY_DURABLE_CHECKPOINT_INVALID_FREEZE")
-        if not 1<=len(checkpoints)<=4 or (
-            len(after_positions)!=len(after_stops)!=len(checkpoints)
+        if (
+            not 1<=len(checkpoints)<=4
+            or len(after_positions)!=len(checkpoints)
+            or len(after_stops)!=len(checkpoints)
         ):
             return observed("V40_STOP_RECOVERY_ACCOUNT_SLOT_COUNT_MISMATCH_FREEZE")
 
