@@ -107,7 +107,16 @@ async def review_v40_trailing_from_completed_candles(
         ) from None
     if type(causal) is not V40CausalLow or causal.symbol!=cp.symbol:
         raise V40TrailingReviewHalted("V40_TRAILING_CAUSAL_SOURCE_INVALID")
+    first_expected=(
+        math.ceil(filled_at.timestamp()/BAR_SECONDS)*BAR_SECONDS
+    )
+    last_expected=(
+        math.floor(observed_at.timestamp()/BAR_SECONDS)*BAR_SECONDS
+        -BAR_SECONDS
+    )
     if causal.status=="V40_NO_CAUSAL_COMPLETED_BARS_NONAUTHORIZING":
+        if last_expected>=first_expected:
+            raise V40TrailingReviewHalted("V40_TRAILING_EXPECTED_BARS_MISSING")
         if causal.observed_low is not None or causal.complete_bars!=0:
             raise V40TrailingReviewHalted("V40_TRAILING_CAUSAL_EMPTY_CONTRADICTION")
         return V40CausalTrailingReview(
@@ -126,13 +135,6 @@ async def review_v40_trailing_from_completed_candles(
         or causal.stop_amendment_authorized is not False
     ):
         raise V40TrailingReviewHalted("V40_TRAILING_CAUSAL_EVIDENCE_INVALID")
-    first_expected=(
-        math.ceil(filled_at.timestamp()/BAR_SECONDS)*BAR_SECONDS
-    )
-    last_expected=(
-        math.floor(observed_at.timestamp()/BAR_SECONDS)*BAR_SECONDS
-        -BAR_SECONDS
-    )
     if (
         causal.first_completed_open_ts!=first_expected
         or causal.last_completed_open_ts!=last_expected
