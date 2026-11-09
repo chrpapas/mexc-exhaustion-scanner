@@ -20,6 +20,27 @@ class ReadOnlyMexcProbe:
     def __init__(self, client: PrivateGet):
         self._client = client
 
+    async def raw_position_mode(self) -> int:
+        """Signed GET: 1=hedge; 2=one-way. Unknown is NOT hedge.
+
+        Accept only the documented positionMode field or the direct integer
+        envelope data variant observed in client integrations. Never modify
+        account configuration to force an expected mode.
+        """
+        try:
+            data=await self._client._private_get(
+                "/api/v1/private/position/position_mode"
+            )
+        except Exception:
+            raise VenueReadHalted("POSITION_MODE_GET_FAILED") from None
+        if type(data) is dict:
+            if set(data)!={"positionMode"}:
+                raise VenueReadHalted("POSITION_MODE_RESPONSE_UNVERIFIED")
+            data=data["positionMode"]
+        if type(data) is not int or data not in (1,2):
+            raise VenueReadHalted("POSITION_MODE_RESPONSE_UNVERIFIED")
+        return data
+
     async def raw_account_assets(self) -> list[dict[str, Any]]:
         try:
             raw = await self._client._private_get(
