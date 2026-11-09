@@ -186,6 +186,10 @@ def run_mac_restart_drill(
         first=run_child(service,Path(tmp)/"first.json",child_env)
         if first is None:
             return _fail("PILOT_RESTART_FIRST_PROCESS_FAILED_HALT")
+        # A failed/unsafe first process should never trigger a second
+        # exchange read or obscure which boundary failed.
+        if assess_separate_processes(first,first).status!=READY:
+            return _fail("PILOT_RESTART_FIRST_PROCESS_PREFLIGHT_FAILED_HALT")
         second=run_child(service,Path(tmp)/"second.json",child_env)
         if second is None:
             return _fail("PILOT_RESTART_SECOND_PROCESS_FAILED_HALT")
