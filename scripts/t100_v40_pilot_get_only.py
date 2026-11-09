@@ -138,6 +138,20 @@ def _nonnegative(x: Any) -> D:
     return n
 
 
+def _finite_signed(x: Any) -> D:
+    # Unrealized P&L is signed by exchange contract; a negative reading
+    # is a financial-state mismatch, not a malformed numeric field.
+    try:
+        if x is None or type(x) is bool:
+            raise InvalidOperation
+        n=D(str(x))
+    except (InvalidOperation,ValueError,TypeError):
+        raise PilotPreflightHalted("USDT_ASSET_FIELD_INVALID") from None
+    if not n.is_finite():
+        raise PilotPreflightHalted("USDT_ASSET_FIELD_INVALID")
+    return n
+
+
 def evaluate_pilot_flat_bookends(
     first: PilotInventory,second: PilotInventory,
 ) -> PilotGetOnlyResult:
@@ -191,7 +205,10 @@ def evaluate_pilot_flat_bookends(
                 "bonus","debtAmount","contributeMarginAmount")
         if any(k not in a for k in needed):
             raise PilotPreflightHalted("PILOT_USDT_ASSET_FIELDS_MISSING")
-        vals={k:_nonnegative(a[k]) for k in needed}
+        vals={
+            k:(_finite_signed(a[k]) if k=="unrealized" else _nonnegative(a[k]))
+            for k in needed
+        }
         if vals["equity"]<=0:
             raise PilotPreflightHalted("PILOT_USDT_EQUITY_NONPOSITIVE_HALT")
         if vals["availableBalance"]>vals["equity"]:
