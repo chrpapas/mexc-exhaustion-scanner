@@ -485,9 +485,6 @@ class FourSlotOperatorCliTests(unittest.IsolatedAsyncioTestCase):
             self.assertNotIn(forbidden, source)
 
 
-if __name__ == "__main__":
-    unittest.main()
-
 
     async def test_v40_post_commit_mode_get_allowlist_accepts_hedge_mode_only(self):
         class Recorder:
@@ -530,3 +527,7 @@ if __name__ == "__main__":
             assert result["live_authorization"] is False
             assert result["mexc_orders_sent"] is False
             assert result["database_writes_sent"] is False
+
+
+if __name__ == "__main__":
+    unittest.main()
