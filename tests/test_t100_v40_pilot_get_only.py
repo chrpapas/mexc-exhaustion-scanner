@@ -227,3 +227,12 @@ def test_after_position_close_residual_account_fields_stay_blocking(field,expect
         evaluate_pilot_flat_bookends(a,b)
     assert str(exc.value)==expected
     assert "0.00000001" not in str(exc.value)
+
+
+def test_negative_unrealized_pnl_is_a_signed_nonzero_blocker_not_bad_schema():
+    a=sample()
+    b=deepcopy(a)
+    b.assets[0]["unrealized"]="-0.00000001"
+    with pytest.raises(PilotPreflightHalted) as exc:
+        evaluate_pilot_flat_bookends(a,b)
+    assert str(exc.value)=="PILOT_UNREALIZED_PNL_NONZERO_HALT"
