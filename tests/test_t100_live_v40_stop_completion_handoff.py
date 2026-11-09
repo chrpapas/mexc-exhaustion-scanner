@@ -238,3 +238,101 @@ def test_bookend_current_position_drift_rejected(monkeypatch):
         "STOP_COMPLETION_BOOKEND_STALE_OR_DRIFT_FREEZE",
     )
     assert x[5].calls==[]
+
+
+def test_signed_get_protective_volume_field_drift_freezes_before_db(monkeypatch):
+    # profitLossVolType=SAME reads full volume from "vol", so a changed
+    # supplementary stopLossVol can pass independent static coverage checks.
+    # It must STILL freeze as raw signed venue evidence drift.
+    authorize_mock_only(monkeypatch)
+    x=fixture()
+    original=x[7]._private_get
+    calls=[0]
+
+    async def drifted(path,params=None):
+        rows=await original(path,params)
+        if path.endswith("stoporder/open_orders"):
+            calls[0]+=1
+            if calls[0]==2:
+                rows[0]["stopLossVol"]="19"
+        return rows
+
+    x[7]._private_get=drifted
+    out=commit(x)
+    assert out.status=="STOP_COMPLETION_BOOKEND_STALE_OR_DRIFT_FREEZE"
+    assert x[4].states[x[0].external_id]=="UNKNOWN"
+    assert x[5].calls==[]
+    assert out.exchange_posts==0
+
+
+def test_signed_get_unknown_stop_field_drift_blocks_checkpoint(monkeypatch):
+    # A venue-introduced/changed stop field must never be silently omitted
+    # from the stability witness merely because it isn't a known field.
+    authorize_mock_only(monkeypatch)
+    x=fixture()
+    original=x[7]._private_get
+    count=[0]
+
+    async def drifted(path,params=None):
+        rows=await original(path,params)
+        if path.endswith("stoporder/open_orders"):
+            count[0]+=1
+            rows[0]["venueVersion"]=count[0]
+        return rows
+
+    x[7]._private_get=drifted
+    out=commit(x)
+    assert out.status=="STOP_COMPLETION_BOOKEND_STALE_OR_DRIFT_FREEZE"
+    assert x[5].calls==[]
+
+
+def test_signed_get_noncanonical_value_halts_without_leaking(monkeypatch):
+    authorize_mock_only(monkeypatch)
+    x=fixture()
+    x[7].stop_rows[0]["sensitive_uncertain_field"]=object()
+    out=commit(x)
+    assert out.status=="STOP_COMPLETION_SIGNED_GET_FAILED_FREEZE"
+    assert x[5].calls==[]
+    assert out.exchange_posts==0
+
+
+def test_durable_journal_changed_after_exchange_bookends_freezes(monkeypatch):
+    authorize_mock_only(monkeypatch)
+    x=fixture()
+    original=x[7]._private_get
+    count=[0]
+    async def journal_raced(path,params=None):
+        rows=await original(path,params)
+        if path.endswith("stoporder/open_orders"):
+            count[0]+=1
+            if count[0]==2:
+                # Emulate a second worker changing the journal AFTER the
+                # original auditor's ledger+journal bookends.
+                x[4].states[x[0].external_id]="VERIFIED"
+        return rows
+    x[7]._private_get=journal_raced
+    out=commit(x)
+    assert out.status=="STOP_COMPLETION_JOURNAL_DRIFT_AFTER_GET_FREEZE"
+    assert x[5].calls==[]
+    assert out.exchange_posts==0
+
+
+def test_journal_read_unavailable_after_signed_bookends_freezes(monkeypatch):
+    authorize_mock_only(monkeypatch)
+    x=fixture()
+    original=x[7]._private_get
+    count=[0]
+    async def raced(path,params=None):
+        rows=await original(path,params)
+        if path.endswith("stoporder/open_orders"):
+            count[0]+=1
+            if count[0]==2:
+                async def failed(_):
+                    raise OSError("PRIVATE_LEDGER_CONNECTION")
+                x[4].state=failed
+        return rows
+    x[7]._private_get=raced
+    out=commit(x)
+    assert out.status=="STOP_COMPLETION_POST_GET_JOURNAL_UNAVAILABLE_FREEZE"
+    assert x[5].calls==[]
+    assert "PRIVATE_LEDGER_CONNECTION" not in out.status
