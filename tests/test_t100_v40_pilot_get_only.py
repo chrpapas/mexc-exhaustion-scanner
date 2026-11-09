@@ -91,7 +91,7 @@ def test_nonflat_or_ambiguous_pilot_halts(fault):
         "missing_usdt":"PILOT_USDT_ASSET_MISSING_OR_DUPLICATE",
         "duplicate_usdt":"PILOT_USDT_ASSET_MISSING_OR_DUPLICATE",
         "missing_collateral_component":"PILOT_USDT_ASSET_FIELDS_MISSING",
-        "available_above_equity":"PILOT_AVAILABLE_ABOVE_EQUITY_HALT",
+        "available_above_equity":"PILOT_AVAILABLE_EQUITY_GAP_EXCEEDS_DISPLAY_PRECISION_HALT",
         "nonzero_position_margin":"PILOT_POSITION_MARGIN_NONZERO_HALT",
         "nonzero_unrealized":"PILOT_UNREALIZED_PNL_NONZERO_HALT",
         "nonzero_debt":"PILOT_DEBT_NONZERO_HALT",
@@ -236,3 +236,59 @@ def test_negative_unrealized_pnl_is_a_signed_nonzero_blocker_not_bad_schema():
     with pytest.raises(PilotPreflightHalted) as exc:
         evaluate_pilot_flat_bookends(a,b)
     assert str(exc.value)=="PILOT_UNREALIZED_PNL_NONZERO_HALT"
+
+
+def test_mexc_official_documented_micro_roundoff_reconciles_without_authorizing():
+    # Real official MEXC example of a flat 0-margin USDT wallet:
+    # availableBalance 32.80984793658 > equity 32.80984793.
+    a=sample()
+    b=deepcopy(a)
+    for row in (a.assets[0],b.assets[0]):
+        row["equity"]="32.80984793"
+        row["cashBalance"]="32.80984793"
+        row["availableBalance"]="32.80984793658"
+    out=evaluate_pilot_flat_bookends(a,b)
+    assert out.status=="PILOT_FLAT_HEDGE_SIGNED_GET_BOOKENDS_NONAUTHORIZING"
+    assert out.available_equity_roundoff_observed
+    assert out.account_equity_usdt=="32.80984793"
+    assert out.available_balance_usdt=="32.80984793658"
+    assert not out.cross_margin_collateral_verified
+    assert not out.live_authorization
+    assert out.mexc_posts==0
+
+
+def test_display_precision_one_quantum_accepted_but_not_more():
+    a=sample()
+    b=deepcopy(a)
+    for row in (a.assets[0],b.assets[0]):
+        row["equity"]="50"
+        row["cashBalance"]="50"
+        row["availableBalance"]="50.00000001"
+    assert evaluate_pilot_flat_bookends(
+        a,b
+    ).available_equity_roundoff_observed
+    b.assets[0]["availableBalance"]="50.00000001001"
+    with pytest.raises(PilotPreflightHalted,match="EXCEEDS_DISPLAY_PRECISION"):
+        evaluate_pilot_flat_bookends(a,b)
+
+
+def test_small_available_equity_gap_without_cash_equity_parity_still_halts():
+    a=sample()
+    b=deepcopy(a)
+    for row in (a.assets[0],b.assets[0]):
+        row["equity"]="50"
+        row["availableBalance"]="50.000000005"
+        row["cashBalance"]="49.0"
+    with pytest.raises(PilotPreflightHalted,match="CASH_EQUITY_PRECISION_CROSSCHECK"):
+        evaluate_pilot_flat_bookends(a,b)
+
+
+def test_actual_material_profit_does_not_create_unbounded_equity_exception():
+    a=sample()
+    b=deepcopy(a)
+    for row in (a.assets[0],b.assets[0]):
+        row["equity"]="85"
+        row["cashBalance"]="85"
+        row["availableBalance"]="85.10"
+    with pytest.raises(PilotPreflightHalted,match="EXCEEDS_DISPLAY_PRECISION"):
+        evaluate_pilot_flat_bookends(a,b)
