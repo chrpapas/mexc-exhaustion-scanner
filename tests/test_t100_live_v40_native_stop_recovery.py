@@ -290,3 +290,36 @@ def test_unavailable_signed_get_is_a_freeze_with_no_mutations():
     x=observe(a,reader)
     assert x.status=="V40_STOP_RECOVERY_READ_OR_PROVENANCE_UNVERIFIED_FREEZE"
     assert not x.entry_allowed
+
+
+def test_competing_unknown_stop_mutation_freezes_even_with_good_target_stop():
+    a,reader,ledger,venue,complete,journal=make()
+    ledger.amendments.append({
+        "external_id":"other-unknown","symbol":"OTHER_USDT",
+        "position_id":"33","stop_order_id":"77",
+        "previous_stop":D("180"),"proposed_stop":D("170"),
+        "verified_stop_order_id":None,"state":"UNKNOWN",
+    })
+    result=observe(a,reader)
+    assert result.status=="V40_STOP_RECOVERY_COMPETING_UNKNOWN_MUTATION_FREEZE"
+    assert result.outcome_price_tightened is False
+    assert journal.state_value=="UNKNOWN"
+
+
+def test_verified_journal_result_stop_id_must_match_current_native_order():
+    a,reader,ledger,venue,complete,journal=make(state="VERIFIED")
+    ledger.amendments[0]["verified_stop_order_id"]="999"
+    result=observe(a,reader)
+    assert result.status=="V40_STOP_RECOVERY_VERIFIED_ID_DRIFT_FREEZE"
+    assert not result.post_outcome_persistence_allowed
+    assert journal.state_value=="VERIFIED"
+
+
+def test_verified_replacement_record_does_not_bypass_finished_history():
+    a,reader,ledger,venue,complete,journal=make(
+        state="VERIFIED",stop_id="100",
+    )
+    ledger.amendments[0]["verified_stop_order_id"]="100"
+    result=observe(a,reader)
+    assert result.status=="V40_STOP_REPLACEMENT_HISTORY_REQUIRED_FREEZE"
+    assert not result.live_authorization
