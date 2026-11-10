@@ -75,11 +75,16 @@ class KeychainSignedGetOnly:
             "/api/v1/private/account/assets",
             "/api/v1/private/position/position_mode",
         )
-        risk_path="/api/v1/private/account/risk_limit"
+        # Two explicitly symbol-scoped GET-only capability reads.
+        # Never add change_leverage or any other private POST route.
+        scoped_paths=(
+            "/api/v1/private/account/risk_limit",
+            "/api/v1/private/position/leverage",
+        )
         if path in normal_paths and params is None:
             query=""
         elif (
-            path==risk_path
+            path in scoped_paths
             and type(params) is dict
             and set(params)=={"symbol"}
             and type(params["symbol"]) is str
