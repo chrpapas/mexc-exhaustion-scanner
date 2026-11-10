@@ -252,19 +252,57 @@ async def observe_pilot_capability(
     ):
         raise PilotCapabilityHalted("PILOT_SYMBOL_INVALID")
     flat=await observe_live_pilot(key=key,secret=secret)
-    if flat.status!="PILOT_FLAT_HEDGE_SIGNED_GET_BOOKENDS_NONAUTHORIZING":
+    if not (
+        flat.status=="PILOT_FLAT_HEDGE_SIGNED_GET_BOOKENDS_NONAUTHORIZING"
+        and flat.samples==2
+        and flat.position_count==0
+        and flat.native_stop_count==0
+        and flat.hedge_mode_observed is True
+        and flat.inventory_bookends_equal is True
+        and flat.live_authorization is False
+        and flat.mexc_posts==0
+        and flat.db_mutations==0
+    ):
         return PilotCapabilityReport(
             status="PILOT_FLAT_GET_BOOKENDS_REQUIRED_HALT",symbol=symbol,
         )
     signed=KeychainSignedGetOnly(key=key,secret=secret)
     try:
         probe=ReadOnlyMexcProbe(signed)
-        tiers=await probe.raw_account_risk_limits(symbol)
-    except Exception:
-        return PilotCapabilityReport(
-            status="PILOT_PRIVATE_RISK_GET_UNVERIFIED_HALT",symbol=symbol,
-            flat_hedge_account_bookended=True,
-        )
+        try:
+            tiers=await probe.raw_account_risk_limits(symbol)
+        except Exception:
+            return PilotCapabilityReport(
+                status="PILOT_PRIVATE_RISK_GET_UNVERIFIED_HALT",symbol=symbol,
+                flat_hedge_account_bookended=True,
+            )
+        try:
+            leverages=await probe.raw_position_leverage(symbol)
+        except Exception:
+            return PilotCapabilityReport(
+                status="PILOT_PRIVATE_LEVERAGE_GET_UNVERIFIED_HALT",
+                symbol=symbol,flat_hedge_account_bookended=True,
+            )
+        try:
+            tiers_second=await probe.raw_account_risk_limits(symbol)
+            leverages_second=await probe.raw_position_leverage(symbol)
+            stable=(
+                json.dumps([tiers,leverages],sort_keys=True,
+                           allow_nan=False,separators=(",",":"))
+                == json.dumps([tiers_second,leverages_second],
+                              sort_keys=True,allow_nan=False,
+                              separators=(",",":"))
+            )
+        except Exception:
+            return PilotCapabilityReport(
+                status="PILOT_PRIVATE_CAPABILITY_SECOND_GET_UNVERIFIED_HALT",
+                symbol=symbol,flat_hedge_account_bookended=True,
+            )
+        if not stable:
+            return PilotCapabilityReport(
+                status="PILOT_PRIVATE_CAPABILITY_GET_DRIFT_HALT",
+                symbol=symbol,flat_hedge_account_bookended=True,
+            )
     finally:
         await signed.close()
 
@@ -294,7 +332,7 @@ async def observe_pilot_capability(
         )
     return assess_pilot_capability(
         symbol=symbol,contract=contract,private_risk=tiers,
-        flat_preflight_ok=True,
+        private_leverage=leverages,flat_preflight_ok=True,
     )
 
 
