@@ -42,6 +42,10 @@ class Private:
                 "openType":2,"leverage":1,"maxVol":"1000",
             }],
         }
+        self.private_leverage=[
+            {"positionType":1,"openType":1,"leverage":2},
+            {"positionType":2,"openType":2,"leverage":1},
+        ]
         self.calls=[]
         self.fail=False
     async def _private_get(self,path,params=None):
@@ -54,6 +58,7 @@ class Private:
             "/api/v1/private/account/assets":self.assets,
             "/api/v1/private/position/position_mode":self.mode,
             "/api/v1/private/account/risk_limit":self.private_risk,
+            "/api/v1/private/position/leverage":self.private_leverage,
         }
         return deepcopy(mapping[path])
 
@@ -137,6 +142,8 @@ def test_signed_get_bookends_flat_account_and_public_market_without_approval():
     assert out.bookended_flat_account
     assert out.hedge_mode_observed
     assert out.private_risk_row_observed
+    assert out.private_short_cross_1x_settings_bookended
+    assert not out.private_risk_limit_settings_fields_missing
     assert out.top_bid==D("100")
     assert out.candidate_contract.contract_size==D("1")
     assert out.candidate_contract.market_state_and_country_verified
@@ -146,7 +153,9 @@ def test_signed_get_bookends_flat_account_and_public_market_without_approval():
     assert out.private_key_order_permission_verified is False
     assert not out.entry_allowed
     assert not out.live_authorization
-    assert len(private.calls)==11
+    assert len(private.calls)==14
+    assert sum(p=="/api/v1/private/account/risk_limit" for _,p in private.calls)==2
+    assert sum(p=="/api/v1/private/position/leverage" for _,p in private.calls)==2
     assert all(x[0]=="GET" for x in private.calls)
     assert all(x[0]=="GET" for x in public.calls)
 
@@ -175,8 +184,10 @@ def test_exact_lot_depth_vwap_and_slippage_are_recomputed_not_assumed():
     ("offline","MARKET_COUNTRY_CONTRACT_NOT_ELIGIBLE"),
     ("no_public_api","MARKET_COUNTRY_CONTRACT_NOT_ELIGIBLE"),
     ("isolated_only","MARKET_COUNTRY_CONTRACT_NOT_ELIGIBLE"),
-    ("private_isolated","MARKET_PRIVATE_CROSS_ONE_X_UNVERIFIED"),
-    ("private_leverage_two","MARKET_PRIVATE_CROSS_ONE_X_UNVERIFIED"),
+    ("private_isolated","MARKET_PRIVATE_RISK_LEVERAGE_CONFLICT"),
+    ("private_leverage_two","MARKET_PRIVATE_RISK_LEVERAGE_CONFLICT"),
+    ("real_private_isolated","MARKET_PRIVATE_CROSS_ONE_X_UNVERIFIED"),
+    ("real_private_leverage_two","MARKET_PRIVATE_CROSS_ONE_X_UNVERIFIED"),
     ("stale_depth","MARKET_BOOK_TIMESTAMP_OR_VERSION_STALE"),
     ("unsorted_bids","MARKET_DEPTH_NOT_STRICTLY_SORTED"),
     ("crossed_book","MARKET_CROSSED_ORDER_BOOK"),
@@ -194,6 +205,10 @@ def test_unverified_exchange_economics_are_rejected(fault,expect):
     if fault=="isolated_only":public.contract["positionOpenType"]=1
     if fault=="private_isolated":pub.private_risk[SYM][0]["openType"]=1
     if fault=="private_leverage_two":pub.private_risk[SYM][0]["leverage"]=2
+    if fault=="real_private_isolated":
+        pub.private_leverage[1]["openType"]=1
+    if fault=="real_private_leverage_two":
+        pub.private_leverage[1]["leverage"]=2
     if fault=="stale_depth":public.depth["timestamp"]=START-10_000
     if fault=="unsorted_bids":public.depth["bids"]=[[99,10],[100,10]]
     if fault=="crossed_book":public.depth["asks"]=[[99,10],[100,10]]
@@ -344,3 +359,118 @@ def test_micro_available_gap_with_different_cash_equity_is_rejected():
     private.assets[0]["availableBalance"]="5000.00000000658"
     with pytest.raises(V40CandidateMarketHalted,match="USDT_COLLATERAL_DRIFT"):
         run(c)
+
+
+def test_risk_tier_without_optional_margin_and_leverage_fields_uses_dedicated_get():
+    c,private,_=setup()
+    private.private_risk[SYM][0].pop("openType")
+    private.private_risk[SYM][0].pop("leverage")
+    out=run(c)
+    assert out.status=="V40_GET_ONLY_FLAT_ACCOUNT_AND_MARKET_QUOTED_NONAUTHORIZING"
+    assert out.private_short_cross_1x_settings_bookended
+    assert out.private_risk_limit_settings_fields_missing
+    assert out.private_key_order_permission_verified is False
+    assert out.live_authorization is False
+
+
+def test_risk_limit_fields_conflicting_with_dedicated_signed_get_fail_closed():
+    c,private,_=setup()
+    private.private_risk[SYM][0]["openType"]=1
+    with pytest.raises(V40CandidateMarketHalted,match="RISK_LEVERAGE_CONFLICT"):
+        run(c)
+
+
+@pytest.mark.parametrize("field,value",[
+    ("openType",1),("leverage",50),
+])
+def test_actual_short_isolated_or_50x_is_not_witnessed_as_cross_one_x(field,value):
+    c,private,_=setup()
+    private.private_leverage[1][field]=value
+    # The dedicated GET defines actual configuration. Even if the
+    # risk_limit row says CROSS 1x, this can never pass.
+    with pytest.raises(V40CandidateMarketHalted,match="CROSS_ONE_X_UNVERIFIED"):
+        run(c)
+
+
+@pytest.mark.parametrize("payload",[
+    [],None,{},[{"positionType":1,"openType":2,"leverage":1}],
+    [{"positionType":2,"openType":2,"leverage":True}],
+    [{"positionType":2,"openType":2,"leverage":0}],
+    [{"positionType":2,"openType":2,"leverage":1,"symbol":"WRONG_USDT"}],
+    [{"positionType":2,"openType":2,"leverage":1}]*2,
+])
+def test_missing_or_invalid_dedicated_config_blocks_without_fallback(payload):
+    c,private,_=setup()
+    private.private_leverage=payload
+    with pytest.raises(V40CandidateMarketHalted,match="MARKET_SIGNED_GET_FAILED"):
+        run(c)
+
+
+def test_private_leverage_change_during_depth_observation_halts():
+    class DriftingLeverage(Private):
+        async def _private_get(self,path,params=None):
+            result=await super()._private_get(path,params)
+            if path=="/api/v1/private/position/leverage":
+                n=getattr(self,"lever_reads",0)+1
+                self.lever_reads=n
+                if n==2:
+                    result[1]["leverage"]=50
+            return result
+    private=DriftingLeverage()
+    public=Public()
+    witness=MexcV40CandidateMarketWitness(
+        private=ReadOnlyMexcProbe(private),public=public,
+        clock_ms=Clock(START,END),
+    )
+    with pytest.raises(V40CandidateMarketHalted,match="PRIVATE_CONFIG_BOOKEND_DRIFT"):
+        run(witness)
+
+
+def test_private_risk_maxvol_change_during_depth_observation_halts():
+    class DriftingRisk(Private):
+        async def _private_get(self,path,params=None):
+            result=await super()._private_get(path,params)
+            if path=="/api/v1/private/account/risk_limit":
+                n=getattr(self,"risk_reads",0)+1
+                self.risk_reads=n
+                if n==2:
+                    result[SYM][0]["maxVol"]="2"
+            return result
+    private=DriftingRisk()
+    public=Public()
+    witness=MexcV40CandidateMarketWitness(
+        private=ReadOnlyMexcProbe(private),public=public,
+        clock_ms=Clock(START,END),
+    )
+    with pytest.raises(V40CandidateMarketHalted,match="PRIVATE_CONFIG_BOOKEND_DRIFT"):
+        run(witness)
+
+
+def test_private_risk_tier_level_must_be_positive():
+    c,private,_=setup()
+    private.private_risk[SYM][0]["level"]=0
+    with pytest.raises(VenueReadHalted,match="RISK_LIMIT_ROW_UNVERIFIED"):
+        asyncio.run(ReadOnlyMexcProbe(private).raw_account_risk_limits(SYM))
+    with pytest.raises(V40CandidateMarketHalted,match="MARKET_SIGNED_GET_FAILED"):
+        run(c)
+
+
+def test_duplicate_short_settings_from_venue_do_not_pass():
+    c,private,_=setup()
+    private.private_leverage=[
+        {"positionType":2,"openType":2,"leverage":1},
+        {"positionType":2,"openType":2,"leverage":1},
+    ]
+    with pytest.raises(V40CandidateMarketHalted,match="MARKET_SIGNED_GET_FAILED"):
+        run(c)
+
+
+def test_current_v40_candidate_excludes_btc_and_eth_without_mexc_get():
+    from dataclasses import replace
+    for sym in ("BTC_USDT","ETH_USDT"):
+        c,private,public=setup()
+        wrong=replace(candidate(),symbol=sym)
+        with pytest.raises(V40CandidateMarketHalted,match="MARKET_SIGNAL_IDENTITY_INVALID"):
+            asyncio.run(c.observe(wrong))
+        assert private.calls==[]
+        assert public.calls==[]
