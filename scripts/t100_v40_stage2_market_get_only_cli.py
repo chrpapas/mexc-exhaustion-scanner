@@ -13,10 +13,18 @@ permissions. The actual market witness requires per-symbol SHORT CROSS
 bookends and executable contract metadata; it does NOT grant any trade
 permission, collateral certification, or autonomous restart certification.
 
-Postgres credentials are requested with hidden terminal prompts only,
-never saved or printed. MEXC keys are read from Mac Keychain under the
-explicit WEB pilot service, never from shell environment. A restricted
-read-only SQL role plus a read-only transaction are mandatory.
+The existing scanner-owner PostgreSQL External URL is requested via
+ONE hidden terminal prompt; there is no separate runtime-role password.
+The scanner-owner role must be mexc_scanner, and the connection defaults
+to READ ONLY; every source query is also confined to an explicit
+REPEATABLE READ, READ ONLY transaction. A high-privilege owner URL is
+acceptable ONLY in this manual, nonauthorizing research diagnostic:
+never reuse it for the live executor/worker. The dedicated executor
+role intentionally lacks access to scanner Stage2 tables.
+
+MEXC keys are read from Mac Keychain under the exact WEB pilot service,
+never from shell environment. No DB or exchange credentials are saved
+or printed. No monitoring witness/sentinel DB roles are reused.
 """
 from __future__ import annotations
 
@@ -46,7 +54,7 @@ from app.t100_live_v40_candidate_market_witness import (
 )
 from app.t100_live_v40_stage2_source import (
     PostgresV40Stage2Source,V40SignalIntakeHalted,V40SourceBatch,
-    V40SourceCandidate,
+    V40SourceCandidate,MANUAL_SCANNER_READONLY_OWNER_ROLE,
 )
 from scripts.t100_v40_pilot_get_only import (
     BASE,KEY_ACCOUNT,SECRET_ACCOUNT,KeychainSignedGetOnly,_from_keychain,
@@ -55,6 +63,31 @@ from scripts.t100_v40_pilot_get_only import (
 WEB_PILOT_KEYCHAIN_SERVICE="t100225-mexc-web-pilot-subaccount-v1"
 MAX_SOURCE=32
 MAX_CHECKS=4
+# Stable, source-owned failure codes only: never surface arbitrary
+# PostgreSQL/driver errors, raw DSNs or untrusted exception text.
+_ALLOWED_SOURCE_FAILURES=frozenset({
+    "SOURCE_RESTRICTED_REPEATABLE_READ_CONTEXT_REQUIRED",
+    "SOURCE_SIGNAL_QUERY_SHAPE_INVALID",
+    "SOURCE_SIGNAL_BATCH_TRUNCATION_BLOCKED",
+    "SOURCE_SIGNAL_IDENTITY_INVALID",
+    "SOURCE_HISTORY_QUERY_SHAPE_INVALID",
+    "SOURCE_DUPLICATE_SIGNAL_OR_SYMBOL_TIME",
+    "SOURCE_READ_ONLY_POSTGRES_QUERY_FAILED",
+    "SOURCE_SIGNAL_OR_HISTORY_SHAPE_INVALID",
+    "SOURCE_SIGNAL_FIELDS_MISSING_OR_INVALID",
+    "SOURCE_STAGE2_CONTRACT_OR_TIER_MISMATCH",
+    "SOURCE_SIGNAL_CLOCK_OR_AGE_INVALID",
+    "SOURCE_CAUSAL_49_BAR_COUNT_INVALID",
+    "SOURCE_CANDLE_SHAPE_INVALID",
+    "SOURCE_CANDLE_FIELDS_INVALID",
+    "SOURCE_CANDLE_DUPLICATE_OR_OHLC_INVALID",
+    "SOURCE_CAUSAL_49_BAR_TIMING_INVALID",
+    "SOURCE_ENTRY_REFERENCE_PRICE_DRIFT",
+    "SOURCE_NAIVE_TIMESTAMP",
+    "SOURCE_SUBSECOND_CANDLE_CLOCK_INVALID",
+    "SOURCE_INVALID_NUMBER",
+    "SOURCE_INTAKE_ARGS_INVALID",
+})
 _ALLOWED_FAILURES=frozenset({
     "MARKET_SIGNED_GET_FAILED",
     "MARKET_PUBLIC_GET_FAILED",
@@ -147,6 +180,13 @@ async def preview_fresh_stage2(
     try:
         batch=await source.latest_candidates(
             observed_at=observed_at,limit=MAX_SOURCE,
+        )
+    except V40SignalIntakeHalted as exc:
+        safe=str(exc)
+        return _halt(
+            "STAGE2_MARKET_"+safe+"_HALT"
+            if safe in _ALLOWED_SOURCE_FAILURES
+            else "STAGE2_MARKET_READONLY_SOURCE_UNVERIFIED_HALT"
         )
     except Exception:
         return _halt("STAGE2_MARKET_READONLY_SOURCE_UNVERIFIED_HALT")
@@ -252,17 +292,20 @@ async def _main(args:argparse.Namespace,env:Mapping[str,str])->Stage2Preview:
         secret=_from_keychain(args.keychain_service,SECRET_ACCOUNT)
     except Exception:
         return _halt("STAGE2_MARKET_WEB_PILOT_KEYCHAIN_UNAVAILABLE_HALT")
-    # Hidden passwords. Do not save or echo database host or credentials.
-    password=getpass.getpass("Restricted T100 DB role password (hidden): ")
-    dsn=getpass.getpass("Render PostgreSQL External URL (hidden): ")
-    if not password or not dsn:
-        return _halt("STAGE2_MARKET_READONLY_DB_CREDENTIALS_MISSING_HALT")
+    # The existing scanner-owner URL includes its own DB login and
+    # password; do not ask for, guess, rotate or substitute the unrelated
+    # executor or witness/sentinel Keychain secrets.
+    dsn=getpass.getpass(
+        "Existing scanner-owner Render PostgreSQL External URL (hidden): "
+    )
+    if not dsn or not dsn.startswith(("postgresql://","postgres://")):
+        return _halt("STAGE2_MARKET_SCANNER_OWNER_URL_REQUIRED_HALT")
     import asyncpg
     pool=None
     signed=None
     try:
         pool=await asyncpg.create_pool(
-            dsn=dsn,user=TARGET_ROLE,password=password,
+            dsn=dsn,
             ssl=ssl.create_default_context(),timeout=10,command_timeout=12,
             min_size=1,max_size=1,
             server_settings={"default_transaction_read_only":"on"},
@@ -273,7 +316,9 @@ async def _main(args:argparse.Namespace,env:Mapping[str,str])->Stage2Preview:
             follow_redirects=False,timeout=10,
         ) as public:
             return await asyncio.wait_for(preview_fresh_stage2(
-                source=PostgresV40Stage2Source(pool),
+                source=PostgresV40Stage2Source(
+                    pool,manual_scanner_owner_readonly=True,
+                ),
                 private=ReadOnlyMexcProbe(signed),
                 public=public,env=env,
                 clock_ms=lambda:int(time.time()*1000),
