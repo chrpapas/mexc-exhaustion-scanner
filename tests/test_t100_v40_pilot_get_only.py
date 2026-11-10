@@ -323,8 +323,14 @@ def test_symbol_scoped_risk_limit_get_signs_exact_urlencoded_parameters(monkeypa
                 {"symbol":"BTC_USDT"},
             )
             assert result=={"BTC_USDT":[]}
+            result2=await client._private_get(
+                "/api/v1/private/position/leverage",{"symbol":"BTC_USDT"},
+            )
+            assert result2=={"BTC_USDT":[]}
             for path,params in (
                 ("/api/v1/private/account/risk_limit",{"symbol":"BTC_USDT","other":"x"}),
+                ("/api/v1/private/position/leverage",None),
+                ("/api/v1/private/position/leverage",{"symbol":"BTC_USDT","extra":"secret"}),
                 ("/api/v1/private/account/assets",{"symbol":"BTC_USDT"}),
                 ("/api/v1/private/order/submit",{"symbol":"BTC_USDT"}),
             ):
@@ -333,13 +339,17 @@ def test_symbol_scoped_risk_limit_get_signs_exact_urlencoded_parameters(monkeypa
         finally:
             await client.close()
     asyncio.run(invoke())
-    assert len(mock.calls)==1
-    path,params,headers=mock.calls[0]
-    assert path=="/api/v1/private/account/risk_limit"
-    assert params=={"symbol":"BTC_USDT"}
+    assert len(mock.calls)==2
+    for path,params,headers in mock.calls:
+        assert path in (
+            "/api/v1/private/account/risk_limit",
+            "/api/v1/private/position/leverage",
+        )
+        assert params=={"symbol":"BTC_USDT"}
     stamp=str(int(1712345.678*1000))
     expected=hmac.new(
         b"fakesecret",f"fakekey{stamp}symbol=BTC_USDT".encode(),hashlib.sha256,
     ).hexdigest()
-    assert headers["Signature"]==expected
-    assert headers["Request-Time"]==stamp
+    for _,_,headers in mock.calls:
+        assert headers["Signature"]==expected
+        assert headers["Request-Time"]==stamp
