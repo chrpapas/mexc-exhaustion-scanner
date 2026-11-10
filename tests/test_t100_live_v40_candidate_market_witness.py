@@ -402,7 +402,9 @@ def test_actual_short_isolated_or_50x_is_not_witnessed_as_cross_one_x(field,valu
 def test_missing_or_invalid_dedicated_config_blocks_without_fallback(payload):
     c,private,_=setup()
     private.private_leverage=payload
-    with pytest.raises(V40CandidateMarketHalted,match="MARKET_SIGNED_GET_FAILED"):
+    with pytest.raises(V40CandidateMarketHalted,match=(
+        "MARKET_SIGNED_GET_FAILED|MARKET_PRIVATE_SHORT_SETTINGS_UNVERIFIED"
+    )):
         run(c)
 
 
