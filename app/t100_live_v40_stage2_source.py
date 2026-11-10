@@ -29,6 +29,12 @@ from app.t100_live_role_preflight import TARGET_ROLE
 
 MAX_BATCH = 32
 MAX_SIGNAL_AGE_SECONDS = 900
+# The live-executor runtime role is deliberately DENIED SELECT on the
+# scanner's paper/production signal and candle tables. A manually-run
+# research CLI may use the existing scanner OWNER login only inside a
+# forced READ ONLY, REPEATABLE READ transaction; this mode never provides
+# live execution authority or a production source role.
+MANUAL_SCANNER_READONLY_OWNER_ROLE = "mexc_scanner"
 
 # The ordering includes the immutable signal PK, not mutable paper decisions.
 # Query an extra row so exceeding the batch cap blocks instead of truncating.
@@ -211,10 +217,20 @@ def inspect_stage2_candidate(
 class PostgresV40Stage2Source:
     """Account-unprivileged production signal reader; no trade_decision writes."""
 
-    def __init__(self, pool: Any):
-        if pool is None:
+    def __init__(
+        self, pool: Any, *,
+        manual_scanner_owner_readonly: bool = False,
+    ):
+        if pool is None or type(manual_scanner_owner_readonly) is not bool:
             raise ValueError("V40_SIGNAL_READER_POOL_MISSING")
         self.pool = pool
+        # Explicit, opt-in manual research only; default contract is
+        # unchanged. No way to select an arbitrary high-privilege role.
+        self.expected_source_role = (
+            MANUAL_SCANNER_READONLY_OWNER_ROLE
+            if manual_scanner_owner_readonly else TARGET_ROLE
+        )
+        self.manual_scanner_owner_readonly = manual_scanner_owner_readonly
 
     async def latest_candidates(
         self, *,
@@ -249,7 +265,7 @@ class PostgresV40Stage2Source:
                         or await conn.fetchval("SELECT current_database()")
                         != EXPECTED_DATABASE
                         or await conn.fetchval("SELECT current_user")
-                        != TARGET_ROLE
+                        != self.expected_source_role
                     ):
                         raise V40SignalIntakeHalted(
                             "SOURCE_RESTRICTED_REPEATABLE_READ_CONTEXT_REQUIRED"
