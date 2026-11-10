@@ -12,6 +12,7 @@ from app.t100_live_role_preflight import TARGET_ROLE
 from app.t100_live_v40_stage2_source import (
     HISTORY_SQL,SIGNALS_SQL,MAX_SIGNAL_AGE_SECONDS,MAX_BATCH,
     PostgresV40Stage2Source,V40SignalIntakeHalted,
+    MANUAL_SCANNER_READONLY_OWNER_ROLE,
     inspect_stage2_candidate,
 )
 
@@ -133,10 +134,11 @@ class Tx:
 
 class FakeConn:
     def __init__(self, signals, history, *, readonly_role=True,
-                 fail_query=False):
+                 fail_query=False,actual_role=None):
         self.signals=signals
         self.history=history
         self.readonly_role=readonly_role
+        self.actual_role=actual_role
         self.fail_query=fail_query
         self.queries=[]
     def transaction(self, *, isolation, readonly):
@@ -151,7 +153,10 @@ class FakeConn:
         if "current_database" in sql:
             return "mexc_exhaustion"
         if "current_user" in sql:
-            return TARGET_ROLE if self.readonly_role else "mexc_scanner"
+            return (
+                self.actual_role if self.actual_role is not None
+                else TARGET_ROLE if self.readonly_role else "mexc_scanner"
+            )
         raise AssertionError("unexpected SQL")
     async def fetch(self, sql,*args):
         self.queries.append(sql)
@@ -265,4 +270,69 @@ def test_subsecond_signal_and_candle_clocks_are_not_silently_truncated():
     with pytest.raises(V40SignalIntakeHalted,match="SUBSECOND"):
         inspect_stage2_candidate(
             signal,history,observed_at=T+timedelta(seconds=25),
+        )
+
+
+def test_manual_scanner_owner_reads_stage2_only_inside_strict_readonly_tx():
+    signal,hist=fixtures()
+    conn=FakeConn(
+        [signal],hist,actual_role=MANUAL_SCANNER_READONLY_OWNER_ROLE,
+    )
+    source=PostgresV40Stage2Source(
+        Pool(conn),manual_scanner_owner_readonly=True,
+    )
+    assert source.expected_source_role==MANUAL_SCANNER_READONLY_OWNER_ROLE
+    out=asyncio.run(source.latest_candidates(
+        observed_at=T+timedelta(seconds=25),
+    ))
+    assert len(out.candidates)==1
+    assert out.status=="FROZEN_V40_STAGE2_SOURCE_VALIDATED_NONAUTHORIZING"
+    assert out.read_only_repeatable_read is True
+    assert out.entry_allowed is False
+    assert out.live_authorization is False
+    assert not any(
+        sql.lstrip().upper().startswith(
+            ("INSERT","UPDATE","DELETE","ALTER","GRANT","CREATE")
+        ) for sql in conn.queries
+    )
+
+
+def test_manual_scanner_research_never_accepts_executor_or_monitor_roles():
+    signal,hist=fixtures()
+    for role in (
+        TARGET_ROLE,"t100_shadow_witness_writer",
+        "t100_shadow_sentinel_outbox","mexc_external_random",
+    ):
+        conn=FakeConn([signal],hist,actual_role=role)
+        reader=PostgresV40Stage2Source(
+            Pool(conn),manual_scanner_owner_readonly=True,
+        )
+        with pytest.raises(
+            V40SignalIntakeHalted,
+            match="SOURCE_RESTRICTED_REPEATABLE_READ_CONTEXT_REQUIRED",
+        ):
+            asyncio.run(reader.latest_candidates(
+                observed_at=T+timedelta(seconds=25),
+            ))
+        assert not any("FROM public.t100_p2_signals" in q for q in conn.queries)
+
+
+def test_existing_executor_source_contract_does_not_accept_owner_implicitly():
+    signal,hist=fixtures()
+    conn=FakeConn(
+        [signal],hist,actual_role=MANUAL_SCANNER_READONLY_OWNER_ROLE,
+    )
+    source=PostgresV40Stage2Source(Pool(conn))
+    assert source.expected_source_role==TARGET_ROLE
+    with pytest.raises(V40SignalIntakeHalted,match="RESTRICTED"):
+        asyncio.run(source.latest_candidates(
+            observed_at=T+timedelta(seconds=25),
+        ))
+
+
+def test_manual_scanner_source_not_arbitrary_role_or_truthy_string():
+    with pytest.raises(ValueError):
+        PostgresV40Stage2Source(
+            Pool(FakeConn([],[])),
+            manual_scanner_owner_readonly="mexc_scanner",
         )
