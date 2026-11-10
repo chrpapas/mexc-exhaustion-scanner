@@ -149,6 +149,8 @@ class V40CandidateQuote:
     bookended_flat_account: bool
     hedge_mode_observed: bool
     private_risk_row_observed: bool
+    private_short_cross_1x_settings_bookended: bool=False
+    private_risk_limit_settings_fields_missing: bool=False
     # These are NOT obtained from current asset/risk endpoints.
     full_cross_collateral_verified: bool=False
     complete_realized_daily_loss_verified: bool=False
@@ -240,9 +242,16 @@ class MexcV40CandidateMarketWitness:
                 _COUNTRY_PATH,{"symbol":signal.symbol},
             )
             risks=await self.private.raw_account_risk_limits(signal.symbol)
+            leverage=await self.private.raw_position_leverage(signal.symbol)
             depth=await self._public_data(
                 _DEPTH_PREFIX+signal.symbol,{"limit":"100"},
             )
+            # The risk_limit GET is a liquidation-tier cap, while
+            # position/leverage is the authoritative short-side setting.
+            # Require both signed GETs to remain stable across the book
+            # observation; otherwise the sizing assumptions may be stale.
+            risks_after=await self.private.raw_account_risk_limits(signal.symbol)
+            leverage_after=await self.private.raw_position_leverage(signal.symbol)
             after=await self._account()
         except V40CandidateMarketHalted:
             raise
@@ -254,6 +263,17 @@ class MexcV40CandidateMarketWitness:
             or ended-started>self.max_cycle_ms
         ):
             raise V40CandidateMarketHalted("MARKET_TOTAL_CYCLE_STALE")
+        try:
+            source_fingerprints=(
+                json.dumps([risks,leverage],sort_keys=True,
+                           separators=(",",":"),allow_nan=False),
+                json.dumps([risks_after,leverage_after],sort_keys=True,
+                           separators=(",",":"),allow_nan=False),
+            )
+        except (TypeError,ValueError):
+            raise V40CandidateMarketHalted("MARKET_PRIVATE_CONFIG_SHAPE_INVALID") from None
+        if source_fingerprints[0]!=source_fingerprints[1]:
+            raise V40CandidateMarketHalted("MARKET_PRIVATE_CONFIG_BOOKEND_DRIFT")
         for state in (before,after):
             if (
                 state[0] or state[1] or not _counts_empty(state[2])
@@ -328,13 +348,41 @@ class MexcV40CandidateMarketWitness:
         ):
             raise V40CandidateMarketHalted("MARKET_PRIVATE_SHORT_RISK_UNVERIFIED")
         short=shorts[0]
+        if type(short.get("level")) is not int or short["level"]<1:
+            raise V40CandidateMarketHalted("MARKET_PRIVATE_RISK_LEVEL_INVALID")
+        # MEXC's risk_limit endpoint describes maxVol/liquidation tier.
+        # The documented position/leverage endpoint exposes actual
+        # configured SHORT openType (CROSS=2) and leverage (1x). MEXC
+        # examples sometimes omit the latter fields from risk_limit.
+        if type(leverage) is not list or not 1<=len(leverage)<=2:
+            raise V40CandidateMarketHalted("MARKET_PRIVATE_SHORT_SETTINGS_UNVERIFIED")
+        short_configs=[
+            row for row in leverage
+            if type(row) is dict and row.get("positionType")==2
+        ]
+        if len(short_configs)!=1:
+            raise V40CandidateMarketHalted("MARKET_PRIVATE_SHORT_SETTINGS_UNVERIFIED")
+        config=short_configs[0]
         if (
-            type(short.get("openType")) is not int
-            or short["openType"]!=2
-            or type(short.get("leverage")) is not int
-            or short["leverage"]!=1
+            type(config.get("openType")) is not int
+            or config["openType"]!=2
+            or type(config.get("leverage")) is not int
+            or config["leverage"]!=1
         ):
             raise V40CandidateMarketHalted("MARKET_PRIVATE_CROSS_ONE_X_UNVERIFIED")
+        # Do not waive an actual disagreement when risk_limit happens to
+        # include both fields. They are optional there, not ignorable.
+        if (
+            ("openType" in short and (
+                type(short["openType"]) is not int
+                or short["openType"]!=config["openType"]
+            ))
+            or ("leverage" in short and (
+                type(short["leverage"]) is not int
+                or short["leverage"]!=config["leverage"]
+            ))
+        ):
+            raise V40CandidateMarketHalted("MARKET_PRIVATE_RISK_LEVERAGE_CONFLICT")
         private_max=_decimal(short.get("maxVol"))
         if private_max<minimum:
             raise V40CandidateMarketHalted("MARKET_PRIVATE_VOLUME_BELOW_MINIMUM")
@@ -368,6 +416,10 @@ class MexcV40CandidateMarketWitness:
             top_bid=bids[0][0],top_ask=asks[0][0],
             bookended_flat_account=True,hedge_mode_observed=True,
             private_risk_row_observed=True,
+            private_short_cross_1x_settings_bookended=True,
+            private_risk_limit_settings_fields_missing=(
+                "openType" not in short or "leverage" not in short
+            ),
         ),depth
 
     async def observe(
