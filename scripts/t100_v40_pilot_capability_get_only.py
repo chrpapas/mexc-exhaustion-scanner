@@ -2,8 +2,8 @@
 
 After successful two-bookend flat account preflight, inspect a single
 selected FUTURES contract's *public* availability and current private
-short CROSS 1x risk tier. These GETs cannot establish API-key Futures
-write permissions or certify any native stop amendment or trigger.
+short risk tier and separate position/leverage configuration. These GETs
+cannot establish API-key Futures write permissions or certify any native stop amendment or trigger.
 
 Private GET is restricted by KeychainSignedGetOnly, public GET is
 restricted to a single contract-country endpoint. No POST, no DB, no
@@ -42,6 +42,11 @@ class PilotCapabilityReport:
     flat_hedge_account_bookended: bool=False
     public_futures_contract_eligible_observed: bool=False
     current_private_short_cross_1x_tier_observed: bool=False
+    current_private_short_risk_limit_observed: bool=False
+    private_short_position_leverage_observed: bool=False
+    short_margin_mode_observed: str="UNKNOWN"
+    short_leverage_observed: int|None=None
+    private_risk_limit_mode_fields_missing: bool=False
     one_contract_on_public_lot_grid: bool=False
     current_short_tier_supports_one_contract: bool=False
     current_contract_tick_observed: bool=False
@@ -75,6 +80,7 @@ def assess_pilot_capability(
     symbol: str,
     contract: Any,
     private_risk: Any,
+    private_leverage: Any,
     flat_preflight_ok: bool,
 ) -> PilotCapabilityReport:
     if (
@@ -157,42 +163,83 @@ def assess_pilot_capability(
                       one_contract_on_public_lot_grid=True,
                       current_contract_tick_observed=True)
     short=shorts[0]
-    if not (
-        type(short.get("openType")) is int
-        and short["openType"]==2
-        and type(short.get("leverage")) is int
-        and short["leverage"]==1
-        and type(short.get("level")) is int
-        and short["level"]>=1
-    ):
-        return report("PILOT_PRIVATE_SHORT_CROSS_ONE_X_NOT_OBSERVED_HALT",
-                      flat_hedge_account_bookended=True,
-                      public_futures_contract_eligible_observed=True,
-                      one_contract_on_public_lot_grid=True,
-                      current_contract_tick_observed=True)
+    base=dict(
+        flat_hedge_account_bookended=True,
+        public_futures_contract_eligible_observed=True,
+        one_contract_on_public_lot_grid=True,
+        current_contract_tick_observed=True,
+    )
+    if type(short.get("level")) is not int or short["level"]<1:
+        return report("PILOT_PRIVATE_SHORT_RISK_TIER_INVALID_HALT",**base)
     try:
         max_private=_positive(short.get("maxVol"))
     except PilotCapabilityHalted:
-        return report("PILOT_PRIVATE_MAX_VOLUME_INVALID_HALT",
-                      flat_hedge_account_bookended=True,
-                      public_futures_contract_eligible_observed=True,
-                      one_contract_on_public_lot_grid=True,
-                      current_contract_tick_observed=True)
+        return report("PILOT_PRIVATE_MAX_VOLUME_INVALID_HALT",**base)
+    base["current_private_short_risk_limit_observed"]=True
+
+    # account/risk_limit's primary contract describes liquidation tiers,
+    # NOT authoritative leverage configuration. Historic versions may
+    # omit openType/leverage altogether. Use the separately documented
+    # private/position/leverage GET for the actual SHORT mode and 1x.
+    if (
+        type(private_leverage) is not list
+        or not 1<=len(private_leverage)<=2
+        or any(type(row) is not dict for row in private_leverage)
+    ):
+        return report("PILOT_PRIVATE_LEVERAGE_ROWS_UNVERIFIED_HALT",**base)
+    seen=set()
+    for row in private_leverage:
+        side=row.get("positionType")
+        if (
+            type(side) is not int or side not in (1,2)
+            or side in seen
+            or ("symbol" in row and row["symbol"]!=symbol)
+            or type(row.get("openType")) is not int
+            or row["openType"] not in (1,2)
+            or type(row.get("leverage")) is not int
+            or not 1<=row["leverage"]<=1000
+        ):
+            return report("PILOT_PRIVATE_LEVERAGE_ROWS_UNVERIFIED_HALT",**base)
+        seen.add(side)
+    leverages=[r for r in private_leverage if r["positionType"]==2]
+    if len(leverages)!=1:
+        return report("PILOT_PRIVATE_SHORT_LEVERAGE_MISSING_HALT",**base)
+    config=leverages[0]
+    base.update(
+        private_short_position_leverage_observed=True,
+        short_margin_mode_observed=(
+            "CROSS" if config["openType"]==2 else "ISOLATED"
+        ),
+        short_leverage_observed=config["leverage"],
+        private_risk_limit_mode_fields_missing=(
+            "openType" not in short or "leverage" not in short
+        ),
+    )
+    if config["openType"]!=2 or config["leverage"]!=1:
+        return report("PILOT_PRIVATE_SHORT_CONFIG_NOT_CROSS_ONE_X_HALT",**base)
+
+    # When risk-limit GET also supplies mode/leverage, disagreements
+    # between two signed private endpoints are NOT silently waived.
+    # Do not infer CROSS from merely seeing a risk tier.
+    if (
+        ("openType" in short and (
+            type(short["openType"]) is not int
+            or short["openType"]!=config["openType"]
+        ))
+        or ("leverage" in short and (
+            type(short["leverage"]) is not int
+            or short["leverage"]!=config["leverage"]
+        ))
+    ):
+        return report("PILOT_PRIVATE_RISK_VS_LEVERAGE_CONFLICT_HALT",**base)
+
+    base["current_private_short_cross_1x_tier_observed"]=True
     if max_private<D(1):
-        return report("PILOT_PRIVATE_SHORT_TIER_BELOW_ONE_CONTRACT_HALT",
-                      flat_hedge_account_bookended=True,
-                      public_futures_contract_eligible_observed=True,
-                      one_contract_on_public_lot_grid=True,
-                      current_private_short_cross_1x_tier_observed=True,
-                      current_contract_tick_observed=True)
+        return report("PILOT_PRIVATE_SHORT_TIER_BELOW_ONE_CONTRACT_HALT",**base)
     return report(
         "PILOT_PUBLIC_CONTRACT_AND_PRIVATE_SHORT_CROSS_TIER_OBSERVED_NONAUTHORIZING",
-        flat_hedge_account_bookended=True,
-        public_futures_contract_eligible_observed=True,
-        current_private_short_cross_1x_tier_observed=True,
-        one_contract_on_public_lot_grid=True,
         current_short_tier_supports_one_contract=True,
-        current_contract_tick_observed=True,
+        **base,
     )
 
 
