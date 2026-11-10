@@ -95,6 +95,45 @@ class ProbeTests(unittest.IsolatedAsyncioTestCase):
             await self.probe.raw_account_risk_limits("BAD/SYMBOL")
         self.assertEqual(self.client.calls, [])
 
+    async def test_short_leverage_get_exposes_cross_one_x_side(self):
+        data=[
+            {"positionType":1,"openType":1,"leverage":2},
+            {"positionType":2,"openType":2,"leverage":1},
+        ]
+        self.client.responses=[data]
+        assert await self.probe.raw_position_leverage("BTC_USDT")==data
+        assert self.client.calls==[
+            ("/api/v1/private/position/leverage",{"symbol":"BTC_USDT"})
+        ]
+
+    async def test_position_leverage_get_malformed_mode_or_scope_halts(self):
+        for payload in (
+            [],None,{},[{"positionType":2,"openType":2}],
+            [{"positionType":2,"openType":1,"leverage":False}],
+            [{"positionType":2,"openType":3,"leverage":1}],
+            [{"positionType":2,"openType":2,"leverage":1},
+             {"positionType":2,"openType":2,"leverage":1}],
+            [{"positionType":2,"openType":2,"leverage":1,
+              "symbol":"ETH_USDT"}],
+        ):
+            with self.subTest(payload=payload):
+                self.client.responses=[payload]
+                with self.assertRaises(VenueReadHalted):
+                    await self.probe.raw_position_leverage("BTC_USDT")
+
+    async def test_position_leverage_malformed_symbol_never_hits_exchange(self):
+        with self.assertRaisesRegex(VenueReadHalted,"INVALID_POSITION_LEVERAGE_SYMBOL"):
+            await self.probe.raw_position_leverage("BTC_USDT/../order/submit")
+        assert self.client.calls==[]
+
+    async def test_position_leverage_get_transport_failure_redacted(self):
+        self.client.fail=True
+        with self.assertRaisesRegex(VenueReadHalted,"POSITION_LEVERAGE_GET_FAILED"):
+            await self.probe.raw_position_leverage("BTC_USDT")
+        assert self.client.calls==[
+            ("/api/v1/private/position/leverage",{"symbol":"BTC_USDT"})
+        ]
+
     async def test_flat_positions_is_list_not_inferred_from_null(self):
         self.client.responses = [[]]
         self.assertEqual(await self.probe.raw_open_positions(), [])
