@@ -5,6 +5,7 @@ import asyncio
 from dataclasses import replace
 from datetime import datetime,timezone
 from types import SimpleNamespace
+import sys
 
 import pytest
 
@@ -213,3 +214,109 @@ def test_restricted_sql_and_keychain_code_has_no_order_submission():
         "trigger_deploy(", "pool.execute(", "INSERT INTO", "UPDATE public.",
     ):
         assert forbidden not in text
+
+
+def test_fixed_source_failure_is_exposed_without_secret_contents():
+    from app.t100_live_v40_stage2_source import V40SignalIntakeHalted
+    src,_=source([candidate()])
+    async def missing_role(**kwargs):
+        raise V40SignalIntakeHalted(
+            "SOURCE_RESTRICTED_REPEATABLE_READ_CONTEXT_REQUIRED"
+        )
+    src.latest_candidates=missing_role
+    out=asyncio.run(cli.preview_fresh_stage2(
+        source=src,private=ReadOnlyMexcProbe(Private()),public=Public(),
+        clock_ms=Clock(START,END),observed_at=NOW,env=PAPER,
+    ))
+    assert out.status==(
+        "STAGE2_MARKET_SOURCE_RESTRICTED_REPEATABLE_READ_CONTEXT_REQUIRED_HALT"
+    )
+    assert not out.entry_allowed
+
+
+def test_unrecognized_source_error_cannot_be_echoed_as_password():
+    from app.t100_live_v40_stage2_source import V40SignalIntakeHalted
+    src,_=source([candidate()])
+    async def secret_error(**kwargs):
+        raise V40SignalIntakeHalted("SOURCE_PASSWORD_IS_VERY_SECRET")
+    src.latest_candidates=secret_error
+    out=asyncio.run(cli.preview_fresh_stage2(
+        source=src,private=ReadOnlyMexcProbe(Private()),public=Public(),
+        clock_ms=Clock(START,END),observed_at=NOW,env=PAPER,
+    ))
+    assert out.status=="STAGE2_MARKET_READONLY_SOURCE_UNVERIFIED_HALT"
+    assert "PASSWORD" not in str(out)
+
+
+def test_mac_owner_url_has_one_hidden_prompt_and_no_executor_password(
+    monkeypatch,
+):
+    monkeypatch.setattr(cli.sys,"platform","darwin")
+    entries=[]
+    monkeypatch.setattr(
+        cli,"_from_keychain",
+        lambda service,account:(
+            entries.append(("KEYCHAIN",service,account)) or "FAKE_KEY"
+        ),
+    )
+    prompts=[]
+    url="postgresql://mexc_scanner:fake_pass@localhost/mexc_exhaustion"
+    def one_hidden_prompt(question):
+        prompts.append(question)
+        return url
+    monkeypatch.setattr(cli.getpass,"getpass",one_hidden_prompt)
+    pools=[]
+    class FakePool:
+        async def close(self):pools.append("CLOSED")
+    async def pool_factory(**kw):
+        pools.append(kw)
+        return FakePool()
+    monkeypatch.setitem(
+        sys.modules,"asyncpg",
+        SimpleNamespace(create_pool=pool_factory),
+    )
+    class Signed:
+        def __init__(self,*,key,secret):
+            assert key==secret=="FAKE_KEY"
+        async def close(self):entries.append("SIGNED_CLOSED")
+    monkeypatch.setattr(cli,"KeychainSignedGetOnly",Signed)
+    class PublicCtx:
+        async def __aenter__(self):return object()
+        async def __aexit__(self,*_):return None
+    monkeypatch.setattr(cli.httpx,"AsyncClient",lambda **kw:PublicCtx())
+    async def fake_preview(**kw):
+        assert kw["source"].manual_scanner_owner_readonly is True
+        assert kw["source"].expected_source_role=="mexc_scanner"
+        assert kw["env"]==PAPER
+        return cli.Stage2Preview(
+            status="STAGE2_NO_FRESH_ELIGIBLE_CANDIDATES_NONAUTHORIZING",
+        )
+    monkeypatch.setattr(cli,"preview_fresh_stage2",fake_preview)
+    out=asyncio.run(cli._main(SimpleNamespace(
+        keychain_service=cli.WEB_PILOT_KEYCHAIN_SERVICE,max_checks=4,
+    ),PAPER))
+    assert out.status=="STAGE2_NO_FRESH_ELIGIBLE_CANDIDATES_NONAUTHORIZING"
+    assert len(prompts)==1
+    assert "External URL" in prompts[0]
+    assert "password" not in prompts[0].lower()
+    assert isinstance(pools[0],dict)
+    assert pools[0]["dsn"]==url
+    assert "user" not in pools[0]
+    assert "password" not in pools[0]
+    assert pools[0]["server_settings"]=={
+        "default_transaction_read_only":"on",
+    }
+    assert pools[1]=="CLOSED"
+    assert "SIGNED_CLOSED" in entries
+    assert out.mexc_posts==out.database_writes==0
+
+
+def test_mac_owner_url_missing_refuses_without_connecting_to_db(monkeypatch):
+    monkeypatch.setattr(cli.sys,"platform","darwin")
+    monkeypatch.setattr(cli,"_from_keychain",lambda *_:"SAFE_MOCK_KEY")
+    monkeypatch.setattr(cli.getpass,"getpass",lambda _:"")
+    out=asyncio.run(cli._main(SimpleNamespace(
+        keychain_service=cli.WEB_PILOT_KEYCHAIN_SERVICE,max_checks=4,
+    ),PAPER))
+    assert out.status=="STAGE2_MARKET_SCANNER_OWNER_URL_REQUIRED_HALT"
+    assert out.database_writes==out.mexc_posts==0
