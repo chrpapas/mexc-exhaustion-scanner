@@ -46,6 +46,7 @@ from app.t100_live_v40_candidate_market_witness import (
 )
 from app.t100_live_v40_stage2_source import (
     PostgresV40Stage2Source,V40SignalIntakeHalted,V40SourceBatch,
+    V40SourceCandidate,
 )
 from scripts.t100_v40_pilot_get_only import (
     BASE,KEY_ACCOUNT,SECRET_ACCOUNT,KeychainSignedGetOnly,_from_keychain,
@@ -158,10 +159,14 @@ async def preview_fresh_stage2(
         or batch.entry_allowed is not False
         or type(batch.candidates) is not tuple
         or len(batch.candidates)>MAX_SOURCE
+        or any(type(c) is not V40SourceCandidate
+               for c in batch.candidates)
     ):
         return _halt("STAGE2_MARKET_SOURCE_CONTRACT_INVALID_HALT")
     if not batch.candidates:
         return Stage2Preview(status="STAGE2_NO_FRESH_ELIGIBLE_CANDIDATES_NONAUTHORIZING")
+    if len({c.signal_id for c in batch.candidates})!=len(batch.candidates):
+        return _halt("STAGE2_MARKET_DUPLICATE_SIGNAL_SOURCE_HALT")
     # Never claim all candidates inspected if the bounded research sweep
     # did not inspect every one. Newest first, no fake signal generation.
     selected=sorted(
