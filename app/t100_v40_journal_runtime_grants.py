@@ -274,6 +274,20 @@ async def apply(conn:Any)->dict[str,Any]:
                         TARGET_ROLE,table,privilege,
                     ) is not False:
                         raise V40JournalGrantsHalted("V40_JOURNAL_GRANTS_EXISTING_ACL")
+                for column in (UPDATE_COLUMNS if table==SLOT else ("signal_id",)):
+                    if await conn.fetchval(
+                        "SELECT has_column_privilege($1,$2,$3,'UPDATE')",
+                        TARGET_ROLE,table,column,
+                    ) is not False:
+                        raise V40JournalGrantsHalted("V40_JOURNAL_GRANTS_EXISTING_ACL")
+                for privilege in ("SELECT","INSERT","UPDATE","DELETE","TRUNCATE"):
+                    if await conn.fetchval(
+                        "SELECT has_table_privilege($1,$2,$3)",
+                        RESTRICTED_V40_SIGNAL_READER_ROLE,table,privilege,
+                    ) is not False:
+                        raise V40JournalGrantsHalted(
+                            "V40_JOURNAL_GRANTS_SIGNAL_READER_NOT_ISOLATED"
+                        )
             trigger=await conn.fetchval(
                 """SELECT EXISTS (
                     SELECT 1 FROM pg_catalog.pg_trigger WHERE
@@ -335,7 +349,12 @@ async def _run(*,apply_changes:bool)->dict[str,Any]:
             audit=await audit_runtime(runtime)
         finally:
             await runtime.close()
-        return {**grant_result,**audit}
+        return {
+            **grant_result,**audit,
+            "database_writes":grant_result["database_writes"],
+            "grant_statements":grant_result["grant_statements"],
+            "grants_applied":True,
+        }
     except Exception:
         return {**grant_result,"status":"V40_JOURNAL_GRANTS_APPLIED_AUDIT_LOGIN_FAILED"}
 
