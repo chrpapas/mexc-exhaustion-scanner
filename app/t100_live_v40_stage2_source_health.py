@@ -12,6 +12,7 @@ SQL mutation, MEXC request, Keychain lookup or credentials in responses.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from collections.abc import Mapping
 from datetime import datetime,timedelta,timezone
 from typing import Any
 
@@ -119,9 +120,9 @@ async def inspect_scanner_source_health(
                 latest=await conn.fetchrow(LAST_ELIGIBLE_SQL)
 
         if (
-            (heartbeat is not None and type(heartbeat) is not dict)
-            or (runtime is not None and type(runtime) is not dict)
-            or (latest is not None and type(latest) is not dict)
+            (heartbeat is not None and not isinstance(heartbeat,Mapping))
+            or (runtime is not None and not isinstance(runtime,Mapping))
+            or (latest is not None and not isinstance(latest,Mapping))
             or type(count) is not int or count<0
         ):
             return blocked("STAGE2_SOURCE_HEALTH_READBACK_INVALID_HALT")
