@@ -65,7 +65,7 @@ def monitor_environment(env: Mapping[str,str]) -> bool:
     return (
         eligible_environment(env)
         and env.get(ACTIVATION_FLAG)=="true"
-        and env.get("T100_V40_SINGLE_POSITION_PILOT")=="true"
+        and env.get("T100_V40_MONITOR_SINGLE_POSITION_SCOPE")=="true"
     )
 
 
