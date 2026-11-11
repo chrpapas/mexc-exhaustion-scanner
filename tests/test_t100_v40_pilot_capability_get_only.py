@@ -346,10 +346,45 @@ def test_private_get_drift_identifies_endpoint_without_weakening_halt(
     ))
     assert result.status=="PILOT_PRIVATE_CAPABILITY_GET_DRIFT_HALT"
     assert result.private_capability_drift_source==drift_scope
+    assert result.private_risk_drift_field_labels==(
+        ("SHORT_MAXVOL",)
+        if drift_scope in ("RISK_LIMIT","BOTH") else ()
+    )
     assert not result.current_private_short_cross_1x_tier_observed
     assert not result.live_authorization
     assert not result.entry_allowed
     assert result.mexc_posts==0
+
+
+def test_risk_limit_diagnostic_no_values_unknown_keys_or_order_waiver():
+    from scripts.t100_v40_pilot_capability_get_only import (
+        _risk_drift_field_labels,
+    )
+    first=tiers()
+    second=deepcopy(first)
+    second[SYMBOL][1]["maxVol"]="987654321"
+    assert _risk_drift_field_labels(
+        first,second,SYMBOL,
+    )==("SHORT_MAXVOL",)
+    assert "987654321" not in str(_risk_drift_field_labels(
+        first,second,SYMBOL,
+    ))
+    second=deepcopy(first)
+    second[SYMBOL].reverse()
+    assert _risk_drift_field_labels(
+        first,second,SYMBOL,
+    )==("ROW_ORDER_ONLY",)
+    second=deepcopy(first)
+    second[SYMBOL][1]["PRIVATE_SECRET_TOKEN"]="secret-value"
+    assert _risk_drift_field_labels(
+        first,second,SYMBOL,
+    )==("SHORT_OTHER_FIELD",)
+    second=deepcopy(first)
+    second[SYMBOL][0]["mmr"]="0.099"
+    second[SYMBOL][1]["level"]=4
+    assert _risk_drift_field_labels(
+        first,second,SYMBOL,
+    )==("LONG_MMR","SHORT_LEVEL")
 
 
 def test_signed_leverage_get_failure_has_specific_redacted_status(monkeypatch):
