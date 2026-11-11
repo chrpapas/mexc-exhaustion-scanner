@@ -529,3 +529,57 @@ def test_exact_depth_verification_never_upgrades_uncertified_risk_flags():
     assert not merged.contract_trading_access_verified
     assert not merged.no_unresolved_mutations
     assert original.observed_sell_vwap==D("0")
+
+
+def test_exact_monitored_signal_identity_can_progress_only_under_mocked_release(monkeypatch):
+    log=[]
+    patch_release_gates_and_mutations(monkeypatch,log)
+    signal=candidate()
+    outcome=asyncio.run(controller(log).run_one(
+        permit=None,caps=caps(),parity_report={},holder_id="mock-holder",
+        monitored_signal_id=signal.signal_id,
+        monitored_symbol=signal.symbol,monitored_tier=signal.tier,
+    ))
+    assert outcome.status=="V40_ONE_PROTECTED_ENTRY_RECOVERED_NOT_AUTONOMOUS"
+    assert log[0:2]==["source","lease_acquire"]
+    assert log.count("dispatch")==1
+
+
+@pytest.mark.parametrize("candidate_variant",[
+    "different_id","different_symbol","different_tier",
+    "empty","multiple","partial_identity","bad_identity",
+])
+def test_monitored_signal_drift_blocks_before_lease_reservation_or_post(
+    monkeypatch,candidate_variant,
+):
+    log=[]
+    patch_release_gates_and_mutations(monkeypatch,log)
+    signal=candidate()
+    kwargs={
+        "monitored_signal_id":signal.signal_id,
+        "monitored_symbol":signal.symbol,
+        "monitored_tier":signal.tier,
+    }
+    events=[signal]
+    if candidate_variant=="different_id":
+        kwargs["monitored_signal_id"]=signal.signal_id+1
+    elif candidate_variant=="different_symbol":
+        kwargs["monitored_symbol"]="DIFFERENT_USDT"
+    elif candidate_variant=="different_tier":
+        kwargs["monitored_tier"]=(
+            "HIGH_225" if signal.tier=="LOW_100" else "LOW_100"
+        )
+    elif candidate_variant=="empty":
+        events=[]
+    elif candidate_variant=="multiple":
+        events=[signal,signal]
+    elif candidate_variant=="partial_identity":
+        del kwargs["monitored_tier"]
+    else:
+        kwargs["monitored_signal_id"]=True
+    with pytest.raises(m.V40CoordinatorHalted,match="V40_MONITORED_SIGNAL"):
+        asyncio.run(controller(log,events=events).run_one(
+            permit=None,caps=caps(),parity_report={},holder_id="mock-holder",
+            **kwargs,
+        ))
+    assert log==["source"]
