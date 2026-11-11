@@ -34,7 +34,9 @@ from typing import Any, Callable, Protocol, Sequence
 from app.t100_live_authorization import (
     LiveMutationPermit, require_certified_transport_permit,
 )
-from app.t100_live_execution import EntryIntent, LiveCaps
+from app.t100_live_execution import (
+    EntryIntent, LiveCaps, modeled_short_loss_at_native_stop,
+)
 from app.t100_live_leader_fencing import (
     LeaderLease, LeaderLeaseCoordinator,
 )
@@ -238,6 +240,7 @@ def prepare_candidate(
     risk: V40CurrentRiskEvidence,
     terms: V40ContractTerms,
     cost_bps: float,
+    pilot_notional_ceiling: D | None = None,
 ) -> V40PreparedEntry | None:
     """No DB mutation or transport; exact frozen V40 quantities and origin."""
     if (
@@ -292,11 +295,20 @@ def prepare_candidate(
         or plan.live_authorization is not False
     ):
         raise V40CoordinatorHalted("V40_FOUR_SLOT_ACCOUNT_OR_STRATEGY_BLOCKED")
+    if pilot_notional_ceiling is not None and (
+        type(pilot_notional_ceiling) is not D
+        or not pilot_notional_ceiling.is_finite()
+        or pilot_notional_ceiling <= 0
+    ):
+        raise V40CoordinatorHalted("V40_PILOT_CEILING_INVALID")
+    capped_target=D(str(plan.modeled_notional_usdt))
+    if pilot_notional_ceiling is not None:
+        capped_target=min(capped_target,pilot_notional_ceiling)
     try:
         intent=EntryIntent.build(
             signal_id=signal.signal_id,symbol=signal.symbol,
             reference_price=D(str(signal.entry_reference_price)),
-            notional_usdt=D(str(plan.modeled_notional_usdt)),
+            notional_usdt=capped_target,
             contract_size=terms.contract_size,
             volume_step=terms.volume_step,
             min_volume=terms.min_volume,
@@ -312,6 +324,7 @@ def prepare_candidate(
     if (
         intent.notional_usdt <= 0
         or intent.notional_usdt > D(str(plan.modeled_notional_usdt))
+        or intent.notional_usdt > capped_target
     ):
         raise V40CoordinatorHalted("V40_ORDER_EXCEEDS_MODEL_NOTIONAL")
     return V40PreparedEntry(signal,plan,intent,terms)
