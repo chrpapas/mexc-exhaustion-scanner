@@ -1,7 +1,9 @@
 """Safe, networkless HOLDING process for repurposed old Render paper trader.
 
 This is deliberately NOT a live execution adapter. The trader service can
-build and run the new V40 branch *before* private MEXC credentials are added.
+build and run the new V40 branch before or after private MEXC credentials
+are provided: MEXC_API_KEY and MEXC_API_SECRET are NEVER read by this
+process, and their presence does not enable execution.
 It does not import an exchange, database, notifier, or signing client.
 
 Use this as the repurposed Render service's startCommand while bootstrapping
@@ -27,8 +29,8 @@ def require_disabled_worker(env: Mapping[str,str]) -> bool:
         and env.get("EXECUTION_ENABLED") == "false"
         and env.get("TRADING_MODE") == "paper"
         and not env.get("DATABASE_URL")
-        and not env.get("MEXC_API_KEY")
-        and not env.get("MEXC_API_SECRET")
+        and not env.get("T100_V40_TRADER_API_KEY")
+        and not env.get("T100_V40_TRADER_API_SECRET")
     )
 
 
