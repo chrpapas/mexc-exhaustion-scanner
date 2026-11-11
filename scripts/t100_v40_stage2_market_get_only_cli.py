@@ -113,6 +113,9 @@ _ALLOWED_FAILURES=frozenset({
     "MARKET_PRIVATE_RISK_LEVERAGE_CONFLICT",
     "MARKET_PRIVATE_CONFIG_BOOKEND_DRIFT",
     "MARKET_PRIVATE_CONFIG_SHAPE_INVALID",
+    "MARKET_PRIVATE_RISK_CANONICAL_SHAPE_INVALID",
+    "MARKET_PRIVATE_RISK_CANONICAL_ROW_INVALID",
+    "MARKET_PRIVATE_RISK_CANONICAL_ENCODING_INVALID",
     "MARKET_PRIVATE_VOLUME_BELOW_MINIMUM",
     "MARKET_BOOK_TIMESTAMP_OR_VERSION_STALE",
     "MARKET_CROSSED_ORDER_BOOK",
@@ -132,6 +135,7 @@ class CandidatePreview:
     short_cross_1x_bookended:bool=False
     public_contract_eligible:bool=False
     fresh_depth_observed:bool=False
+    private_risk_row_order_normalized:bool=False
     private_order_write_permission_verified:bool=False
     entry_allowed:bool=False
 
@@ -280,6 +284,9 @@ async def preview_fresh_stage2(
             short_cross_1x_bookended=True,
             public_contract_eligible=True,
             fresh_depth_observed=True,
+            private_risk_row_order_normalized=(
+                quote.private_risk_row_order_normalized is True
+            ),
         ))
     return Stage2Preview(
         status="STAGE2_MARKET_BOUNDED_GET_SWEEP_NONAUTHORIZING",
