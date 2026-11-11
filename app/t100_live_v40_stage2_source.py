@@ -35,6 +35,9 @@ MAX_SIGNAL_AGE_SECONDS = 900
 # forced READ ONLY, REPEATABLE READ transaction; this mode never provides
 # live execution authority or a production source role.
 MANUAL_SCANNER_READONLY_OWNER_ROLE = "mexc_scanner"
+# Separate, SELECT-ONLY source login. The live order/ledger runtime role
+# stays DENIED production scanner table privileges by design.
+RESTRICTED_V40_SIGNAL_READER_ROLE = "t100_v40_signal_reader"
 
 # The ordering includes the immutable signal PK, not mutable paper decisions.
 # Query an extra row so exceeding the batch cap blocks instead of truncating.
@@ -220,17 +223,24 @@ class PostgresV40Stage2Source:
     def __init__(
         self, pool: Any, *,
         manual_scanner_owner_readonly: bool = False,
+        restricted_source_reader: bool = False,
     ):
-        if pool is None or type(manual_scanner_owner_readonly) is not bool:
-            raise ValueError("V40_SIGNAL_READER_POOL_MISSING")
+        if (
+            pool is None or type(manual_scanner_owner_readonly) is not bool
+            or type(restricted_source_reader) is not bool
+            or (manual_scanner_owner_readonly and restricted_source_reader)
+        ):
+            raise ValueError("V40_SIGNAL_READER_POOL_OR_ROLE_INVALID")
         self.pool = pool
-        # Explicit, opt-in manual research only; default contract is
-        # unchanged. No way to select an arbitrary high-privilege role.
+        # Role must be pinned at construction; a caller can never supply
+        # an arbitrary PostgreSQL login or reuse the scanner owner for POST.
         self.expected_source_role = (
-            MANUAL_SCANNER_READONLY_OWNER_ROLE
+            RESTRICTED_V40_SIGNAL_READER_ROLE if restricted_source_reader
+            else MANUAL_SCANNER_READONLY_OWNER_ROLE
             if manual_scanner_owner_readonly else TARGET_ROLE
         )
         self.manual_scanner_owner_readonly = manual_scanner_owner_readonly
+        self.restricted_source_reader = restricted_source_reader
 
     async def latest_candidates(
         self, *,
