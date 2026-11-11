@@ -428,6 +428,91 @@ def test_private_leverage_change_during_depth_observation_halts():
         run(witness)
 
 
+def test_private_risk_two_sides_row_order_only_passes_market_get():
+    class ReorderingRisk(Private):
+        async def _private_get(self,path,params=None):
+            result=await super()._private_get(path,params)
+            if path=="/api/v1/private/account/risk_limit":
+                n=getattr(self,"risk_reads",0)+1
+                self.risk_reads=n
+                if n==2:
+                    result[SYM].reverse()
+            return result
+
+    private=ReorderingRisk()
+    private.private_risk[SYM].insert(0,{
+        "symbol":SYM,"positionType":1,"level":1,
+        "openType":2,"leverage":1,"maxVol":"1000",
+    })
+    witness=MexcV40CandidateMarketWitness(
+        private=ReadOnlyMexcProbe(private),public=Public(),
+        clock_ms=Clock(START,END),
+    )
+    quote=run(witness)
+    assert quote.private_risk_row_order_normalized is True
+    assert quote.private_short_cross_1x_settings_bookended
+    assert quote.private_key_order_permission_verified is False
+    assert quote.full_cross_collateral_verified is False
+    assert quote.entry_allowed is False
+    assert quote.live_authorization is False
+    assert all(x[0]=="GET" for x in private.calls)
+
+
+@pytest.mark.parametrize("change",["maxVol","level","openType","unknown"])
+def test_row_reorder_cannot_hide_changed_risk_fields(change):
+    class ReorderingAndChangingRisk(Private):
+        async def _private_get(self,path,params=None):
+            result=await super()._private_get(path,params)
+            if path=="/api/v1/private/account/risk_limit":
+                n=getattr(self,"risk_reads",0)+1
+                self.risk_reads=n
+                if n==2:
+                    result[SYM].reverse()
+                    row=next(r for r in result[SYM] if r["positionType"]==2)
+                    if change=="maxVol":
+                        row["maxVol"]="999"
+                    elif change=="level":
+                        row["level"]=2
+                    elif change=="openType":
+                        row["openType"]=1
+                    else:
+                        row["undocumentedField"]="redacted"
+            return result
+
+    private=ReorderingAndChangingRisk()
+    private.private_risk[SYM].insert(0,{
+        "symbol":SYM,"positionType":1,"level":1,
+        "openType":2,"leverage":1,"maxVol":"1000",
+    })
+    witness=MexcV40CandidateMarketWitness(
+        private=ReadOnlyMexcProbe(private),public=Public(),
+        clock_ms=Clock(START,END),
+    )
+    with pytest.raises(V40CandidateMarketHalted,match="PRIVATE_CONFIG_BOOKEND_DRIFT"):
+        run(witness)
+
+
+def test_risk_side_duplicates_and_bad_identity_cannot_be_canonicalized():
+    from app.t100_live_v40_candidate_market_witness import _risk_limit_canonical
+    from copy import deepcopy
+    original={SYM:[
+        {"symbol":SYM,"positionType":1,"level":1,"maxVol":"100"},
+        {"symbol":SYM,"positionType":2,"level":1,"maxVol":"100"},
+    ]}
+    canon=_risk_limit_canonical(original,SYM)
+    rev=deepcopy(original)
+    rev[SYM].reverse()
+    assert _risk_limit_canonical(rev,SYM)==canon
+    for mutation in ("duplicate","wrong_symbol","bool_level","missing_side"):
+        bad=deepcopy(original)
+        if mutation=="duplicate":bad[SYM][1]["positionType"]=1
+        if mutation=="wrong_symbol":bad[SYM][1]["symbol"]="OTHER_USDT"
+        if mutation=="bool_level":bad[SYM][1]["level"]=True
+        if mutation=="missing_side":bad[SYM].clear()
+        with pytest.raises(V40CandidateMarketHalted,match="CANONICAL_"):
+            _risk_limit_canonical(bad,SYM)
+
+
 def test_private_risk_maxvol_change_during_depth_observation_halts():
     class DriftingRisk(Private):
         async def _private_get(self,path,params=None):
