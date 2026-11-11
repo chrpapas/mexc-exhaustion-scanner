@@ -13,6 +13,7 @@ from app.t100_v40_render_supervised_pilot_worker import (
     supervise_real_v40_cycle, run_supervised_signal_monitor,
 )
 from scripts.t100_v40_pilot_get_only import PilotGetOnlyResult
+from scripts.t100_v40_pilot_capability_get_only import PilotCapabilityReport
 
 BASE={
     "T100_V40_EXECUTOR_DISABLED_WORKER":"true",
@@ -59,7 +60,19 @@ def candidate():
     )
 
 
-def run(env=BASE,source=None,account=None):
+def capability():
+    return PilotCapabilityReport(
+        status="PILOT_PUBLIC_CONTRACT_AND_PRIVATE_SHORT_CROSS_TIER_OBSERVED_NONAUTHORIZING",
+        symbol="TEST_USDT",flat_hedge_account_bookended=True,
+        public_futures_contract_eligible_observed=True,
+        current_private_short_cross_1x_tier_observed=True,
+        one_contract_on_public_lot_grid=True,
+        current_short_tier_supports_one_contract=True,
+        short_margin_mode_observed="CROSS",short_leverage_observed=1,
+    )
+
+
+def run(env=BASE,source=None,account=None,cap=None):
     calls=[]
     async def source_read(environment):
         calls.append("source")
@@ -71,8 +84,16 @@ def run(env=BASE,source=None,account=None):
         if isinstance(account,BaseException):
             raise account
         return flat() if account is None else account
+    async def capability_observe(*,key,secret,symbol):
+        calls.append("capability")
+        assert key==BASE["MEXC_API_KEY"] and secret==BASE["MEXC_API_SECRET"]
+        assert symbol=="TEST_USDT"
+        if isinstance(cap,BaseException):
+            raise cap
+        return capability() if cap is None else cap
     result=asyncio.run(supervise_real_v40_cycle(
         env,signal_read=source_read,account_observe=account_observe,
+        capability_observe=capability_observe,
     ))
     return result,calls
 
@@ -91,10 +112,13 @@ def test_empty_genuine_scanner_continuously_gets_flat_account():
 
 def test_real_fresh_v40_candidate_is_logged_not_executed():
     result,calls=run(source=candidate())
-    assert calls==["source","account"]
+    assert calls==["source","account","capability"]
     assert result.status=="V40_REAL_FRESH_SIGNAL_OBSERVED_EXECUTION_STILL_GUARDED"
     assert result.signal_id==492 and result.signal_symbol=="TEST_USDT"
     assert result.real_signal_economics_observed
+    assert result.candidate_public_contract_and_cross_1x_verified is True
+    assert result.candidate_exact_strategy_lot_verified is False
+    assert result.candidate_capability_status=="PILOT_PUBLIC_CONTRACT_AND_PRIVATE_SHORT_CROSS_TIER_OBSERVED_NONAUTHORIZING"
     assert result.enabled_position_capacity==0
     assert not result.native_stop_management_connected
     assert not result.continuous_nonflat_guardian_connected
@@ -198,3 +222,32 @@ def test_supervisor_halts_after_unverified_first_cycle(capsys):
     ))
     assert code==2 and events==["cycle"]
     assert "UNVERIFIED_HALT" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("cap_result",[
+    replace(capability(),short_margin_mode_observed="ISOLATED"),
+    replace(capability(),short_leverage_observed=2),
+    replace(capability(),current_short_tier_supports_one_contract=False),
+    replace(capability(),one_contract_on_public_lot_grid=False),
+    replace(capability(),status="PILOT_PUBLIC_CONTRACT_NOT_ELIGIBLE_HALT"),
+    replace(capability(),symbol="OTHER_USDT"),
+    replace(capability(),mexc_posts=1),
+    RuntimeError("PRIVATE_API_SECRET_IN_ERROR_MESSAGE"),
+])
+def test_live_candidate_cross_or_contract_unverified_halts_without_order(cap_result):
+    out,calls=run(source=candidate(),cap=cap_result)
+    assert out.status in (
+        "V40_REAL_SIGNAL_PRIVATE_CROSS_CAPABILITY_UNVERIFIED_HALT",
+        "V40_REAL_SIGNAL_PRIVATE_CROSS_CAPABILITY_GET_FAILED_HALT",
+    )
+    assert calls==["source","account","capability"]
+    assert not out.live_authorization and not out.entry_allowed
+    assert "PRIVATE_API_SECRET" not in str(out)
+
+
+def test_no_candidate_does_not_hit_public_contract_or_risk_api():
+    out,calls=run(source=empty())
+    assert out.status=="V40_REAL_SCANNER_ACTIVE_NO_CANDIDATE_ACCOUNT_FLAT"
+    assert calls==["source","account"]
+    assert not out.candidate_public_contract_and_cross_1x_verified
+    assert not out.candidate_exact_strategy_lot_verified
