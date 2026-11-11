@@ -183,3 +183,61 @@ def test_paper_trade_decision_is_not_a_v40_entry_gate():
 def test_legacy_performance_dashboard_intentionally_disabled():
     worker=object.__new__(V40Stage2RenderScanner)
     assert asyncio.run(worker._maybe_send_daily_dashboard(T)) is None
+
+
+def test_v40_initialization_reuses_existing_schema_never_runs_migrations():
+    from types import SimpleNamespace
+    from app.t100_200_strategy import STRATEGY_ID
+    calls=[]
+    class Conn:
+        async def fetchrow(self,sql):
+            calls.append(sql)
+            if "current_database()" in sql:
+                return {"db":"mexc_exhaustion","role":"mexc_scanner"}
+            return {"strategy_id":STRATEGY_ID,"run_id":"existing"}
+    class Pool:
+        def acquire(self):
+            class Acq:
+                async def __aenter__(self):return Conn()
+                async def __aexit__(self,*_):return False
+            return Acq()
+    class DB:
+        pool=Pool()
+        async def connect(self):calls.append("CONNECT")
+        async def migrate(self):raise AssertionError("MIGRATIONS_FORBIDDEN")
+    worker=object.__new__(V40Stage2RenderScanner)
+    worker.db=DB()
+    async def refresh():calls.append("REFRESH")
+    worker.refresh_contracts=refresh
+    asyncio.run(worker.initialize())
+    assert calls[0]=="CONNECT"
+    assert calls[-1]=="REFRESH"
+    assert any("FROM public.t100_runtime" in q for q in calls)
+    assert not any("INSERT" in q or "ALTER" in q for q in calls)
+
+
+def test_v40_startup_rejects_unexpected_scanner_owner_identity_before_writes():
+    from app.t100_v40_render_stage2_scanner import V40RenderCutoverHalted
+    calls=[]
+    class Conn:
+        async def fetchrow(self,sql):
+            if "current_database()" in sql:
+                return {"db":"mexc_exhaustion","role":"t100_live_runtime"}
+            return {"strategy_id":STRATEGY_ID,"run_id":"existing"}
+    class Pool:
+        def acquire(self):
+            class Acq:
+                async def __aenter__(self):return Conn()
+                async def __aexit__(self,*_):return False
+            return Acq()
+    class DB:
+        pool=Pool()
+        async def connect(self):pass
+        async def migrate(self):raise AssertionError("FORBIDDEN")
+    worker=object.__new__(V40Stage2RenderScanner)
+    worker.db=DB()
+    async def refresh():calls.append("UNSAFE_REFRESH")
+    worker.refresh_contracts=refresh
+    with pytest.raises(V40RenderCutoverHalted,match="ROLE_INVALID"):
+        asyncio.run(worker.initialize())
+    assert calls==[]
