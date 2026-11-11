@@ -24,8 +24,8 @@ def test_paper_no_database_no_legacy_exchange_passes():
     ("EXECUTION_ENABLED","true"),
     ("TRADING_MODE","live"),
     ("DATABASE_URL","postgresql://owner:pass@hostname/db"),
-    ("MEXC_API_KEY","old_account_key"),
-    ("MEXC_API_SECRET","old_account_secret"),
+    ("T100_V40_TRADER_API_KEY","ambiguous_second_key"),
+    ("T100_V40_TRADER_API_SECRET","ambiguous_second_secret"),
 ])
 def test_any_nonisolated_or_trading_mode_fails_closed(k,v):
     assert not require_disabled_worker({**BASE,k:v})
@@ -34,3 +34,10 @@ def test_missing_enables_do_not_default_open():
     assert not require_disabled_worker({})
     for k in BASE:
         assert not require_disabled_worker({x:y for x,y in BASE.items() if x!=k})
+
+
+def test_disabled_holding_runner_stays_networkless_with_two_mexc_secrets():
+    env={**BASE, "MEXC_API_KEY":"isolated-subaccount-key",
+              "MEXC_API_SECRET":"isolated-subaccount-secret"}
+    assert require_disabled_worker(env)
+    # The holding worker neither reads these secrets nor makes any calls.
