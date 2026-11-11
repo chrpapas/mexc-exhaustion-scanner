@@ -77,6 +77,7 @@ class HistoricalSymbolSettings:
     short_margin_mode_observed:str="UNKNOWN"
     private_capability_drift_source:str="NONE"
     private_risk_drift_field_labels:tuple[str,...]=()
+    private_risk_row_order_normalized:bool=False
     short_leverage_observed:int|None=None
     current_short_cross_1x_observed:bool=False
     historical_only:bool=True
@@ -133,6 +134,7 @@ def _safe_row(
         or observation.private_capability_drift_source not in (
             "NONE","RISK_LIMIT","POSITION_LEVERAGE","BOTH"
         )
+        or type(observation.private_risk_row_order_normalized) is not bool
         or type(observation.private_risk_drift_field_labels) is not tuple
         or any(
             type(label) is not str
@@ -190,6 +192,7 @@ def _safe_row(
         short_leverage_observed=observation.short_leverage_observed,
         private_capability_drift_source=observation.private_capability_drift_source,
         private_risk_drift_field_labels=observation.private_risk_drift_field_labels,
+        private_risk_row_order_normalized=observation.private_risk_row_order_normalized,
         current_short_cross_1x_observed=proven,
     )
 
