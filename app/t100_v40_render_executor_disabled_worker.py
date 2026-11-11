@@ -1,14 +1,15 @@
-"""Safe, networkless HOLDING process for repurposed old Render paper trader.
+"""Default networkless HOLD, or explicit GET-only REAL V40 signal supervisor.
 
-This is deliberately NOT a live execution adapter. The trader service can
-build and run the new V40 branch before or after private MEXC credentials
-are provided: MEXC_API_KEY and MEXC_API_SECRET are NEVER read by this
-process, and their presence does not enable execution.
-It does not import an exchange, database, notifier, or signing client.
+The existing Render worker remains hard paper/kill-latched. With NO extra
+flag, it performs absolutely zero network requests, unchanged. With
+T100_V40_REAL_SIGNAL_MONITOR_ENABLED=true AND
+T100_V40_SINGLE_POSITION_PILOT=true it delegates ONLY to a real
+V40 scanner->signed GET observer (NO order/stop/DB mutation methods).
+Even if those flags are set, no live mutation authorization is possible.
 
-Use this as the repurposed Render service's startCommand while bootstrapping
-and running short-lived one-off GET-only jobs. Never replace it with an
-order path until reviewed + certified live release.
+Never replace this start command with an order/stop transport until an
+independently reviewed safe live execution, protection and recovery path
+is ready. The monitoring option is not permission to trade.
 """
 from __future__ import annotations
 
@@ -45,6 +46,16 @@ def main() -> int:
             "mexc_posts":0,"database_writes":0,
         },sort_keys=True))
         return 2
+    # Explicit first-stage live-data activation. The existing startCommand
+    # remains unchanged, but this branch reads genuine Stage2 signals and
+    # sends only signed GETs while the paper kill switch stays engaged.
+    # It must never be treated as the actual live-order adapter.
+    if os.environ.get("T100_V40_REAL_SIGNAL_MONITOR_ENABLED")=="true":
+        from app.t100_v40_render_supervised_pilot_worker import (
+            run_supervised_signal_monitor,
+        )
+        import asyncio
+        return asyncio.run(run_supervised_signal_monitor(dict(os.environ)))
     print(json.dumps({
         "status":"V40_DISABLED_EXECUTOR_HOLDING_PROCESS",
         "entry_allowed":False,"live_authorization":False,
