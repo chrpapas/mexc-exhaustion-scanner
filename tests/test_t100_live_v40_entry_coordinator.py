@@ -583,3 +583,52 @@ def test_monitored_signal_drift_blocks_before_lease_reservation_or_post(
             **kwargs,
         ))
     assert log==["source"]
+
+
+def test_tiny_pilot_lot_uses_capped_size_not_frozen_full_4_slot_target():
+    picked=m.prepare_candidate(
+        signal=candidate(),witness=snapshot(),
+        risk=risk(),terms=terms(contract_size=D(".1")),
+        cost_bps=100.,pilot_notional_ceiling=D("12.50"),
+    )
+    assert picked.plan.modeled_notional_usdt==5000
+    assert picked.intent.notional_usdt==D("10")
+    assert picked.intent.volume_contracts==D("1")
+    assert picked.intent.notional_usdt<=D("12.50")
+    assert picked.entry_allowed is False and picked.live_authorization is False
+
+
+def test_tiny_pilot_never_tops_up_subminimum_grid():
+    with pytest.raises(m.V40CoordinatorHalted,match="CONTRACT_LOT"):
+        m.prepare_candidate(
+            signal=candidate(),witness=snapshot(),risk=risk(),
+            terms=terms(contract_size=D("1")),
+            cost_bps=100.,pilot_notional_ceiling=D("12.50"),
+        )
+
+
+def test_invalid_pilot_ceiling_blocks_without_order():
+    with pytest.raises(m.V40CoordinatorHalted,match="PILOT_CEILING"):
+        m.prepare_candidate(
+            signal=candidate(),witness=snapshot(),risk=risk(),
+            terms=terms(),cost_bps=100.,
+            pilot_notional_ceiling=D("-1"),
+        )
+
+
+def test_pre_reservation_small_pilot_notional_refused_before_db_mutation(monkeypatch):
+    log=[]
+    patch_release_gates_and_mutations(monkeypatch,log)
+    small=LiveCaps(
+        max_order_usdt=D("12.50"),
+        max_portfolio_usdt=D("12.50"),
+        max_daily_loss_usdt=D("8"),
+    )
+    with pytest.raises(m.V40CoordinatorHalted,match="CONTRACT_LOT"):
+        asyncio.run(controller(log).run_one(
+            permit=None,caps=small,parity_report={},holder_id="mock-holder",
+        ))
+    assert "reserve" not in log
+    assert "stage" not in log
+    assert "dispatch" not in log
+    assert "lease_release" in log
