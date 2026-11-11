@@ -83,6 +83,25 @@ def test_fresh_stage2_symbol_auto_discovered_and_quoted_with_no_post():
     assert len(pub.calls)==2
 
 
+def test_preview_reports_only_normalized_risk_row_order_not_auth(monkeypatch):
+    from app.t100_live_v40_candidate_market_witness import (
+        MexcV40CandidateMarketWitness,V40CandidateQuote,
+    )
+    original=MexcV40CandidateMarketWitness.observe
+    async def reordered_observation(self, signal):
+        report=await original(self,signal)
+        return replace(report,private_risk_row_order_normalized=True)
+    monkeypatch.setattr(
+        MexcV40CandidateMarketWitness,"observe",reordered_observation,
+    )
+    out,_,private,public=check()
+    assert out.candidates[0].private_risk_row_order_normalized is True
+    assert out.candidates[0].private_order_write_permission_verified is False
+    assert out.live_authorization is False
+    assert out.entry_allowed is False
+    assert out.database_writes==out.mexc_posts==0
+
+
 def test_no_fresh_stage2_signals_does_not_invent_symbols_or_query_exchange():
     out,calls,priv,pub=check(signals=[])
     assert out.status=="STAGE2_NO_FRESH_ELIGIBLE_CANDIDATES_NONAUTHORIZING"
