@@ -13,6 +13,7 @@ from app.t100_live_v40_stage2_source import (
     HISTORY_SQL,SIGNALS_SQL,MAX_SIGNAL_AGE_SECONDS,MAX_BATCH,
     PostgresV40Stage2Source,V40SignalIntakeHalted,
     MANUAL_SCANNER_READONLY_OWNER_ROLE,
+    RESTRICTED_V40_SIGNAL_READER_ROLE,
     inspect_stage2_candidate,
 )
 
@@ -336,3 +337,50 @@ def test_manual_scanner_source_not_arbitrary_role_or_truthy_string():
             Pool(FakeConn([],[])),
             manual_scanner_owner_readonly="mexc_scanner",
         )
+
+
+def test_explicit_restricted_signal_reader_role_reads_validated_stage2_only():
+    sig,history=fixtures()
+    conn=FakeConn([sig],history,actual_role=RESTRICTED_V40_SIGNAL_READER_ROLE)
+    reader=PostgresV40Stage2Source(
+        Pool(conn),restricted_source_reader=True,
+    )
+    result=asyncio.run(reader.latest_candidates(
+        observed_at=T+timedelta(seconds=25),
+    ))
+    assert result.status=="FROZEN_V40_STAGE2_SOURCE_VALIDATED_NONAUTHORIZING"
+    assert len(result.candidates)==1 and result.candidates[0].signal_id==42
+    assert reader.expected_source_role==RESTRICTED_V40_SIGNAL_READER_ROLE
+    assert result.read_only_repeatable_read
+    assert not result.entry_allowed and not result.live_authorization
+    assert not any(q.lstrip().upper().startswith(("INSERT","UPDATE","DELETE"))
+                   for q in conn.queries)
+
+
+def test_source_reader_role_never_accepts_executor_ledger_user():
+    sig,history=fixtures()
+    conn=FakeConn([sig],history,actual_role=TARGET_ROLE)
+    reader=PostgresV40Stage2Source(
+        Pool(conn),restricted_source_reader=True,
+    )
+    with pytest.raises(V40SignalIntakeHalted,match="RESTRICTED"):
+        asyncio.run(reader.latest_candidates(
+            observed_at=T+timedelta(seconds=25),
+        ))
+
+
+def test_cannot_mix_scanner_owner_research_and_restricted_role():
+    sig,history=fixtures()
+    with pytest.raises(ValueError,match="POOL_OR_ROLE_INVALID"):
+        PostgresV40Stage2Source(
+            Pool(FakeConn([sig],history)),
+            manual_scanner_owner_readonly=True,
+            restricted_source_reader=True,
+        )
+
+
+def test_new_source_role_does_not_change_existing_default_role_contract():
+    sig,history=fixtures()
+    reader=PostgresV40Stage2Source(Pool(FakeConn([sig],history)))
+    assert reader.expected_source_role==TARGET_ROLE
+    assert reader.restricted_source_reader is False
