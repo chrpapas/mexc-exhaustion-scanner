@@ -366,6 +366,9 @@ class V40OneShotCoordinator:
         parity_report: dict[str,Any],
         holder_id: str,
         cost_bps: float = 100.,
+        monitored_signal_id: int | None = None,
+        monitored_symbol: str | None = None,
+        monitored_tier: str | None = None,
     ) -> V40OneShotReport:
         # Absolutely no PG writes, API GETs, lease renewal or POST before
         # independently issued permit and full historical strategy gate.
@@ -385,6 +388,32 @@ class V40OneShotCoordinator:
             or tape.live_authorization is not False
         ):
             raise V40CoordinatorHalted("V40_SOURCE_BATCH_UNVERIFIED")
+        # A monitor-originated handoff must pin the exact real source row.
+        # Never substitute another (even admissible) candidate if the tape
+        # changed between the read-only monitor and the one-shot executor.
+        # This check is BEFORE lease, reservation, claim, GET or exchange POST.
+        monitored = (
+            monitored_signal_id is not None
+            or monitored_symbol is not None
+            or monitored_tier is not None
+        )
+        if monitored:
+            if (
+                type(monitored_signal_id) is not int
+                or monitored_signal_id <= 0
+                or type(monitored_symbol) is not str
+                or not monitored_symbol.endswith("_USDT")
+                or type(monitored_tier) is not str
+                or monitored_tier not in ("LOW_100", "HIGH_225")
+            ):
+                raise V40CoordinatorHalted("V40_MONITORED_SIGNAL_IDENTITY_INVALID")
+            if (
+                len(tape.candidates) != 1
+                or tape.candidates[0].signal_id != monitored_signal_id
+                or tape.candidates[0].symbol != monitored_symbol
+                or tape.candidates[0].tier != monitored_tier
+            ):
+                raise V40CoordinatorHalted("V40_MONITORED_SIGNAL_CHANGED_OR_NOT_UNIQUE")
         if not tape.candidates:
             return V40OneShotReport("V40_NO_CURRENT_STAGE2_SIGNALS")
 
