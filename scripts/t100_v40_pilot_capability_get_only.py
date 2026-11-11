@@ -15,7 +15,7 @@ import argparse
 import asyncio
 import json
 import re
-from dataclasses import asdict,dataclass
+from dataclasses import asdict,dataclass,replace
 from decimal import Decimal as D,InvalidOperation
 from pathlib import Path
 from typing import Any
@@ -44,8 +44,8 @@ _RISK_FIELD_LABELS={
 def _risk_drift_field_labels(first: Any,second: Any,symbol: str) -> tuple[str,...]:
     """Describe a rejected signed risk-limit mismatch without any values.
 
-    Sort only for *diagnostic comparison*: the actual risk_stable gate
-    still uses strict whole-response JSON equality and MUST fail closed.
+    Only a unique LONG/SHORT row sequence may change. Actual risk_stable
+    compares strict canonical serialized values, never rounded/omitted fields.
     """
     if (
         type(first) is not dict or type(second) is not dict
@@ -70,7 +70,14 @@ def _risk_drift_field_labels(first: Any,second: Any,symbol: str) -> tuple[str,..
     a,b=sides(first),sides(second)
     if a is None or b is None or set(a)!=set(b):
         return ("ROW_SET_OR_SHAPE_CHANGED",)
-    if a==b:
+    try:
+        rows_equal=(
+            _canonical_risk_limit(first,symbol)
+            == _canonical_risk_limit(second,symbol)
+        )
+    except PilotCapabilityHalted:
+        rows_equal=False
+    if rows_equal:
         return ("ROW_ORDER_ONLY",) if first!=second else ()
     missing=object()
     names=set()
@@ -87,6 +94,42 @@ class PilotCapabilityHalted(RuntimeError):
     """Only fixed diagnostic IDs; never transport/Keychain information."""
 
 
+def _canonical_risk_limit(snapshot: Any,symbol: str) -> str:
+    """Strict field-for-field signed risk comparison, indifferent to row order.
+
+    Only the unique LONG/SHORT row sequence may differ. Preserve every field
+    and JSON value/type; do not round maxVol, omit unknown fields, or trust
+    a raw response that lacks exact symbol/side/level identity.
+    """
+    if (
+        type(snapshot) is not dict or set(snapshot)!={symbol}
+        or type(snapshot[symbol]) is not list
+        or not 1<=len(snapshot[symbol])<=2
+    ):
+        raise PilotCapabilityHalted("PILOT_PRIVATE_RISK_CANONICAL_SHAPE_HALT")
+    rows=snapshot[symbol]
+    sides=set()
+    for row in rows:
+        if (
+            type(row) is not dict
+            or row.get("symbol")!=symbol
+            or type(row.get("positionType")) is not int
+            or row["positionType"] not in (1,2)
+            or row["positionType"] in sides
+            or type(row.get("level")) is not int
+            or row["level"]<1
+        ):
+            raise PilotCapabilityHalted("PILOT_PRIVATE_RISK_CANONICAL_ROW_HALT")
+        sides.add(row["positionType"])
+    try:
+        return json.dumps(
+            {symbol:sorted(rows,key=lambda row:row["positionType"])},
+            sort_keys=True,allow_nan=False,separators=(",",":"),
+        )
+    except Exception:
+        raise PilotCapabilityHalted("PILOT_PRIVATE_RISK_CANONICAL_SERIALIZE_HALT") from None
+
+
 @dataclass(frozen=True)
 class PilotCapabilityReport:
     status: str
@@ -98,6 +141,7 @@ class PilotCapabilityReport:
     private_short_position_leverage_observed: bool=False
     private_capability_drift_source: str="NONE"
     private_risk_drift_field_labels: tuple[str,...]=()
+    private_risk_row_order_normalized: bool=False
     short_margin_mode_observed: str="UNKNOWN"
     short_leverage_observed: int|None=None
     private_risk_limit_mode_fields_missing: bool=False
@@ -343,9 +387,17 @@ async def observe_pilot_capability(
             # Diagnose WHICH signed endpoint drifted without exposing raw
             # responses, weakening exact identity checks, or allowing trades.
             risk_stable=(
+                _canonical_risk_limit(tiers,symbol)
+                == _canonical_risk_limit(tiers_second,symbol)
+            )
+            # Distinguish benign sequence variation from identical raw JSON.
+            # Never treat changed fields, missing rows or duplicate sides
+            # as reordering; those still HALT.
+            risk_row_order_normalized=(
+                risk_stable and
                 json.dumps(tiers,sort_keys=True,
                            allow_nan=False,separators=(",",":"))
-                == json.dumps(tiers_second,sort_keys=True,
+                != json.dumps(tiers_second,sort_keys=True,
                               allow_nan=False,separators=(",",":"))
             )
             leverage_stable=(
@@ -401,9 +453,13 @@ async def observe_pilot_capability(
             status="PILOT_PUBLIC_CONTRACT_GET_UNVERIFIED_HALT",
             symbol=symbol,flat_hedge_account_bookended=True,
         )
-    return assess_pilot_capability(
+    report=assess_pilot_capability(
         symbol=symbol,contract=contract,private_risk=tiers,
         private_leverage=leverages,flat_preflight_ok=True,
+    )
+    # Purely observational, never an exchange/entry permission.
+    return replace(
+        report,private_risk_row_order_normalized=risk_row_order_normalized,
     )
 
 
