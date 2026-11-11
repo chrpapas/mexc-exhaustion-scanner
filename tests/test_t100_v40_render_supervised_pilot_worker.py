@@ -205,7 +205,7 @@ def test_exchange_nonflat_unverified_or_failed_halts_without_secret_leak(account
 def test_signals_not_acted_on_when_account_equity_drift():
     result,calls=run(source=candidate(),account=replace(flat(),account_equity_usdt="55"))
     assert result.status=="V40_REAL_SIGNAL_ACCOUNT_EQUITY_DRIFT_HALT"
-    assert calls==["source","account"]
+    assert calls==["source","journal","account"]
 
 
 def test_supervised_monitor_cycles_then_exits_without_orders(capsys):
@@ -269,7 +269,7 @@ def test_live_candidate_cross_or_contract_unverified_halts_without_order(cap_res
 def test_no_candidate_does_not_hit_public_contract_or_risk_api():
     out,calls=run(source=empty())
     assert out.status=="V40_REAL_SCANNER_ACTIVE_NO_CANDIDATE_ACCOUNT_FLAT"
-    assert calls==["source","account"]
+    assert calls==["source","journal","account"]
     assert not out.candidate_public_contract_and_cross_1x_verified
     assert not out.candidate_exact_strategy_lot_verified
 
