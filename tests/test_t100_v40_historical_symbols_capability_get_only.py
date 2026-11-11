@@ -111,11 +111,17 @@ def test_real_historical_symbol_drift_reason_is_preserved_without_authorization(
             status="PILOT_PRIVATE_CAPABILITY_GET_DRIFT_HALT",
             symbol=symbol,flat_hedge_account_bookended=True,
             private_capability_drift_source=drift_source,
+            private_risk_drift_field_labels=(
+                ("SHORT_MAXVOL",) if drift_source in ("RISK_LIMIT","BOTH") else ()
+            ),
         )
     monkeypatch.setattr(m,"observe_pilot_capability",witness)
     result=asyncio.run(do(max_symbols=1))
     assert result.checked_symbols==1
     assert result.symbols[0].private_capability_drift_source==drift_source
+    assert result.symbols[0].private_risk_drift_field_labels==(
+        ("SHORT_MAXVOL",) if drift_source in ("RISK_LIMIT","BOTH") else ()
+    )
     assert result.cross_1x_contract_settings_observed==0
     assert result.symbols[0].current_short_cross_1x_observed is False
     assert result.mexc_posts==result.database_writes==0
@@ -158,6 +164,7 @@ def test_symbol_get_transport_exception_never_reveals_private_error(monkeypatch)
     {"api_key_futures_write_permission_verified":True},
     {"short_margin_mode_observed":"ARBITRARY"},
     {"private_capability_drift_source":"RAW_PRIVATE_API_RESPONSE"},
+    {"private_risk_drift_field_labels":("SHORT_API_KEY_PRIVATE_SECRET",)},
     {"short_leverage_observed":False},
     {"symbol":"BTC_USDT"},
 ])
@@ -170,6 +177,20 @@ def test_malicious_or_inconsistent_observer_cannot_upgrade_proof(monkeypatch,tam
     assert out.symbols[0].status=="HISTORICAL_SYMBOL_EVIDENCE_INVARIANT_FAILED_HALT"
     assert out.entry_allowed is False
     assert out.mexc_posts==out.database_writes==0
+
+
+def test_passing_status_with_drift_labels_is_rejected(monkeypatch):
+    async def witness(*,key,secret,symbol):
+        return replace(
+            good(symbol),
+            private_capability_drift_source="RISK_LIMIT",
+            private_risk_drift_field_labels=("SHORT_MAXVOL",),
+        )
+    monkeypatch.setattr(m,"observe_pilot_capability",witness)
+    out=asyncio.run(do(max_symbols=1))
+    assert out.symbols[0].status=="HISTORICAL_SYMBOL_PARTIAL_PASSED_OBSERVATION_REJECTED_HALT"
+    assert out.cross_1x_contract_settings_observed==0
+    assert out.entry_allowed is False
 
 
 def test_passing_status_with_mismatched_settings_not_upgraded(monkeypatch):
