@@ -35,7 +35,7 @@ from app.t100_live_v40_stage2_source import (
 )
 from app.t100_live_v40_historical_stage2_audit import (
     HistoricalStage2Audit,inspect_historical_stage2,
-    MAX_LOOKBACK_DAYS,MAX_HISTORICAL_RECORDS,
+    DEFAULT_LOOKBACK_DAYS,MAX_LOOKBACK_DAYS,MAX_HISTORICAL_RECORDS,
 )
 
 
@@ -110,7 +110,7 @@ async def _main(args:argparse.Namespace,env:Mapping[str,str])->HistoricalStage2A
 def main()->None:
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument("--max-records",type=int,default=MAX_HISTORICAL_RECORDS)
-    p.add_argument("--lookback-days",type=int,default=MAX_LOOKBACK_DAYS)
+    p.add_argument("--lookback-days",type=int,default=DEFAULT_LOOKBACK_DAYS)
     p.add_argument(
         "--output",default="~/Downloads/t100_v40_historical_stage2_audit.json",
     )
