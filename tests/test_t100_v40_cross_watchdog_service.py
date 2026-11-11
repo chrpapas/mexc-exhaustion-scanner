@@ -139,7 +139,11 @@ def test_dedicated_keychain_scope_checked_before_any_reads(monkeypatch,tmp_path)
         calls.append(a) or "NOT_USED"
     ))
     candidate={**env(tmp_path),"T100_V40_WATCH_KEYCHAIN_SERVICE":"BOXWAVE"}
-    with pytest.raises(m.V40WatchServiceHalted,match="KEYCHAIN_SCOPE_REQUIRED"):
+    with pytest.raises(m.V40WatchServiceHalted,match="PAPER_KILL_AND_SCOPE_REQUIRED"):
+        asyncio.run(m.run_v40_watch(environ=candidate,cycles=1))
+    assert calls==[]
+    candidate={**env(tmp_path),"T100_LIVE_KILL_SWITCH":"false"}
+    with pytest.raises(m.V40WatchServiceHalted,match="PAPER_KILL_AND_SCOPE_REQUIRED"):
         asyncio.run(m.run_v40_watch(environ=candidate,cycles=1))
     assert calls==[]
 
