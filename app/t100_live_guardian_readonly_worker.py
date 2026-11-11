@@ -41,9 +41,20 @@ class GuardianWorkerConfig:
             failures = int(env.get("T100_GUARDIAN_MAX_FAILURES", "3"))
         except (ValueError, TypeError):
             raise GuardianOnceHalted("GUARDIAN_WORKER_LIMITS_INVALID") from None
-        if (not 30 <= interval <= 3600 or
-                not 1 <= failures <= 5 or
-                type(interval) is not int or type(failures) is not int):
+        # A separately enabled V40 pilot observer can check faster than
+        # the older 90-second shadow cadence, but ONLY with a persistent
+        # incident journal and first-failure alert latch. This is sampled
+        # signed-GET observation, not continuous exchange protection.
+        fast=env.get("T100_V40_FAST_GUARDIAN_ENABLED")=="true"
+        if fast:
+            if not (
+                env.get("T100_GUARDIAN_DURABLE_ALERTS_ENABLED")=="true"
+                and env.get("T100_V40_ACCOUNT_PROFILE")=="DEDICATED_WEB_PILOT"
+                and 3<=interval<=5
+                and failures==1
+            ):
+                raise GuardianOnceHalted("V40_FAST_GUARDIAN_DURABLE_SCOPE_REQUIRED")
+        elif not (30 <= interval <= 3600 and 1 <= failures <= 5):
             raise GuardianOnceHalted("GUARDIAN_WORKER_LIMITS_OUT_OF_RANGE")
         # Account, position, Keychain-equivalent credentials, TLS CA, and
         # paper-mode kill switch must all be present before any connection.
