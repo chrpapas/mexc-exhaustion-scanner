@@ -147,12 +147,12 @@ class RuntimeConn:
         raise AssertionError("unexpected SQL")
 
 
-def testa(r):
+def check_audit(r):
     return asyncio.run(audit_runtime(r))
 
 
 def test_independent_restricted_role_positive_does_not_authorize_trading():
-    out=testa(RuntimeConn())
+    out=check_audit(RuntimeConn())
     assert out["status"]=="V40_JOURNAL_RUNTIME_MINIMAL_PRIVILEGES_VERIFIED_NONAUTHORIZING"
     assert out["journal_privileges_verified"]
     assert out["runtime_ddl_denied"]
@@ -168,7 +168,7 @@ def test_independent_restricted_role_positive_does_not_authorize_trading():
     ({"ddl":True},"SCHEMA_DDL_PRESENT"),
 ])
 def test_bad_runtime_privileges_refuse_authorization(options,status):
-    out=testa(RuntimeConn(**options))
+    out=check_audit(RuntimeConn(**options))
     assert status in out["status"]
     assert not out["journal_privileges_verified"]
 
