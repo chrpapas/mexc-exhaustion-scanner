@@ -27,7 +27,8 @@ from app.t100_live_v40_stage2_source import (
 )
 
 MAX_HISTORICAL_RECORDS=8
-MAX_LOOKBACK_DAYS=7
+DEFAULT_LOOKBACK_DAYS=60
+MAX_LOOKBACK_DAYS=180
 HISTORICAL_SQL="""
 SELECT id,strategy_id,symbol,p2_at,feature_at,entry_price,
        physical_episode_seq,stage_no,stage1_return_24h,
@@ -82,7 +83,7 @@ class HistoricalStage2Audit:
     reconstructed_records: int=0
     invalid_records: int=0
     max_records: int=MAX_HISTORICAL_RECORDS
-    lookback_days: int=MAX_LOOKBACK_DAYS
+    lookback_days: int=DEFAULT_LOOKBACK_DAYS
     historical_sample_only: bool=True
     records: tuple[HistoricalSignalAssessment,...]=()
     fresh_signal_discovery_verified: bool=False
@@ -123,7 +124,7 @@ def _safe_event_identity(
 
 async def inspect_historical_stage2(
     source:PostgresV40Stage2Source,*,observed_at:datetime,
-    lookback_days:int=MAX_LOOKBACK_DAYS,
+    lookback_days:int=DEFAULT_LOOKBACK_DAYS,
     max_records:int=MAX_HISTORICAL_RECORDS,
 )->HistoricalStage2Audit:
     """Bounded historical audit, independent of the live candidate intake."""
