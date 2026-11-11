@@ -62,6 +62,29 @@ does **not** verify MEXC exchange-side read-only permissions, account
 identity, alerts, network access or operational watchdog status. If
 `LOCAL_SECRETS_SETUP_REQUIRED`, complete the Keychain steps above first.
 
+## Safe first live check: signed GETs, no alarm journal
+
+Once the local Keychain check reports `V40_WATCHDOG_LOCAL_SECRETS_PRESENT_NONAUTHORIZING`, use this **before** running the persistent watchdog. This requires no Discord sends, creates no journal and makes no database changes. It performs eight signed GET-only queries on the dedicated read-only T100 WEB pilot credentials, if the paper-mode gates pass:
+
+```bash
+export T100_EXECUTION_MODE=paper
+export T100_LIVE_ORDER_API_ENABLED=false
+export T100_LIVE_KILL_SWITCH=true
+
+.venv/bin/python -m scripts.t100_v40_watchdog_flat_get_only_preflight \
+  --keychain-service t100225-mexc-web-pilot-readonly-v1
+```
+
+Expected on a **currently empty** account:
+`WATCH_FLAT_INVENTORY_OBSERVED_NONAUTHORIZING` with
+`flat_inventory_observed=true`.
+If the GET key is denied, the account is not actually flat, inventory is
+unreliable, or hedge mode differs, it **fails closed**; do not force/erase
+state or use a writable API key. This is NOT exchange-side permission
+certification or independent subaccount identity verification; verify those
+in the authenticated MEXC subaccount API UI separately. A GET-only client's
+lack of a POST method does not prove that its API key is read-only.
+
 ## Supervised flat-account dry run
 
 Use the integration branch as checkout, and `cd` to repo root. Commands below avoid putting raw MEXC keys or webhooks in shell history.
