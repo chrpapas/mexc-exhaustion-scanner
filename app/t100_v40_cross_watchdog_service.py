@@ -193,16 +193,24 @@ def configure_v40_watch(
     )
 
 
+def require_paper_watch_scope(env:Mapping[str,str])->None:
+    """Refuse before Keychain access unless isolated paper/kill is explicit."""
+    if not all((
+        env.get("T100_V40_WATCH_ENABLED")=="true",
+        env.get("T100_EXECUTION_MODE")=="paper",
+        env.get("T100_LIVE_ORDER_API_ENABLED")=="false",
+        env.get("T100_LIVE_KILL_SWITCH")=="true",
+        env.get("T100_V40_WATCH_KEYCHAIN_SERVICE")==KEYCHAIN_READONLY,
+        env.get("T100_V40_WATCH_DISCORD_KEYCHAIN_SERVICE")==KEYCHAIN_DISCORD,
+    )):
+        raise V40WatchServiceHalted("WATCH_V40_PAPER_KILL_AND_SCOPE_REQUIRED")
+
+
 async def run_v40_watch(
     *,environ:Mapping[str,str]|None=None,cycles:int|None=1,
 ):
     env=os.environ if environ is None else environ
-    # Explicit Keychain scope must be checked before reading credentials.
-    if (
-        env.get("T100_V40_WATCH_KEYCHAIN_SERVICE")!=KEYCHAIN_READONLY
-        or env.get("T100_V40_WATCH_DISCORD_KEYCHAIN_SERVICE")!=KEYCHAIN_DISCORD
-    ):
-        raise V40WatchServiceHalted("WATCH_V40_KEYCHAIN_SCOPE_REQUIRED")
+    require_paper_watch_scope(env)
     key=_from_keychain(KEYCHAIN_READONLY,KEY_ACCOUNT)
     secret=_from_keychain(KEYCHAIN_READONLY,SECRET_ACCOUNT)
     config=configure_v40_watch(env,api_key=key,cycles=cycles)
@@ -250,6 +258,7 @@ def main():
     args=parser.parse_args()
     try:
         if args.print_sentinel_scope:
+            require_paper_watch_scope(os.environ)
             key=_from_keychain(KEYCHAIN_READONLY,KEY_ACCOUNT)
             config=configure_v40_watch(
                 os.environ,api_key=key,cycles=1,
