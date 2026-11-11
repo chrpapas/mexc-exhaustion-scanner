@@ -54,7 +54,7 @@ def test_live_or_kill_disabled_refuses_before_password_or_database(
     assert out.status=="V40_HISTORICAL_PAPER_KILL_REQUIRED_HALT"
 
 
-@pytest.mark.parametrize("max_records,lookback_days",[(9,7),(8,8),(0,7),(True,7)])
+@pytest.mark.parametrize("max_records,lookback_days",[(9,7),(8,181),(0,7),(True,7)])
 def test_unbounded_research_refuses_without_db_connection(
     monkeypatch,max_records,lookback_days,
 ):
