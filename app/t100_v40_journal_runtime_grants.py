@@ -334,12 +334,44 @@ async def _run(*,apply_changes:bool)->dict[str,Any]:
             prepared=await plan(conn)
         if prepared["status"]!="V40_JOURNAL_RUNTIME_MINIMAL_GRANTS_PLAN_PASSED":
             return prepared
+        # Verify the EXISTING runtime login BEFORE any GRANT. Without this,
+        # a missing/wrong password could leave committed ACL changes that
+        # cannot be independently audited by the operator.
+        runtime_password=getpass.getpass(
+            "Existing restricted executor-runtime DB password (hidden): "
+        )
+        if not runtime_password:
+            return {
+                **prepared,
+                "status":"V40_JOURNAL_RUNTIME_PASSWORD_REQUIRED_BEFORE_GRANTS",
+            }
+        try:
+            witness=await asyncpg.connect(
+                dsn=owner_dsn,user=TARGET_ROLE,password=runtime_password,
+                ssl="require",timeout=12,command_timeout=20,
+            )
+            try:
+                async with witness.transaction(readonly=True):
+                    identity_ok=(
+                        await witness.fetchval("SELECT current_user")==TARGET_ROLE
+                        and await witness.fetchval("SELECT current_database()")
+                        ==EXPECTED_DATABASE
+                        and await witness.fetchval(
+                            "SELECT current_setting('transaction_read_only')"
+                        )=="on"
+                    )
+            finally:
+                await witness.close()
+        except Exception:
+            identity_ok=False
+        if not identity_ok:
+            return {
+                **prepared,
+                "status":"V40_JOURNAL_RUNTIME_LOGIN_FAILED_BEFORE_GRANTS",
+            }
         grant_result=await apply(conn)
     finally:
         await conn.close()
-    runtime_password=getpass.getpass("Existing restricted executor-runtime DB password (hidden): ")
-    if not runtime_password:
-        return {**grant_result,"status":"V40_JOURNAL_GRANTS_APPLIED_AUDIT_PASSWORD_MISSING"}
     try:
         runtime=await asyncpg.connect(
             dsn=owner_dsn,user=TARGET_ROLE,password=runtime_password,
