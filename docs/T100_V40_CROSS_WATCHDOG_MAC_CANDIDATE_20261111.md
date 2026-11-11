@@ -23,6 +23,29 @@ This candidate adds:
 3. Confirm the target subaccount is *flat* before initial `FLAT` mode. No manual orders, unrelated positions or outstanding stops. Do NOT place an order merely to test observer startup. Keep T100 paper/kill switches.
 4. Both services must be tested supervised, with an alarm-delivery drill and deliberate process-death drill. Mac LaunchAgents/always-on supervisor and independent host delivery are NOT installed by this candidate.
 
+## Optional: one-command secure Keychain setup for missing items
+
+When all four new credential **values** are ready, run the interactive
+local-only installer:
+
+```bash
+.venv/bin/python -m scripts.t100_v40_watchdog_keychain_setup --install
+```
+
+Type `YES` to opt in. For each **missing** Keychain generic-password item,
+macOS `/usr/bin/security add-generic-password` is called with `-w` as
+the final argument and **without a password argument**, so the native
+Mac prompt accepts the value securely rather than putting it in command
+history, process command-line arguments, GitHub or ChatGPT. Existing
+entries are NEVER overwritten. This makes no network requests and does
+not change MEXC permission settings. The local script prints the same
+redacted four-item readiness result at the end.
+
+**Do not** type a trading-enabled key into these read-only watchdog
+items. If the MEXC account page does not let you grant only Futures
+read/trading-information read permissions, stop and do not use a writable
+key as a substitute.
+
 ## First, one no-network local prerequisite check
 
 Before configuring any runtime or creating a journal, simply run in the
