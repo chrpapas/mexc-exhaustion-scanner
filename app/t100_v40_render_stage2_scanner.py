@@ -57,11 +57,25 @@ def require_v40_shadow_render_guards(env: Any) -> None:
 
 
 @dataclass(frozen=True)
+class V40ObservedSignal:
+    """Provenance from genuine DB Stage2 + causal 49-bar/VOL30 research gate.
+
+    This receipt is **NOT** an order or an authorization for an executor.
+    """
+    signal_id: int
+    symbol: str
+    tier: str
+    p2_at: datetime
+    pre24_vol_pct: float
+
+
+@dataclass(frozen=True)
 class V40ShadowBatch:
     status: str
     validated_stage2: int = 0
     vol30_skip: int = 0
     vol30_passed_research_only: int = 0
+    passed_signals: tuple[V40ObservedSignal, ...] = ()
     history_verified: bool = False
     source_readonly_transaction: bool = False
     source_is_scanner_owner_not_executor: bool = True
@@ -124,6 +138,7 @@ async def inspect_new_v40_stage2(
                 validated=0
                 skipped=0
                 passed=0
+                accepted=[]
                 origin_ids=set()
                 for row in rows:
                     signal=dict(row)
@@ -143,11 +158,19 @@ async def inspect_new_v40_stage2(
                         skipped+=1
                     else:
                         passed+=1
+                        accepted.append(V40ObservedSignal(
+                            signal_id=candidate.signal_id,
+                            symbol=candidate.symbol,
+                            tier=candidate.tier,
+                            p2_at=signal["p2_at"],
+                            pre24_vol_pct=candidate.pre24_vol_pct,
+                        ))
                 return V40ShadowBatch(
                     "V40_SHADOW_FRESH_STAGE2_CAUSAL_VOL30_AUDIT_NONAUTHORIZING",
                     validated_stage2=validated,
                     vol30_skip=skipped,
                     vol30_passed_research_only=passed,
+                    passed_signals=tuple(accepted),
                     history_verified=True,
                     source_readonly_transaction=True,
                 )
@@ -210,6 +233,16 @@ class V40Stage2RenderScanner(T100Scanner):
             result.status,result.validated_stage2,result.vol30_skip,
             result.vol30_passed_research_only,
         )
+        # Verifiable market-signal provenance for supervised pilot operations.
+        # Do NOT infer an order can be sent from this scanner receipt.
+        for receipt in result.passed_signals:
+            LOGGER.info(
+                "V40 VERIFIED_SIGNAL signal_id=%d symbol=%s tier=%s "
+                "p2_at=%s pre24_vol_pct=%.4f "
+                "entry_allowed=false live_authorization=false no_order=true",
+                receipt.signal_id,receipt.symbol,receipt.tier,
+                receipt.p2_at.isoformat(),receipt.pre24_vol_pct,
+            )
 
 
 async def main() -> None:
