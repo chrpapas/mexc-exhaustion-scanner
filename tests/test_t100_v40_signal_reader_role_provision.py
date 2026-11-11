@@ -111,10 +111,10 @@ class FakeReader:
         assert kw=={"isolation":"repeatable_read","readonly":True}
         return Context()
     async def fetchval(self,sql,*args):
-        if "current_user" in sql:return self.role
-        if "current_database" in sql:return "mexc_exhaustion"
         if "has_column_privilege" in sql:return True
         if "has_table_privilege" in sql:return self.unexpected_access
+        if sql=="SELECT current_user":return self.role
+        if sql=="SELECT current_database()":return "mexc_exhaustion"
         raise AssertionError("unexpected SQL")
     async def fetch(self,sql,*args):
         assert "pg_catalog.pg_class" in sql
