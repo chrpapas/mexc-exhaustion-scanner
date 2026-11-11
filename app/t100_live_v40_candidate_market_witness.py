@@ -72,6 +72,40 @@ def _canonical(rows: Any, fields: tuple[str,...]) -> tuple[str,...]:
         raise V40CandidateMarketHalted("MARKET_BOOKEND_ENCODING_INVALID") from None
 
 
+def _risk_limit_canonical(raw: Any, symbol: str) -> str:
+    """Strict risk-tier comparison independent ONLY of unique side row order.
+
+    Keep the original fields and JSON types exactly. In particular, do not
+    suppress fair-price-dependent maxVol changes or any unknown venue field.
+    """
+    if (
+        type(raw) is not dict or set(raw)!={symbol}
+        or type(raw[symbol]) is not list
+        or not 1<=len(raw[symbol])<=2
+    ):
+        raise V40CandidateMarketHalted("MARKET_PRIVATE_RISK_CANONICAL_SHAPE_INVALID")
+    rows=raw[symbol]
+    sides=set()
+    for row in rows:
+        if (
+            type(row) is not dict or row.get("symbol")!=symbol
+            or type(row.get("positionType")) is not int
+            or row["positionType"] not in (1,2)
+            or row["positionType"] in sides
+            or type(row.get("level")) is not int
+            or row["level"]<1
+        ):
+            raise V40CandidateMarketHalted("MARKET_PRIVATE_RISK_CANONICAL_ROW_INVALID")
+        sides.add(row["positionType"])
+    try:
+        return json.dumps(
+            {symbol:sorted(rows,key=lambda row:row["positionType"])},
+            sort_keys=True,separators=(",",":"),allow_nan=False,
+        )
+    except (ValueError,TypeError):
+        raise V40CandidateMarketHalted("MARKET_PRIVATE_RISK_CANONICAL_ENCODING_INVALID") from None
+
+
 def _counts_empty(counts: Any) -> bool:
     return type(counts) is dict and all(
         type(counts.get(name)) is int and counts[name]==0
@@ -151,6 +185,7 @@ class V40CandidateQuote:
     private_risk_row_observed: bool
     private_short_cross_1x_settings_bookended: bool=False
     private_risk_limit_settings_fields_missing: bool=False
+    private_risk_row_order_normalized: bool=False
     # These are NOT obtained from current asset/risk endpoints.
     full_cross_collateral_verified: bool=False
     complete_realized_daily_loss_verified: bool=False
@@ -263,16 +298,28 @@ class MexcV40CandidateMarketWitness:
             or ended-started>self.max_cycle_ms
         ):
             raise V40CandidateMarketHalted("MARKET_TOTAL_CYCLE_STALE")
+        # The real MEXC WEB pilot showed LONG/SHORT risk_limit rows may
+        # arrive in a different order. Preserve exact full-field risk and
+        # private leverage equality; do not treat changed numeric data as
+        # benign drift or weaken any downstream risk/collateral gate.
+        risk_before=_risk_limit_canonical(risks,signal.symbol)
+        risk_after=_risk_limit_canonical(risks_after,signal.symbol)
         try:
-            source_fingerprints=(
-                json.dumps([risks,leverage],sort_keys=True,
-                           separators=(",",":"),allow_nan=False),
-                json.dumps([risks_after,leverage_after],sort_keys=True,
-                           separators=(",",":"),allow_nan=False),
+            leverage_before=json.dumps(
+                leverage,sort_keys=True,separators=(",",":"),allow_nan=False,
+            )
+            leverage_after=json.dumps(
+                leverage_after,sort_keys=True,separators=(",",":"),allow_nan=False,
+            )
+            risk_row_order_normalized=(
+                risk_before==risk_after and
+                json.dumps(risks,sort_keys=True,separators=(",",":"),allow_nan=False)
+                !=json.dumps(risks_after,sort_keys=True,
+                            separators=(",",":"),allow_nan=False)
             )
         except (TypeError,ValueError):
             raise V40CandidateMarketHalted("MARKET_PRIVATE_CONFIG_SHAPE_INVALID") from None
-        if source_fingerprints[0]!=source_fingerprints[1]:
+        if risk_before!=risk_after or leverage_before!=leverage_after:
             raise V40CandidateMarketHalted("MARKET_PRIVATE_CONFIG_BOOKEND_DRIFT")
         for state in (before,after):
             if (
@@ -417,6 +464,7 @@ class MexcV40CandidateMarketWitness:
             bookended_flat_account=True,hedge_mode_observed=True,
             private_risk_row_observed=True,
             private_short_cross_1x_settings_bookended=True,
+            private_risk_row_order_normalized=risk_row_order_normalized,
             private_risk_limit_settings_fields_missing=(
                 "openType" not in short or "leverage" not in short
             ),
