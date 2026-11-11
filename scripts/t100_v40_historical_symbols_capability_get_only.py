@@ -167,6 +167,8 @@ def _safe_row(
         observation.current_short_tier_supports_one_contract is True,
         observation.one_contract_on_public_lot_grid is True,
         observation.current_contract_tick_observed is True,
+        observation.private_capability_drift_source=="NONE",
+        observation.private_risk_drift_field_labels==(),
         observation.short_margin_mode_observed=="CROSS",
         observation.short_leverage_observed==1,
     ))
