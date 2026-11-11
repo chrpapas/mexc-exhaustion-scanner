@@ -73,14 +73,14 @@ async def plan(conn:Any)->dict[str,Any]:
     )
     if user is None:
         raise V40JournalMigrationBlocked("V40_JOURNAL_CURRENT_USER_UNVERIFIED")
-    all_base=all(
-        (await conn.fetchval("SELECT to_regclass($1)",table)) is not None
-        for table in BASE_TABLES
-    )
-    none_new=all(
-        (await conn.fetchval("SELECT to_regclass($1)",object_name)) is None
-        for object_name in TARGET_OBJECTS
-    )
+    all_base=True
+    for table in BASE_TABLES:
+        if await conn.fetchval("SELECT to_regclass($1)",table) is None:
+            all_base=False
+    none_new=True
+    for object_name in TARGET_OBJECTS:
+        if await conn.fetchval("SELECT to_regclass($1)",object_name) is not None:
+            none_new=False
     function_absent=await conn.fetchval(
         "SELECT to_regprocedure($1)",FUNCTION
     ) is None
@@ -90,13 +90,14 @@ async def plan(conn:Any)->dict[str,Any]:
         """SELECT NOT EXISTS (SELECT 1 FROM pg_trigger
            WHERE tgname=$1 AND NOT tgisinternal)""",TRIGGER
     ) is True
-    permitted=all(
-        (await conn.fetchval(
+    permitted=True
+    for privilege in ("CREATE","USAGE"):
+        result=await conn.fetchval(
             "SELECT has_schema_privilege(current_user,'public',$1)",
             privilege,
-        )) is True
-        for privilege in ("CREATE","USAGE")
-    )
+        )
+        if result is not True:
+            permitted=False
     can_apply=(all_base and none_new and function_absent
                and trigger_absent and permitted)
     return {
@@ -132,11 +133,11 @@ async def apply(conn:Any,*,blobs:tuple[bytes,...])->dict[str,Any]:
                 raise V40JournalMigrationBlocked("V40_JOURNAL_DDL_PRECHECK_FAILED")
             for blob in blobs:
                 await conn.execute(blob.decode("utf-8"))
-            if not all(
-                (await conn.fetchval("SELECT to_regclass($1)",name)) is not None
-                for name in TARGET_OBJECTS
-            ):
-                raise V40JournalMigrationBlocked("V40_JOURNAL_SCHEMA_POSTCHECK_FAILED")
+            for name in TARGET_OBJECTS:
+                if await conn.fetchval("SELECT to_regclass($1)",name) is None:
+                    raise V40JournalMigrationBlocked(
+                        "V40_JOURNAL_SCHEMA_POSTCHECK_FAILED"
+                    )
             exists=await conn.fetchval(
                 """SELECT EXISTS (SELECT 1 FROM pg_trigger
                    WHERE tgname=$1 AND NOT tgisinternal)""",TRIGGER
