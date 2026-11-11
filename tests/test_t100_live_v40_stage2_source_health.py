@@ -112,6 +112,58 @@ def test_recent_scanner_heartbeat_eval_and_historical_stage2_count_are_observati
     ) for q,_ in c.queries)
 
 
+class AsyncpgLikeRecord:
+    """Exercise asyncpg.Record-style dict(row), without Mapping inheritance."""
+    def __init__(self,**data):
+        self._data=data
+    def keys(self):
+        return self._data.keys()
+    def get(self,key,default=None):
+        return self._data.get(key,default)
+    def __getitem__(self,key):
+        return self._data[key]
+    def __iter__(self):
+        # asyncpg.Record iteration returns values, not mapping keys.
+        return iter(self._data.values())
+
+
+def test_actual_asyncpg_like_fetchrow_is_validated_without_mapping_subclass():
+    from collections.abc import Mapping
+    class RealShapeConn(Conn):
+        async def fetchrow(self,sql,*args):
+            raw=await super().fetchrow(sql,*args)
+            return AsyncpgLikeRecord(**raw) if raw is not None else None
+    assert not isinstance(AsyncpgLikeRecord(last_seen_at=NOW),Mapping)
+    c=RealShapeConn()
+    out=read(c)
+    assert out.database_and_scanner_role_verified is True
+    assert out.status=="STAGE2_SCANNER_RECENT_HEARTBEAT_AND_EVALUATION_OBSERVED_NONAUTHORIZING"
+    assert out.scanner_heartbeat_recent and out.scanner_evaluation_recent
+    assert out.eligible_stage2_events_last_7d==3
+    assert out.latest_eligible_stage2_utc==c.latest.isoformat()
+    assert out.entry_allowed is False and out.live_authorization is False
+    assert out.mexc_posts==out.database_writes==0
+    assert len(c.queries)==8
+
+
+@pytest.mark.parametrize("changed_row",[
+    AsyncpgLikeRecord(unexpected=NOW),
+    AsyncpgLikeRecord(last_seen_at=NOW,extra=NOW),
+    "2026-11-11T08:20:00+00:00",
+    ["last_seen_at",NOW],
+])
+def test_health_readback_rejects_bad_real_record_shape(changed_row):
+    class BadShapeConn(Conn):
+        async def fetchrow(self,sql,*args):
+            result=await super().fetchrow(sql,*args)
+            return changed_row if sql==HEARTBEAT_SQL else result
+    out=read(BadShapeConn())
+    assert out.status=="STAGE2_SOURCE_HEALTH_READBACK_INVALID_HALT"
+    assert out.database_and_scanner_role_verified is False
+    assert out.eligible_stage2_events_last_7d is None
+    assert out.entry_allowed is False and out.live_authorization is False
+
+
 def test_zero_signals_in_seven_days_does_not_imply_scanner_stopped():
     c=Conn()
     c.events=0
