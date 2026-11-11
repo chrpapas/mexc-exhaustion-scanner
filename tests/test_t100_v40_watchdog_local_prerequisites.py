@@ -45,7 +45,7 @@ def test_absent_or_same_webhooks_require_setup_not_false_pass():
     def absent(*args):raise RuntimeError("SECRET_KEYCHAIN_ERROR")
     result=inspect_local_prerequisites(absent)
     assert result.status=="V40_WATCHDOG_LOCAL_SECRETS_SETUP_REQUIRED"
-    assert "SECRET" not in str(result)
+    assert "SECRET_KEYCHAIN_ERROR" not in str(result)
     same="https://discord.com/api/webhooks/123456/abcdEFG"
     def duplicate(service,account):
         return ("test-api-secret-or-key-12345"
