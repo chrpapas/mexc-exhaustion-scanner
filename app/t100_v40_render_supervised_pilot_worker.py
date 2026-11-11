@@ -34,6 +34,9 @@ from scripts.t100_v40_pilot_get_only import PilotGetOnlyResult, observe_live_pil
 from scripts.t100_v40_pilot_capability_get_only import (
     PilotCapabilityReport, observe_pilot_capability,
 )
+from app.t100_v40_render_journal_readonly import (
+    DSN_KEY, V40RuntimeJournalObservation, observe_render_runtime_journal,
+)
 
 ACTIVATION_FLAG="T100_V40_REAL_SIGNAL_MONITOR_ENABLED"
 POLL_SECONDS=60
@@ -57,6 +60,8 @@ class V40SupervisedPilotObservation:
     candidate_public_contract_and_cross_1x_verified: bool = False
     candidate_exact_strategy_lot_verified: bool = False
     candidate_capability_status: str | None = None
+    runtime_journal_status: str | None = None
+    first_position_journal_clean: bool = False
     enabled_position_capacity: int = 0
     live_adapter_connected: bool = False
     native_stop_management_connected: bool = False
@@ -88,6 +93,7 @@ async def supervise_real_v40_cycle(
     signal_read: Callable[[Mapping[str,str]], Awaitable[V40SignalIntakeReport]]=_once,
     account_observe: Callable[...,Awaitable[PilotGetOnlyResult]]=observe_live_pilot,
     capability_observe: Callable[...,Awaitable[PilotCapabilityReport]]=observe_pilot_capability,
+    journal_observe: Callable[[Mapping[str,str]],Awaitable[V40RuntimeJournalObservation]]=observe_render_runtime_journal,
 ) -> V40SupervisedPilotObservation:
     def blocked(status:str, source:V40SignalIntakeReport|None=None):
         return V40SupervisedPilotObservation(
@@ -136,6 +142,35 @@ async def supervise_real_v40_cycle(
         or source.symbol is not None
     ):
         return blocked("V40_REAL_SIGNAL_EMPTY_SOURCE_SHAPE_HALT",source)
+
+    # Inspect actual restricted live journal if separately configured.
+    # Do not treat a missing journal DSN as permission to trade. The flat
+    # account monitor may still run without a candidate, but a candidate
+    # cannot advance without a clean first-position ledger snapshot.
+    journal_clean=False
+    journal_status=None
+    if env.get(DSN_KEY):
+        try:
+            journal=await asyncio.wait_for(journal_observe(env),timeout=12)
+        except Exception:
+            return blocked("V40_REAL_SIGNAL_RUNTIME_JOURNAL_READ_FAILED_HALT",source)
+        if (
+            type(journal) is not V40RuntimeJournalObservation
+            or journal.status!="V40_FIRST_POSITION_JOURNAL_EMPTY_AND_READONLY_VERIFIED"
+            or journal.first_position_journal_clear is not True
+            or journal.runtime_role_verified is not True
+            or journal.repeatable_read_readonly_verified is not True
+            or journal.v40_no_prior_claims_or_slots is not True
+            or journal.legacy_unresolved_absent is not True
+            or journal.database_writes!=0 or journal.mexc_posts!=0
+            or journal.entry_allowed is not False
+            or journal.live_authorization is not False
+        ):
+            return blocked("V40_REAL_SIGNAL_RUNTIME_JOURNAL_UNRESOLVED_HALT",source)
+        journal_clean=True
+        journal_status=journal.status
+    elif source.signal_id is not None:
+        return blocked("V40_REAL_SIGNAL_RUNTIME_JOURNAL_DSN_REQUIRED_HALT",source)
 
     key,secret=env.get("MEXC_API_KEY",""),env.get("MEXC_API_SECRET","")
     if (
@@ -220,6 +255,8 @@ async def supervise_real_v40_cycle(
         real_signal_economics_observed=source.signal_id is not None,
         candidate_public_contract_and_cross_1x_verified=capability_verified,
         candidate_capability_status=capability_status,
+        runtime_journal_status=journal_status,
+        first_position_journal_clean=journal_clean,
         # Recheck actual integer lot and intended notional independently
         # against live depth before any entry can ever be authorized.
         candidate_exact_strategy_lot_verified=False,
