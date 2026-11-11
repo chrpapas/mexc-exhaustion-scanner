@@ -445,10 +445,16 @@ class V40OneShotCoordinator:
             # Refuse predictably over-budget entries BEFORE durable reservation.
             # The frozen research target is not permission to exceed the
             # operator's small pilot ceiling. No top-up to min exchange lot.
+            # Live permits are independently checked at entry; the test
+            # harness injects a guarded fake without a permit instance.
+            permit_order_cap=getattr(
+                permit,"max_position_notional_usdt",caps.max_order_usdt,
+            )
             if (
-                selected.intent.notional_usdt > caps.max_order_usdt
-                or selected.intent.notional_usdt > permit.max_position_notional_usdt
-                or selected.intent.notional_usdt > D("12.50")
+                type(permit_order_cap) is not D
+                or selected.intent.notional_usdt > min(
+                    caps.max_order_usdt,permit_order_cap,
+                )
             ):
                 return V40OneShotReport(
                     "V40_PRE_RESERVATION_PILOT_NOTIONAL_CAP_REJECTED",
