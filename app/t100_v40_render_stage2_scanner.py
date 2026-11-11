@@ -20,17 +20,17 @@ import asyncio
 import logging
 import os
 import signal
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
 from app.t100_200_scanner import T100Scanner
+from app.t100_200_strategy import STRATEGY_ID
 from app.t100_200_worker import configure_logging
 from app.t100_live_v40_stage2_source import (
     HISTORY_SQL,
     MAX_BATCH,
     MAX_SIGNAL_AGE_SECONDS,
-    V40SignalIntakeHalted,
     inspect_stage2_candidate,
 )
 from app.t100_v40_admission import VOL_SKIP_THRESHOLD
@@ -158,6 +158,42 @@ async def inspect_new_v40_stage2(
 
 class V40Stage2RenderScanner(T100Scanner):
     """Keeps source generation; replaces old dashboard with V40 shadow gate."""
+
+    async def initialize(self) -> None:
+        """No automatic migrations or paper-runtime creation on V40 cutover.
+
+        Original scanner.initialize() invokes db.migrate() and an INSERT.
+        A future integration branch can contain migrations not yet reviewed
+        against production. Require the existing scanner schema and identity,
+        then do ONLY the regular source scanner's market-data maintenance.
+        """
+        try:
+            await self.db.connect()
+            async with self.db.pool.acquire() as conn:
+                identity=await conn.fetchrow(
+                    "SELECT current_database() AS db, current_user AS role"
+                )
+                runtime=await conn.fetchrow(
+                    "SELECT strategy_id,run_id "
+                    "FROM public.t100_runtime WHERE singleton=true"
+                )
+                if (
+                    identity is None or runtime is None
+                    or identity["db"]!="mexc_exhaustion"
+                    or identity["role"]!="mexc_scanner"
+                    or runtime["strategy_id"]!=STRATEGY_ID
+                ):
+                    raise V40RenderCutoverHalted(
+                        "V40_SCANNER_EXISTING_SCHEMA_OR_ROLE_INVALID"
+                    )
+            await self.refresh_contracts()
+        except V40RenderCutoverHalted:
+            raise
+        except Exception:
+            # Never expose database credentials or SQL errors in a log.
+            raise V40RenderCutoverHalted(
+                "V40_SCANNER_EXISTING_SCHEMA_READ_FAILED"
+            ) from None
 
     async def _maybe_send_daily_dashboard(self, now: datetime) -> None:
         # Deliberately no old T100_200 portfolio/report side effects.
