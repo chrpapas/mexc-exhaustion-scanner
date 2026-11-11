@@ -447,9 +447,36 @@ class V40OneShotCoordinator:
                 raise V40CoordinatorHalted("V40_CRITICAL_ACCOUNT_SNAPSHOT_BLOCKED")
             for signal in tape.candidates:
                 risk, terms=await self.witness.inspect(signal)
+                # Tiny real-money pilot is an explicit capped-size
+                # execution variation, not a replacement for the frozen
+                # V40 research model. Do not round UP to exchange minimum.
+                pilot_ceiling=None
+                if caps.max_order_usdt<=D("12.50"):
+                    permit_cap=getattr(
+                        permit,"max_position_notional_usdt",
+                        caps.max_order_usdt,
+                    )
+                    if (
+                        type(risk) is not V40CurrentRiskEvidence
+                        or type(permit_cap) is not D
+                        or type(risk.current_account_equity_usdt) is not D
+                        or type(risk.available_margin_usdt) is not D
+                    ):
+                        raise V40CoordinatorHalted("V40_PILOT_RISK_BUDGET_UNVERIFIED")
+                    pilot_ceiling=min(
+                        caps.max_order_usdt,permit_cap,
+                        risk.current_account_equity_usdt*D("0.25"),
+                        risk.available_margin_usdt,
+                    )
+                    if not pilot_ceiling.is_finite() or pilot_ceiling<=0:
+                        return V40OneShotReport(
+                            "V40_PILOT_RISK_BUDGET_EMPTY_NO_RESERVATION",
+                            signal_id=signal.signal_id,
+                        )
                 selected=prepare_candidate(
                     signal=signal,witness=pre,risk=risk,
                     terms=terms,cost_bps=cost_bps,
+                    pilot_notional_ceiling=pilot_ceiling,
                 )
                 if selected is not None:
                     break
@@ -471,6 +498,31 @@ class V40OneShotCoordinator:
             ):
                 return V40OneShotReport(
                     "V40_PRE_RESERVATION_PILOT_NOTIONAL_CAP_REJECTED",
+                    signal_id=selected.signal.signal_id,
+                )
+            # Model the frozen +75% SHORT stop before any durable claim.
+            # This is a risk-budget refusal, never a guaranteed max loss:
+            # venue gaps, liquidation, funding and failed stops are separate.
+            try:
+                modeled_loss=modeled_short_loss_at_native_stop(
+                    selected.intent,max_adverse_slippage_bps=caps.max_slippage_bps,
+                )
+                daily_cap=min(
+                    caps.max_daily_loss_usdt,
+                    getattr(permit,"max_daily_loss_usdt",caps.max_daily_loss_usdt),
+                )
+                pre_reservation_loss_ok=(
+                    type(daily_cap) is D
+                    and type(risk.realized_today_loss_usdt) is D
+                    and risk.realized_today_loss_usdt.is_finite()
+                    and risk.realized_today_loss_usdt>=0
+                    and risk.realized_today_loss_usdt+modeled_loss<daily_cap
+                )
+            except Exception:
+                pre_reservation_loss_ok=False
+            if not pre_reservation_loss_ok:
+                return V40OneShotReport(
+                    "V40_PRE_RESERVATION_MODELED_SL75_LOSS_CAP_REJECTED",
                     signal_id=selected.signal.signal_id,
                 )
             # Fresh lease and critical account after GET-heavy selection.
@@ -533,16 +585,24 @@ class V40OneShotCoordinator:
                     reserved=True,staged=True,
                 )
             try:
+                revised_ceiling=pilot_ceiling
+                if pilot_ceiling is not None:
+                    revised_ceiling=min(
+                        pilot_ceiling,
+                        refreshed.current_account_equity_usdt*D("0.25"),
+                        refreshed.available_margin_usdt,
+                    )
                 revised=prepare_candidate(
                     signal=selected.signal,witness=pre,
                     risk=refreshed,terms=terms_new,cost_bps=cost_bps,
+                    pilot_notional_ceiling=revised_ceiling,
                 )
             except V40CoordinatorHalted:
                 revised=None
             if (
                 revised is None
                 or selected.intent.notional_usdt >
-                   D(str(revised.plan.modeled_notional_usdt))
+                   revised.intent.notional_usdt
             ):
                 return V40OneShotReport(
                     "V40_REFRESHED_V40_CAPACITY_OR_COLLATERAL_REJECTS_POST",
