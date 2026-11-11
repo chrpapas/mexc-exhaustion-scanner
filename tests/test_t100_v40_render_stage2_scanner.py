@@ -279,10 +279,11 @@ def test_verified_signal_log_is_explicitly_no_order(caplog):
     worker.db=SimpleNamespace(pool=Pool(FakeConn()))
     async def noop(_worker,_eval):
         return None
+    verified=audit(FakeConn(),seen=T+timedelta(seconds=20))
     with (patch("app.t100_200_scanner.T100Scanner.process_eval",noop),
-          patch("app.t100_v40_render_stage2_scanner.datetime") as clock,
+          patch("app.t100_v40_render_stage2_scanner.inspect_new_v40_stage2",
+                return_value=verified),
           caplog.at_level("INFO")):
-        clock.now.return_value=T+timedelta(seconds=20)
         asyncio.run(worker.process_eval(T))
     assert "V40 VERIFIED_SIGNAL signal_id=42 symbol=EXAMPLE_USDT" in caplog.text
     assert "entry_allowed=false live_authorization=false no_order=true" in caplog.text
