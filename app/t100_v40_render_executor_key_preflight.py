@@ -82,8 +82,7 @@ async def one_get_only(
     if (
         type(key) is not str or len(key) < 12
         or type(secret) is not str or len(secret) < 16
-        or "\\n" in key or "\\r" in key
-        or "\\n" in secret or "\\r" in secret
+        or key != key.strip() or secret != secret.strip()
     ):
         return halted("V40_EXECUTOR_PREFLIGHT_TRADING_CREDENTIALS_INVALID")
     try:
