@@ -442,6 +442,18 @@ class V40OneShotCoordinator:
                     break
             if selected is None:
                 return V40OneShotReport("V40_NO_ADMISSIBLE_STAGE2_CANDIDATE")
+            # Refuse predictably over-budget entries BEFORE durable reservation.
+            # The frozen research target is not permission to exceed the
+            # operator's small pilot ceiling. No top-up to min exchange lot.
+            if (
+                selected.intent.notional_usdt > caps.max_order_usdt
+                or selected.intent.notional_usdt > permit.max_position_notional_usdt
+                or selected.intent.notional_usdt > D("12.50")
+            ):
+                return V40OneShotReport(
+                    "V40_PRE_RESERVATION_PILOT_NOTIONAL_CAP_REJECTED",
+                    signal_id=selected.signal.signal_id,
+                )
             # Fresh lease and critical account after GET-heavy selection.
             await self.leaders.require_current(lease)
             observed_at=datetime.now(timezone.utc)
