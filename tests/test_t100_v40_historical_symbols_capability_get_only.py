@@ -76,6 +76,19 @@ def test_complete_eight_exact_real_historical_symbols_get_research_no_auth(monke
         assert row.entry_allowed is False and row.live_authorization is False
 
 
+def test_real_sweep_retains_benign_risk_row_reorder_evidence(monkeypatch):
+    async def witness(*,key,secret,symbol):
+        return replace(good(symbol),private_risk_row_order_normalized=True)
+    monkeypatch.setattr(m,"observe_pilot_capability",witness)
+    out=asyncio.run(do(max_symbols=1))
+    assert out.symbols[0].private_risk_row_order_normalized is True
+    assert out.symbols[0].current_short_cross_1x_observed is True
+    assert out.symbols[0].private_capability_drift_source=="NONE"
+    assert out.entry_allowed is False
+    assert out.live_authorization is False
+    assert out.mexc_posts==out.database_writes==0
+
+
 def test_isolated_50_x_does_not_inherit_btc_cross_1_x_proof(monkeypatch):
     async def witness(*,key,secret,symbol):
         if symbol=="ARIA_USDT":
@@ -165,6 +178,7 @@ def test_symbol_get_transport_exception_never_reveals_private_error(monkeypatch)
     {"short_margin_mode_observed":"ARBITRARY"},
     {"private_capability_drift_source":"RAW_PRIVATE_API_RESPONSE"},
     {"private_risk_drift_field_labels":("SHORT_API_KEY_PRIVATE_SECRET",)},
+    {"private_risk_row_order_normalized":"yes"},
     {"short_leverage_observed":False},
     {"symbol":"BTC_USDT"},
 ])
