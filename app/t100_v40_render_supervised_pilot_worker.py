@@ -31,10 +31,13 @@ from app.t100_v40_render_signal_intake import (
     V40SignalIntakeReport, _once, eligible_environment,
 )
 from scripts.t100_v40_pilot_get_only import PilotGetOnlyResult, observe_live_pilot
+from scripts.t100_v40_pilot_capability_get_only import (
+    PilotCapabilityReport, observe_pilot_capability,
+)
 
 ACTIVATION_FLAG="T100_V40_REAL_SIGNAL_MONITOR_ENABLED"
 POLL_SECONDS=60
-MAX_CYCLE_SECONDS=50
+MAX_CYCLE_SECONDS=125
 
 
 @dataclass(frozen=True)
@@ -51,6 +54,9 @@ class V40SupervisedPilotObservation:
     account_flat_verified: bool = False
     source_verified: bool = False
     real_signal_economics_observed: bool = False
+    candidate_public_contract_and_cross_1x_verified: bool = False
+    candidate_exact_strategy_lot_verified: bool = False
+    candidate_capability_status: str | None = None
     enabled_position_capacity: int = 0
     live_adapter_connected: bool = False
     native_stop_management_connected: bool = False
@@ -81,6 +87,7 @@ async def supervise_real_v40_cycle(
     env: Mapping[str,str], *,
     signal_read: Callable[[Mapping[str,str]], Awaitable[V40SignalIntakeReport]]=_once,
     account_observe: Callable[...,Awaitable[PilotGetOnlyResult]]=observe_live_pilot,
+    capability_observe: Callable[...,Awaitable[PilotCapabilityReport]]=observe_pilot_capability,
 ) -> V40SupervisedPilotObservation:
     def blocked(status:str, source:V40SignalIntakeReport|None=None):
         return V40SupervisedPilotObservation(
@@ -163,6 +170,37 @@ async def supervise_real_v40_cycle(
                Decimal(str(account.account_equity_usdt)))>Decimal("0.00000001")
     ):
         return blocked("V40_REAL_SIGNAL_ACCOUNT_EQUITY_DRIFT_HALT",source)
+    # A real candidate triggers additional PUBLIC futures-contract and
+    # separately signed PRIVATE SHORT CROSS 1x risk/leverage GET witnesses.
+    # This does NOT establish the executable lot for the capped order,
+    # server-side POST permission, stop attachment, or future risk tiers.
+    capability_verified=False
+    capability_status=None
+    if source.signal_id is not None:
+        try:
+            cap=await asyncio.wait_for(capability_observe(
+                key=key,secret=secret,symbol=source.symbol,
+            ),timeout=65)
+        except Exception:
+            return blocked("V40_REAL_SIGNAL_PRIVATE_CROSS_CAPABILITY_GET_FAILED_HALT",source)
+        if (
+            type(cap) is not PilotCapabilityReport
+            or cap.symbol!=source.symbol
+            or cap.status!="PILOT_PUBLIC_CONTRACT_AND_PRIVATE_SHORT_CROSS_TIER_OBSERVED_NONAUTHORIZING"
+            or cap.flat_hedge_account_bookended is not True
+            or cap.public_futures_contract_eligible_observed is not True
+            or cap.current_private_short_cross_1x_tier_observed is not True
+            or cap.one_contract_on_public_lot_grid is not True
+            or cap.current_short_tier_supports_one_contract is not True
+            or cap.short_margin_mode_observed!="CROSS"
+            or cap.short_leverage_observed!=1
+            or cap.mexc_posts!=0 or cap.db_mutations!=0
+            or cap.entry_allowed is not False
+            or cap.live_authorization is not False
+        ):
+            return blocked("V40_REAL_SIGNAL_PRIVATE_CROSS_CAPABILITY_UNVERIFIED_HALT",source)
+        capability_verified=True
+        capability_status=cap.status
     return V40SupervisedPilotObservation(
         status=(
             "V40_REAL_FRESH_SIGNAL_OBSERVED_EXECUTION_STILL_GUARDED"
@@ -180,6 +218,11 @@ async def supervise_real_v40_cycle(
         account_flat_verified=True,
         source_verified=True,
         real_signal_economics_observed=source.signal_id is not None,
+        candidate_public_contract_and_cross_1x_verified=capability_verified,
+        candidate_capability_status=capability_status,
+        # Recheck actual integer lot and intended notional independently
+        # against live depth before any entry can ever be authorized.
+        candidate_exact_strategy_lot_verified=False,
     )
 
 
