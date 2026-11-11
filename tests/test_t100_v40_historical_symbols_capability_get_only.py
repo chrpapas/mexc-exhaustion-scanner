@@ -100,6 +100,28 @@ def test_isolated_50_x_does_not_inherit_btc_cross_1_x_proof(monkeypatch):
     assert result.live_authorization is False
 
 
+@pytest.mark.parametrize("drift_source",[
+    "RISK_LIMIT","POSITION_LEVERAGE","BOTH",
+])
+def test_real_historical_symbol_drift_reason_is_preserved_without_authorization(
+    monkeypatch,drift_source,
+):
+    async def witness(*,key,secret,symbol):
+        return PilotCapabilityReport(
+            status="PILOT_PRIVATE_CAPABILITY_GET_DRIFT_HALT",
+            symbol=symbol,flat_hedge_account_bookended=True,
+            private_capability_drift_source=drift_source,
+        )
+    monkeypatch.setattr(m,"observe_pilot_capability",witness)
+    result=asyncio.run(do(max_symbols=1))
+    assert result.checked_symbols==1
+    assert result.symbols[0].private_capability_drift_source==drift_source
+    assert result.cross_1x_contract_settings_observed==0
+    assert result.symbols[0].current_short_cross_1x_observed is False
+    assert result.mexc_posts==result.database_writes==0
+    assert result.entry_allowed is False and result.live_authorization is False
+
+
 def test_flat_account_preflight_failed_halts_rest_before_other_symbols(monkeypatch):
     seen=[]
     async def witness(*,key,secret,symbol):
@@ -135,6 +157,7 @@ def test_symbol_get_transport_exception_never_reveals_private_error(monkeypatch)
     {"db_mutations":1},
     {"api_key_futures_write_permission_verified":True},
     {"short_margin_mode_observed":"ARBITRARY"},
+    {"private_capability_drift_source":"RAW_PRIVATE_API_RESPONSE"},
     {"short_leverage_observed":False},
     {"symbol":"BTC_USDT"},
 ])
