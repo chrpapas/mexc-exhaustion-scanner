@@ -190,3 +190,53 @@ def test_apply_rejects_existing_rights_before_grant():
     with pytest.raises(V40JournalGrantsHalted,match="EXISTING_ACL"):
         asyncio.run(apply(c))
     assert c.writes[2:]==[]
+
+
+def test_apply_requires_existing_runtime_password_before_any_grants(monkeypatch):
+    import sys
+    import types
+    import app.t100_v40_journal_runtime_grants as mod
+    c=FakeOwner()
+    async def close():return None
+    c.close=close
+    attempts=[]
+    async def connect(**kw):
+        attempts.append(kw)
+        return c
+    monkeypatch.setitem(sys.modules,"asyncpg",types.SimpleNamespace(connect=connect))
+    monkeypatch.setattr("builtins.input",lambda _:mod.CONFIRM)
+    monkeypatch.setattr(mod.getpass,"getpass",lambda prompt:
+                        "" if "executor-runtime" in prompt else "OWNER_URL_HIDDEN")
+    out=asyncio.run(mod._run(apply_changes=True))
+    assert out["status"]=="V40_JOURNAL_RUNTIME_PASSWORD_REQUIRED_BEFORE_GRANTS"
+    assert len(attempts)==1
+    assert not any(q.startswith("GRANT ") for q in c.writes)
+    assert out["database_writes"]==0
+    assert not out["live_authorization"]
+
+
+def test_apply_bad_runtime_login_halts_before_any_grants(monkeypatch):
+    import sys
+    import types
+    import app.t100_v40_journal_runtime_grants as mod
+    c=FakeOwner()
+    async def close():return None
+    c.close=close
+    attempts=[]
+    async def connect(**kw):
+        attempts.append(kw)
+        if "user" in kw:
+            raise RuntimeError("AUTH_FAILED_WITH_SECRET_IN_ERROR")
+        return c
+    monkeypatch.setitem(sys.modules,"asyncpg",types.SimpleNamespace(connect=connect))
+    monkeypatch.setattr("builtins.input",lambda _:mod.CONFIRM)
+    monkeypatch.setattr(mod.getpass,"getpass",lambda prompt:
+                        "RUNTIME_PASSWORD_HIDDEN" if "executor-runtime" in prompt
+                        else "OWNER_URL_HIDDEN")
+    out=asyncio.run(mod._run(apply_changes=True))
+    assert out["status"]=="V40_JOURNAL_RUNTIME_LOGIN_FAILED_BEFORE_GRANTS"
+    assert "SECRET" not in str(out)
+    assert len(attempts)==2
+    assert not any(q.startswith("GRANT ") for q in c.writes)
+    assert out["database_writes"]==0
+    assert not out["live_authorization"]
