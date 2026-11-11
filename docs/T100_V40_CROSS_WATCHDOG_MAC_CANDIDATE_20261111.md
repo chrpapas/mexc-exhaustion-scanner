@@ -23,6 +23,22 @@ This candidate adds:
 3. Confirm the target subaccount is *flat* before initial `FLAT` mode. No manual orders, unrelated positions or outstanding stops. Do NOT place an order merely to test observer startup. Keep T100 paper/kill switches.
 4. Both services must be tested supervised, with an alarm-delivery drill and deliberate process-death drill. Mac LaunchAgents/always-on supervisor and independent host delivery are NOT installed by this candidate.
 
+## First, one no-network local prerequisite check
+
+Before configuring any runtime or creating a journal, simply run in the
+repository root after syncing the branch:
+
+```bash
+.venv/bin/python -m scripts.t100_v40_watchdog_local_prerequisites
+```
+
+It reports whether the **dedicated** read-only MEXC key pair and both
+different Discord webhooks are stored in their exact macOS Keychain
+services, without printing raw keys or webhook URLs. `LOCAL_SECRETS_PRESENT`
+does **not** verify MEXC exchange-side read-only permissions, account
+identity, alerts, network access or operational watchdog status. If
+`LOCAL_SECRETS_SETUP_REQUIRED`, complete the Keychain steps above first.
+
 ## Supervised flat-account dry run
 
 Use the integration branch as checkout, and `cd` to repo root. Commands below avoid putting raw MEXC keys or webhooks in shell history.
