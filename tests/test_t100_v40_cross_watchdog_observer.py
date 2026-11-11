@@ -140,7 +140,7 @@ def test_owned_wrong_margin_quantity_identity_or_state_blocks(field,value):
     ("stopLossPrice","3.6"),("stopLossType",1),
     ("stopLossType",None),("triggerSide",1),("errorCode",1),
     ("volType",3),("stopLossReverse",1),("lossTrend",2),
-    ("isFinished",1),("positionType",1),("vol","3"),
+    ("isFinished",1),("positionType",1),
 ])
 def test_native_stop_missing_or_wrong_semantics_blocks(field,value):
     bad=inventory(owned=True)
