@@ -303,7 +303,12 @@ def test_tight_signed_risk_get_and_public_country_only(monkeypatch):
     assert not result.live_authorization
 
 
-def test_private_leverage_bookend_drift_never_infers_cross_1x(monkeypatch):
+@pytest.mark.parametrize("drift_scope",[
+    "RISK_LIMIT","POSITION_LEVERAGE","BOTH",
+])
+def test_private_get_drift_identifies_endpoint_without_weakening_halt(
+    monkeypatch,drift_scope,
+):
     import scripts.t100_v40_pilot_capability_get_only as m
     from scripts.t100_v40_pilot_get_only import PilotGetOnlyResult
 
@@ -315,14 +320,19 @@ def test_private_leverage_bookend_drift_never_infers_cross_1x(monkeypatch):
         )
     monkeypatch.setattr(m,"observe_live_pilot",flat)
     class Signed:
-        calls=0
+        risk_calls=0
+        leverage_calls=0
         async def _private_get(self,path,params=None):
             assert params=={"symbol":SYMBOL}
             if path.endswith("/risk_limit"):
-                return tiers()
-            self.calls+=1
+                self.risk_calls+=1
+                rows=tiers()
+                if self.risk_calls==2 and drift_scope in ("RISK_LIMIT","BOTH"):
+                    rows[SYMBOL][1]["maxVol"]="20000"
+                return rows
+            self.leverage_calls+=1
             rows=leverages()
-            if self.calls==2:
+            if self.leverage_calls==2 and drift_scope in ("POSITION_LEVERAGE","BOTH"):
                 rows[1]["leverage"]=2
             return rows
         async def close(self):pass
@@ -335,6 +345,8 @@ def test_private_leverage_bookend_drift_never_infers_cross_1x(monkeypatch):
         key="fake",secret="fake",symbol=SYMBOL,
     ))
     assert result.status=="PILOT_PRIVATE_CAPABILITY_GET_DRIFT_HALT"
+    assert result.private_capability_drift_source==drift_scope
+    assert not result.current_private_short_cross_1x_tier_observed
     assert not result.live_authorization
     assert not result.entry_allowed
     assert result.mexc_posts==0
