@@ -387,6 +387,115 @@ def test_risk_limit_diagnostic_no_values_unknown_keys_or_order_waiver():
     )==("LONG_MMR","SHORT_LEVEL")
 
 
+def test_risk_limit_canonicalization_accepts_only_side_row_reordering():
+    from scripts.t100_v40_pilot_capability_get_only import _canonical_risk_limit
+    original=tiers()
+    reversed_rows=deepcopy(original)
+    reversed_rows[SYMBOL].reverse()
+    assert _canonical_risk_limit(original,SYMBOL)==(
+        _canonical_risk_limit(reversed_rows,SYMBOL)
+    )
+    assert _canonical_risk_limit(original,SYMBOL)==(
+        _canonical_risk_limit(deepcopy(original),SYMBOL)
+    )
+
+
+@pytest.mark.parametrize("change",[
+    "maxvol","level","margin","unknown","value_type",
+])
+def test_risk_limit_canonicalization_refuses_field_changes(change):
+    from scripts.t100_v40_pilot_capability_get_only import _canonical_risk_limit
+    original=tiers()
+    changed=deepcopy(original)
+    if change=="maxvol":
+        changed[SYMBOL][1]["maxVol"]="9000"
+    elif change=="level":
+        changed[SYMBOL][1]["level"]=2
+    elif change=="margin":
+        changed[SYMBOL][1]["openType"]=1
+    elif change=="unknown":
+        changed[SYMBOL][1]["venueSecretTag"]="DO_NOT_LOG_THIS_VALUE"
+    else:
+        changed[SYMBOL][1]["leverage"]=1.0
+    changed[SYMBOL].reverse()
+    assert _canonical_risk_limit(original,SYMBOL)!=(
+        _canonical_risk_limit(changed,SYMBOL)
+    )
+
+
+@pytest.mark.parametrize("change",[
+    "duplicate_side","missing_symbol","wrong_symbol","bad_level","bad_side",
+])
+def test_risk_limit_canonicalization_rejects_unsafe_shape(change):
+    from scripts.t100_v40_pilot_capability_get_only import _canonical_risk_limit
+    bad=deepcopy(tiers())
+    if change=="duplicate_side":
+        bad[SYMBOL][1]["positionType"]=1
+    elif change=="missing_symbol":
+        bad={"OTHER_USDT":bad[SYMBOL]}
+    elif change=="wrong_symbol":
+        bad[SYMBOL][1]["symbol"]="OTHER_USDT"
+    elif change=="bad_level":
+        bad[SYMBOL][1]["level"]=True
+    else:
+        bad[SYMBOL][1]["positionType"]=True
+    with pytest.raises(PilotCapabilityHalted,match="CANONICAL_"):
+        _canonical_risk_limit(bad,SYMBOL)
+
+
+def test_signed_risk_get_reordering_is_recorded_but_not_trade_permission(monkeypatch):
+    import scripts.t100_v40_pilot_capability_get_only as m
+    from scripts.t100_v40_pilot_get_only import PilotGetOnlyResult
+
+    async def flat(**kw):
+        return PilotGetOnlyResult(
+            status="PILOT_FLAT_HEDGE_SIGNED_GET_BOOKENDS_NONAUTHORIZING",
+            samples=2,position_count=0,native_stop_count=0,
+            hedge_mode_observed=True,inventory_bookends_equal=True,
+        )
+    monkeypatch.setattr(m,"observe_live_pilot",flat)
+    class Signed:
+        risk_calls=0
+        async def _private_get(self,path,params=None):
+            assert params=={"symbol":SYMBOL}
+            if path.endswith("/risk_limit"):
+                self.risk_calls+=1
+                values=tiers()
+                if self.risk_calls==2:
+                    values[SYMBOL].reverse()
+                return values
+            return leverages()
+        async def close(self):pass
+    monkeypatch.setattr(m,"KeychainSignedGetOnly",lambda **kw:Signed())
+
+    class Response:
+        def raise_for_status(self):pass
+        def json(self):
+            return {"success":True,"code":0,"data":contract()}
+    class Public:
+        async def __aenter__(self):return self
+        async def __aexit__(self,*args):pass
+        async def get(self,path,params):
+            assert path==m.COUNTRY_PATH and params=={"symbol":SYMBOL}
+            return Response()
+    monkeypatch.setattr(m.httpx,"AsyncClient",lambda **kw:Public())
+
+    result=asyncio.run(observe_pilot_capability(
+        key="dummy",secret="dummy",symbol=SYMBOL,
+    ))
+    assert result.status==(
+        "PILOT_PUBLIC_CONTRACT_AND_PRIVATE_SHORT_CROSS_TIER_OBSERVED_NONAUTHORIZING"
+    )
+    assert result.private_risk_row_order_normalized is True
+    assert result.private_capability_drift_source=="NONE"
+    assert result.private_risk_drift_field_labels==()
+    assert result.current_private_short_cross_1x_tier_observed is True
+    assert result.api_key_futures_write_permission_verified is False
+    assert result.live_authorization is False
+    assert result.entry_allowed is False
+    assert result.mexc_posts==0 and result.db_mutations==0
+
+
 def test_signed_leverage_get_failure_has_specific_redacted_status(monkeypatch):
     import scripts.t100_v40_pilot_capability_get_only as m
     from scripts.t100_v40_pilot_get_only import PilotGetOnlyResult
