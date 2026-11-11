@@ -59,6 +59,9 @@ from app.t100_live_v40_stage2_source import (
 from scripts.t100_v40_pilot_get_only import (
     BASE,KEY_ACCOUNT,SECRET_ACCOUNT,KeychainSignedGetOnly,_from_keychain,
 )
+from app.t100_live_v40_stage2_source_health import (
+    V40Stage2SourceHealth,inspect_scanner_source_health,
+)
 
 WEB_PILOT_KEYCHAIN_SERVICE="t100225-mexc-web-pilot-subaccount-v1"
 MAX_SOURCE=32
@@ -140,6 +143,7 @@ class Stage2Preview:
     checked_symbols:int=0
     limited_for_research:bool=False
     candidates:tuple[CandidatePreview,...]=()
+    source_health:V40Stage2SourceHealth|None=None
     independent_risk_and_collateral_certified:bool=False
     actual_order_execution_certified:bool=False
     independent_autonomous_restart_certified:bool=False
@@ -204,7 +208,18 @@ async def preview_fresh_stage2(
     ):
         return _halt("STAGE2_MARKET_SOURCE_CONTRACT_INVALID_HALT")
     if not batch.candidates:
-        return Stage2Preview(status="STAGE2_NO_FRESH_ELIGIBLE_CANDIDATES_NONAUTHORIZING")
+        try:
+            health=await inspect_scanner_source_health(
+                source,observed_at=observed_at,
+            )
+        except Exception:
+            health=V40Stage2SourceHealth(
+                status="STAGE2_SOURCE_HEALTH_READONLY_INSPECTION_FAILED_HALT"
+            )
+        return Stage2Preview(
+            status="STAGE2_NO_FRESH_ELIGIBLE_CANDIDATES_NONAUTHORIZING",
+            source_health=health,
+        )
     if len({c.signal_id for c in batch.candidates})!=len(batch.candidates):
         return _halt("STAGE2_MARKET_DUPLICATE_SIGNAL_SOURCE_HALT")
     # Never claim all candidates inspected if the bounded research sweep
