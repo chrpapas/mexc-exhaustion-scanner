@@ -27,7 +27,7 @@ BASE={
     "MEXC_API_KEY":"RENDER_TEST_DEDICATED_PILOT_KEY_123456",
     "MEXC_API_SECRET":"RENDER_TEST_DEDICATED_PILOT_SECRET_123456",
     "T100_V40_REAL_SIGNAL_MONITOR_ENABLED":"true",
-    "T100_V40_SINGLE_POSITION_PILOT":"true",
+    "T100_V40_MONITOR_SINGLE_POSITION_SCOPE":"true",
 }
 
 
@@ -104,7 +104,7 @@ def test_real_fresh_v40_candidate_is_logged_not_executed():
 
 @pytest.mark.parametrize("flag,value",[
     ("T100_V40_REAL_SIGNAL_MONITOR_ENABLED","false"),
-    ("T100_V40_SINGLE_POSITION_PILOT","false"),
+    ("T100_V40_MONITOR_SINGLE_POSITION_SCOPE","false"),
     ("T100_V40_EXECUTOR_DISABLED_WORKER","false"),
     ("T100_EXECUTION_MODE","live"),
     ("T100_LIVE_ORDER_API_ENABLED","true"),
