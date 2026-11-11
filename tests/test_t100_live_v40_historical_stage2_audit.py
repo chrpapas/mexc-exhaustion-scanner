@@ -30,7 +30,7 @@ class HistoricalConn(FakeConn):
     async def fetch(self,sql,*args):
         if sql==HISTORICAL_SQL:
             self.queries.append(sql)
-            assert args[0]==NOW-timedelta(days=7)
+            assert args[0]==NOW-timedelta(days=60)
             assert args[1]==NOW
             assert 1<=args[2]<=MAX_HISTORICAL_RECORDS
             return self.signals
@@ -172,7 +172,7 @@ def test_readonly_contract_is_independent_of_live_executor_source():
 
 
 @pytest.mark.parametrize("args",[
-    {"lookback_days":8},
+    {"lookback_days":181},
     {"lookback_days":0},
     {"max_records":9},
     {"max_records":0},
