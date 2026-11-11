@@ -43,6 +43,9 @@ class V40SupervisedPilotObservation:
     source_status: str | None = None
     signal_id: int | None = None
     signal_symbol: str | None = None
+    signal_tier: str | None = None
+    pre24_vol_pct: float | None = None
+    theoretical_notional_usdt: str | None = None
     fresh_signal_count: int = 0
     account_equity_usdt: str | None = None
     account_flat_verified: bool = False
@@ -85,6 +88,11 @@ async def supervise_real_v40_cycle(
             source_status=source.status if source else None,
             signal_id=source.signal_id if source else None,
             signal_symbol=source.symbol if source else None,
+            signal_tier=source.tier if source else None,
+            pre24_vol_pct=source.pre24_vol_pct if source else None,
+            theoretical_notional_usdt=(
+                source.theoretical_v40_notional_usdt if source else None
+            ),
             fresh_signal_count=source.signal_count if source else 0,
             source_verified=source.fresh_source_verified if source else False,
         )
@@ -164,6 +172,9 @@ async def supervise_real_v40_cycle(
         source_status=source.status,
         signal_id=source.signal_id,
         signal_symbol=source.symbol,
+        signal_tier=source.tier,
+        pre24_vol_pct=source.pre24_vol_pct,
+        theoretical_notional_usdt=source.theoretical_v40_notional_usdt,
         fresh_signal_count=source.signal_count,
         account_equity_usdt=str(account.account_equity_usdt),
         account_flat_verified=True,
