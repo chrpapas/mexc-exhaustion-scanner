@@ -30,6 +30,58 @@ from scripts.t100_v40_pilot_get_only import (
 
 COUNTRY_PATH="/api/v1/contract/detail/country"
 
+# Diagnostic-only, fixed allowlist: never print private field *values* or
+# unknown field names. A changing value is NOT waived or considered safe.
+_RISK_FIELD_LABELS={
+    "symbol":"SYMBOL","positionType":"POSITION_TYPE",
+    "level":"LEVEL","maxVol":"MAXVOL","maxLeverage":"MAX_LEVERAGE",
+    "mmr":"MMR","imr":"IMR","openType":"OPEN_TYPE",
+    "leverage":"LEVERAGE","limitBySys":"LIMIT_BY_SYS",
+    "currentMmr":"CURRENT_MMR",
+}
+
+
+def _risk_drift_field_labels(first: Any,second: Any,symbol: str) -> tuple[str,...]:
+    """Describe a rejected signed risk-limit mismatch without any values.
+
+    Sort only for *diagnostic comparison*: the actual risk_stable gate
+    still uses strict whole-response JSON equality and MUST fail closed.
+    """
+    if (
+        type(first) is not dict or type(second) is not dict
+        or set(first)!={symbol} or set(second)!={symbol}
+    ):
+        return ("RESPONSE_SHAPE_CHANGED",)
+    def sides(snapshot):
+        rows=snapshot[symbol]
+        if type(rows) is not list or not 1<=len(rows)<=2:
+            return None
+        found={}
+        for row in rows:
+            if (
+                type(row) is not dict or row.get("symbol")!=symbol
+                or type(row.get("positionType")) is not int
+                or row["positionType"] not in (1,2)
+                or row["positionType"] in found
+            ):
+                return None
+            found[row["positionType"]]=row
+        return found
+    a,b=sides(first),sides(second)
+    if a is None or b is None or set(a)!=set(b):
+        return ("ROW_SET_OR_SHAPE_CHANGED",)
+    if a==b:
+        return ("ROW_ORDER_ONLY",) if first!=second else ()
+    missing=object()
+    names=set()
+    for side in sorted(a):
+        prefix="LONG" if side==1 else "SHORT"
+        for key in set(a[side])|set(b[side]):
+            if a[side].get(key,missing)!=b[side].get(key,missing):
+                label=_RISK_FIELD_LABELS.get(key)
+                names.add(prefix+"_"+(label if label else "OTHER_FIELD"))
+    return tuple(sorted(names)) or ("UNCLASSIFIED_CHANGE",)
+
 
 class PilotCapabilityHalted(RuntimeError):
     """Only fixed diagnostic IDs; never transport/Keychain information."""
@@ -45,6 +97,7 @@ class PilotCapabilityReport:
     current_private_short_risk_limit_observed: bool=False
     private_short_position_leverage_observed: bool=False
     private_capability_drift_source: str="NONE"
+    private_risk_drift_field_labels: tuple[str,...]=()
     short_margin_mode_observed: str="UNKNOWN"
     short_leverage_observed: int|None=None
     private_risk_limit_mode_fields_missing: bool=False
@@ -316,6 +369,10 @@ async def observe_pilot_capability(
                 status="PILOT_PRIVATE_CAPABILITY_GET_DRIFT_HALT",
                 symbol=symbol,flat_hedge_account_bookended=True,
                 private_capability_drift_source=drift_source,
+                private_risk_drift_field_labels=(
+                    _risk_drift_field_labels(tiers,tiers_second,symbol)
+                    if not risk_stable else ()
+                ),
             )
     finally:
         await signed.close()
