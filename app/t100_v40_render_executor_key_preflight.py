@@ -1,7 +1,8 @@
 """T100 V40 *trading-key* Render first-stage signed-GET-only proof.
 
 The operator created a Futures trading-enabled key for the dedicated WEB
-pilot subaccount. This CLI validates it in a separate **currently suspended**
+pilot subaccount. Configure only MEXC_API_KEY and MEXC_API_SECRET in its
+isolated Render service. No fingerprint is required. This CLI validates it in a separate **currently suspended**
 Render trader-service build, as a ONE-OFF JOB, without ever submitting any
 order or starting a live executor.
 
@@ -14,11 +15,8 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import hashlib
-import hmac
 import json
 import os
-import re
 from dataclasses import asdict, dataclass
 from decimal import Decimal as D
 from typing import Any, Awaitable, Callable, Mapping
@@ -35,7 +33,6 @@ class V40TradeKeyGetOnlyPreflight:
     account_equity_usdt: str | None = None
     available_balance_usdt: str | None = None
     research_only_notional_ceiling_usdt: str | None = None
-    exact_key_fingerprint_pinned: bool = False
     subaccount_identity_independently_verified: bool = False
     exchange_side_trade_permission_verified: bool = False
     current_market_contract_risk_verified: bool = False
@@ -62,8 +59,8 @@ def safe_env(env: Mapping[str, str]) -> bool:
         env.get("EXECUTION_ENABLED") == "false",
         env.get("TRADING_MODE") == "paper",
         not env.get("DATABASE_URL"),
-        not env.get("MEXC_API_KEY"),
-        not env.get("MEXC_API_SECRET"),
+        not env.get("T100_V40_TRADER_API_KEY"),
+        not env.get("T100_V40_TRADER_API_SECRET"),
     ))
 
 
@@ -77,19 +74,18 @@ async def one_get_only(
 
     if not safe_env(env):
         return halted("V40_EXECUTOR_PREFLIGHT_PAPER_OR_ISOLATION_HALT")
-    key = env.get("T100_V40_TRADER_API_KEY", "")
-    secret = env.get("T100_V40_TRADER_API_SECRET", "")
-    expected_hash = env.get("T100_V40_TRADER_API_KEY_SHA256", "")
+    # The trader has only TWO exchange secrets. Account identity must be
+    # verified independently through MEXC and the signed-GET account state;
+    # replacing the two values never authorizes an order.
+    key = env.get("MEXC_API_KEY", "")
+    secret = env.get("MEXC_API_SECRET", "")
     if (
         type(key) is not str or len(key) < 12
         or type(secret) is not str or len(secret) < 16
-        or type(expected_hash) is not str
-        or re.fullmatch(r"[a-f0-9]{64}", expected_hash) is None
-        or not hmac.compare_digest(
-            expected_hash, hashlib.sha256(key.encode()).hexdigest()
-        )
+        or "\\n" in key or "\\r" in key
+        or "\\n" in secret or "\\r" in secret
     ):
-        return halted("V40_EXECUTOR_PREFLIGHT_EXACT_TRADING_KEY_PIN_HALT")
+        return halted("V40_EXECUTOR_PREFLIGHT_TRADING_CREDENTIALS_INVALID")
     try:
         observed = await asyncio.wait_for(
             observe(key=key, secret=secret), timeout=25,
@@ -128,7 +124,6 @@ async def one_get_only(
             research_only_notional_ceiling_usdt=str(
                 research_ceiling.quantize(D("0.00000001"))
             ),
-            exact_key_fingerprint_pinned=True,
         )
     except Exception:
         return halted("V40_EXECUTOR_PREFLIGHT_SIGNED_GET_FAILED")
