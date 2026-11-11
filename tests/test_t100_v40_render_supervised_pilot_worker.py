@@ -14,6 +14,7 @@ from app.t100_v40_render_supervised_pilot_worker import (
 )
 from scripts.t100_v40_pilot_get_only import PilotGetOnlyResult
 from scripts.t100_v40_pilot_capability_get_only import PilotCapabilityReport
+from app.t100_v40_render_journal_readonly import V40RuntimeJournalObservation
 
 BASE={
     "T100_V40_EXECUTOR_DISABLED_WORKER":"true",
@@ -25,6 +26,7 @@ BASE={
     "EXECUTION_ENABLED":"false",
     "TRADING_MODE":"paper",
     "T100_V40_SIGNAL_READER_DSN":"postgresql://dedicated-reader:redacted@internal-db/db",
+    "T100_V40_EXECUTOR_RUNTIME_DSN":"postgresql://t100_live_executor_runtime:redacted@internal-db/db",
     "MEXC_API_KEY":"RENDER_TEST_DEDICATED_PILOT_KEY_123456",
     "MEXC_API_SECRET":"RENDER_TEST_DEDICATED_PILOT_SECRET_123456",
     "T100_V40_REAL_SIGNAL_MONITOR_ENABLED":"true",
@@ -72,11 +74,29 @@ def capability():
     )
 
 
-def run(env=BASE,source=None,account=None,cap=None):
+def journal():
+    return V40RuntimeJournalObservation(
+        "V40_FIRST_POSITION_JOURNAL_EMPTY_AND_READONLY_VERIFIED",
+        runtime_role_verified=True,
+        repeatable_read_readonly_verified=True,
+        v40_tables_observed=True,
+        v40_dispatch_state_unresolved_absent=True,
+        v40_no_prior_claims_or_slots=True,
+        legacy_unresolved_absent=True,
+        first_position_journal_clear=True,
+    )
+
+
+def run(env=BASE,source=None,account=None,cap=None,journal_result=None):
     calls=[]
     async def source_read(environment):
         calls.append("source")
         return empty() if source is None else source
+    async def journal_observe(environment):
+        calls.append("journal")
+        if isinstance(journal_result,BaseException):
+            raise journal_result
+        return journal() if journal_result is None else journal_result
     async def account_observe(*,key,secret):
         calls.append("account")
         assert key==BASE["MEXC_API_KEY"]
@@ -94,13 +114,14 @@ def run(env=BASE,source=None,account=None,cap=None):
     result=asyncio.run(supervise_real_v40_cycle(
         env,signal_read=source_read,account_observe=account_observe,
         capability_observe=capability_observe,
+        journal_observe=journal_observe,
     ))
     return result,calls
 
 
 def test_empty_genuine_scanner_continuously_gets_flat_account():
     result,calls=run()
-    assert calls==["source","account"]
+    assert calls==["source","journal","account"]
     assert result.status=="V40_REAL_SCANNER_ACTIVE_NO_CANDIDATE_ACCOUNT_FLAT"
     assert result.source_verified and result.account_flat_verified
     assert result.signal_id is None and result.fresh_signal_count==0
@@ -112,7 +133,7 @@ def test_empty_genuine_scanner_continuously_gets_flat_account():
 
 def test_real_fresh_v40_candidate_is_logged_not_executed():
     result,calls=run(source=candidate())
-    assert calls==["source","account","capability"]
+    assert calls==["source","journal","account","capability"]
     assert result.status=="V40_REAL_FRESH_SIGNAL_OBSERVED_EXECUTION_STILL_GUARDED"
     assert result.signal_id==492 and result.signal_symbol=="TEST_USDT"
     assert result.real_signal_economics_observed
@@ -176,7 +197,7 @@ def test_exchange_nonflat_unverified_or_failed_halts_without_secret_leak(account
         "V40_REAL_SIGNAL_ACCOUNT_INVENTORY_UNVERIFIED_HALT",
         "V40_REAL_SIGNAL_ACCOUNT_NOT_FLAT_OR_GET_FAILED_HALT",
     )
-    assert calls==["source","account"]
+    assert calls==["source","journal","account"]
     assert "PRIVATE_ACCOUNT_PASSWORD" not in str(result)
     assert BASE["MEXC_API_SECRET"] not in str(result)
 
@@ -240,7 +261,7 @@ def test_live_candidate_cross_or_contract_unverified_halts_without_order(cap_res
         "V40_REAL_SIGNAL_PRIVATE_CROSS_CAPABILITY_UNVERIFIED_HALT",
         "V40_REAL_SIGNAL_PRIVATE_CROSS_CAPABILITY_GET_FAILED_HALT",
     )
-    assert calls==["source","account","capability"]
+    assert calls==["source","journal","account","capability"]
     assert not out.live_authorization and not out.entry_allowed
     assert "PRIVATE_API_SECRET" not in str(out)
 
@@ -251,3 +272,29 @@ def test_no_candidate_does_not_hit_public_contract_or_risk_api():
     assert calls==["source","account"]
     assert not out.candidate_public_contract_and_cross_1x_verified
     assert not out.candidate_exact_strategy_lot_verified
+
+
+@pytest.mark.parametrize("journal_result",[
+    replace(journal(),first_position_journal_clear=False),
+    replace(journal(),legacy_unresolved_absent=False),
+    replace(journal(),runtime_role_verified=False),
+    replace(journal(),database_writes=1),
+    RuntimeError("DB_PASSWORD_NEVER_LEAK"),
+])
+def test_candidate_journal_ambiguity_halts_before_mexc_account(journal_result):
+    result,calls=run(source=candidate(),journal_result=journal_result)
+    assert result.status in (
+        "V40_REAL_SIGNAL_RUNTIME_JOURNAL_UNRESOLVED_HALT",
+        "V40_REAL_SIGNAL_RUNTIME_JOURNAL_READ_FAILED_HALT",
+    )
+    assert calls==["source","journal"]
+    assert "DB_PASSWORD" not in str(result)
+    assert not result.entry_allowed and not result.live_authorization
+
+
+def test_candidate_requires_separate_restricted_runtime_dsn():
+    env=dict(BASE)
+    del env["T100_V40_EXECUTOR_RUNTIME_DSN"]
+    result,calls=run(env=env,source=candidate())
+    assert result.status=="V40_REAL_SIGNAL_RUNTIME_JOURNAL_DSN_REQUIRED_HALT"
+    assert calls==["source"]
