@@ -241,3 +241,45 @@ def test_v40_startup_rejects_unexpected_scanner_owner_identity_before_writes():
     with pytest.raises(V40RenderCutoverHalted,match="ROLE_INVALID"):
         asyncio.run(worker.initialize())
     assert calls==[]
+
+
+def test_native_validated_v40_signal_receipt_preserves_exact_source_provenance():
+    result=audit(FakeConn())
+    assert len(result.passed_signals)==1
+    receipt=result.passed_signals[0]
+    assert receipt.signal_id==42
+    assert receipt.symbol=="EXAMPLE_USDT"
+    assert receipt.tier=="HIGH_225"
+    assert receipt.p2_at==T
+    assert 0<=receipt.pre24_vol_pct<30
+    assert result.vol30_passed_research_only==len(result.passed_signals)
+    assert not result.entry_allowed
+    assert not result.live_authorization
+
+
+def test_stale_source_emits_no_tradeable_signal_receipt():
+    result=audit(FakeConn(),seen=T+timedelta(seconds=901))
+    assert result.passed_signals==()
+    assert not result.entry_allowed
+
+
+def test_invalid_second_candidate_discards_first_receipt_entirely():
+    valid=candidate()
+    invalid={**candidate(),"id":43,"symbol":"OTHER_USDT","stage1_eligible":False}
+    result=audit(FakeConn(rows=[valid,invalid]))
+    assert result.status=="V40_SHADOW_SIGNAL_OR_HISTORY_VALIDATION_HALTED"
+    assert result.passed_signals==()
+    assert result.vol30_passed_research_only==0
+    assert not result.history_verified
+
+
+def test_verified_signal_log_is_explicitly_no_order(caplog):
+    from types import SimpleNamespace
+    worker=object.__new__(V40Stage2RenderScanner)
+    worker.db=SimpleNamespace(pool=Pool(FakeConn()))
+    async def noop(_worker,_eval):
+        return None
+    with patch("app.t100_200_scanner.T100Scanner.process_eval",noop), caplog.at_level("INFO"):
+        asyncio.run(worker.process_eval(T))
+    assert "V40 VERIFIED_SIGNAL signal_id=42 symbol=EXAMPLE_USDT" in caplog.text
+    assert "entry_allowed=false live_authorization=false no_order=true" in caplog.text
