@@ -44,6 +44,7 @@ class PilotCapabilityReport:
     current_private_short_cross_1x_tier_observed: bool=False
     current_private_short_risk_limit_observed: bool=False
     private_short_position_leverage_observed: bool=False
+    private_capability_drift_source: str="NONE"
     short_margin_mode_observed: str="UNKNOWN"
     short_leverage_observed: int|None=None
     private_risk_limit_mode_fields_missing: bool=False
@@ -286,22 +287,35 @@ async def observe_pilot_capability(
         try:
             tiers_second=await probe.raw_account_risk_limits(symbol)
             leverages_second=await probe.raw_position_leverage(symbol)
-            stable=(
-                json.dumps([tiers,leverages],sort_keys=True,
+            # Diagnose WHICH signed endpoint drifted without exposing raw
+            # responses, weakening exact identity checks, or allowing trades.
+            risk_stable=(
+                json.dumps(tiers,sort_keys=True,
                            allow_nan=False,separators=(",",":"))
-                == json.dumps([tiers_second,leverages_second],
-                              sort_keys=True,allow_nan=False,
-                              separators=(",",":"))
+                == json.dumps(tiers_second,sort_keys=True,
+                              allow_nan=False,separators=(",",":"))
+            )
+            leverage_stable=(
+                json.dumps(leverages,sort_keys=True,
+                           allow_nan=False,separators=(",",":"))
+                == json.dumps(leverages_second,sort_keys=True,
+                              allow_nan=False,separators=(",",":"))
             )
         except Exception:
             return PilotCapabilityReport(
                 status="PILOT_PRIVATE_CAPABILITY_SECOND_GET_UNVERIFIED_HALT",
                 symbol=symbol,flat_hedge_account_bookended=True,
             )
-        if not stable:
+        if not risk_stable or not leverage_stable:
+            drift_source=(
+                "BOTH" if not risk_stable and not leverage_stable
+                else "RISK_LIMIT" if not risk_stable
+                else "POSITION_LEVERAGE"
+            )
             return PilotCapabilityReport(
                 status="PILOT_PRIVATE_CAPABILITY_GET_DRIFT_HALT",
                 symbol=symbol,flat_hedge_account_bookended=True,
+                private_capability_drift_source=drift_source,
             )
     finally:
         await signed.close()
