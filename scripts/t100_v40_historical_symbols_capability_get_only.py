@@ -75,6 +75,7 @@ class HistoricalSymbolSettings:
     one_contract_on_public_lot_grid:bool=False
     private_short_risk_limit_observed:bool=False
     short_margin_mode_observed:str="UNKNOWN"
+    private_capability_drift_source:str="NONE"
     short_leverage_observed:int|None=None
     current_short_cross_1x_observed:bool=False
     historical_only:bool=True
@@ -128,6 +129,9 @@ def _safe_row(
         or observation.short_margin_mode_observed not in (
             "UNKNOWN","CROSS","ISOLATED"
         )
+        or observation.private_capability_drift_source not in (
+            "NONE","RISK_LIMIT","POSITION_LEVERAGE","BOTH"
+        )
         or (
             observation.short_leverage_observed is not None
             and (
@@ -170,6 +174,7 @@ def _safe_row(
         ),
         short_margin_mode_observed=observation.short_margin_mode_observed,
         short_leverage_observed=observation.short_leverage_observed,
+        private_capability_drift_source=observation.private_capability_drift_source,
         current_short_cross_1x_observed=proven,
     )
 
