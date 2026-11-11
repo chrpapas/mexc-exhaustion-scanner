@@ -65,7 +65,7 @@ def review_v40_pilot_exact_lot(
     def halt(code: str) -> V40PilotLotReview:
         return V40PilotLotReview(code,signal_id,symbol)
     values = {
-        k:_n(v, allow_zero=k=="realized_today_loss_usdt")
+        k:_n(v, allow_zero=k in ("realized_today_loss_usdt","max_slippage_bps"))
         for k,v in locals().items() if k in {
             "reference_price","frozen_modeled_notional_usdt",
             "equity_usdt","available_usdt","contract_size",
@@ -79,7 +79,7 @@ def review_v40_pilot_exact_lot(
         or type(symbol) is not str or not symbol.endswith("_USDT")
         or symbol in ("BTC_USDT","ETH_USDT")
         or any(v is None for v in values.values())
-        or len(values)!=13
+        or len(values)!=14
     ):
         return halt("V40_PILOT_LOT_INPUTS_INVALID")
     v=values
