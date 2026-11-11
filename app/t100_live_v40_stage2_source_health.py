@@ -83,6 +83,33 @@ def _utc(value:Any,now:datetime)->tuple[str|None,bool]:
     return ts.isoformat(),True
 
 
+def _read_named_timestamp_row(row:Any,field:str)->tuple[bool,Any]:
+    """Validate a single-column PostgreSQL fetchrow, including asyncpg.Record.
+
+    asyncpg.Record provides keys()/get() and dict(row), but does not
+    necessarily satisfy isinstance(row, collections.abc.Mapping).
+    Accept no unexpected or duplicate columns; never stringify raw data.
+    """
+    if row is None:
+        return True,None
+    if not isinstance(row,Mapping):
+        if not (
+            callable(getattr(row,"keys",None))
+            and callable(getattr(row,"get",None))
+        ):
+            return False,None
+        try:
+            row=dict(row)
+        except Exception:
+            return False,None
+    try:
+        if set(row.keys())!={field}:
+            return False,None
+        return True,row[field]
+    except Exception:
+        return False,None
+
+
 async def inspect_scanner_source_health(
     source:PostgresV40Stage2Source,*,observed_at:datetime,
 )->V40Stage2SourceHealth:
@@ -119,17 +146,14 @@ async def inspect_scanner_source_health(
                 )
                 latest=await conn.fetchrow(LAST_ELIGIBLE_SQL)
 
+        hb_valid,hb=_read_named_timestamp_row(heartbeat,"last_seen_at")
+        ev_valid,ev=_read_named_timestamp_row(runtime,"last_eval_at")
+        last_valid,last=_read_named_timestamp_row(latest,"p2_at")
         if (
-            (heartbeat is not None and not isinstance(heartbeat,Mapping))
-            or (runtime is not None and not isinstance(runtime,Mapping))
-            or (latest is not None and not isinstance(latest,Mapping))
+            not hb_valid or not ev_valid or not last_valid
             or type(count) is not int or count<0
         ):
             return blocked("STAGE2_SOURCE_HEALTH_READBACK_INVALID_HALT")
-
-        hb=heartbeat.get("last_seen_at") if heartbeat is not None else None
-        ev=runtime.get("last_eval_at") if runtime is not None else None
-        last=latest.get("p2_at") if latest is not None else None
         hb_utc,_=_utc(hb,now)
         ev_utc,_=_utc(ev,now)
         last_utc,_=_utc(last,now)
