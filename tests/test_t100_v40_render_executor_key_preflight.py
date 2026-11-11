@@ -2,7 +2,6 @@
 from __future__ import annotations
 import asyncio
 from dataclasses import replace
-import hashlib
 import pytest
 
 from app.t100_v40_render_executor_key_preflight import one_get_only, safe_env
@@ -18,9 +17,8 @@ ENV = {
     "T100_LIVE_KILL_SWITCH":"true",
     "EXECUTION_ENABLED":"false",
     "TRADING_MODE":"paper",
-    "T100_V40_TRADER_API_KEY":API_KEY,
-    "T100_V40_TRADER_API_SECRET":SECRET,
-    "T100_V40_TRADER_API_KEY_SHA256":hashlib.sha256(API_KEY.encode()).hexdigest(),
+    "MEXC_API_KEY":API_KEY,
+    "MEXC_API_SECRET":SECRET,
 }
 
 def sample(equity="49.9", available="49.9"):
@@ -64,22 +62,24 @@ def test_positive_gets_are_non_authorizing_even_with_trade_key():
     ("EXECUTION_ENABLED","true"),
     ("TRADING_MODE","live"),
     ("DATABASE_URL","postgresql://owner:password@localhost/trader"),
-    ("MEXC_API_KEY","legacy-direct-key"),
-    ("MEXC_API_SECRET","legacy-direct-secret"),
+    ("T100_V40_TRADER_API_KEY","ambiguous-second-key"),
+    ("T100_V40_TRADER_API_SECRET","ambiguous-second-secret"),
 ])
 def test_rejects_broad_credentials_and_any_live_mode_before_network(k,v):
     out,calls=run({**ENV,k:v})
     assert out.status=="V40_EXECUTOR_PREFLIGHT_PAPER_OR_ISOLATION_HALT"
     assert calls==[]
 
-def test_missing_key_secret_or_pin_refuses_before_get():
+def test_missing_or_bad_two_credentials_refuse_before_get():
     for k,v in [
-        ("T100_V40_TRADER_API_KEY",""),
-        ("T100_V40_TRADER_API_SECRET",""),
-        ("T100_V40_TRADER_API_KEY_SHA256","0"*64),
+        ("MEXC_API_KEY",""),
+        ("MEXC_API_SECRET",""),
+        ("MEXC_API_KEY","short"),
+        ("MEXC_API_SECRET","too-short"),
+        ("MEXC_API_KEY",API_KEY+" "),
     ]:
         out,calls=run({**ENV,k:v})
-        assert out.status=="V40_EXECUTOR_PREFLIGHT_EXACT_TRADING_KEY_PIN_HALT"
+        assert out.status=="V40_EXECUTOR_PREFLIGHT_TRADING_CREDENTIALS_INVALID"
         assert calls==[]
 
 @pytest.mark.parametrize("changed",[
@@ -111,3 +111,26 @@ def test_raw_venue_exception_redacted():
     out=asyncio.run(one_get_only(ENV,observe=observe))
     assert out.status=="V40_EXECUTOR_PREFLIGHT_SIGNED_GET_FAILED"
     assert "REDACT_MY_API_SECRET" not in str(out)
+
+
+def test_only_two_mexc_env_values_needed_no_fingerprint():
+    out,calls=run(ENV)
+    assert out.signed_get_bookends_complete
+    assert calls==[(API_KEY,SECRET)]
+    assert "T100_V40_TRADER_API_KEY_SHA256" not in ENV
+
+
+def test_changing_two_credentials_only_changes_observed_account_not_authority():
+    new_key="different-subaccount-key-999"
+    new_secret="different-subaccount-secret-888"
+    observations=[]
+    async def observe(*,key,secret):
+        observations.append((key,secret))
+        return sample("30.0","30.0")
+    new_env={**ENV,"MEXC_API_KEY":new_key,"MEXC_API_SECRET":new_secret}
+    out=asyncio.run(one_get_only(new_env,observe=observe))
+    assert observations==[(new_key,new_secret)]
+    assert out.research_only_notional_ceiling_usdt=="7.50000000"
+    assert not out.subaccount_identity_independently_verified
+    assert not out.exchange_side_trade_permission_verified
+    assert not out.entry_allowed and not out.live_authorization
