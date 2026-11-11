@@ -320,3 +320,51 @@ def test_mac_owner_url_missing_refuses_without_connecting_to_db(monkeypatch):
     ),PAPER))
     assert out.status=="STAGE2_MARKET_SCANNER_OWNER_URL_REQUIRED_HALT"
     assert out.database_writes==out.mexc_posts==0
+
+
+def test_empty_live_batch_retains_no_signal_status_and_includes_separate_health(monkeypatch):
+    from app.t100_live_v40_stage2_source_health import V40Stage2SourceHealth
+    calls=[]
+    async def health(source,*,observed_at):
+        calls.append(observed_at)
+        return V40Stage2SourceHealth(
+            status="STAGE2_SCANNER_RECENT_HEARTBEAT_AND_EVALUATION_OBSERVED_NONAUTHORIZING",
+            eligible_stage2_events_last_7d=3,
+            scanner_heartbeat_recent=True,
+            scanner_evaluation_recent=True,
+            database_and_scanner_role_verified=True,
+        )
+    monkeypatch.setattr(cli,"inspect_scanner_source_health",health)
+    out,source_calls,private,public=check(signals=[])
+    assert out.status=="STAGE2_NO_FRESH_ELIGIBLE_CANDIDATES_NONAUTHORIZING"
+    assert out.fresh_validated_signals==0
+    assert out.checked_symbols==0
+    assert out.source_health is not None
+    assert out.source_health.eligible_stage2_events_last_7d==3
+    assert out.source_health.scanner_heartbeat_recent is True
+    assert out.entry_allowed is False
+    assert not out.live_authorization
+    assert private.calls==public.calls==[]
+    assert calls==[NOW]
+
+
+def test_failed_optional_health_does_not_reclassify_valid_empty_live_intake(monkeypatch):
+    async def failed(*args,**kwargs):
+        raise ValueError("DB_SECRET_RAISED_FROM_MOCK")
+    monkeypatch.setattr(cli,"inspect_scanner_source_health",failed)
+    out,_,private,public=check(signals=[])
+    assert out.status=="STAGE2_NO_FRESH_ELIGIBLE_CANDIDATES_NONAUTHORIZING"
+    assert out.source_health.status=="STAGE2_SOURCE_HEALTH_READONLY_INSPECTION_FAILED_HALT"
+    assert "SECRET" not in str(out)
+    assert private.calls==public.calls==[]
+    assert out.database_writes==out.mexc_posts==0
+
+
+def test_nonempty_source_does_not_run_independent_historical_health_query(monkeypatch):
+    async def forbidden(*args,**kwargs):
+        raise AssertionError("HEALTH_ONLY_AFTER_EMPTY_LIVE_INTAKE")
+    monkeypatch.setattr(cli,"inspect_scanner_source_health",forbidden)
+    out,_,_,_=check()
+    assert out.status=="STAGE2_MARKET_BOUNDED_GET_SWEEP_NONAUTHORIZING"
+    assert out.source_health is None
+    assert not out.entry_allowed
