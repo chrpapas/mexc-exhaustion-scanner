@@ -218,6 +218,12 @@ class LiveOrderGateway:
         switches. Do not invoke this method without that coordinator.
         """
         permit = require_certified_transport_permit(permit)
+        # A scoped V40 first-canary permit can ONLY execute through the
+        # immutable V40 Stage2/leader/claim/reconcile coordinator. Never
+        # allow reuse by the older general-purpose order gateway.
+        from app.t100_live_authorization import V40_CANARY_SCOPE
+        if permit.scope==V40_CANARY_SCOPE:
+            raise ExecutionHalted("V40_CANARY_LEGACY_ORDER_GATEWAY_FORBIDDEN")
         # Double-check transport and configured cap agree before creating a
         # journal intent. A legacy isolated adapter can never silently place
         # a trade when the approved pilot is CROSS.
