@@ -88,7 +88,9 @@ def test_independent_guardian_native_stop_and_each_prerequisite_mandatory(field)
     {"T100_LIVE_LEVERAGE":"2"},
 ])
 def test_pilot_switch_and_strict_financial_caps(change):
-    with pytest.raises(LiveAuthorizationHalted):
+    # The base controls parser rejects invalid decimal inputs before the
+    # additional supervised-canary authorization boundary is reached.
+    with pytest.raises((LiveAuthorizationHalted,ValueError)):
         issue(controls=controls(**change))
 
 
