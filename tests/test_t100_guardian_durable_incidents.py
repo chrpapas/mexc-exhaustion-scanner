@@ -56,7 +56,7 @@ class FakeConnection:
         if "has_table_privilege" in sql:
             row=dict(read_only="off",incident_insert=True,
                      incident_update=True,outbox_select=True,
-                     outbox_update=True,
+                     outbox_insert=True,outbox_update=True,
                      incident_delete=False,incident_truncate=False,
                      outbox_delete=False,outbox_truncate=False,
                      checkpoint_insert=False,checkpoint_update=False,
