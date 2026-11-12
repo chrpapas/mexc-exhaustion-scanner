@@ -61,6 +61,9 @@ class GetOnlyMexcTransport:
         r"/api/v1/private/order/external/[A-Z0-9]+_USDT/[A-Za-z0-9_-]{1,128}"
     )
     _ORDER = re.compile(r"/api/v1/private/order/get/[1-9][0-9]*")
+    _ORDER_DEALS = re.compile(
+        r"/api/v1/private/order/deal_details/[1-9][0-9]*"
+    )
     # Official MEXC Futures API domain since January 2026. Do not silently
     # fall back to retired contract.mexc.com or follow credentialed redirects.
     BASE_URL = "https://api.mexc.com"
@@ -78,7 +81,8 @@ class GetOnlyMexcTransport:
         return (type(path) is str and
                 (path in cls._FIXED or
                  cls._EXTERNAL.fullmatch(path) is not None or
-                 cls._ORDER.fullmatch(path) is not None))
+                 cls._ORDER.fullmatch(path) is not None or
+                 cls._ORDER_DEALS.fullmatch(path) is not None))
 
     async def _private_get(
         self, path: str, params: dict[str, Any] | None = None,
