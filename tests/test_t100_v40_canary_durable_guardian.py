@@ -219,3 +219,57 @@ def test_live_canary_guardian_requires_distinct_checkpoint_select_role():
         }
         with pytest.raises(m.V40DurableGuardianHalted):
             m.config(bad)
+
+
+def test_redacted_startup_reason_is_specific_without_leaking_secrets():
+    from app.t100_v40_canary_account_guardian import V40CanaryGuardianHalted
+    for error in (
+        V40CanaryGuardianHalted(
+            "V40_GUARDIAN_READONLY_CREDENTIALS_MISSING"
+        ),
+        m.V40DurableGuardianHalted(
+            "V40_CROSS_OWNED_GUARDIAN_DISTINCT_READONLY_LEDGER_REQUIRED"
+        ),
+        m.V40DurableGuardianHalted(
+            "V40_DURABLE_DATABASE_CONNECT_FAILED_SAFE_HALT"
+        ),
+    ):
+        assert m._redacted_startup_status(error)==str(error)
+    for error in (
+        RuntimeError("postgresql://user:SECRET@host/db"),
+        ValueError("SECRET_DISCORD_WEBHOOK_TOKEN"),
+        m.V40DurableGuardianHalted(
+            "V40_DURABLE_DATABASE_CONNECT_FAILED_SAFE_HALT:SECRET"
+        ),
+    ):
+        assert m._redacted_startup_status(error)==(
+            "V40_DURABLE_GUARDIAN_FAILED_SAFE_HALT"
+        )
+
+
+def test_connection_exception_reports_safe_database_connect_stage():
+    async def connection_failure(_dsn,_ca):
+        raise RuntimeError("postgresql://name:SUPER_SECRET@host/db")
+    with pytest.raises(m.V40DurableGuardianHalted) as e:
+        asyncio.run(m.run(
+            env(),
+            connect=connection_failure,
+            observe=lambda _:flat(),
+            max_cycles=1,
+        ))
+    assert str(e.value)=="V40_DURABLE_DATABASE_CONNECT_FAILED_SAFE_HALT"
+    assert "SUPER_SECRET" not in str(e.value)
+
+
+def test_role_failure_reports_secret_free_privilege_stage():
+    class WrongRole:
+        async def fetchrow(self,_sql):
+            raise RuntimeError("PRIVATE_PG_PASSWORD")
+        async def close(self):
+            pass
+    async def connect(_dsn,_ca):
+        return WrongRole()
+    with pytest.raises(m.V40DurableGuardianHalted) as e:
+        asyncio.run(m.run(env(),connect=connect,max_cycles=1))
+    assert str(e.value)=="V40_DURABLE_INCIDENT_WRITER_ROLE_FAILED_SAFE_HALT"
+    assert "PRIVATE" not in str(e.value)
