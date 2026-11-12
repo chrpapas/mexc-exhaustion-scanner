@@ -110,6 +110,16 @@ def _preclaim_validate(
     # Actual permit issuer and adapter certification are separate. This
     # MUST be the first decision; never trust operator limits alone.
     require_certified_transport_permit(permit)
+    from app.t100_live_authorization import V40_CANARY_SCOPE
+    if permit.scope==V40_CANARY_SCOPE and (
+        permit.signal_id!=intent.signal_id or permit.symbol!=intent.symbol
+        or intent.notional_usdt> D("12.50")
+        or caps.max_order_usdt>D("12.50")
+        or caps.max_portfolio_usdt>D("12.50")
+        or caps.max_daily_loss_usdt>D("12.50")
+        or plan.occupied_slots!=0
+    ):
+        raise V40DispatchHalted("V40_CANARY_SIGNAL_OR_TINY_CAP_MISMATCH")
     if (
         type(plan) is not FourSlotPlan
         or plan.action != "ADMIT"
