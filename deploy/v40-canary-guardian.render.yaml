@@ -1,0 +1,61 @@
+# Isolated T100_V40 first-canary guardian only.
+# This Blueprint intentionally creates ONE NEW independent background worker.
+# It does NOT adopt, alter, or replace the original T100/225 shadow worker,
+# the V40 scanner/trader, the BOXWAVE subaccount, or existing Render databases.
+#
+# CRITICAL: Do not approve the Blueprint until (a) migrations 034/035 are
+# reviewed/applied, (b) a distinct SELECT-only t100_v40_guardian_reader role
+# and a distinct narrow guardian INCIDENT writer role are provisioned,
+# (c) a dedicated V40 exchange READ-ONLY key is connected via Render UI,
+# (d) the account scope and webhook are verified, (e) secrets are rotated,
+# (f) recurring starter worker charges are approved by the operator.
+#
+# This is a non-trading, no-POST worker. It fails closed if provisioned incorrectly.
+services:
+  - type: worker
+    name: mexc-t100-v40-canary-guardian
+    runtime: python
+    plan: starter
+    region: frankfurt
+    repo: https://github.com/chrpapas/mexc-exhaustion-scanner.git
+    branch: integration/t100-v40-live-signal-intake-20261108
+    autoDeployTrigger: off
+    buildCommand: pip install .
+    startCommand: python -m app.t100_v40_canary_durable_guardian --run
+    envVars:
+      - key: T100_EXECUTION_MODE
+        value: paper
+      - key: T100_LIVE_ORDER_API_ENABLED
+        value: "false"
+      - key: T100_LIVE_KILL_SWITCH
+        value: "true"
+      - key: T100_GUARDIAN_OBSERVER_ENABLED
+        value: "true"
+      - key: T100_V40_CANARY_GUARDIAN_ENABLED
+        value: "true"
+      - key: T100_V40_GUARDIAN_DURABLE_ALERTS_ENABLED
+        value: "true"
+      - key: T100_V40_GUARDIAN_CROSS_PROTECTION_REQUIRED
+        value: "true"
+      - key: T100_V40_GUARDIAN_ACCOUNT_SCOPE
+        value: V40_DEDICATED
+      - key: T100_V40_CANARY_GUARDIAN_INTERVAL_SECONDS
+        value: "5"
+      # Separate from any POST-capable API key. Never paste these into chat.
+      - key: T100_V40_GUARDIAN_READONLY_API_KEY
+        sync: false
+      - key: T100_V40_GUARDIAN_READONLY_API_SECRET
+        sync: false
+      # Independent dedicated SELECT-only role on checkpoint/journal tables.
+      - key: T100_V40_GUARDIAN_LEDGER_READONLY_DSN
+        sync: false
+      - key: T100_V40_GUARDIAN_LEDGER_CA_FILE
+        sync: false
+      # Separate INCIDENT-ONLY writer role (migration 035).
+      - key: T100_V40_GUARDIAN_INCIDENT_DB_DSN
+        sync: false
+      - key: T100_V40_GUARDIAN_INCIDENT_DB_CA_FILE
+        sync: false
+      # Durable, redacted alert delivery. Never shares the trading key.
+      - key: T100_V40_GUARDIAN_DISCORD_WEBHOOK_URL
+        sync: false
