@@ -394,7 +394,7 @@ class V40OneShotCoordinator:
         # selector. It may only handle exactly its own operator-approved
         # genuine Stage2 identity and first-position flat-only mode.
         from app.t100_live_authorization import V40_CANARY_SCOPE
-        if permit.scope==V40_CANARY_SCOPE and (
+        if getattr(permit,'scope',None)==V40_CANARY_SCOPE and (
             self.initial_pilot_only is not True
             or monitored_signal_id!=permit.signal_id
             or monitored_symbol!=permit.symbol
