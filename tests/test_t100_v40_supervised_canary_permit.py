@@ -104,15 +104,19 @@ def test_permit_requires_exact_real_stage2_identity(signal_id,symbol):
 
 
 def test_invalid_forged_canary_economics_fails_even_if_scope_string_matches():
-    permit=issue()
-    for bad in (
-        replace(permit,max_position_notional_usdt=D("100")),
-        replace(permit,max_total_notional_usdt=D("100")),
-        replace(permit,max_daily_loss_usdt=D("100")),
-        replace(permit,signal_id=0),
-        replace(permit,symbol="OTHER"),
-        replace(permit,leverage=2),
+    # Deliberately use object.__setattr__ in offline tests to simulate
+    # tampered/deserialized runtime values. This frozen typed object is
+    # an accidental-use gate, not a cryptographic capability.
+    for field,value in (
+        ("max_position_notional_usdt",D("100")),
+        ("max_total_notional_usdt",D("100")),
+        ("max_daily_loss_usdt",D("100")),
+        ("signal_id",0),
+        ("symbol","OTHER"),
+        ("leverage",2),
     ):
+        bad=issue()
+        object.__setattr__(bad,field,value)
         with pytest.raises(LiveAuthorizationHalted):
             require_live_mutation_permit(bad)
 
