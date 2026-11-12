@@ -51,6 +51,11 @@ async def observe_v40_account_and_owned(
         return _halt("V40_GUARDIAN_INDEPENDENT_READER_OR_GET_INVALID_HALT")
     venue,completeness=_components(signed_get)
     try:
+        # The exchange hedge mode is a separate signed GET; position
+        # openType=CROSS alone cannot attest the account's position mode.
+        mode=await ReadOnlyMexcProbe(signed_get).raw_position_mode()
+        if mode!=1:
+            return _halt("V40_GUARDIAN_ACCOUNT_HEDGE_MODE_UNVERIFIED_HALT")
         snapshot=await FourSlotSnapshotCoordinator(
             ledger=ledger,venue=venue,completeness=completeness,
         ).inspect()
@@ -69,7 +74,7 @@ async def observe_v40_account_and_owned(
             "V40_GUARDIAN_FLAT_ACCOUNT_DOUBLE_GET_STANDBY_NONAUTHORIZING",
             monitored_account_flat=True,
             inventory_two_signed_get_bookends=True,
-            hedge_mode_verified=False,
+            hedge_mode_verified=True,
             incident_alert=False,
             ledger_provenance_verified=True,
         )
