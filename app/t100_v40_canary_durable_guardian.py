@@ -46,6 +46,7 @@ class V40DurableGuardianStatus:
     incident_pending: int=0
     discord_delivered: int=0
     account_flat_two_get: bool=False
+    owned_cross_native_sl_observed: bool=False
     guardian_outbox_committed: bool=False
     independently_verified_by_trader: bool=False
     native_stop_lifecycle_verified: bool=False
@@ -81,6 +82,22 @@ def config(env:Mapping[str,str])->tuple[str,str,str,int]:
         "T100_V40_EXECUTOR_RUNTIME_DSN"
     ):
         raise V40DurableGuardianHalted("V40_DURABLE_WRITER_ROLE_NOT_SEPARATE")
+    if env.get("T100_V40_GUARDIAN_CROSS_PROTECTION_REQUIRED")=="true":
+        readonly=env.get("T100_V40_GUARDIAN_LEDGER_READONLY_DSN","")
+        reader_ca=env.get("T100_V40_GUARDIAN_LEDGER_CA_FILE","")
+        if (
+            type(readonly) is not str
+            or not readonly.startswith(("postgresql://","postgres://"))
+            or readonly in (
+                dsn,env.get("T100_V40_SIGNAL_READER_DSN"),
+                env.get("T100_V40_EXECUTOR_RUNTIME_DSN"),
+            )
+            or type(reader_ca) is not str
+            or not reader_ca.startswith("/")
+        ):
+            raise V40DurableGuardianHalted(
+                "V40_CROSS_OWNED_GUARDIAN_DISTINCT_READONLY_LEDGER_REQUIRED"
+            )
     parsed=urlsplit(hook)
     if (
         parsed.scheme!="https"
@@ -112,6 +129,19 @@ def _status_for_outbox(heartbeat:V40CanaryGuardianHeartbeat)->str:
     if (
         type(heartbeat) is V40CanaryGuardianHeartbeat
         and heartbeat.status==
+            "V40_GUARDIAN_ONE_OWNED_CROSS_SHORT_NATIVE_SL_OBSERVED_NONAUTHORIZING"
+        and heartbeat.single_owned_cross_native_sl_verified is True
+        and heartbeat.ledger_provenance_verified is True
+        and heartbeat.inventory_two_signed_get_bookends is True
+        and heartbeat.hedge_mode_verified is True
+        and heartbeat.incident_alert is False
+        and heartbeat.mexc_posts==0
+        and heartbeat.database_writes==0
+    ):
+        return "OBSERVER_V40_CANARY_OWNED_CROSS_NATIVE_MARKET_SL"
+    if (
+        type(heartbeat) is V40CanaryGuardianHeartbeat
+        and heartbeat.status==
            "V40_GUARDIAN_NONFLAT_OR_PENDING_ORDER_UNKNOWN_OWNER_HALT"
     ):
         return "OBSERVER_V40_CANARY_NONFLAT_UNKNOWN_OWNER"
@@ -122,14 +152,24 @@ async def run(
     env:Mapping[str,str],
     *,
     connect:Callable[[str,str],Awaitable[Any]]=default_alert_connection,
-    observe:Callable[[Mapping[str,str]],Awaitable[V40CanaryGuardianHeartbeat]]=
-        observe_v40_account_once,
+    observe:Callable[[Mapping[str,str]],Awaitable[V40CanaryGuardianHeartbeat]]|
+        None=None,
     notifier_factory:Callable[...,Any]=T100LiveOpsNotifier,
     pause:Callable[[float],Awaitable[Any]]=asyncio.sleep,
     emit:Callable[[str],object]=print,
     max_cycles:int|None=None,
 )->V40DurableGuardianStatus:
     dsn,ca,hook,interval=config(env)
+    if observe is None:
+        if env.get("T100_V40_GUARDIAN_CROSS_PROTECTION_REQUIRED")=="true":
+            from app.t100_v40_guardian_account_and_owned import (
+                observe_v40_account_and_owned_network,
+            )
+            observer=observe_v40_account_and_owned_network
+        else:
+            observer=observe_v40_account_once
+    else:
+        observer=observe
     if max_cycles is not None and (
         type(max_cycles) is not int or not 1<=max_cycles<=100000
     ):
@@ -146,13 +186,16 @@ async def run(
         while max_cycles is None or cycle<max_cycles:
             cycle+=1
             try:
-                heartbeat=await asyncio.wait_for(observe(env),timeout=27)
+                heartbeat=await asyncio.wait_for(observer(env),timeout=53)
             except Exception:
                 heartbeat=V40CanaryGuardianHeartbeat(
                     "V40_GUARDIAN_SIGNED_GET_OR_RUNTIME_FAILED_HALT"
                 )
             code=_status_for_outbox(heartbeat)
-            healthy=code=="OBSERVER_V40_CANARY_FLAT_DOUBLE_GET"
+            healthy=code in (
+                "OBSERVER_V40_CANARY_FLAT_DOUBLE_GET",
+                "OBSERVER_V40_CANARY_OWNED_CROSS_NATIVE_MARKET_SL",
+            )
             # Commit incident state BEFORE Discord and before continuing.
             state=await outbox.observe(status=code,alert=not healthy)
             delivered=0
@@ -184,7 +227,12 @@ async def run(
                 critical_latched=state.critical_latched,
                 incident_pending=pending_count,
                 discord_delivered=delivered,
-                account_flat_two_get=healthy,
+                account_flat_two_get=(
+                    code=="OBSERVER_V40_CANARY_FLAT_DOUBLE_GET"
+                ),
+                owned_cross_native_sl_observed=(
+                    code=="OBSERVER_V40_CANARY_OWNED_CROSS_NATIVE_MARKET_SL"
+                ),
                 guardian_outbox_committed=True,
             )
             emit(json.dumps(asdict(report),sort_keys=True),)
@@ -226,7 +274,10 @@ def main()->int:
         )),sort_keys=True))
         return 2
     return 0 if (
-        state.account_flat_two_get is True
+        (
+            state.account_flat_two_get is True
+            or state.owned_cross_native_sl_observed is True
+        )
         and state.critical_latched is False
         and state.incident_pending==0
     ) else 2
