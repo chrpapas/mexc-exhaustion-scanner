@@ -16,6 +16,7 @@ from scripts.t100_v40_pilot_get_only import PilotGetOnlyResult
 from scripts.t100_v40_pilot_capability_get_only import PilotCapabilityReport
 from app.t100_v40_render_journal_readonly import V40RuntimeJournalObservation
 from app.t100_v40_render_exact_lot_preview import V40ExactLotPreview
+from app.t100_v40_render_ws_get_only_diagnostic import V40WsGetOnlyReport
 
 BASE={
     "T100_V40_EXECUTOR_DISABLED_WORKER":"true",
@@ -445,3 +446,86 @@ def test_optional_exact_lot_bad_or_failed_observation_cannot_authorize_or_crash(
     assert out.candidate_executable_notional_usdt is None
     assert out.entry_allowed is False and out.live_authorization is False
     assert "SECRET_SHOULD_NOT_LEAK" not in str(out)
+
+
+def test_opt_in_one_shot_ws_probe_runs_only_after_safe_flat_journal_heartbeat(capsys):
+    events=[]
+    env={**BASE,"T100_V40_WS_GET_ONLY_PROBE_ENABLED":"true"}
+    async def observe(_env):
+        events.append("flat_monitor")
+        return V40SupervisedPilotObservation(
+            "V40_REAL_SCANNER_ACTIVE_NO_CANDIDATE_ACCOUNT_FLAT",
+            source_verified=True,account_flat_verified=True,
+            first_position_journal_clean=True,
+        )
+    async def ws_observe(_env):
+        events.append("ws_once")
+        return V40WsGetOnlyReport(
+            "V40_WS_LOGIN_FILTER_VERIFIED_LIFECYCLE_INCOMPLETE_GET_ONLY",
+            login_filter_verified=True,
+        )
+    async def delay(_):
+        events.append("sleep")
+    outcome=asyncio.run(run_supervised_signal_monitor(
+        env,max_cycles=3,observe_cycle=observe,delay=delay,
+        ws_observe=ws_observe,
+    ))
+    assert outcome==0
+    assert events==[
+        "flat_monitor","ws_once","sleep",
+        "flat_monitor","sleep","flat_monitor",
+    ]
+    log=capsys.readouterr().out
+    assert "V40_WS_LOGIN_FILTER_VERIFIED_LIFECYCLE_INCOMPLETE_GET_ONLY" in log
+    assert '"mexc_posts": 0' in log
+    assert '"live_authorization": false' in log
+
+
+def test_opt_in_ws_probe_does_not_run_if_first_monitor_is_unverified(capsys):
+    events=[]
+    env={**BASE,"T100_V40_WS_GET_ONLY_PROBE_ENABLED":"true"}
+    async def observe(_env):
+        events.append("unsafe_monitor")
+        return V40SupervisedPilotObservation(
+            "V40_REAL_SIGNAL_RUNTIME_JOURNAL_UNRESOLVED_HALT",
+        )
+    async def ws_observe(_env):
+        raise AssertionError("WS must never run on account/journal failure")
+    code=asyncio.run(run_supervised_signal_monitor(
+        env,max_cycles=2,observe_cycle=observe,ws_observe=ws_observe,
+    ))
+    assert code==2 and events==["unsafe_monitor"]
+    assert "UNRESOLVED_HALT" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("ws_failure",[
+    RuntimeError("PRIVATE_KEY_MUST_NOT_LOG"),
+    dict(status="fake-authority",live_authorization=True),
+    V40WsGetOnlyReport(
+        "V40_WS_REST_LIFECYCLE_CORRELATED_GET_ONLY_NONAUTHORIZING",
+        live_authorization=True,
+    ),
+])
+def test_opt_in_ws_failure_redacted_and_no_order_authority(ws_failure,capsys):
+    env={**BASE,"T100_V40_WS_GET_ONLY_PROBE_ENABLED":"true"}
+    async def observe(_env):
+        return V40SupervisedPilotObservation(
+            "V40_REAL_SCANNER_ACTIVE_NO_CANDIDATE_ACCOUNT_FLAT",
+            source_verified=True,account_flat_verified=True,
+        )
+    async def ws_observe(_env):
+        if isinstance(ws_failure,Exception):
+            raise ws_failure
+        return ws_failure
+    code=asyncio.run(run_supervised_signal_monitor(
+        env,max_cycles=1,observe_cycle=observe,ws_observe=ws_observe,
+    ))
+    log=capsys.readouterr().out
+    assert code==0  # GET-only monitor remains healthy
+    assert "PRIVATE_KEY_MUST_NOT_LOG" not in log
+    assert (
+        "V40_WS_DIAGNOSTIC_CYCLE_FAILED_REDACTED" in log
+        or "V40_WS_DIAGNOSTIC_UNVERIFIED_OUTPUT_REDACTED" in log
+    )
+    assert '"mexc_posts": 0' in log
+    assert '"live_authorization": false' in log
