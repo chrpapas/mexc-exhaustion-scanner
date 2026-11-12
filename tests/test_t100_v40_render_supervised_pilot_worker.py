@@ -62,6 +62,15 @@ def candidate():
     )
 
 
+def vol30_skip():
+    return V40SignalIntakeReport(
+        status="V40_SIGNAL_INTAKE_VOL30_SKIP_REAL_SOURCE",
+        fresh_source_verified=True,
+        signal_count=1, signal_id=521, symbol="AGT_USDT",
+        tier="HIGH_225", pre24_vol_pct=56.805531,
+    )
+
+
 def capability():
     return PilotCapabilityReport(
         status="PILOT_PUBLIC_CONTRACT_AND_PRIVATE_SHORT_CROSS_TIER_OBSERVED_NONAUTHORIZING",
@@ -129,6 +138,73 @@ def test_empty_genuine_scanner_continuously_gets_flat_account():
     assert not result.live_authorization
     assert not result.entry_allowed and not result.live_adapter_connected
     assert result.mexc_orders_sent==0 and result.database_writes==0
+
+
+def test_real_vol30_skip_continues_account_and_journal_monitor_without_crashing():
+    result,calls=run(source=vol30_skip())
+    assert calls==["source","journal","account"]
+    assert result.status=="V40_REAL_VOL30_SIGNAL_SKIPPED_ACCOUNT_FLAT"
+    assert result.signal_id==521 and result.signal_symbol=="AGT_USDT"
+    assert result.pre24_vol_pct==56.805531
+    assert result.source_verified and result.account_flat_verified
+    assert result.first_position_journal_clean
+    assert not result.real_signal_economics_observed
+    assert not result.candidate_public_contract_and_cross_1x_verified
+    assert result.enabled_position_capacity==0
+    assert not result.live_authorization and not result.entry_allowed
+    assert result.mexc_orders_sent==0 and result.database_writes==0
+
+
+@pytest.mark.parametrize("value",[
+    replace(vol30_skip(),pre24_vol_pct=29.999),
+    replace(vol30_skip(),pre24_vol_pct=float("nan")),
+    replace(vol30_skip(),pre24_vol_pct=float("inf")),
+    replace(vol30_skip(),signal_count=2),
+    replace(vol30_skip(),signal_id=True),
+    replace(vol30_skip(),symbol="BTC_USDT"),
+    replace(vol30_skip(),tier="UNKNOWN"),
+    replace(vol30_skip(),theoretical_v40_notional_usdt="12.50"),
+    replace(vol30_skip(),current_flat_account_verified=True),
+])
+def test_invalid_vol30_skip_halts_before_db_or_account(value):
+    result,calls=run(source=value)
+    assert result.status=="V40_REAL_SIGNAL_VOL30_SKIP_SHAPE_HALT"
+    assert calls==["source"]
+
+
+def test_vol30_skip_does_not_bypass_journal_or_account_guard():
+    result,calls=run(source=vol30_skip(),account=replace(flat(),position_count=1))
+    assert result.status=="V40_REAL_SIGNAL_ACCOUNT_INVENTORY_UNVERIFIED_HALT"
+    assert calls==["source","journal","account"]
+    result,calls=run(source=vol30_skip(),journal_result=replace(
+        journal(),first_position_journal_clear=False,
+    ))
+    assert result.status=="V40_REAL_SIGNAL_RUNTIME_JOURNAL_UNRESOLVED_HALT"
+    assert calls==["source","journal"]
+
+
+def test_real_skipped_stage2_cycle_never_exits_monitor_loop(capsys):
+    reads=[]
+    async def observe(_env):
+        reads.append("monitor")
+        return V40SupervisedPilotObservation(
+            status="V40_REAL_VOL30_SIGNAL_SKIPPED_ACCOUNT_FLAT",
+            source_status="V40_SIGNAL_INTAKE_VOL30_SKIP_REAL_SOURCE",
+            signal_id=521,signal_symbol="AGT_USDT",
+            pre24_vol_pct=56.805531,fresh_signal_count=1,
+            source_verified=True,account_flat_verified=True,
+            first_position_journal_clean=True,
+        )
+    async def delay(_seconds):
+        reads.append("sleep")
+    code=asyncio.run(run_supervised_signal_monitor(
+        BASE,max_cycles=3,observe_cycle=observe,delay=delay,
+    ))
+    assert code==0
+    assert reads==["monitor","sleep","monitor","sleep","monitor"]
+    printed=capsys.readouterr().out
+    assert "V40_REAL_VOL30_SIGNAL_SKIPPED_ACCOUNT_FLAT" in printed
+    assert '"mexc_orders_sent": 0' in printed
 
 
 def test_real_fresh_v40_candidate_is_logged_not_executed():
