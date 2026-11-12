@@ -172,7 +172,10 @@ def test_durable_guardian_accepts_only_independently_recovered_owned_cross():
     assert result.critical_latched is False
     assert result.incident_pending==0
     assert db.revision==3
-    assert notifier.sent==[]
+    # The existing durable outbox also emits a WARNING on a status
+    # transition (flat -> protected), even without a critical alert.
+    assert all(item[3]=="warning" for item in notifier.sent)
+    assert not any(item[3]=="critical" for item in notifier.sent)
     assert result.live_authorization is False and result.mexc_posts==0
 
 
