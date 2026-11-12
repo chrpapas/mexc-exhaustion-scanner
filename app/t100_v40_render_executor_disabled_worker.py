@@ -51,11 +51,11 @@ def main() -> int:
     # sends only signed GETs while the paper kill switch stays engaged.
     # It must never be treated as the actual live-order adapter.
     if os.environ.get("T100_V40_REAL_SIGNAL_MONITOR_ENABLED")=="true":
-        from app.t100_v40_render_supervised_pilot_worker import (
-            run_supervised_signal_monitor,
+        from app.t100_v40_render_ws_supervisor import (
+            run_with_optional_ws_preflight,
         )
         import asyncio
-        return asyncio.run(run_supervised_signal_monitor(dict(os.environ)))
+        return asyncio.run(run_with_optional_ws_preflight(dict(os.environ)))
     print(json.dumps({
         "status":"V40_DISABLED_EXECUTOR_HOLDING_PROCESS",
         "entry_allowed":False,"live_authorization":False,
