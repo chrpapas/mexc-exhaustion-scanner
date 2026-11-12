@@ -632,3 +632,45 @@ def test_pre_reservation_small_pilot_notional_refused_before_db_mutation(monkeyp
     assert "stage" not in log
     assert "dispatch" not in log
     assert "lease_release" in log
+
+
+def test_initial_one_position_pilot_denies_preexisting_nonflat_before_reservation(monkeypatch):
+    log=[]
+    patch_release_gates_and_mutations(monkeypatch,log)
+    one=controller(log)
+    one.initial_pilot_only=True
+
+    class AlreadyNonflat:
+        async def inspect(self):
+            log.append("snapshot_nonflat")
+            return FourSlotSnapshotResult(
+                status="NONFLAT_PROVENANCE_MATCHED_NONAUTHORIZING",
+                occupied_slots=1,inventory=inventory(),
+            )
+    one.snapshots=AlreadyNonflat()
+    with pytest.raises(m.V40CoordinatorHalted,match="INITIAL_PILOT_REQUIRES_FLAT"):
+        asyncio.run(one.run_one(
+            permit=None,caps=caps(),parity_report={},holder_id="mock-holder",
+        ))
+    assert log==[
+        "source","lease_acquire","snapshot_nonflat","lease_release",
+    ]
+    assert "reserve" not in log
+    assert "stage" not in log
+    assert "dispatch" not in log
+
+
+def test_initial_pilot_scope_rejects_truthy_non_boolean_constructor_flag():
+    log=[]
+    c=controller(log)
+    with pytest.raises(ValueError,match="INITIAL_PILOT_SCOPE_INVALID"):
+        m.V40OneShotCoordinator(
+            source=c.source,snapshots=c.snapshots,
+            witness=c.witness,depth=c.depth,leaders=c.leaders,
+            reservations=c.reservations,journal=c.journal,
+            claims=c.claims,claim_reader=c.claim_reader,
+            transport=c.transport,get_venue=c.get_venue,
+            completeness=c.completeness,commit_writer=c.commit_writer,
+            initial_pilot_only="true",
+        )
+    assert log==[]
