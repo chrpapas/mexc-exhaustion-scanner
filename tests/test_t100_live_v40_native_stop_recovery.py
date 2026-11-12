@@ -162,6 +162,20 @@ def test_unknown_post_can_observe_native_market_stop_but_never_clear_journal():
     assert journal.state_value=="UNKNOWN"
 
 
+def test_exact_entry_attached_market_stop_is_recovered_but_foreign_id_freezes():
+    a,reader,ledger,venue,complete,journal=make()
+    ledger.rows[0]["exchange_order_id"]="666"
+    venue.stops[0]["orderId"]="666"
+    yes=observe(a,reader)
+    assert yes.status=="V40_AMENDMENT_OUTCOME_OBSERVED_NATIVE_PROTECTION_NONAUTHORIZING"
+    assert not yes.live_stop_mutation_allowed and not yes.live_authorization
+    venue.stops[0]["orderId"]="667"
+    no=observe(a,reader)
+    assert no.status=="V40_STOP_RECOVERY_NATIVE_MARKET_FULL_VOLUME_UNVERIFIED_FREEZE"
+    assert not no.post_outcome_persistence_allowed
+    assert not no.entry_allowed
+
+
 def test_prepared_journal_cannot_infer_success_from_matching_price():
     a,reader,ledger,venue,complete,journal=make(state="PREPARED")
     x=observe(a,reader)
