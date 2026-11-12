@@ -318,6 +318,7 @@ class V40NativeStopRecoveryAuditor:
                     stop=native_stop,symbol=cp.symbol,
                     position_id=cp.position_id,position_quantity=cp.contracts,
                     maximum_short_stop_price=cp.stop_price,
+                    verified_filled_entry_order_id=cp.exchange_order_id,
                 )
                 if report.active_native_full_volume_market_sl_observed is not True:
                     return observed("V40_STOP_RECOVERY_NATIVE_MARKET_FULL_VOLUME_UNVERIFIED_FREEZE")
