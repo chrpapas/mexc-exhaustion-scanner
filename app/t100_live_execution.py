@@ -222,7 +222,7 @@ class LiveOrderGateway:
         # immutable V40 Stage2/leader/claim/reconcile coordinator. Never
         # allow reuse by the older general-purpose order gateway.
         from app.t100_live_authorization import V40_CANARY_SCOPE
-        if permit.scope==V40_CANARY_SCOPE:
+        if getattr(permit,'scope',None)==V40_CANARY_SCOPE:
             raise ExecutionHalted("V40_CANARY_LEGACY_ORDER_GATEWAY_FORBIDDEN")
         # Double-check transport and configured cap agree before creating a
         # journal intent. A legacy isolated adapter can never silently place
