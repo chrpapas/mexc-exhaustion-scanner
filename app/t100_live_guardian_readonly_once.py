@@ -53,6 +53,7 @@ class GetOnlyMexcTransport:
     _FIXED = frozenset({
         "/api/v1/private/order/open_order_total_count",
         "/api/v1/private/position/open_positions",
+        "/api/v1/private/position/position_mode",
         "/api/v1/private/stoporder/open_orders",
         "/api/v1/private/stoporder/list/orders",
         "/api/v1/private/position/list/history_positions",
