@@ -40,6 +40,9 @@ from app.t100_v40_render_journal_readonly import (
 from app.t100_v40_render_exact_lot_preview import (
     V40ExactLotPreview, observe_render_exact_lot_preview,
 )
+from app.t100_v40_render_ws_get_only_diagnostic import (
+    V40WsGetOnlyReport, observe_ws_once,
+)
 
 ACTIVATION_FLAG="T100_V40_REAL_SIGNAL_MONITOR_ENABLED"
 POLL_SECONDS=60
@@ -357,6 +360,7 @@ async def run_supervised_signal_monitor(
     env:Mapping[str,str], *, max_cycles:int|None=None,
     observe_cycle:Callable[...,Awaitable[V40SupervisedPilotObservation]]=supervise_real_v40_cycle,
     delay: Callable[[float],Awaitable[Any]]=asyncio.sleep,
+    ws_observe: Callable[...,Awaitable[V40WsGetOnlyReport]]=observe_ws_once,
 )->int:
     if not monitor_environment(env):
         print(json.dumps(asdict(V40SupervisedPilotObservation(
@@ -367,6 +371,7 @@ async def run_supervised_signal_monitor(
         return 2
     last_signal=None
     number=0
+    ws_probe_pending=env.get("T100_V40_WS_GET_ONLY_PROBE_ENABLED")=="true"
     while max_cycles is None or number<max_cycles:
         try:
             result=await asyncio.wait_for(
@@ -394,6 +399,33 @@ async def run_supervised_signal_monitor(
             print(json.dumps(asdict(result),sort_keys=True),flush=True)
         if not ok:
             return 2
+        # One-shot private WS observer begins ONLY after a separately
+        # verified healthy journal+flat-account heartbeat. It NEVER runs
+        # on account/source safety halts. WS failures are reported but
+        # cannot upgrade permissions, send orders or terminate the healthy
+        # GET-only account monitor.
+        if ws_probe_pending:
+            ws_probe_pending=False
+            try:
+                observed_ws=await asyncio.wait_for(
+                    ws_observe(env),timeout=65,
+                )
+                if (
+                    type(observed_ws) is not V40WsGetOnlyReport
+                    or observed_ws.entry_allowed is not False
+                    or observed_ws.live_authorization is not False
+                    or observed_ws.mexc_posts!=0
+                    or observed_ws.database_writes!=0
+                    or observed_ws.read_only is not True
+                ):
+                    observed_ws=V40WsGetOnlyReport(
+                        "V40_WS_DIAGNOSTIC_UNVERIFIED_OUTPUT_REDACTED"
+                    )
+            except Exception:
+                observed_ws=V40WsGetOnlyReport(
+                    "V40_WS_DIAGNOSTIC_CYCLE_FAILED_REDACTED"
+                )
+            print(json.dumps(asdict(observed_ws),sort_keys=True),flush=True)
         last_signal=result.signal_id if result.signal_id is not None else last_signal
         if max_cycles is None or number<max_cycles:
             await delay(POLL_SECONDS)
