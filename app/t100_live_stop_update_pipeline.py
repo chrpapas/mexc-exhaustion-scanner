@@ -102,6 +102,7 @@ class StopUpdatePersistencePipeline:
             position_id=previous.position_id,
             position_quantity=previous.contracts,
             maximum_short_stop_price=previous.stop_price,
+            verified_filled_entry_order_id=previous.exchange_order_id,
         )
         if (
             report.status
