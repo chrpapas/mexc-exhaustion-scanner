@@ -361,6 +361,7 @@ async def run_supervised_signal_monitor(
     observe_cycle:Callable[...,Awaitable[V40SupervisedPilotObservation]]=supervise_real_v40_cycle,
     delay: Callable[[float],Awaitable[Any]]=asyncio.sleep,
     ws_observe: Callable[...,Awaitable[V40WsGetOnlyReport]]=observe_ws_once,
+    assembly_observe: Callable[...,Awaitable[Any]]|None=None,
 )->int:
     if not monitor_environment(env):
         print(json.dumps(asdict(V40SupervisedPilotObservation(
@@ -372,6 +373,9 @@ async def run_supervised_signal_monitor(
     last_signal=None
     number=0
     ws_probe_pending=env.get("T100_V40_WS_GET_ONLY_PROBE_ENABLED")=="true"
+    assembly_probe_pending=(
+        env.get("T100_V40_EXECUTOR_ASSEMBLY_GET_ONLY_ENABLED")=="true"
+    )
     while max_cycles is None or number<max_cycles:
         try:
             result=await asyncio.wait_for(
@@ -399,6 +403,38 @@ async def run_supervised_signal_monitor(
             print(json.dumps(asdict(result),sort_keys=True),flush=True)
         if not ok:
             return 2
+        # ONE startup-only exact assembly check, strictly after a healthy
+        # source/journal/flat-account heartbeat. The runtime SQL handles
+        # are SELECT-only; no exchange POST transport can be instantiated.
+        # An unsuccessful optional diagnostic must never hide the primary
+        # account monitor's heartbeat or create a live permit.
+        if assembly_probe_pending:
+            assembly_probe_pending=False
+            from app.t100_v40_render_executor_assembly_preflight import (
+                V40AssemblyPreflight,observe_v40_assembly_render,
+            )
+            try:
+                observe=(
+                    assembly_observe if assembly_observe is not None
+                    else observe_v40_assembly_render
+                )
+                checked=await asyncio.wait_for(observe(env),timeout=55)
+                if (
+                    type(checked) is not V40AssemblyPreflight
+                    or checked.entry_allowed is not False
+                    or checked.live_authorization is not False
+                    or checked.exchange_posts!=0
+                    or checked.database_writes!=0
+                    or checked.live_post_adapter_connected is not False
+                ):
+                    checked=V40AssemblyPreflight(
+                        "V40_EXECUTOR_ASSEMBLY_UNVERIFIED_OUTPUT_REDACTED"
+                    )
+            except Exception:
+                checked=V40AssemblyPreflight(
+                    "V40_EXECUTOR_ASSEMBLY_DIAGNOSTIC_FAILED_REDACTED"
+                )
+            print(json.dumps(asdict(checked),sort_keys=True),flush=True)
         # One-shot private WS observer begins ONLY after a separately
         # verified healthy journal+flat-account heartbeat. It NEVER runs
         # on account/source safety halts. WS failures are reported but
