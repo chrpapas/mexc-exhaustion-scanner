@@ -62,7 +62,7 @@ class LiveMexcAdapter:
     ) -> str:
         permit = require_certified_transport_permit(permit)
         from app.t100_live_authorization import V40_CANARY_SCOPE
-        if permit.scope==V40_CANARY_SCOPE and (
+        if getattr(permit,'scope',None)==V40_CANARY_SCOPE and (
             permit.signal_id!=intent.signal_id
             or permit.symbol!=intent.symbol
             or intent.notional_usdt>D("12.50")
