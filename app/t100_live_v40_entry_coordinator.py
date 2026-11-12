@@ -390,6 +390,19 @@ class V40OneShotCoordinator:
         # Absolutely no PG writes, API GETs, lease renewal or POST before
         # independently issued permit and full historical strategy gate.
         require_certified_transport_permit(permit)
+        # The supervised-first-signal permit is NOT an autonomous feed
+        # selector. It may only handle exactly its own operator-approved
+        # genuine Stage2 identity and first-position flat-only mode.
+        from app.t100_live_authorization import V40_CANARY_SCOPE
+        if permit.scope==V40_CANARY_SCOPE and (
+            self.initial_pilot_only is not True
+            or monitored_signal_id!=permit.signal_id
+            or monitored_symbol!=permit.symbol
+            or monitored_tier not in ("LOW_100","HIGH_225")
+        ):
+            raise V40CoordinatorHalted(
+                "V40_CANARY_PINNED_REAL_SIGNAL_AND_SINGLE_POSITION_REQUIRED"
+            )
         if type(caps) is not LiveCaps:
             raise V40CoordinatorHalted("V40_OPERATOR_RISK_CAPS_REQUIRED")
         parity=assess_strategy_parity_report(parity_report)
