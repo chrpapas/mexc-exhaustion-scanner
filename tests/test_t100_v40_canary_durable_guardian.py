@@ -147,3 +147,72 @@ def test_fixed_namespace_does_not_depend_on_secret_api_key_hash():
     assert len(m.SCOPE)==64
     assert m.SCOPE!=ENV["T100_V40_GUARDIAN_READONLY_API_KEY"]
     assert m.config(env())[3]==5
+
+
+
+def owned_cross():
+    return V40CanaryGuardianHeartbeat(
+        "V40_GUARDIAN_ONE_OWNED_CROSS_SHORT_NATIVE_SL_OBSERVED_NONAUTHORIZING",
+        monitored_account_flat=False,
+        inventory_two_signed_get_bookends=True,
+        hedge_mode_verified=True,
+        incident_alert=False,
+        ledger_provenance_verified=True,
+        single_owned_cross_native_sl_verified=True,
+    )
+
+
+def test_durable_guardian_accepts_only_independently_recovered_owned_cross():
+    result,db,notifier,logs=asyncio.run(run_one([
+        flat(),owned_cross(),owned_cross(),
+    ]))
+    assert result.status=="OBSERVER_V40_CANARY_OWNED_CROSS_NATIVE_MARKET_SL"
+    assert result.account_flat_two_get is False
+    assert result.owned_cross_native_sl_observed is True
+    assert result.critical_latched is False
+    assert result.incident_pending==0
+    assert db.revision==3
+    assert notifier.sent==[]
+    assert result.live_authorization is False and result.mexc_posts==0
+
+
+def test_fake_protected_claim_without_ledger_or_native_stop_becomes_critical():
+    for override in (
+        dict(ledger_provenance_verified=False),
+        dict(single_owned_cross_native_sl_verified=False),
+        dict(hedge_mode_verified=False),
+        dict(incident_alert=True),
+        dict(mexc_posts=1),
+    ):
+        from dataclasses import replace
+        forged=replace(owned_cross(),**override)
+        result,db,notifier,logs=asyncio.run(run_one([forged]))
+        assert result.status=="OBSERVER_V40_CANARY_SIGNED_GET_OR_ACCOUNT_INVALID"
+        assert result.critical_latched
+        assert result.incident_pending==0
+        assert result.owned_cross_native_sl_observed is False
+        assert len(db.events)==1
+
+
+def test_live_canary_guardian_requires_distinct_checkpoint_select_role():
+    options=env(
+        T100_V40_GUARDIAN_CROSS_PROTECTION_REQUIRED="true",
+    )
+    with pytest.raises(m.V40DurableGuardianHalted):
+        m.config(options)
+    options["T100_V40_GUARDIAN_LEDGER_READONLY_DSN"]=(
+        "postgresql://guardian-readonly@fake/v40"
+    )
+    options["T100_V40_GUARDIAN_LEDGER_CA_FILE"]="/etc/ssl/certs/ca.pem"
+    assert m.config(options)[3]==5
+    for same in (
+        options["T100_V40_GUARDIAN_INCIDENT_DB_DSN"],
+        "postgresql://source@fake/v40",
+    ):
+        bad={
+            **options,
+            "T100_V40_GUARDIAN_LEDGER_READONLY_DSN":same,
+            "T100_V40_SIGNAL_READER_DSN":"postgresql://source@fake/v40",
+        }
+        with pytest.raises(m.V40DurableGuardianHalted):
+            m.config(bad)
