@@ -129,6 +129,25 @@ class SignedGetTests(unittest.IsolatedAsyncioTestCase):
                     await tr._private_get(path)
         self.assertEqual(mock.calls,[])
 
+    async def test_ws_correlation_exact_deal_get_allowlist_rejects_other_paths(self):
+        mock=HTTP()
+        tr=GetOnlyMexcTransport(
+            mock,api_key=KEY,api_secret="0123456789abcdefXyz",
+        )
+        await tr._private_get("/api/v1/private/order/deal_details/991")
+        self.assertEqual(len(mock.calls),1)
+        self.assertFalse(hasattr(tr,"_private_post"))
+        for path in (
+            "/api/v1/private/order/deal_details/0",
+            "/api/v1/private/order/deal_details/-1",
+            "/api/v1/private/order/deal_details/991/extra",
+            "/api/v1/private/order/deal_details/991?symbol=BTC_USDT",
+            "/api/v1/private/order/deal_details/999/../create",
+        ):
+            with self.subTest(path=path), self.assertRaises(GuardianOnceHalted):
+                await tr._private_get(path)
+        self.assertEqual(len(mock.calls),1)
+
     async def test_602_api_error_is_redacted(self):
         mock=HTTP(MockResponse(dict(success=False,code=602,message="some URL with secret")))
         tr=GetOnlyMexcTransport(
