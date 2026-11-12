@@ -354,9 +354,12 @@ class V40OneShotCoordinator:
         completeness: Any,
         commit_writer: Any,
         clock_ms: Callable[[],int] | None = None,
+        initial_pilot_only: bool = False,
     ) -> None:
         if depth is None:
             raise ValueError("V40_EXACT_DEPTH_WITNESS_REQUIRED")
+        if type(initial_pilot_only) is not bool:
+            raise ValueError("V40_INITIAL_PILOT_SCOPE_INVALID")
         self.source=source
         self.snapshots=snapshots
         self.witness=witness
@@ -371,6 +374,7 @@ class V40OneShotCoordinator:
         self.get_venue=get_venue
         self.completeness=completeness
         self.commit_writer=commit_writer
+        self.initial_pilot_only=initial_pilot_only
 
     async def run_one(
         self, *,
@@ -445,6 +449,16 @@ class V40OneShotCoordinator:
                 "NONFLAT_PROVENANCE_MATCHED_NONAUTHORIZING",
             ):
                 raise V40CoordinatorHalted("V40_CRITICAL_ACCOUNT_SNAPSHOT_BLOCKED")
+            # First real-money V40 canary is strictly one FLAT-to-one SHORT.
+            # The four-slot research plan is not a pilot authorization.
+            # Existing offline multi-slot tests retain the legacy default.
+            if self.initial_pilot_only and (
+                pre.status!="FLAT_OBSERVED_NONAUTHORIZING"
+                or pre.occupied_slots!=0
+            ):
+                raise V40CoordinatorHalted(
+                    "V40_INITIAL_PILOT_REQUIRES_FLAT_ACCOUNT_NO_LEGACY_EXPOSURE"
+                )
             for signal in tape.candidates:
                 risk, terms=await self.witness.inspect(signal)
                 # Tiny real-money pilot is an explicit capped-size
