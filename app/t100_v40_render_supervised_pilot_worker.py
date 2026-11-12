@@ -37,10 +37,16 @@ from scripts.t100_v40_pilot_capability_get_only import (
 from app.t100_v40_render_journal_readonly import (
     DSN_KEY, V40RuntimeJournalObservation, observe_render_runtime_journal,
 )
+from app.t100_v40_render_exact_lot_preview import (
+    V40ExactLotPreview, observe_render_exact_lot_preview,
+)
 
 ACTIVATION_FLAG="T100_V40_REAL_SIGNAL_MONITOR_ENABLED"
 POLL_SECONDS=60
-MAX_CYCLE_SECONDS=125
+# Candidate-only extra source + two full MEXC depth/account bookends
+# are bounded independently. No candidate = original 60-second cadence.
+MAX_CYCLE_SECONDS=220
+EXACT_LOT_FLAG="T100_V40_EXACT_LOT_GET_ONLY_ENABLED"
 
 
 @dataclass(frozen=True)
@@ -59,6 +65,11 @@ class V40SupervisedPilotObservation:
     real_signal_economics_observed: bool = False
     candidate_public_contract_and_cross_1x_verified: bool = False
     candidate_exact_strategy_lot_verified: bool = False
+    candidate_exact_lot_status: str | None = None
+    candidate_executable_notional_usdt: str | None = None
+    candidate_executable_contracts: str | None = None
+    candidate_exact_lot_vwap: str | None = None
+    candidate_exact_lot_book_age_ms: int | None = None
     candidate_capability_status: str | None = None
     runtime_journal_status: str | None = None
     first_position_journal_clean: bool = False
@@ -94,6 +105,7 @@ async def supervise_real_v40_cycle(
     account_observe: Callable[...,Awaitable[PilotGetOnlyResult]]=observe_live_pilot,
     capability_observe: Callable[...,Awaitable[PilotCapabilityReport]]=observe_pilot_capability,
     journal_observe: Callable[[Mapping[str,str]],Awaitable[V40RuntimeJournalObservation]]=observe_render_runtime_journal,
+    exact_lot_observe: Callable[[Mapping[str,str],V40SignalIntakeReport],Awaitable[V40ExactLotPreview]]=observe_render_exact_lot_preview,
 ) -> V40SupervisedPilotObservation:
     def blocked(status:str, source:V40SignalIntakeReport|None=None):
         return V40SupervisedPilotObservation(
@@ -253,6 +265,48 @@ async def supervise_real_v40_cycle(
             return blocked("V40_REAL_SIGNAL_PRIVATE_CROSS_CAPABILITY_UNVERIFIED_HALT",source)
         capability_verified=True
         capability_status=cap.status
+
+    # Optional real-candidate-only SECOND restricted Stage2 read, exact
+    # exchange-lot sizing, and full-quantity fresh order-book depth quote.
+    # A declined/failed preview is a NONAUTHORIZING observation, NOT a
+    # worker-crash reason. Neither a source skip nor an empty feed makes
+    # public/private candidate GETs. This can never place an order.
+    exact_preview=None
+    exact_preview_verified=False
+    exact_preview_status=None
+    if (
+        source.status==allowed_status[1]
+        and env.get(EXACT_LOT_FLAG)=="true"
+    ):
+        try:
+            exact_preview=await asyncio.wait_for(
+                exact_lot_observe(env,source),timeout=65,
+            )
+        except Exception:
+            exact_preview_status="V40_EXACT_PREVIEW_GET_TIMEOUT_OR_FAILURE"
+        else:
+            if (
+                type(exact_preview) is V40ExactLotPreview
+                and exact_preview.signal_id==source.signal_id
+                and exact_preview.symbol==source.symbol
+                and exact_preview.tier==source.tier
+                and exact_preview.mexc_posts==0
+                and exact_preview.database_writes==0
+                and exact_preview.entry_allowed is False
+                and exact_preview.live_authorization is False
+                and exact_preview.read_only is True
+            ):
+                exact_preview_status=exact_preview.status
+                exact_preview_verified=(
+                    exact_preview.status=="V40_PILOT_REAL_SIGNAL_EXACT_DEPTH_QUOTED_NONAUTHORIZING"
+                    and exact_preview.exact_lot_depth_verified is True
+                    and exact_preview.native_market_stop_verified is False
+                    and exact_preview.cross_collateral_certified is False
+                    and exact_preview.exchange_order_permission_certified is False
+                )
+            else:
+                exact_preview_status="V40_EXACT_PREVIEW_RESULT_SHAPE_UNVERIFIED"
+
     return V40SupervisedPilotObservation(
         status=(
             "V40_REAL_FRESH_SIGNAL_OBSERVED_EXECUTION_STILL_GUARDED"
@@ -274,11 +328,28 @@ async def supervise_real_v40_cycle(
         real_signal_economics_observed=source.status==allowed_status[1],
         candidate_public_contract_and_cross_1x_verified=capability_verified,
         candidate_capability_status=capability_status,
+        candidate_exact_lot_status=exact_preview_status,
+        candidate_executable_notional_usdt=(
+            exact_preview.executable_notional_usdt
+            if exact_preview_verified else None
+        ),
+        candidate_executable_contracts=(
+            exact_preview.executable_contracts
+            if exact_preview_verified else None
+        ),
+        candidate_exact_lot_vwap=(
+            exact_preview.displayed_sell_vwap
+            if exact_preview_verified else None
+        ),
+        candidate_exact_lot_book_age_ms=(
+            exact_preview.order_book_age_ms
+            if exact_preview_verified else None
+        ),
         runtime_journal_status=journal_status,
         first_position_journal_clean=journal_clean,
         # Recheck actual integer lot and intended notional independently
         # against live depth before any entry can ever be authorized.
-        candidate_exact_strategy_lot_verified=False,
+        candidate_exact_strategy_lot_verified=exact_preview_verified,
     )
 
 
