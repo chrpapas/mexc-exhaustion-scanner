@@ -86,6 +86,25 @@ class PrepareProtectedEntriesTests(unittest.IsolatedAsyncioTestCase):
                     self.prepare()
                 self.stops[-1][field] = original
 
+    async def test_filled_entry_attached_market_sl_prepares_exact_checkpoint(self):
+        # MEXC native TP/SL can be order-attached; only the verified
+        # filled entry order ID may establish that origin.
+        self.stops[-1]["orderId"]="990"
+        batch=self.prepare()
+        self.assertEqual(len(batch.entries),1)
+        self.assertEqual(batch.entries[0].order_id,"990")
+        self.assertEqual(batch.entries[0].checkpoint.stop_order_id,"999")
+        self.assertFalse(batch.native_stop_exchange_atomicity_verified)
+        self.assertFalse(batch.durable_checkpoint_persisted)
+        self.assertFalse(batch.mexc_orders_sent)
+
+    async def test_unrelated_attached_native_sl_never_prepares_checkpoint(self):
+        for order_id in ("991","0x990",True,None,"0900"):
+            with self.subTest(order_id=order_id):
+                self.stops[-1]["orderId"]=order_id
+                with self.assertRaises(ProtectedFinalizeHalted):
+                    self.prepare()
+
     async def test_partial_deal_histories_halt_with_no_checkpoint(self):
         self.deals["990"][0]["vol"] = D("249")
         with self.assertRaises(ProtectedFinalizeHalted):
