@@ -529,3 +529,87 @@ def test_opt_in_ws_failure_redacted_and_no_order_authority(ws_failure,capsys):
     )
     assert '"mexc_posts": 0' in log
     assert '"live_authorization": false' in log
+
+
+def test_opt_in_executor_assembly_preflight_after_first_healthy_heartbeat_once(capsys):
+    from app.t100_v40_render_executor_assembly_preflight import V40AssemblyPreflight
+    events=[]
+    async def healthy(_env):
+        events.append("cycle")
+        return V40SupervisedPilotObservation(
+            status="V40_REAL_SCANNER_ACTIVE_NO_CANDIDATE_ACCOUNT_FLAT",
+            source_verified=True,account_flat_verified=True,
+        )
+    async def observe_assembly(_env):
+        events.append("assembly")
+        return V40AssemblyPreflight(
+            "V40_EXECUTOR_ASSEMBLED_TWO_ROLES_GET_ONLY_NO_LIVE_POST",
+            coordinator_wired=True,
+            initial_pilot_flat_only=True,
+        )
+    async def no_delay(_seconds):
+        events.append("sleep")
+    env={
+        **BASE,
+        "T100_V40_EXECUTOR_ASSEMBLY_GET_ONLY_ENABLED":"true",
+    }
+    result=asyncio.run(run_supervised_signal_monitor(
+        env,max_cycles=3,observe_cycle=healthy,delay=no_delay,
+        assembly_observe=observe_assembly,
+    ))
+    output=capsys.readouterr().out
+    assert result==0
+    assert events==[
+        "cycle","assembly","sleep","cycle","sleep","cycle",
+    ]
+    assert "V40_EXECUTOR_ASSEMBLED_TWO_ROLES_GET_ONLY_NO_LIVE_POST" in output
+    assert '"coordinator_wired": true' in output
+    assert '"live_authorization": false' in output
+    assert '"entry_allowed": false' in output
+
+
+def test_optional_assembly_diagnostic_failure_is_redacted_and_does_not_mask_monitor(capsys):
+    events=[]
+    async def healthy(_env):
+        events.append("monitor")
+        return V40SupervisedPilotObservation(
+            status="V40_REAL_SCANNER_ACTIVE_NO_CANDIDATE_ACCOUNT_FLAT",
+            source_verified=True,account_flat_verified=True,
+        )
+    async def dangerous(_env):
+        events.append("assembly")
+        raise RuntimeError("SECRET_DATABASE_AND_API_PASSWORD")
+    env={
+        **BASE,
+        "T100_V40_EXECUTOR_ASSEMBLY_GET_ONLY_ENABLED":"true",
+    }
+    result=asyncio.run(run_supervised_signal_monitor(
+        env,max_cycles=1,observe_cycle=healthy,
+        assembly_observe=dangerous,
+    ))
+    output=capsys.readouterr().out
+    assert result==0 and events==["monitor","assembly"]
+    assert "V40_EXECUTOR_ASSEMBLY_DIAGNOSTIC_FAILED_REDACTED" in output
+    assert "SECRET_DATABASE_AND_API_PASSWORD" not in output
+
+
+def test_unhealthy_first_cycle_never_opens_executor_db_pools_or_get(capsys):
+    events=[]
+    async def unhealthy(_env):
+        events.append("monitor")
+        return V40SupervisedPilotObservation(
+            status="V40_REAL_SIGNAL_RUNTIME_JOURNAL_UNRESOLVED_HALT"
+        )
+    async def forbidden(_env):
+        events.append("assembly")
+        raise AssertionError("NO_ASSEMBLY_AFTER_HALT")
+    env={
+        **BASE,
+        "T100_V40_EXECUTOR_ASSEMBLY_GET_ONLY_ENABLED":"true",
+    }
+    result=asyncio.run(run_supervised_signal_monitor(
+        env,max_cycles=1,observe_cycle=unhealthy,
+        assembly_observe=forbidden,
+    ))
+    assert result==2
+    assert events==["monitor"]
