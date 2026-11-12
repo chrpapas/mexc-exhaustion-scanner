@@ -15,6 +15,7 @@ from app.t100_v40_render_supervised_pilot_worker import (
 from scripts.t100_v40_pilot_get_only import PilotGetOnlyResult
 from scripts.t100_v40_pilot_capability_get_only import PilotCapabilityReport
 from app.t100_v40_render_journal_readonly import V40RuntimeJournalObservation
+from app.t100_v40_render_exact_lot_preview import V40ExactLotPreview
 
 BASE={
     "T100_V40_EXECUTOR_DISABLED_WORKER":"true",
@@ -96,7 +97,7 @@ def journal():
     )
 
 
-def run(env=BASE,source=None,account=None,cap=None,journal_result=None):
+def run(env=BASE,source=None,account=None,cap=None,journal_result=None,lot=None):
     calls=[]
     async def source_read(environment):
         calls.append("source")
@@ -120,10 +121,29 @@ def run(env=BASE,source=None,account=None,cap=None,journal_result=None):
         if isinstance(cap,BaseException):
             raise cap
         return capability() if cap is None else cap
+    async def exact_lot_observe(environment,source_report):
+        calls.append("exact_lot")
+        assert source_report.symbol=="TEST_USDT"
+        if isinstance(lot,BaseException):
+            raise lot
+        if lot is not None:
+            return lot
+        return V40ExactLotPreview(
+            status="V40_PILOT_REAL_SIGNAL_EXACT_DEPTH_QUOTED_NONAUTHORIZING",
+            signal_id=492,symbol="TEST_USDT",tier="HIGH_225",
+            capped_target_usdt="12.50",
+            executable_notional_usdt="10.00",
+            executable_contracts="1",
+            modeled_stop_loss_usdt="7.60",
+            displayed_sell_vwap="100",
+            order_book_age_ms=125,
+            exact_lot_depth_verified=True,
+        )
     result=asyncio.run(supervise_real_v40_cycle(
         env,signal_read=source_read,account_observe=account_observe,
         capability_observe=capability_observe,
         journal_observe=journal_observe,
+        exact_lot_observe=exact_lot_observe,
     ))
     return result,calls
 
@@ -374,3 +394,54 @@ def test_candidate_requires_separate_restricted_runtime_dsn():
     result,calls=run(env=env,source=candidate())
     assert result.status=="V40_REAL_SIGNAL_RUNTIME_JOURNAL_DSN_REQUIRED_HALT"
     assert calls==["source"]
+
+
+def test_optional_exact_lot_preview_is_strictly_candidate_only_and_readonly():
+    env={**BASE,"T100_V40_EXACT_LOT_GET_ONLY_ENABLED":"true"}
+    out,calls=run(env,source=candidate())
+    assert calls==["source","journal","account","capability","exact_lot"]
+    assert out.status=="V40_REAL_FRESH_SIGNAL_OBSERVED_EXECUTION_STILL_GUARDED"
+    assert out.candidate_exact_lot_status=="V40_PILOT_REAL_SIGNAL_EXACT_DEPTH_QUOTED_NONAUTHORIZING"
+    assert out.candidate_exact_strategy_lot_verified is True
+    assert out.candidate_executable_notional_usdt=="10.00"
+    assert out.candidate_executable_contracts=="1"
+    assert out.candidate_exact_lot_vwap=="100"
+    assert out.candidate_exact_lot_book_age_ms==125
+    assert not out.live_adapter_connected
+    assert not out.native_stop_management_connected
+    assert not out.continuous_nonflat_guardian_connected
+    assert out.entry_allowed is False and out.live_authorization is False
+    assert out.mexc_orders_sent==0 and out.database_writes==0
+
+    for skipped in (empty(),vol30_skip()):
+        out,calls=run(env,source=skipped)
+        assert calls==["source","journal","account"]
+        assert not out.candidate_exact_strategy_lot_verified
+
+
+@pytest.mark.parametrize("invalid",[
+    V40ExactLotPreview(
+        "V40_PILOT_REAL_SIGNAL_EXACT_DEPTH_QUOTED_NONAUTHORIZING",
+        signal_id=493,symbol="TEST_USDT",tier="HIGH_225",
+        exact_lot_depth_verified=True,
+    ),
+    V40ExactLotPreview(
+        "V40_PILOT_REAL_SIGNAL_EXACT_DEPTH_QUOTED_NONAUTHORIZING",
+        signal_id=492,symbol="TEST_USDT",tier="HIGH_225",
+        exact_lot_depth_verified=True,mexc_posts=1,
+    ),
+    V40ExactLotPreview(
+        "V40_EXACT_PREVIEW_LOT_OR_MODELED_STOP_LIMIT_REJECTED",
+        signal_id=492,symbol="TEST_USDT",tier="HIGH_225",
+    ),
+    RuntimeError("MEXC_PRIVATE_SECRET_SHOULD_NOT_LEAK"),
+])
+def test_optional_exact_lot_bad_or_failed_observation_cannot_authorize_or_crash(invalid):
+    env={**BASE,"T100_V40_EXACT_LOT_GET_ONLY_ENABLED":"true"}
+    out,calls=run(env,source=candidate(),lot=invalid)
+    assert calls==["source","journal","account","capability","exact_lot"]
+    assert out.status=="V40_REAL_FRESH_SIGNAL_OBSERVED_EXECUTION_STILL_GUARDED"
+    assert out.candidate_exact_strategy_lot_verified is False
+    assert out.candidate_executable_notional_usdt is None
+    assert out.entry_allowed is False and out.live_authorization is False
+    assert "SECRET_SHOULD_NOT_LEAK" not in str(out)
