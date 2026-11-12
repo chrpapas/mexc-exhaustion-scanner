@@ -126,6 +126,7 @@ async def supervise_real_v40_cycle(
     allowed_status=(
         "V40_SIGNAL_INTAKE_FRESH_EMPTY_SOURCE_OBSERVED",
         "V40_GENUINE_SIGNAL_AND_FLAT_ACCOUNT_MODELED_NONAUTHORIZING",
+        "V40_SIGNAL_INTAKE_VOL30_SKIP_REAL_SOURCE",
     )
     if source.status not in allowed_status:
         return blocked("V40_REAL_SIGNAL_SOURCE_OR_CANDIDATE_HALT",source)
@@ -142,6 +143,22 @@ async def supervise_real_v40_cycle(
         or source.symbol is not None
     ):
         return blocked("V40_REAL_SIGNAL_EMPTY_SOURCE_SHAPE_HALT",source)
+    # VOL30_SKIP is a NORMAL strategy rejection, not a daemon crash.
+    # Require independently source-verified identity and >=30% volatility.
+    # Still perform both journal and MEXC flat-account GET bookends before
+    # reporting a healthy skip; no candidate-specific capability GET or POST.
+    if source.status==allowed_status[2] and (
+        type(source.signal_id) is not int or source.signal_id<=0
+        or type(source.symbol) is not str or not source.symbol.endswith("_USDT")
+        or source.symbol in ("BTC_USDT","ETH_USDT")
+        or source.tier not in ("LOW_100","HIGH_225")
+        or type(source.signal_count) is not int or source.signal_count!=1
+        or type(source.pre24_vol_pct) not in (int,float)
+        or not 30 <= source.pre24_vol_pct < float("inf")
+        or source.current_flat_account_verified is not False
+        or source.theoretical_v40_notional_usdt is not None
+    ):
+        return blocked("V40_REAL_SIGNAL_VOL30_SKIP_SHAPE_HALT",source)
 
     # Inspect actual restricted live journal if separately configured.
     # Do not treat a missing journal DSN as permission to trade. The flat
@@ -211,7 +228,7 @@ async def supervise_real_v40_cycle(
     # server-side POST permission, stop attachment, or future risk tiers.
     capability_verified=False
     capability_status=None
-    if source.signal_id is not None:
+    if source.status==allowed_status[1]:
         try:
             cap=await asyncio.wait_for(capability_observe(
                 key=key,secret=secret,symbol=source.symbol,
@@ -239,7 +256,9 @@ async def supervise_real_v40_cycle(
     return V40SupervisedPilotObservation(
         status=(
             "V40_REAL_FRESH_SIGNAL_OBSERVED_EXECUTION_STILL_GUARDED"
-            if source.signal_id is not None else
+            if source.status==allowed_status[1] else
+            "V40_REAL_VOL30_SIGNAL_SKIPPED_ACCOUNT_FLAT"
+            if source.status==allowed_status[2] else
             "V40_REAL_SCANNER_ACTIVE_NO_CANDIDATE_ACCOUNT_FLAT"
         ),
         source_status=source.status,
@@ -252,7 +271,7 @@ async def supervise_real_v40_cycle(
         account_equity_usdt=str(account.account_equity_usdt),
         account_flat_verified=True,
         source_verified=True,
-        real_signal_economics_observed=source.signal_id is not None,
+        real_signal_economics_observed=source.status==allowed_status[1],
         candidate_public_contract_and_cross_1x_verified=capability_verified,
         candidate_capability_status=capability_status,
         runtime_journal_status=journal_status,
@@ -290,6 +309,7 @@ async def run_supervised_signal_monitor(
             and result.status in (
                 "V40_REAL_SCANNER_ACTIVE_NO_CANDIDATE_ACCOUNT_FLAT",
                 "V40_REAL_FRESH_SIGNAL_OBSERVED_EXECUTION_STILL_GUARDED",
+                "V40_REAL_VOL30_SIGNAL_SKIPPED_ACCOUNT_FLAT",
             )
             and result.source_verified is True
             and result.account_flat_verified is True
