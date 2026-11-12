@@ -79,6 +79,12 @@ _SAFE_STARTUP_REASONS=frozenset({
     "V40_DURABLE_NOTIFIER_CONSTRUCT_FAILED_SAFE_HALT",
     "V40_DURABLE_INCIDENT_PERSIST_OR_DISCORD_FAILED_SAFE_HALT",
     "V40_DURABLE_GUARDIAN_UNEXPECTED_EXIT",
+    "V40_SHARED_GUARDIAN_NOT_RESTRICTED_EXECUTOR_ROLE",
+    "V40_SHARED_GUARDIAN_INCIDENT_GRANTS_NOT_APPLIED",
+    "V40_SHARED_GUARDIAN_DATABASE_PERMISSION_AUDIT_FAILED",
+    "V40_SHARED_GUARDIAN_DATABASE_CONNECT_FAILED",
+    "V40_SHARED_GUARDIAN_TLS_MODE_INVALID",
+    "V40_SHARED_GUARDIAN_CONNECTION_STRING_MISSING",
 })
 
 
@@ -95,8 +101,15 @@ def config(env:Mapping[str,str])->tuple[str,str,str,int]:
     verify_guardian_environment(env)
     if env.get("T100_V40_GUARDIAN_DURABLE_ALERTS_ENABLED")!="true":
         raise V40DurableGuardianHalted("V40_DURABLE_ALERTS_NOT_ENABLED")
-    dsn=env.get("T100_V40_GUARDIAN_INCIDENT_DB_DSN","")
-    ca=env.get("T100_V40_GUARDIAN_INCIDENT_DB_CA_FILE","")
+    shared=env.get("T100_V40_GUARDIAN_REUSE_V40_RUNTIME_DB")=="true"
+    dsn=env.get(
+        "T100_V40_GUARDIAN_SHARED_DB_DSN" if shared
+        else "T100_V40_GUARDIAN_INCIDENT_DB_DSN",""
+    )
+    ca=(
+        "USE_EXISTING_V40_RUNTIME_TLS" if shared
+        else env.get("T100_V40_GUARDIAN_INCIDENT_DB_CA_FILE","")
+    )
     hook=env.get("T100_V40_GUARDIAN_DISCORD_WEBHOOK_URL","")
     interval=env.get("T100_V40_CANARY_GUARDIAN_INTERVAL_SECONDS","5")
     if (
@@ -108,11 +121,22 @@ def config(env:Mapping[str,str])->tuple[str,str,str,int]:
         or interval not in ("3","4","5")
     ):
         raise V40DurableGuardianHalted("V40_DURABLE_ACCOUNT_OR_DB_CONFIG_INVALID")
-    if dsn==env.get("T100_V40_SIGNAL_READER_DSN") or dsn==env.get(
+    if shared:
+        # Same exact DSN as the existing V40 trader runtime, NOT the
+        # database owner or scanner signal-reader login. Validate actual
+        # current_user and grant shape on connection; do not trust this flag.
+        if dsn==env.get("T100_V40_SIGNAL_READER_DSN") and dsn:
+            raise V40DurableGuardianHalted(
+                "V40_DURABLE_WRITER_ROLE_NOT_SEPARATE"
+            )
+    elif dsn==env.get("T100_V40_SIGNAL_READER_DSN") or dsn==env.get(
         "T100_V40_EXECUTOR_RUNTIME_DSN"
     ):
         raise V40DurableGuardianHalted("V40_DURABLE_WRITER_ROLE_NOT_SEPARATE")
-    if env.get("T100_V40_GUARDIAN_CROSS_PROTECTION_REQUIRED")=="true":
+    if (
+        not shared and
+        env.get("T100_V40_GUARDIAN_CROSS_PROTECTION_REQUIRED")=="true"
+    ):
         readonly=env.get("T100_V40_GUARDIAN_LEDGER_READONLY_DSN","")
         reader_ca=env.get("T100_V40_GUARDIAN_LEDGER_CA_FILE","")
         if (
@@ -190,6 +214,12 @@ async def run(
     max_cycles:int|None=None,
 )->V40DurableGuardianStatus:
     dsn,ca,hook,interval=config(env)
+    shared=env.get("T100_V40_GUARDIAN_REUSE_V40_RUNTIME_DB")=="true"
+    if shared:
+        from app.t100_v40_guardian_shared_db import (
+            shared_guardian_connection,
+            verify_existing_runtime_for_guardian,
+        )
     if observe is None:
         if env.get("T100_V40_GUARDIAN_CROSS_PROTECTION_REQUIRED")=="true":
             from app.t100_v40_guardian_account_and_owned import (
@@ -208,9 +238,17 @@ async def run(
     notifier=None
     stage="DATABASE_CONNECT"
     try:
-        conn=await connect(dsn,ca)
+        connector=(
+            shared_guardian_connection
+            if shared and connect is default_alert_connection
+            else connect
+        )
+        conn=await connector(dsn,ca)
         stage="INCIDENT_WRITER_ROLE"
-        await verify_alert_writer_role(conn)
+        if shared:
+            await verify_existing_runtime_for_guardian(conn)
+        else:
+            await verify_alert_writer_role(conn)
         stage="INCIDENT_SINGLETON"
         outbox=GuardianIncidentOutbox(conn,scope_sha256=SCOPE)
         await outbox.acquire_singleton()
