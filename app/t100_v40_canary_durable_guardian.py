@@ -116,7 +116,10 @@ def config(env:Mapping[str,str])->tuple[str,str,str,int]:
         type(dsn) is not str or not dsn.startswith(
             ("postgresql://","postgres://")
         )
-        or type(ca) is not str or not ca.startswith("/")
+        or (
+            not shared and
+            (type(ca) is not str or not ca.startswith("/"))
+        )
         or type(hook) is not str
         or interval not in ("3","4","5")
     ):
