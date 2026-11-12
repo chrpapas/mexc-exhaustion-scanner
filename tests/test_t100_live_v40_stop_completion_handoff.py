@@ -168,7 +168,7 @@ def test_exact_filled_entry_attached_stop_can_complete_checkpoint_without_post(m
     out=asyncio.run(handoff.commit_in_place_if_verified(
         amendment=a,previous=correct,trailing=trailing,permit=None,
     ))
-    assert out.journal_checkpoint_committed is True
+    assert out.journal_checkpoint_committed is True, out.status
     assert out.exchange_posts==0 and out.live_authorization is False
     assert len(writer.calls)==1
 
