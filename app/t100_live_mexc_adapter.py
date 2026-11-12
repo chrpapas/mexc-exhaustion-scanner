@@ -6,6 +6,7 @@ successful supervised one-shot pilot's request shape. Unlike that isolated
 typed live permit and durable one-shot journal requirements remain intact.
 """
 from __future__ import annotations
+from decimal import Decimal as D
 import re
 from typing import Any, TYPE_CHECKING
 
@@ -60,6 +61,14 @@ class LiveMexcAdapter:
         permit: LiveMutationPermit,
     ) -> str:
         permit = require_certified_transport_permit(permit)
+        from app.t100_live_authorization import V40_CANARY_SCOPE
+        if permit.scope==V40_CANARY_SCOPE and (
+            permit.signal_id!=intent.signal_id
+            or permit.symbol!=intent.symbol
+            or intent.notional_usdt>D("12.50")
+            or self.open_type!=2
+        ):
+            raise RuntimeError("V40_CANARY_EXACT_SIGNAL_OR_CAP_REQUIRED")
         if intent.notional_usdt > permit.max_position_notional_usdt:
             raise RuntimeError("MEXC_ENTRY_EXCEEDS_PERMIT")
         result = await self.client._private_post(
