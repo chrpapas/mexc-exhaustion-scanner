@@ -674,3 +674,63 @@ def test_initial_pilot_scope_rejects_truthy_non_boolean_constructor_flag():
             initial_pilot_only="true",
         )
     assert log==[]
+
+
+def test_first_live_pilot_rechecks_exact_genuine_stage2_before_dispatch(monkeypatch):
+    log=[]
+    patch_release_gates_and_mutations(monkeypatch,log)
+    c=controller(log)
+    c.initial_pilot_only=True
+    outcome=asyncio.run(c.run_one(
+        permit=None,caps=caps(),parity_report={},holder_id="mock-holder",
+    ))
+    assert outcome.status=="V40_ONE_PROTECTED_ENTRY_RECOVERED_NOT_AUTONOMOUS"
+    assert log.count("source")==2
+    assert log.index("stage") < log.index("depth") < log.index("dispatch")
+    assert log.index("depth") < log.index("source",1) < log.index("dispatch")
+    assert log.count("dispatch")==1
+
+
+@pytest.mark.parametrize("change",["vanished","different_id","different_price","expired","exception"])
+def test_first_pilot_source_drift_after_stage_never_creates_exchange_claim(
+    monkeypatch,change,
+):
+    log=[]
+    patch_release_gates_and_mutations(monkeypatch,log)
+    c=controller(log)
+    c.initial_pilot_only=True
+    original=c.source
+    class ChangedSource:
+        def __init__(self):
+            self.calls=0
+        async def latest_candidates(self,*,observed_at):
+            self.calls+=1
+            if self.calls==1:
+                return await original.latest_candidates(observed_at=observed_at)
+            log.append("second_source")
+            if change=="exception":
+                raise RuntimeError("SECRET_POSTGRES_DSN")
+            x=candidate()
+            if change=="vanished":
+                rows=()
+            elif change=="different_id":
+                rows=(replace(x,signal_id=x.signal_id+1),)
+            elif change=="different_price":
+                rows=(replace(x,entry_reference_price=x.entry_reference_price+1),)
+            else:
+                rows=(replace(x,observed_age_seconds=901),)
+            return V40SourceBatch(
+                "FROZEN_V40_STAGE2_SOURCE_VALIDATED_NONAUTHORIZING",
+                observed_at=observed_at,candidates=rows,
+            )
+    c.source=ChangedSource()
+    outcome=asyncio.run(c.run_one(
+        permit=None,caps=caps(),parity_report={},holder_id="mock-holder",
+    ))
+    assert outcome.status=="V40_FINAL_STAGE2_CHANGED_OR_EXPIRED_NO_POST_RECONCILE"
+    assert outcome.reserved and outcome.staged
+    assert outcome.post_attempted is False
+    assert outcome.live_authorization is False
+    assert "stage" in log and "depth" in log and "second_source" in log
+    assert "dispatch" not in log
+    assert "SECRET_POSTGRES_DSN" not in str(outcome)
