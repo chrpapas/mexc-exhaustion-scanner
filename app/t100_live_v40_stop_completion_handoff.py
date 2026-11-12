@@ -296,6 +296,7 @@ class V40NativeStopCompletionHandoff:
                         position_id=previous.position_id,
                         position_quantity=previous.contracts,
                         maximum_short_stop_price=amendment.proposed_stop,
+                        verified_filled_entry_order_id=previous.exchange_order_id,
                     ).active_native_full_volume_market_sl_observed is not True
                 ):
                     return V40StopCompletionResult(
