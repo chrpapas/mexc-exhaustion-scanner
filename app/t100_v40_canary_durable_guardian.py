@@ -32,8 +32,8 @@ from app.t100_live_guardian_durable_worker import (
 from app.t100_live_guardian_incident_outbox import GuardianIncidentOutbox
 from app.t100_live_ops_notifier import OpsNotice,T100LiveOpsNotifier
 from app.t100_v40_canary_account_guardian import (
-    V40CanaryGuardianHeartbeat,observe_v40_account_once,
-    verify_guardian_environment,
+    V40CanaryGuardianHeartbeat,V40CanaryGuardianHalted,
+    observe_v40_account_once,verify_guardian_environment,
 )
 
 SCOPE=hashlib.sha256(b"T100_V40_DEDICATED_FIRST_CANARY_GUARDIAN").hexdigest()
@@ -59,6 +59,36 @@ class V40DurableGuardianStatus:
 
 class V40DurableGuardianHalted(RuntimeError):
     pass
+
+
+# Hardcoded diagnostic vocabulary. Never print exception text from asyncpg,
+# httpx, MEXC, Discord or a user-controlled connection string.
+_SAFE_STARTUP_REASONS=frozenset({
+    "V40_GUARDIAN_READONLY_ACCOUNT_SCOPE_REQUIRED",
+    "V40_GUARDIAN_READONLY_CREDENTIALS_MISSING",
+    "V40_GUARDIAN_MUST_HAVE_SEPARATE_GET_KEY",
+    "V40_DURABLE_ALERTS_NOT_ENABLED",
+    "V40_DURABLE_ACCOUNT_OR_DB_CONFIG_INVALID",
+    "V40_DURABLE_WRITER_ROLE_NOT_SEPARATE",
+    "V40_CROSS_OWNED_GUARDIAN_DISTINCT_READONLY_LEDGER_REQUIRED",
+    "V40_DURABLE_DISCORD_WEBHOOK_INVALID",
+    "V40_DURABLE_CYCLE_LIMIT_INVALID",
+    "V40_DURABLE_DATABASE_CONNECT_FAILED_SAFE_HALT",
+    "V40_DURABLE_INCIDENT_WRITER_ROLE_FAILED_SAFE_HALT",
+    "V40_DURABLE_INCIDENT_SINGLETON_FAILED_SAFE_HALT",
+    "V40_DURABLE_NOTIFIER_CONSTRUCT_FAILED_SAFE_HALT",
+    "V40_DURABLE_INCIDENT_PERSIST_OR_DISCORD_FAILED_SAFE_HALT",
+    "V40_DURABLE_GUARDIAN_UNEXPECTED_EXIT",
+})
+
+
+def _redacted_startup_status(error:BaseException)->str:
+    # Exact equality with a bounded constant list prevents leaking raw
+    # database errors, URLs, passwords, API tokens or Discord webhook paths.
+    status=str(error)
+    return status if status in _SAFE_STARTUP_REASONS else (
+        "V40_DURABLE_GUARDIAN_FAILED_SAFE_HALT"
+    )
 
 
 def config(env:Mapping[str,str])->tuple[str,str,str,int]:
@@ -176,12 +206,17 @@ async def run(
         raise V40DurableGuardianHalted("V40_DURABLE_CYCLE_LIMIT_INVALID")
     conn=None
     notifier=None
+    stage="DATABASE_CONNECT"
     try:
         conn=await connect(dsn,ca)
+        stage="INCIDENT_WRITER_ROLE"
         await verify_alert_writer_role(conn)
+        stage="INCIDENT_SINGLETON"
         outbox=GuardianIncidentOutbox(conn,scope_sha256=SCOPE)
         await outbox.acquire_singleton()
+        stage="NOTIFIER_CONSTRUCT"
         notifier=notifier_factory(hook,cooldown_seconds=0)
+        stage="INCIDENT_PERSIST_OR_DISCORD"
         cycle=0
         while max_cycles is None or cycle<max_cycles:
             cycle+=1
@@ -245,8 +280,10 @@ async def run(
     except V40DurableGuardianHalted:
         raise
     except Exception:
-        # No secrets, URLs, passwords or raw SQL in status text.
-        raise V40DurableGuardianHalted("V40_DURABLE_GUARDIAN_RUNTIME_HALTED") from None
+        # Only fixed known stages; never embed a raw database/HTTP error.
+        raise V40DurableGuardianHalted(
+            "V40_DURABLE_"+stage+"_FAILED_SAFE_HALT"
+        ) from None
     finally:
         if conn is not None:
             await conn.close()
@@ -268,10 +305,15 @@ def main()->int:
         state=asyncio.run(run(
             dict(os.environ),max_cycles=1 if args.once else None,
         ))
+    except (V40DurableGuardianHalted,V40CanaryGuardianHalted) as error:
+        print(json.dumps(asdict(V40DurableGuardianStatus(
+            _redacted_startup_status(error)
+        )),sort_keys=True),flush=True)
+        return 2
     except Exception:
         print(json.dumps(asdict(V40DurableGuardianStatus(
             "V40_DURABLE_GUARDIAN_FAILED_SAFE_HALT"
-        )),sort_keys=True))
+        )),sort_keys=True),flush=True)
         return 2
     return 0 if (
         (
