@@ -3,13 +3,11 @@
 # It does NOT adopt, alter, or replace the original T100/225 shadow worker,
 # the V40 scanner/trader, the BOXWAVE subaccount, or existing Render databases.
 #
-# CRITICAL: Do not approve the Blueprint until (a) migrations 034/035 are
-# reviewed/applied, (b) a distinct SELECT-only t100_v40_guardian_reader role
-# and a distinct narrow guardian INCIDENT writer role are provisioned,
-# (c) a dedicated V40 exchange READ-ONLY key is connected via Render UI,
-# (d) the account scope and webhook are verified, (e) secrets are rotated,
-# (f) recurring starter worker charges are approved by the operator.
-#
+# ALREADY DEPLOYED. To use simpler shared-DB mode on the EXISTING worker,
+# set only T100_V40_GUARDIAN_SHARED_DB_DSN to the existing V40 executor
+# runtime URL and reuse your existing Discord webhook. MEXC GET-only key
+# stays independent. Complete migration 035 + reviewed 037 grant first.
+# This is weaker DB credential isolation than the original two-role design.
 # This is a non-trading, no-POST worker. It fails closed if provisioned incorrectly.
 services:
   - type: worker
@@ -46,16 +44,15 @@ services:
         sync: false
       - key: T100_V40_GUARDIAN_READONLY_API_SECRET
         sync: false
-      # Independent dedicated SELECT-only role on checkpoint/journal tables.
-      - key: T100_V40_GUARDIAN_LEDGER_READONLY_DSN
+      # Simpler first-canary mode: SAME existing V40 EXECUTOR RUNTIME DSN
+      # for immutable journal SELECTs and durable incident writes.
+      # Weaker DB privilege isolation; do not use owner/scanner credentials.
+      - key: T100_V40_GUARDIAN_REUSE_V40_RUNTIME_DB
+        value: "true"
+      - key: T100_V40_GUARDIAN_SHARED_DB_DSN
         sync: false
-      - key: T100_V40_GUARDIAN_LEDGER_CA_FILE
-        sync: false
-      # Separate INCIDENT-ONLY writer role (migration 035).
-      - key: T100_V40_GUARDIAN_INCIDENT_DB_DSN
-        sync: false
-      - key: T100_V40_GUARDIAN_INCIDENT_DB_CA_FILE
-        sync: false
+      # No new Postgres users or CA-file paths. Requires migration 035
+      # and one-time grant 037 to existing t100_live_executor_runtime role.
       # Durable, redacted alert delivery. Never shares the trading key.
       - key: T100_V40_GUARDIAN_DISCORD_WEBHOOK_URL
         sync: false
