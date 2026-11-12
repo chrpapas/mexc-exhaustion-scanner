@@ -254,6 +254,14 @@ class V40NativeStopCompletionHandoff:
                             position_id=pid,
                             position_quantity=contracts,
                             maximum_short_stop_price=price,
+                            # A position-origin stop or the exact verified
+                            # filled-entry-attached origin is permissible.
+                            # The checkpoint has already been recovered from
+                            # the durable fill/revision journal.
+                            verified_filled_entry_order_id=(
+                                previous.exchange_order_id
+                                if pid==previous.position_id else None
+                            ),
                         ).active_native_full_volume_market_sl_observed is not True
                     ):
                         return V40StopCompletionResult(
