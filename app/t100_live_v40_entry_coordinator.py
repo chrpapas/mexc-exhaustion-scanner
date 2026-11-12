@@ -662,6 +662,52 @@ class V40OneShotCoordinator:
                     signal_id=selected.signal.signal_id,
                     reserved=True,staged=True,
                 )
+            # The scanner may have invalidated the Stage2 entry while
+            # the leader, SQL stage and multi-bookend MEXC GETs ran. The
+            # first real canary MUST re-read the same genuine source row
+            # immediately before the irreversible exchange dispatch claim.
+            # Never substitute a new candidate or send a late POST. This
+            # second read is restricted READ ONLY; a decline leaves the
+            # staged identity for explicit reconciliation, not retry.
+            if self.initial_pilot_only:
+                try:
+                    final_tape=await self.source.latest_candidates(
+                        observed_at=datetime.now(timezone.utc),
+                    )
+                    identity=(
+                        selected.signal.signal_id,
+                        selected.signal.symbol,
+                        selected.signal.tier,
+                        selected.signal.admission_open_ts,
+                        selected.signal.entry_reference_price,
+                    )
+                    final_valid=(
+                        type(final_tape) is V40SourceBatch
+                        and final_tape.status==
+                            "FROZEN_V40_STAGE2_SOURCE_VALIDATED_NONAUTHORIZING"
+                        and final_tape.read_only_repeatable_read is True
+                        and final_tape.entry_allowed is False
+                        and final_tape.live_authorization is False
+                        and len(final_tape.candidates)==1
+                        and type(final_tape.candidates[0]) is V40SourceCandidate
+                        and (
+                            final_tape.candidates[0].signal_id,
+                            final_tape.candidates[0].symbol,
+                            final_tape.candidates[0].tier,
+                            final_tape.candidates[0].admission_open_ts,
+                            final_tape.candidates[0].entry_reference_price,
+                        )==identity
+                        and 0<=final_tape.candidates[0].observed_age_seconds<=900
+                    )
+                except Exception:
+                    final_valid=False
+                if not final_valid:
+                    return V40OneShotReport(
+                        "V40_FINAL_STAGE2_CHANGED_OR_EXPIRED_NO_POST_RECONCILE",
+                        signal_id=selected.signal.signal_id,
+                        reserved=True,staged=True,
+                        claim_may_exist=False,
+                    )
             dispatch=await dispatch_one_staged_v40(
                 plan=selected.plan,intent=selected.intent,stage=stage,
                 lease=lease,risk=sized_risk,caps=caps,permit=permit,
