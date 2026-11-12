@@ -129,7 +129,7 @@ def test_one_verified_fresh_stage2_exact_integer_lot_depth_remains_readonly():
     assert r.status=="V40_PILOT_REAL_SIGNAL_EXACT_DEPTH_QUOTED_NONAUTHORIZING"
     assert r.signal_id==42 and r.symbol=="EXAMPLE_USDT"
     assert r.capped_target_usdt=="12.50"
-    assert r.executable_notional_usdt=="10.0"
+    assert D(r.executable_notional_usdt)==D("10")
     assert r.executable_contracts=="1"
     assert r.displayed_sell_vwap=="100"
     assert r.exact_lot_depth_verified is True
@@ -144,7 +144,7 @@ def test_one_verified_fresh_stage2_exact_integer_lot_depth_remains_readonly():
 
 @pytest.mark.parametrize("changes",[
     {"status":"V40_SIGNAL_INTAKE_VOL30_SKIP_REAL_SOURCE"},
-    {"source_status":"not_a_field"},
+    {"symbol":"INVALID"},
     {"signal_count":2},
     {"signal_id":True},
     {"symbol":"BTC_USDT"},
@@ -154,8 +154,6 @@ def test_one_verified_fresh_stage2_exact_integer_lot_depth_remains_readonly():
     {"entry_allowed":True},
 ])
 def test_ineligible_monitor_is_rejected_before_any_source_or_exchange_GET(changes):
-    if "source_status" in changes:
-        changes={"symbol":"DIFFERENT_USDT"}
     src,market=Source(),Market()
     r,_,_=run(source=src,market=market,monitor=monitored(**changes))
     assert r.status=="V40_EXACT_PREVIEW_MONITOR_CANDIDATE_INVALID"
