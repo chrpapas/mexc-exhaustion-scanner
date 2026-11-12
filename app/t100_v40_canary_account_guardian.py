@@ -36,6 +36,8 @@ class V40CanaryGuardianHeartbeat:
     monitored_account_flat: bool=False
     inventory_two_signed_get_bookends: bool=False
     hedge_mode_verified: bool=False
+    ledger_provenance_verified: bool=False
+    single_owned_cross_native_sl_verified: bool=False
     unexpected_positions: int=0
     unexpected_stops: int=0
     unexpected_orders: int=0
