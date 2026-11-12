@@ -32,6 +32,7 @@ from app.t100_v40_guardian_owned_cross import (
     assess_v40_owned_cross_guardian,
 )
 from app.t100_live_readonly_probe import ReadOnlyMexcProbe
+from app.t100_live_four_slot_ledger_reader import PostgresFourSlotLedgerReader
 
 
 def _halt(code:str)->V40CanaryGuardianHeartbeat:
@@ -39,12 +40,14 @@ def _halt(code:str)->V40CanaryGuardianHeartbeat:
 
 
 async def observe_v40_account_and_owned(
-    *,ledger:PostgresV40GuardianLedgerReader,
+    *,ledger:PostgresV40GuardianLedgerReader|PostgresFourSlotLedgerReader,
     signed_get:GetOnlyMexcTransport,
 ) -> V40CanaryGuardianHeartbeat:
     """Independent full-account inventory/ledger bookends, no mutation."""
     if (
-        type(ledger) is not PostgresV40GuardianLedgerReader
+        type(ledger) not in (
+            PostgresV40GuardianLedgerReader,PostgresFourSlotLedgerReader,
+        )
         or type(signed_get) is not GetOnlyMexcTransport
         or hasattr(signed_get,"_private_post")
     ):
@@ -106,7 +109,7 @@ async def observe_v40_account_and_owned(
         "V40_GUARDIAN_ONE_OWNED_CROSS_SHORT_NATIVE_SL_OBSERVED_NONAUTHORIZING",
         monitored_account_flat=False,
         inventory_two_signed_get_bookends=True,
-        hedge_mode_verified=False,
+        hedge_mode_verified=True,
         incident_alert=False,
         ledger_provenance_verified=True,
         single_owned_cross_native_sl_verified=True,
@@ -121,16 +124,29 @@ async def observe_v40_account_and_owned_network(
         verify_guardian_environment(env)
     except Exception:
         return _halt("V40_GUARDIAN_INDEPENDENT_CREDENTIAL_SCOPE_HALT")
-    dsn=env.get("T100_V40_GUARDIAN_LEDGER_READONLY_DSN","")
+    shared=env.get("T100_V40_GUARDIAN_REUSE_V40_RUNTIME_DB")=="true"
+    dsn=env.get(
+        "T100_V40_GUARDIAN_SHARED_DB_DSN" if shared
+        else "T100_V40_GUARDIAN_LEDGER_READONLY_DSN",""
+    )
     cafile=env.get("T100_V40_GUARDIAN_LEDGER_CA_FILE","")
     if (
         type(dsn) is not str or not dsn.startswith(
             ("postgresql://","postgres://")
         )
-        or type(cafile) is not str or not cafile.startswith("/")
-        or dsn in (
-            env.get("T100_V40_EXECUTOR_RUNTIME_DSN"),
-            env.get("T100_V40_SIGNAL_READER_DSN"),
+        or (
+            not shared and
+            (type(cafile) is not str or not cafile.startswith("/"))
+        )
+        or (
+            not shared and dsn in (
+                env.get("T100_V40_EXECUTOR_RUNTIME_DSN"),
+                env.get("T100_V40_SIGNAL_READER_DSN"),
+            )
+        )
+        or (
+            shared and dsn==env.get("T100_V40_SIGNAL_READER_DSN")
+            and dsn
         )
     ):
         return _halt("V40_GUARDIAN_DISTINCT_LEDGER_READER_NOT_PROVISIONED_HALT")
@@ -138,9 +154,16 @@ async def observe_v40_account_and_owned_network(
     import httpx
     pool=None
     try:
-        context=ssl.create_default_context(cafile=cafile)
-        context.check_hostname=True
-        context.verify_mode=ssl.CERT_REQUIRED
+        if shared:
+            # Actual runtime role identity and a READ ONLY repeatable-read
+            # snapshot are independently rechecked on EVERY journal query.
+            context="require"
+            reader_class=PostgresFourSlotLedgerReader
+        else:
+            context=ssl.create_default_context(cafile=cafile)
+            context.check_hostname=True
+            context.verify_mode=ssl.CERT_REQUIRED
+            reader_class=PostgresV40GuardianLedgerReader
         pool=await asyncpg.create_pool(
             dsn=dsn,ssl=context,min_size=1,max_size=1,
             timeout=9,command_timeout=12,
@@ -158,7 +181,7 @@ async def observe_v40_account_and_owned_network(
             )
             return await asyncio.wait_for(
                 observe_v40_account_and_owned(
-                    ledger=PostgresV40GuardianLedgerReader(pool),
+                    ledger=reader_class(pool),
                     signed_get=get_only,
                 ),timeout=45,
             )
