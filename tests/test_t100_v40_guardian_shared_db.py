@@ -45,7 +45,7 @@ def test_one_v40_runtime_dsn_replaces_two_new_db_logins_and_two_ca_paths():
 ])
 def test_shared_db_never_bypasses_account_scope_getonly_or_real_discord(bad):
     with pytest.raises(Exception):
-        config(env(**SHARED,**bad))
+        config(env(**{**SHARED,**bad}))
 
 
 def test_shared_flag_off_retains_strict_separate_roles():
