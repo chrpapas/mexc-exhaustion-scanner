@@ -146,6 +146,33 @@ def test_mocked_in_place_readback_can_commit_journal_and_checkpoint_once(monkeyp
     assert all("private" in p for p in x[7].calls)
 
 
+def test_exact_filled_entry_attached_stop_can_complete_checkpoint_without_post(monkeypatch):
+    # This exercises the read-only recovery, independent signed GET,
+    # and no-POST journal handoff using the SAME verified filled origin.
+    from dataclasses import replace
+    authorize_mock_only(monkeypatch)
+    a,previous,trailing,handoff,journal,writer,venue,private=fixture()
+    correct=replace(previous,exchange_order_id="666")
+    handoff.auditor.ledger.rows[0]["exchange_order_id"]="666"
+    venue.stops[0]["orderId"]="666"
+    private.stop_rows[0]["orderId"]="666"
+    revised_row=asdict(correct)
+    trailing=reconstruct_v40_trailing_after_restart(
+        checkpoint_row=revised_row,
+        revision_rows=[dict(revised_row,write_reason="ENTRY_PROTECTED")],
+        observed_post_entry_low=D("86"),
+        price_tick=D(".01"),
+        signed_fill_time_verified=True,
+        full_post_fill_low_stream_verified=True,
+    )
+    out=asyncio.run(handoff.commit_in_place_if_verified(
+        amendment=a,previous=correct,trailing=trailing,permit=None,
+    ))
+    assert out.journal_checkpoint_committed is True
+    assert out.exchange_posts==0 and out.live_authorization is False
+    assert len(writer.calls)==1
+
+
 def test_unknown_unchanged_stop_cannot_persist_or_retry(monkeypatch):
     authorize_mock_only(monkeypatch)
     x=fixture(old_stop=True)
