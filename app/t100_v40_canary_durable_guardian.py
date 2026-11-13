@@ -117,9 +117,23 @@ _SAFE_OBSERVER_DETAILS=frozenset({
 
 def _safe_observer_detail(heartbeat:object)->str:
     code=heartbeat.status if type(heartbeat) is V40CanaryGuardianHeartbeat else None
-    return code if type(code) is str and code in _SAFE_OBSERVER_DETAILS else (
-        "V40_GUARDIAN_UNCLASSIFIED_OBSERVER_HALT"
-    )
+    if type(code) is str and code in _SAFE_OBSERVER_DETAILS:
+        return code
+    if (
+        type(code) is str
+        and code.startswith("V40_GUARDIAN_SNAPSHOT_")
+        and code.endswith("_HALT")
+    ):
+        # Only approved fixed coordinator codes, not exchange/SQL contents.
+        from app.t100_v40_guardian_account_and_owned import (
+            _SAFE_SNAPSHOT_NONREADY,
+        )
+        snapshot_code=code[
+            len("V40_GUARDIAN_SNAPSHOT_"):-len("_HALT")
+        ]
+        if snapshot_code in _SAFE_SNAPSHOT_NONREADY:
+            return code
+    return "V40_GUARDIAN_UNCLASSIFIED_OBSERVER_HALT"
 
 
 def _redacted_startup_status(error:BaseException)->str:
