@@ -42,6 +42,8 @@ SCOPE=hashlib.sha256(b"T100_V40_DEDICATED_FIRST_CANARY_GUARDIAN").hexdigest()
 @dataclass(frozen=True)
 class V40DurableGuardianStatus:
     status: str
+    # Bounded fixed observer code only; never log an HTTP/SQL exception.
+    observer_detail: str="NOT_OBSERVED"
     critical_latched: bool=True
     incident_pending: int=0
     discord_delivered: int=0
@@ -89,6 +91,35 @@ _SAFE_STARTUP_REASONS=frozenset({
     "V40_SHARED_GUARDIAN_DATABASE_PERMISSION_AUDIT_FAILED",
     "V40_SHARED_GUARDIAN_MIGRATION_035_MISSING",
 })
+
+
+_SAFE_OBSERVER_DETAILS=frozenset({
+    "V40_GUARDIAN_INDEPENDENT_CREDENTIAL_SCOPE_HALT",
+    "V40_GUARDIAN_DISTINCT_LEDGER_READER_NOT_PROVISIONED_HALT",
+    "V40_GUARDIAN_INDEPENDENT_DB_OR_VENUE_GET_FAILED_HALT",
+    "V40_GUARDIAN_INDEPENDENT_READER_OR_GET_INVALID_HALT",
+    "V40_GUARDIAN_ACCOUNT_HEDGE_MODE_UNVERIFIED_HALT",
+    "V40_GUARDIAN_ACCOUNT_LEDGER_OR_GET_UNAVAILABLE_HALT",
+    "V40_GUARDIAN_UNOWNED_OR_UNKNOWN_PENDING_MUTATION_HALT",
+    "V40_GUARDIAN_OWNED_CROSS_AUDIT_FAILED_HALT",
+    "V40_GUARDIAN_OWNED_CROSS_OR_NATIVE_SL_UNVERIFIED_HALT",
+    "V40_GUARDIAN_FLAT_ACCOUNT_DOUBLE_GET_STANDBY_NONAUTHORIZING",
+    "V40_GUARDIAN_ONE_OWNED_CROSS_SHORT_NATIVE_SL_OBSERVED_NONAUTHORIZING",
+    "V40_GUARDIAN_SIGNED_GET_OR_RUNTIME_FAILED_HALT",
+    "V40_GUARDIAN_NONFLAT_OR_PENDING_ORDER_UNKNOWN_OWNER_HALT",
+    "V40_GUARDIAN_READONLY_SCOPE_OR_KEY_INVALID_HALT",
+    "V40_GUARDIAN_ACCOUNT_NETWORK_OR_TIMEOUT_HALT",
+    "V40_GUARDIAN_SIGNED_GET_UNAVAILABLE_HALT",
+    "V40_GUARDIAN_ACCOUNT_SHAPE_OR_HEDGE_UNVERIFIED_HALT",
+    "V40_GUARDIAN_ACCOUNT_BOOKENDS_DRIFT_HALT",
+})
+
+
+def _safe_observer_detail(heartbeat:object)->str:
+    code=heartbeat.status if type(heartbeat) is V40CanaryGuardianHeartbeat else None
+    return code if type(code) is str and code in _SAFE_OBSERVER_DETAILS else (
+        "V40_GUARDIAN_UNCLASSIFIED_OBSERVER_HALT"
+    )
 
 
 def _redacted_startup_status(error:BaseException)->str:
@@ -304,6 +335,7 @@ async def run(
             pending_count=await outbox.pending_count()
             report=V40DurableGuardianStatus(
                 status=code,
+                observer_detail=_safe_observer_detail(heartbeat),
                 critical_latched=state.critical_latched,
                 incident_pending=pending_count,
                 discord_delivered=delivered,
