@@ -40,11 +40,11 @@ class Conn:
         return Tx(self)
     async def fetchval(self,sql,*args):
         self.events.append("FETCH")
+        if "has_schema_privilege" in sql:return self.create
         if "current_user" in sql:return self.role
         if "current_database()" in sql:return "mexc_exhaustion"
         if "transaction_read_only" in sql:return "off"
         if "transaction_isolation" in sql:return "serializable"
-        if "has_schema_privilege" in sql:return self.create
         if "pg_advisory_xact_lock" in sql:
             self.events.append("040_LOCK")
             return None
@@ -89,7 +89,7 @@ def go(conn,config=None):
 def test_bundle_is_exact_reviewed_migration_excluding_outer_begin_commit():
     actual=m._reviewed_bundle()
     ref=Path("migrations/040_v40_emergency_close_once_claim.sql").read_text()
-    assert ref.replace("BEGIN;\n","").replace("\nCOMMIT;\n","\n")==actual
+    assert ref.replace("BEGIN;\\n\\n","").replace("\\nCOMMIT;\\n","\\n")==actual
     assert "CREATE TABLE public.t100_live_v40_emergency_close_claims" in actual
     assert "CREATE FUNCTION public.t100_v40_deny_emergency_claim_change" in actual
     assert "DELETE FROM" not in actual
