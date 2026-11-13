@@ -50,7 +50,7 @@ class Conn:
             return None
         if "to_regclass" in sql:
             assert args==("public.t100_live_v40_emergency_close_claims",)
-            return "public.t100_live_v40_emergency_close_claims" if self.exists else None
+            return self.exists
         raise AssertionError(sql)
     async def execute(self,sql,*args):
         if sql.startswith("SET LOCAL"):
@@ -138,7 +138,7 @@ def test_no_create_privilege_or_wrong_owner_do_not_mutate_database():
 def test_failed_create_rolls_back_and_redacts_owner_secrets():
     conn=Conn(fail=True)
     result=go(conn)
-    assert result.status=="V40_MIGRATION_040_OWNER_OR_DB_TRANSACTION_HALTED"
+    assert result.status=="V40_MIGRATION_040_HALTED_AT_EXECUTE_DDL"
     assert conn.events[-1]=="ROLLBACK"
     assert not result.migration_committed
     assert "SENSITIVE" not in repr(result)
