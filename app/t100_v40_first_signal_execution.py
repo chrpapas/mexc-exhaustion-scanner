@@ -62,6 +62,9 @@ class V40FirstCanaryReleaseReview:
     durable_incident_alert_delivery_verified:bool=False
     supervised_emergency_exit_runbook_verified:bool=False
     operator_explicitly_authorized_first_canary:bool=False
+    # True ONLY for the explicitly requested first production observation:
+    # no claim of preverified native stop triggers or emergency exits.
+    production_first_trade_observation_waiver:bool=False
 
 
 @dataclass(frozen=True)
@@ -261,6 +264,9 @@ async def attempt_one_real_v40_first_signal(
         ),
         operator_explicitly_authorized_first_canary=(
             external_review.operator_explicitly_authorized_first_canary
+        ),
+        production_first_trade_observation_waiver=(
+            external_review.production_first_trade_observation_waiver
         ),
     )
     if evidence.failures():
