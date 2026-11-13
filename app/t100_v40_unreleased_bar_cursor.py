@@ -86,6 +86,24 @@ def _state(row: Any) -> V40BarCursorState:
             or type(result.pending_open_ts) is int
             and result.pending_open_ts % BAR_SECONDS == 0
         )
+        and (
+            result.pending_open_ts is None
+            and result.pending_status is None
+            and result.pending_stop_price is None
+            or
+            result.pending_open_ts is not None
+            and result.pending_status in (
+                "KEEP_VERIFIED_NATIVE_STOP",
+                "NATIVE_STOP_TIGHTENING_PROPOSED_UNAUTHORIZED",
+            )
+            and result.pending_stop_price is not None
+            and result.pending_stop_price.is_finite()
+            and result.pending_stop_price > 0
+            and (
+                result.last_committed_open_ts is None
+                or result.pending_open_ts > result.last_committed_open_ts
+            )
+        )
     ):
         raise V40BarCursorHalted("V40_BAR_CURSOR_ROW_INVALID")
     return result
