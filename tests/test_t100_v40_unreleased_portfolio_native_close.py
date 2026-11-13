@@ -89,7 +89,9 @@ def test_any_uncertainty_rejects_per_position_closure(which,value,reason):
     if which=="missing_market_stop":
         ss[0]["stopLossType"]=value
         cert["critical_inventory_sha256"]=_venue_digest(ps,ss)
-    if which=="wrong_leverage":ps[0]["leverage"]=value
+    if which=="wrong_leverage":
+        ps[0]["leverage"]=value
+        cert["critical_inventory_sha256"]=_venue_digest(ps,ss)
     with pytest.raises(m.V40PortfolioCloseHalted,match=reason):
         m._verified_survivor_snapshot(**kw)
 
