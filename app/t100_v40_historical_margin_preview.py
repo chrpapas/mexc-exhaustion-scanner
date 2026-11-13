@@ -109,7 +109,11 @@ def compare_historical_v40_lot_and_margin(
     except Exception:
         raise V40HistoricalMarginPlanHalted("V40_HISTORICAL_ADMISSION_UNVERIFIED") from None
     tier = "HIGH" if stage1_atr7_pct >= 5.7 else "LOW"
-    target = D(str(result.desired_notional_usdt))
+    # Report the exact equity fraction; original admission uses binary floats.
+    # Require float-modeled sizing to agree within sub-cent arithmetic noise.
+    target = equity * (D("0.625") if tier == "HIGH" else D("0.25"))
+    if abs(target - D(str(result.desired_notional_usdt))) > D("0.000000001"):
+        raise V40HistoricalMarginPlanHalted("V40_HISTORICAL_TARGET_PARITY_DRIFT")
     modeled = D(str(result.modeled_notional_usdt))
     qty = D("0")
     actual = D("0")
