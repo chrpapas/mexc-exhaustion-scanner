@@ -164,6 +164,24 @@ def assemble_v40_first_pilot(
         require_certified_transport_permit(permit)
         if type(live_transport) is not LiveMexcAdapter or live_transport.open_type!=2:
             raise V40AssemblyHalted("V40_NATIVE_CROSS_POST_ADAPTER_NOT_CERTIFIED")
+        from app.t100_v40_guardian_post_gate import PostgresV40GuardianPostGate
+        from app.mexc_trade import MexcTradeClient
+        gate=live_transport.guardian_gate
+        venue=live_transport.client
+        if (
+            type(gate) is not PostgresV40GuardianPostGate
+            or gate.pool is not executor_runtime_pool
+            or type(venue) is not MexcTradeClient
+            or type(signed_get) is not V40FirstPilotGetOnly
+            # The supposedly independent read-only GET and the POST must
+            # address the EXACT same MEXC account. No cross-subaccount trade.
+            or venue.api_key!=signed_get._key
+            or venue.api_secret!=signed_get._secret
+            or str(venue.client.base_url).rstrip("/")!="https://api.mexc.com"
+        ):
+            raise V40AssemblyHalted(
+                "V40_LIVE_ADAPTER_GUARDIAN_OR_ACCOUNT_IDENTITY_INVALID"
+            )
     if (
         signal_reader_pool is None or executor_runtime_pool is None
         or signal_reader_pool is executor_runtime_pool
