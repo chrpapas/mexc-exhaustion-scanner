@@ -453,3 +453,34 @@ def test_foreign_singleton_remains_fail_closed_never_observes_or_writes():
     assert db.handoff_attempts==60
     assert db.revision==0
     assert db.closed
+
+
+
+def test_explicit_reviewed_generation_starts_flat_without_touching_legacy(monkeypatch):
+    import app.t100_v40_guardian_reviewed_generation as reviewed
+    logs=[]
+    db=FakeConnection()
+    called=[]
+    async def select(_connection,*,env,observe,pause):
+        called.append("AUDITED_LEGACY_AND_DOUBLE_GET_PREFLIGHT")
+        return reviewed.REVIEWED_SCOPE,"NEW_REVIEWED_GENERATION_AFTER_DOUBLE_GET"
+    async def connect(_dsn,_ca):
+        return db
+    async def observe(_env):
+        return flat()
+    monkeypatch.setattr(reviewed,"select_reviewed_scope",select)
+    result=asyncio.run(m.run(
+        env(T100_V40_GUARDIAN_AUDITED_ROLLOVER="true"),
+        connect=connect,observe=observe,max_cycles=1,emit=logs.append,
+        notifier_factory=lambda *_args,**_kwargs:FakeNotifier(HOOK),
+    ))
+    assert called==["AUDITED_LEGACY_AND_DOUBLE_GET_PREFLIGHT"]
+    assert result.status=="OBSERVER_V40_CANARY_FLAT_DOUBLE_GET"
+    assert result.critical_latched is False
+    assert result.entry_allowed is False
+    assert result.live_authorization is False
+    assert result.mexc_posts==0
+    first=json.loads(logs[0])
+    assert first["status"]=="V40_AUDITED_GUARDIAN_REVIEWED_SCOPE_ACTIVE"
+    assert first["old_latch_untouched"] is True
+    assert first["live_authorization"] is False
