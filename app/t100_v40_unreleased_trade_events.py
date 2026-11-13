@@ -150,6 +150,17 @@ class V40TradeOutbox:
             raise V40EventInvalid("V40_TRADE_OUTBOX_CONNECTION_INVALID")
         self._conn = conn
 
+    async def acquire_singleton(self) -> None:
+        """One delivery worker per V40 account. Lock held by this DB session."""
+        try:
+            acquired = await self._conn.fetchval(
+                "SELECT pg_try_advisory_lock(110041, 100225)"
+            )
+        except Exception:
+            raise V40EventInvalid("V40_TRADE_OUTBOX_LOCK_UNAVAILABLE") from None
+        if acquired is not True:
+            raise V40EventInvalid("V40_TRADE_OUTBOX_ALREADY_RUNNING")
+
     async def enqueue(self, event: V40BusinessEvent) -> bool:
         if type(event) is not V40BusinessEvent:
             raise V40EventInvalid("V40_TRADE_OUTBOX_EVENT_INVALID")
