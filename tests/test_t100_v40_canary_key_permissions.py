@@ -135,3 +135,27 @@ def test_official_nested_data_is_accepted_but_still_nonauthorizing():
     result,_=call({"success":True,"code":0,"data":response()})
     assert result.futures_order_write_scope_verified
     assert not result.live_authorization
+
+
+def test_same_account_key_info_get_can_be_used_by_live_risk_witness_without_post():
+    from app.t100_v40_canary_key_permissions import (
+        read_v40_key_permissions_signed_get,
+    )
+    requests=[]
+    def mock(request):
+        requests.append(request)
+        return httpx.Response(200,json=response())
+    async def run():
+        async with httpx.AsyncClient(
+            base_url="https://api.mexc.com",
+            transport=httpx.MockTransport(mock),
+        ) as http:
+            return await read_v40_key_permissions_signed_get(
+                key=KEY,secret=SECRET,client=http,now_ms=1770000000000,
+            )
+    result=asyncio.run(run())
+    assert result.futures_order_write_scope_verified is True
+    assert result.live_authorization is False
+    assert result.entry_allowed is False
+    assert result.mexc_posts==0
+    assert len(requests)==1 and requests[0].method=="GET"
