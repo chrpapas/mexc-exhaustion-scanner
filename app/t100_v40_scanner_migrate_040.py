@@ -171,6 +171,15 @@ async def migrate_scanner_040_once(
                 )
         # Success is returned only AFTER asyncpg confirmed COMMIT.
         return report
-    except Exception:
-        # Stable enumerated stage, NEVER the raw SQL exception or DSN.
+    except Exception as exc:
+        # SQLSTATE alone is a five-character public protocol category,
+        # never the server SQL error, owner name, query, connection or DSN.
+        state=getattr(exc,"sqlstate",None)
+        if (
+            type(state) is str and len(state)==5
+            and state.isascii() and state.isalnum()
+            and state==state.upper()
+        ):
+            return block("V40_MIGRATION_040_HALTED_AT_"+stage+
+                         "_SQLSTATE_"+state)
         return block("V40_MIGRATION_040_HALTED_AT_"+stage)
