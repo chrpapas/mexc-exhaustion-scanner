@@ -62,6 +62,7 @@ class Conn:
             "read_only":"off","schema_create":False,
             "database_create":False,"admin_role":False,
         }
+        self.schema_exists=True
         self.rows=[
             {"table_name":p,"can_select":True,"can_insert":True,
              "can_update":True,"can_delete_or_truncate":False}
@@ -69,9 +70,15 @@ class Conn:
         ]
         self.calls=[]
     async def fetchrow(self,sql):
-        assert "SELECT current_user AS role" in sql
-        self.calls.append("GET_ROLE")
-        return self.current
+        if "SELECT current_user AS role" in sql:
+            self.calls.append("GET_ROLE")
+            return self.current
+        assert "to_regclass('public.t100_guardian_incident_state')" in sql
+        self.calls.append("GET_SCHEMA")
+        return {
+            "state_exists":self.schema_exists,
+            "outbox_exists":self.schema_exists,
+        }
     async def fetch(self,sql,paths):
         assert sql.lstrip().startswith("SELECT ")
         assert paths==list(m._REQUIRED_TABLES)
@@ -86,7 +93,7 @@ def verify(c):
 def test_existing_runtime_user_with_incident_writes_only_is_accepted():
     c=Conn()
     verify(c)
-    assert c.calls==["GET_ROLE","GET_GRANTS"]
+    assert c.calls==["GET_ROLE","GET_SCHEMA","GET_GRANTS"]
 
 
 @pytest.mark.parametrize("key,bad",[
@@ -132,3 +139,14 @@ def test_raw_sql_exception_never_shows_dsn_password():
     with pytest.raises(m.V40SharedGuardianDatabaseHalted) as e:
         verify(Fault())
     assert "secret_value_123" not in str(e.value)
+
+
+
+def test_missing_migration_035_is_diagnosed_before_privilege_query():
+    c=Conn()
+    c.schema_exists=False
+    with pytest.raises(
+        m.V40SharedGuardianDatabaseHalted,match="MIGRATION_035_MISSING"
+    ):
+        verify(c)
+    assert c.calls==["GET_ROLE","GET_SCHEMA"]
