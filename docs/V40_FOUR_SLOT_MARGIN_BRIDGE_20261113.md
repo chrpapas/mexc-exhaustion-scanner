@@ -4,9 +4,9 @@
 
 ## Scope and provenance
 
-This change adds \`app/t100_v40_unreleased_four_slot_margin_bridge.py\`.
+This change adds `app/t100_v40_unreleased_four_slot_margin_bridge.py`.
 It consumes the output of the existing pure historical admission/lot preview
-(\`app/t100_v40_historical_margin_preview.py\`) and compares one to four
+(`app/t100_v40_historical_margin_preview.py`) and compares one to four
 lot-quantized SHORT notionals against a *hypothetical*, explicitly supplied
 CROSS collateral balance and an observed leverage value.
 
@@ -45,15 +45,15 @@ original backtest identical or stop-safe.
   $12.50 pilot cap or force a 5x exchange setting.
 - Compare nominal initial margin to the provided available collateral.
   A second *illustrative* SL75 joint-price-shock scenario is reported.
-- No branch can set \`entry_allowed\`, \`live_authorization\`,
-  \`liquidation_safety_certified\`, \`maintenance_margin_verified\`, or
+- No branch can set `entry_allowed`, `live_authorization`,
+  `liquidation_safety_certified`, `maintenance_margin_verified`, or
   perform MEXC POST, exchange configuration mutation, or DB write.
 - A nominal-margin or stress check passing **never** proves exchange-native
   liquidation safety or historic/live execution equivalence.
 
 ## Tests and release gate
 
-\`tests/test_t100_v40_unreleased_four_slot_margin_bridge.py\` checks
+`tests/test_t100_v40_unreleased_four_slot_margin_bridge.py` checks
 high-tier 1x insufficiency, 5x nominal-margin-but-not-stress sufficiency,
 four LOW slots versus the one-position canary, a single small cap-fitting
 plan, and fail-closed malformed data. The feature-branch GitHub workflow runs
@@ -71,3 +71,30 @@ critical latch. None of those steps is certified by this change.
 The currently running trader/guardian/scanner are unchanged. The single
 $12.50 live canary profile is **not equivalent** to the historical
 four-slot portfolio and remains nonauthorizing.
+
+
+## Added: sequential V40 -> exchange lot-floor bridge
+
+`app/t100_v40_unreleased_sequential_lot_margin.py` now consumes
+`project_frozen_v40_multi_slot` output, which performs sequential
+shock-budget and same-bar liquidity deductions rather than assuming four
+independent fully allocated positions. It then applies the V39 integer
+contract-lot floor per candidate and uses the margin witness above for the
+aggregate.
+
+Safety restrictions:
+- Requires a **complete from-flat** projected portfolio. A projection with
+  already-open positions is rejected until their independently verified live
+  notional can be incorporated; otherwise margin would be understated.
+- Requires observed lot metadata supplied for exactly each new symbol and
+  rejects unfillable lots, malformed targets, missing symbols, or mismatched
+  sequential portfolio totals.
+- Computes a *hypothetical* child-order count. It does not certify child
+  execution, partial exit fills, liquidation tiers, funding, or native stops.
+- Does not authorize MEXC orders or modify any Render worker, environment
+  variables, guardian latch, account leverage, stop, or trading database.
+
+The integration test uses the project's existing frozen four-slot fixture to
+show that sequential shock-budget clipping yields less than the theoretical
+250% gross HIGH-tier target. The replay with historical real symbols,
+contract specs, partial fills and exit lifecycle remains outstanding.
