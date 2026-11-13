@@ -273,3 +273,48 @@ def test_role_failure_reports_secret_free_privilege_stage():
         asyncio.run(m.run(env(),connect=connect,max_cycles=1))
     assert str(e.value)=="V40_DURABLE_INCIDENT_WRITER_ROLE_FAILED_SAFE_HALT"
     assert "PRIVATE" not in str(e.value)
+
+
+def test_shared_runtime_failure_identifies_missing_grants_without_disclosing_dsn(monkeypatch):
+    import app.t100_v40_guardian_shared_db as shared
+    cfg=env(
+        T100_V40_GUARDIAN_REUSE_V40_RUNTIME_DB="true",
+        T100_V40_GUARDIAN_SHARED_DB_DSN=(
+            "postgresql://restricted:SECRET_PASSWORD@private.invalid/mexc_exhaustion"
+        ),
+        T100_V40_GUARDIAN_CROSS_PROTECTION_REQUIRED="true",
+    )
+    async def get_connection(_dsn,_ca):
+        return FakeConnection()
+    async def deny_permissions(_connection):
+        raise shared.V40SharedGuardianDatabaseHalted(
+            "V40_SHARED_GUARDIAN_INCIDENT_GRANTS_NOT_APPLIED"
+        )
+    monkeypatch.setattr(
+        shared,"verify_existing_runtime_for_guardian",deny_permissions
+    )
+    with pytest.raises(m.V40DurableGuardianHalted) as e:
+        asyncio.run(m.run(cfg,connect=get_connection,max_cycles=1))
+    assert str(e.value)=="V40_SHARED_GUARDIAN_INCIDENT_GRANTS_NOT_APPLIED"
+    assert "SECRET_PASSWORD" not in str(e.value)
+    assert m._redacted_startup_status(e.value)==str(e.value)
+
+
+def test_shared_runtime_unknown_exception_remains_generic_redacted(monkeypatch):
+    import app.t100_v40_guardian_shared_db as shared
+    cfg=env(
+        T100_V40_GUARDIAN_REUSE_V40_RUNTIME_DB="true",
+        T100_V40_GUARDIAN_SHARED_DB_DSN=(
+            "postgresql://restricted:SECRET_PASSWORD@private.invalid/mexc_exhaustion"
+        ),
+        T100_V40_GUARDIAN_CROSS_PROTECTION_REQUIRED="true",
+    )
+    async def get_connection(_dsn,_ca):
+        return FakeConnection()
+    async def fail(_connection):
+        raise ValueError("SECRET_PASSWORD hidden in driver message")
+    monkeypatch.setattr(shared,"verify_existing_runtime_for_guardian",fail)
+    with pytest.raises(m.V40DurableGuardianHalted) as e:
+        asyncio.run(m.run(cfg,connect=get_connection,max_cycles=1))
+    assert str(e.value)=="V40_DURABLE_INCIDENT_WRITER_ROLE_FAILED_SAFE_HALT"
+    assert "SECRET_PASSWORD" not in str(e.value)
