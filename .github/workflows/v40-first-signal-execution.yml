@@ -1,0 +1,25 @@
+name: V40 real first signal coordinator offline tests
+
+on:
+  pull_request:
+    paths:
+      - "app/t100_v40_first_signal_execution.py"
+      - "tests/test_t100_v40_first_signal_execution.py"
+      - ".github/workflows/v40-first-signal-execution.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  first-signal:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install -e ".[dev]"
+      - name: Strict signal -> permit -> one-shot claim (no real network)
+        run: python -m pytest -q tests/test_t100_v40_first_signal_execution.py tests/test_t100_v40_first_canary_risk_witness.py tests/test_t100_v40_first_canary_parity_evidence.py
