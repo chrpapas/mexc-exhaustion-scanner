@@ -80,7 +80,7 @@ def test_verified_fresh_independent_guardian_is_not_itself_live_permission():
     assert out.status=="V40_GUARDIAN_POST_GATE_CURRENT_FLAT_UNLATCHED_NONAUTHORIZING"
     assert out.entry_allowed is False and out.live_authorization is False
     assert out.mexc_posts==0 and out.database_writes==0
-    assert len(conn.queries)==7
+    assert len(conn.queries)==6
 
 
 @pytest.mark.parametrize("field,value",[
