@@ -101,3 +101,63 @@ def test_failed_websocket_does_not_crash_primary_readonly_monitor():
     assert out==0 and len(logged)==1
     assert "EXPOSED" not in logged[0]
     assert json.loads(logged[0])["entry_allowed"] is False
+
+
+def test_optional_futures_key_permission_status_never_authorizes_a_trade():
+    from app.t100_v40_canary_key_permissions import (
+        _FLAG as KEY_FLAG,V40KeyPermissionObservation,
+    )
+    logged=[]
+    async def monitor(env):
+        await asyncio.sleep(.02)
+        return 0
+    async def keys(env):
+        return V40KeyPermissionObservation(
+            "V40_KEY_INFO_FUTURES_WRITE_SCOPE_OBSERVED_NONAUTHORIZING",
+            api_key_identity_verified=True,api_key_active_verified=True,
+            futures_account_read_scope_verified=True,
+            futures_order_read_scope_verified=True,
+            futures_order_write_scope_verified=True,
+        )
+    out=asyncio.run(run_with_optional_ws_preflight(
+        {KEY_FLAG:"true"},monitor=monitor,key_observe=keys,
+        emit=logged.append,
+    ))
+    assert out==0 and len(logged)==1
+    data=json.loads(logged[0])
+    assert data["futures_order_write_scope_verified"] is True
+    assert data["live_authorization"] is False
+    assert data["entry_allowed"] is False
+    assert data["mexc_posts"]==data["database_writes"]==0
+
+
+def test_key_get_error_does_not_interrupt_primary_signal_monitor():
+    from app.t100_v40_canary_key_permissions import _FLAG as KEY_FLAG
+    logged=[]
+    async def monitor(env):
+        await asyncio.sleep(.02)
+        return 0
+    async def keys(env):
+        raise RuntimeError("SENSITIVE_MEXC_API_SECRET")
+    out=asyncio.run(run_with_optional_ws_preflight(
+        {KEY_FLAG:"true"},monitor=monitor,key_observe=keys,
+        emit=logged.append,
+    ))
+    assert out==0 and len(logged)==1
+    assert "SENSITIVE" not in logged[0]
+    assert json.loads(logged[0])["status"]=="V40_KEY_INFO_UNEXPECTED_HALT"
+
+
+def test_key_probe_is_not_started_when_not_explicitly_opted_in():
+    from app.t100_v40_canary_key_permissions import _FLAG as KEY_FLAG
+    events=[]
+    async def monitor(_):
+        events.append("monitor")
+        return 0
+    async def keys(_):
+        events.append("key")
+        raise AssertionError("key probe must not run")
+    assert asyncio.run(run_with_optional_ws_preflight(
+        {KEY_FLAG:"false"},monitor=monitor,key_observe=keys,
+    ))==0
+    assert events==["monitor"]
