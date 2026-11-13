@@ -12,7 +12,7 @@
 
 BEGIN;
 
-CREATE TABLE IF NOT EXISTS public.t100_live_v40_emergency_close_claims (
+CREATE TABLE public.t100_live_v40_emergency_close_claims (
     position_id BIGINT PRIMARY KEY CHECK (position_id > 0),
     entry_external_oid TEXT NOT NULL UNIQUE
       CHECK (entry_external_oid ~ '^t100v1e[a-f0-9]{20}$'),
@@ -32,7 +32,7 @@ CREATE TABLE IF NOT EXISTS public.t100_live_v40_emergency_close_claims (
     claimed_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
 );
 
-CREATE OR REPLACE FUNCTION public.t100_v40_deny_emergency_claim_change()
+CREATE FUNCTION public.t100_v40_deny_emergency_claim_change()
 RETURNS trigger
 LANGUAGE plpgsql
 AS $$
@@ -41,9 +41,6 @@ BEGIN
     USING ERRCODE = '23514';
 END
 $$;
-
-DROP TRIGGER IF EXISTS t100_v40_emergency_claim_immutable
-  ON public.t100_live_v40_emergency_close_claims;
 
 CREATE TRIGGER t100_v40_emergency_claim_immutable
 BEFORE UPDATE OR DELETE
