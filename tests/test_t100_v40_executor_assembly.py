@@ -209,6 +209,27 @@ def test_never_accepts_unpinned_http_hosts_or_same_account_secret_through_url():
 
 
 
+def fixture_current_risk_witness(signed,public):
+    """Same-account, zero-I/O constructor. Never assert readiness in tests."""
+    from app.t100_live_readonly_probe import ReadOnlyMexcProbe
+    from app.t100_live_v40_candidate_market_witness import (
+        MexcV40CandidateMarketWitness,
+    )
+    from app.t100_v40_first_canary_risk_witness import (
+        V40FirstCanaryRiskWitness,
+    )
+    market=MexcV40CandidateMarketWitness(
+        private=ReadOnlyMexcProbe(signed),public=public,
+        clock_ms=lambda:1234567890,
+    )
+    async def unverified():
+        raise AssertionError("NO_CURRENT_RISK_PROOF_IN_OFFLINE_ASSEMBLY")
+    return V40FirstCanaryRiskWitness(
+        market=market,get_permissions=unverified,
+        get_daily_loss=unverified,get_runtime_journal=unverified,
+    )
+
+
 class PoolNoCalls(NoSql):
     def acquire(self):
         raise AssertionError("NO_DATABASE_IO_IN_ASSEMBLY")
@@ -243,6 +264,7 @@ def test_offline_live_canary_assembly_requires_same_get_and_post_api_identity(
         signed_get=signed,
         public_get=public,
         live_transport=adapter,permit=proof,
+        risk_witness=fixture_current_risk_witness(signed,public),
     )
     assert report.production_post_adapter_connected
     assert report.coordinator.transport is adapter
@@ -257,6 +279,7 @@ def test_offline_live_canary_assembly_requires_same_get_and_post_api_identity(
             signed_get=signed,
             public_get=public,
             live_transport=adapter,permit=proof,
+        risk_witness=fixture_current_risk_witness(signed,public),
         )
     venue.api_key=signed._key
     venue.api_secret="different-subaccount-secret"
@@ -267,6 +290,7 @@ def test_offline_live_canary_assembly_requires_same_get_and_post_api_identity(
             signed_get=signed,
             public_get=public,
             live_transport=adapter,permit=proof,
+        risk_witness=fixture_current_risk_witness(signed,public),
         )
 
 
@@ -295,4 +319,31 @@ def test_live_canary_assembly_cannot_use_unrelated_guardian_sql_pool(monkeypatch
             signed_get=signed,
             public_get=public,
             live_transport=adapter,permit=SimpleNamespace(scope="test"),
+            risk_witness=fixture_current_risk_witness(signed,public),
         )
+
+
+def test_canary_live_transport_never_uses_default_nonauthorizing_risk_witness(monkeypatch):
+    from app.mexc_trade import MexcTradeClient
+    from app.t100_live_mexc_adapter import LiveMexcAdapter
+    from app.t100_v40_guardian_post_gate import PostgresV40GuardianPostGate
+
+    monkeypatch.setattr(m,"require_certified_transport_permit",lambda p:p)
+    base,signal,runtime,http,public=assemble(
+        executor_runtime_pool=PoolNoCalls(),
+    )
+    signed=base.coordinator.witness.private._client
+    venue=object.__new__(MexcTradeClient)
+    venue.api_key=signed._key
+    venue.api_secret=signed._secret
+    venue.client=SimpleNamespace(base_url="https://api.mexc.com/")
+    transport=LiveMexcAdapter(
+        venue,guardian_gate=PostgresV40GuardianPostGate(runtime),
+    )
+    with pytest.raises(m.V40AssemblyHalted,match="CURRENT_RISK_WITNESS_REQUIRED"):
+        assemble(
+            signal_reader_pool=signal,executor_runtime_pool=runtime,
+            signed_get=signed,public_get=public,
+            live_transport=transport,permit=SimpleNamespace(scope="test"),
+        )
+    assert signal.calls==runtime.calls==http.calls==public.calls==[]
