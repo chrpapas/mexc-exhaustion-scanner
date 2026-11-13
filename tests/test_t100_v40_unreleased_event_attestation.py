@@ -11,6 +11,7 @@ from app.t100_live_v40_protected_finalization import PreparedProtectedEntry
 from app.t100_v40_unreleased_event_attestation import (
     verified_entry_and_native_sl_events,
     verified_completed_stop_and_pnl_events,
+    verified_plus_five_milestone, verified_trailing_stop_business_event,
 )
 from app.t100_v40_unreleased_trade_events import V40EventInvalid
 
@@ -66,5 +67,33 @@ def test_exit_discord_cannot_claim_sl_trigger_without_signed_finality():
             signal_id=7, position_id="10", symbol="EXAMPLE_USDT",
             close_provenance=None, close_fills=None, accounting=None,
             signed_account_flat_twice=False, durable_checkpoint_closed=False,
+            observed_at=datetime.now(timezone.utc),
+        )
+
+
+def test_plus_five_milestone_never_claims_take_profit_without_signed_quote():
+    _,cp=prepared_fixture()
+    with pytest.raises(V40EventInvalid, match="SIGNED_PRICE_NOT_VERIFIED"):
+        verified_plus_five_milestone(
+            signal_id=7,checkpoint=cp,signed_market_price=D("95"),
+            independent_signed_quote_verified=False,
+            observed_at=datetime.now(timezone.utc),
+        )
+    event=verified_plus_five_milestone(
+        signal_id=7,checkpoint=cp,signed_market_price=D("94.99"),
+        independent_signed_quote_verified=True,
+        observed_at=datetime.now(timezone.utc),
+    )
+    assert event.kind=="PROFIT_5_OBSERVED"
+    assert "NOT A TAKE PROFIT" in event.discord_embed()["title"]
+
+
+def test_trailing_notification_rejects_unreconciled_stop_amendment():
+    _,cp=prepared_fixture()
+    with pytest.raises(V40EventInvalid, match="TRAIL_BUSINESS_PROOF_NOT_FINAL"):
+        verified_trailing_stop_business_event(
+            signal_id=7,previous=cp,current=cp,
+            amendment=None,completion=None,
+            independent_restart_native_sl_verified=False,
             observed_at=datetime.now(timezone.utc),
         )
