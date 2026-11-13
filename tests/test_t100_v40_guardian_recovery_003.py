@@ -1,5 +1,6 @@
 """Recovery 003 is audit-gated; never clears a previous guardian latch."""
 import asyncio
+from dataclasses import replace
 
 import pytest
 
@@ -50,7 +51,7 @@ class DB:
 
 async def call(db,answers=None):
     seen=[]
-    results=list(answers if answers is not None else [flat(),flat()])
+    results=list(answers if answers is not None else [\n        replace(flat(),ledger_provenance_verified=True),\n        replace(flat(),ledger_provenance_verified=True),\n    ])
     async def observer(_):
         seen.append("independent_signed_GET_and_ledger")
         event=results.pop(0)
