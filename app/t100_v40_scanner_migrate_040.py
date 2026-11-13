@@ -28,6 +28,7 @@ class V40Migration040Report:
     account_flatness_unverified:bool=True
     migration_committed:bool=False
     postflight_permissions_verified:bool=False
+    guardian_reader_grant_verified:bool=False
     prior_trading_journal_preserved:bool=True
     mexc_posts:int=0
     entry_allowed:bool=False
@@ -56,11 +57,14 @@ SELECT
   has_table_privilege('t100_live_executor_runtime',
      'public.t100_live_v40_emergency_close_claims',
      'UPDATE,DELETE,TRUNCATE,TRIGGER') AS exec_mutation,
-  has_table_privilege('t100_v40_guardian_reader',
-     'public.t100_live_v40_emergency_close_claims','SELECT') AS guardian_select,
-  has_table_privilege('t100_v40_guardian_reader',
-     'public.t100_live_v40_emergency_close_claims','INSERT,UPDATE,DELETE')
-     AS guardian_mutation
+  COALESCE(has_table_privilege(
+     to_regrole('t100_v40_guardian_reader')::oid,
+     'public.t100_live_v40_emergency_close_claims'::regclass,
+     'SELECT'),FALSE) AS guardian_select,
+  COALESCE(has_table_privilege(
+     to_regrole('t100_v40_guardian_reader')::oid,
+     'public.t100_live_v40_emergency_close_claims'::regclass,
+     'INSERT,UPDATE,DELETE'),FALSE) AS guardian_mutation
 FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
 WHERE n.nspname='public' AND c.relname='t100_live_v40_emergency_close_claims'
 """
@@ -138,6 +142,27 @@ async def migrate_scanner_040_once(
                 )
                 if type(exists) is not bool:
                     raise ValueError("INVALID_EXISTENCE_RESULT")
+                stage="REQUIRED_ROLE_CHECK"
+                runtime_role=await conn.fetchval(
+                    "SELECT to_regrole('t100_live_executor_runtime') IS NOT NULL"
+                )
+                guardian_role=await conn.fetchval(
+                    "SELECT to_regrole('t100_v40_guardian_reader') IS NOT NULL"
+                )
+                if runtime_role is not True or type(guardian_role) is not bool:
+                    return block("V40_MIGRATION_040_REQUIRED_EXECUTOR_ROLE_MISSING")
+                if guardian_role is False:
+                    # The separately running V40 guardian currently shares
+                    # the restricted runtime SQL role (as configured).
+                    # Do not silently CREATE an unreviewed database role.
+                    optional_grant=(
+                        "GRANT SELECT\n"
+                        "  ON TABLE public.t100_live_v40_emergency_close_claims\n"
+                        "  TO t100_v40_guardian_reader;\n"
+                    )
+                    if ddl.count(optional_grant)!=1:
+                        raise ValueError("V40_GUARDIAN_OPTIONAL_GRANT_NOT_EXACT")
+                    ddl=ddl.replace(optional_grant,"")
                 created=False
                 if exists is False:
                     # One reviewed CREATE-only bundle. If the runner fails
@@ -157,17 +182,23 @@ async def migrate_scanner_040_once(
                         ("exec_select",True),
                         ("exec_insert",True),
                         ("exec_mutation",False),
-                        ("guardian_select",True),
+                        ("guardian_select",guardian_role),
                         ("guardian_mutation",False),
                     )
                 ):
                     raise ValueError("V40_EMERGENCY_CLAIM_SCHEMA_OR_GRANTS_INVALID")
                 # No existing trading / incident rows updated or deleted.
                 report=V40Migration040Report(
-                    "V40_MIGRATION_040_CREATED_AND_GRANTS_VERIFIED"
-                    if created else "V40_MIGRATION_040_ALREADY_PRESENT_VERIFIED",
+                    ("V40_MIGRATION_040_CREATED_AND_GRANTS_VERIFIED"
+                     if guardian_role else
+                     "V40_MIGRATION_040_CREATED_RUNTIME_ONLY_GUARDIAN_ROLE_ABSENT")
+                    if created else
+                    ("V40_MIGRATION_040_ALREADY_PRESENT_VERIFIED"
+                     if guardian_role else
+                     "V40_MIGRATION_040_RUNTIME_ONLY_GUARDIAN_ROLE_ABSENT"),
                     migration_committed=True,
                     postflight_permissions_verified=True,
+                    guardian_reader_grant_verified=guardian_role,
                 )
         # Success is returned only AFTER asyncpg confirmed COMMIT.
         return report
