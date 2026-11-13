@@ -386,7 +386,11 @@ async def run(
                 guardian_outbox_committed=True,
             )
             emit(json.dumps(asdict(report),sort_keys=True),)
-            if not healthy or state.critical_latched:
+            # If a historical critical incident remains latched but the
+            # current signed GET is healthy, keep observing every cycle.
+            # Never silently clear the durable latch or give trade approval.
+            # A fresh unsafe observation still halts this worker immediately.
+            if not healthy:
                 return report
             if max_cycles is not None and cycle>=max_cycles:
                 return report
