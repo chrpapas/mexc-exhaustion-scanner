@@ -158,10 +158,16 @@ class V40TradeOutbox:
                 """INSERT INTO public.t100_v40_trade_event_outbox
                    (event_key, event_kind, payload)
                    VALUES ($1,$2,$3::jsonb)
-                   ON CONFLICT (event_key) DO UPDATE SET event_key=EXCLUDED.event_key
+                   ON CONFLICT (event_key) DO NOTHING
                    RETURNING event_kind, payload""",
                 event.idempotency_key, event.kind, event.durable_json(),
             )
+            if row is None:
+                row = await self._conn.fetchrow(
+                    """SELECT event_kind,payload
+                       FROM public.t100_v40_trade_event_outbox
+                       WHERE event_key=$1""", event.idempotency_key,
+                )
         except Exception:
             raise V40EventInvalid("V40_TRADE_OUTBOX_WRITE_FAILED") from None
         if row is None or row["event_kind"] != event.kind or json.dumps(
