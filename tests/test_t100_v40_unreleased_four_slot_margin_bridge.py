@@ -86,3 +86,22 @@ def test_one_small_quantized_position_fits_pilot_but_does_not_authorize():
 def test_fail_closed_invalid_inputs(slots,equity,collateral,leverage,code):
     with pytest.raises(FourSlotMarginBridgeHalted,match=code):
         project(slots,equity=equity,collateral=collateral,leverage=leverage)
+
+
+@pytest.mark.parametrize("atr,expected_notional", [
+    (4.5,D("14.0")),
+    (5.8,D("35.2")),
+])
+def test_actual_historical_preview_profile_is_not_current_canary(atr,expected_notional):
+    """Integration with the original offline V40 admission/lot calculation."""
+    from tests.test_t100_v40_historical_margin_preview import preview
+
+    p = preview(atr=atr)
+    r = project(
+        [HistoricalShortSlot("BTC_USDT",p)],
+        equity=D("56.37671495"),collateral=D("56.37671495"),
+    )
+    assert r.portfolio_notional_usdt == expected_notional
+    assert r.status == "V40_PORTFOLIO_DIFFERENT_FROM_CURRENT_CANARY_NONAUTHORIZING"
+    assert not r.matches_current_single_position_pilot_cap
+    assert not r.entry_allowed
