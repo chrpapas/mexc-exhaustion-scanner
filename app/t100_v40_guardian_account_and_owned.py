@@ -31,7 +31,8 @@ from app.t100_v40_guardian_ledger_reader import (
 from app.t100_v40_guardian_owned_cross import (
     assess_v40_owned_cross_guardian,
 )
-from app.t100_live_readonly_probe import ReadOnlyMexcProbe
+from app.t100_live_readonly_probe import ReadOnlyMexcProbe, VenueReadHalted
+from app.t100_v40_guardian_get_failure_codes import guardian_mode_halt_from_venue_error
 from app.t100_live_four_slot_ledger_reader import PostgresFourSlotLedgerReader
 
 
@@ -101,6 +102,9 @@ async def observe_v40_account_and_owned(
     # of a flat account. Keep fail-closed behavior while identifying stage.
     try:
         mode=await ReadOnlyMexcProbe(signed_get).raw_position_mode()
+    except VenueReadHalted as error:
+        # Diagnostic classification never permits entry or weakens the latch.
+        return _halt(guardian_mode_halt_from_venue_error(error))
     except Exception:
         return _halt("V40_GUARDIAN_HEDGE_MODE_SIGNED_GET_FAILED_HALT")
     if mode!=1:
