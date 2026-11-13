@@ -32,6 +32,8 @@ class V40BarCursorState:
     pending_open_ts: int | None
     pending_status: str | None
     pending_stop_price: D | None
+    pending_best_profit_pct: D | None
+    pending_trail_armed: bool | None
     checkpoint_version: int
     stop_order_id: str
     confirmed_stop_price: D
@@ -53,6 +55,11 @@ def _state(row: Any) -> V40BarCursorState:
                 D(str(row["pending_stop_price"]))
                 if row["pending_stop_price"] is not None else None
             ),
+            pending_best_profit_pct=(
+                D(str(row["pending_best_profit_pct"]))
+                if row["pending_best_profit_pct"] is not None else None
+            ),
+            pending_trail_armed=row["pending_trail_armed"],
             checkpoint_version=int(row["checkpoint_version"]),
             stop_order_id=str(row["stop_order_id"]),
             confirmed_stop_price=D(str(row["confirmed_stop_price"])),
@@ -90,6 +97,8 @@ def _state(row: Any) -> V40BarCursorState:
             result.pending_open_ts is None
             and result.pending_status is None
             and result.pending_stop_price is None
+            and result.pending_best_profit_pct is None
+            and result.pending_trail_armed is None
             or
             result.pending_open_ts is not None
             and result.pending_status in (
@@ -99,6 +108,12 @@ def _state(row: Any) -> V40BarCursorState:
             and result.pending_stop_price is not None
             and result.pending_stop_price.is_finite()
             and result.pending_stop_price > 0
+            and result.pending_best_profit_pct is not None
+            and result.pending_best_profit_pct.is_finite()
+            and result.pending_best_profit_pct >= result.best_profit_pct
+            and result.pending_trail_armed is (
+                result.pending_best_profit_pct >= D("14")
+            )
             and (
                 result.last_committed_open_ts is None
                 or result.pending_open_ts > result.last_committed_open_ts
@@ -206,13 +221,15 @@ class V40DurableBarCursor:
             row=await self.conn.fetchrow(
                 """UPDATE public.t100_v40_exit_bar_cursor
                    SET pending_open_ts=$3,pending_status=$4,
-                       pending_stop_price=$5,updated_at=clock_timestamp()
+                       pending_stop_price=$5,pending_best_profit_pct=$6,
+                       pending_trail_armed=$7,updated_at=clock_timestamp()
                    WHERE position_id=$1 AND cursor_revision=$2
                      AND pending_open_ts IS NULL
                    RETURNING position_id""",
                 cursor.position_id,cursor.cursor_revision,
                 candidate.last_completed_open_ts,plan.status,
-                candidate.native_stop_price,
+                candidate.native_stop_price,candidate.best_profit_pct,
+                candidate.trail_armed,
             )
         except Exception:
             raise V40BarCursorHalted("V40_BAR_CURSOR_STAGE_FAILED") from None
@@ -235,18 +252,32 @@ class V40DurableBarCursor:
             and cursor.pending_open_ts==candidate.last_completed_open_ts
             and cursor.pending_status==plan.status
             and cursor.pending_stop_price==candidate.native_stop_price
+            and cursor.pending_best_profit_pct==candidate.best_profit_pct
+            and cursor.pending_trail_armed==candidate.trail_armed
+            and candidate.best_profit_pct >= cursor.best_profit_pct
             and candidate.position_id==cursor.position_id==persisted_checkpoint.position_id
             and cursor.entry_external_oid==persisted_checkpoint.external_oid
             and persisted_checkpoint.lifecycle_state=="OPEN"
             and persisted_checkpoint.stop_price==candidate.native_stop_price
-            and persisted_checkpoint.best_profit_pct==candidate.best_profit_pct
-            and persisted_checkpoint.armed==candidate.trail_armed
+            and persisted_checkpoint.best_profit_pct<=candidate.best_profit_pct
             and persisted_checkpoint.checkpoint_version>=cursor.checkpoint_version
             and persisted_checkpoint.stop_price<=cursor.confirmed_stop_price
             and (
-                persisted_checkpoint.checkpoint_version>cursor.checkpoint_version
-                if persisted_checkpoint.stop_price<cursor.confirmed_stop_price
-                else persisted_checkpoint.stop_order_id==cursor.stop_order_id
+                (
+                    plan.status=="KEEP_VERIFIED_NATIVE_STOP"
+                    and candidate.native_stop_price==cursor.confirmed_stop_price
+                    and persisted_checkpoint.checkpoint_version==cursor.checkpoint_version
+                    and persisted_checkpoint.stop_order_id==cursor.stop_order_id
+                    and persisted_checkpoint.best_profit_pct<=cursor.best_profit_pct
+                )
+                or
+                (
+                    plan.status=="NATIVE_STOP_TIGHTENING_PROPOSED_UNAUTHORIZED"
+                    and candidate.native_stop_price<cursor.confirmed_stop_price
+                    and persisted_checkpoint.checkpoint_version==cursor.checkpoint_version+1
+                    and persisted_checkpoint.best_profit_pct==candidate.best_profit_pct
+                    and persisted_checkpoint.armed==candidate.trail_armed
+                )
             )
             and independent_native_sl_get_verified is True
             and immutable_checkpoint_history_verified is True
@@ -258,6 +289,7 @@ class V40DurableBarCursor:
                    SET last_committed_open_ts=pending_open_ts,
                        pending_open_ts=NULL,pending_status=NULL,
                        pending_stop_price=NULL,
+                       pending_best_profit_pct=NULL,pending_trail_armed=NULL,
                        checkpoint_version=$3,stop_order_id=$4,
                        confirmed_stop_price=$5,best_profit_pct=$6,
                        trail_armed=$7,cursor_revision=cursor_revision+1,
@@ -265,11 +297,13 @@ class V40DurableBarCursor:
                    WHERE position_id=$1 AND cursor_revision=$2
                      AND pending_open_ts=$8
                      AND pending_stop_price=$5
+                     AND pending_best_profit_pct=$6
+                     AND pending_trail_armed=$7
                    RETURNING *""",
                 cursor.position_id,cursor.cursor_revision,
                 persisted_checkpoint.checkpoint_version,
                 persisted_checkpoint.stop_order_id,persisted_checkpoint.stop_price,
-                persisted_checkpoint.best_profit_pct,persisted_checkpoint.armed,
+                candidate.best_profit_pct,candidate.trail_armed,
                 candidate.last_completed_open_ts,
             )
         except Exception:
