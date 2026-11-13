@@ -39,7 +39,7 @@ class GuardianArchiveScopeAudit:
     critical_latched: bool | None
     revision: int | None
     critical_total: int
-    critical_get_only_class_count: int
+    critical_generic_observer_class_count: int
     critical_other_class_count: int
     undelivered_total: int
 
@@ -84,7 +84,7 @@ async def audit_guardian_archive_readonly(conn: Any) -> GuardianArchiveAudit:
                          COUNT(*) FILTER (WHERE severity='critical')::int AS critical_total,
                          COUNT(*) FILTER (
                              WHERE severity='critical' AND code=$2
-                         )::int AS benign_class_count,
+                         )::int AS generic_class_count,
                          COUNT(*) FILTER (
                              WHERE severity='critical' AND code<>$2
                          )::int AS other_class_count,
@@ -95,7 +95,7 @@ async def audit_guardian_archive_readonly(conn: Any) -> GuardianArchiveAudit:
                 if counts is None:
                     raise GuardianArchiveAuditHalted("V40_ARCHIVE_AUDIT_COUNTS_UNAVAILABLE")
                 metrics=tuple(counts[k] for k in (
-                    "critical_total","benign_class_count","other_class_count","undelivered"
+                    "critical_total","generic_class_count","other_class_count","undelivered"
                 ))
                 if any(type(n) is not int or n<0 for n in metrics):
                     raise GuardianArchiveAuditHalted("V40_ARCHIVE_AUDIT_COUNTS_INVALID")
