@@ -191,7 +191,7 @@ def attest_missing_native_stop_close(
     revs=ledger.revisions
     if (
         len(revs)!=cp.checkpoint_version
-        or any(type(r) is not dict or r.get("position_id")!=cp.position_id
+        or any(type(r) is not dict or str(r.get("position_id"))!=cp.position_id
                or r.get("checkpoint_version")!=i+1
                for i,r in enumerate(revs))
         or revs[-1].get("external_oid")!=cp.external_oid
