@@ -32,7 +32,7 @@ class T100LiveGuardTests(unittest.TestCase):
         self.assertEqual(controls.readiness_failures(), ())
         with self.assertRaisesRegex(RuntimeError, "T100_LIVE_EXECUTION_BLOCKED"):
             require_paper_portfolio(controls)
-        self.assertEqual(LIVE_ADAPTER_STATUS, "NOT_IMPLEMENTED")
+        self.assertEqual(LIVE_ADAPTER_STATUS, "V40_CANARY_RESTRICTED")
 
     def test_live_without_funding_risk_limits_fails(self):
         controls = T100ExecutionControls.from_env({"T100_EXECUTION_MODE": "live"})
