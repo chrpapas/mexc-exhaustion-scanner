@@ -109,7 +109,7 @@ def verify_original_v40_archive(path:Path)->V40FrozenIdentity:
     Full portfolio and exchange liquidation are NOT certified by this
     export, even when the archive matches its signed SHA-256 fingerprint.
     """
-    if type(path) is not Path or not path.is_file() or path.stat().st_size>10_000_000:
+    if not isinstance(path, Path) or not path.is_file() or path.stat().st_size>10_000_000:
         raise V40FrozenArchiveHalted("V40_FROZEN_ARCHIVE_UNAVAILABLE")
     if sha256(path.read_bytes()).hexdigest()!=ZIP_SHA256:
         raise V40FrozenArchiveHalted("V40_FROZEN_ARCHIVE_HASH_MISMATCH")
