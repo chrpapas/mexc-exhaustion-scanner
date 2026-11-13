@@ -134,6 +134,18 @@ class V40BusinessEvent:
         return json.dumps(self.discord_embed(), sort_keys=True, separators=(",", ":"))
 
 
+def _strict_json_object(raw: Any) -> dict[str, Any]:
+    """asyncpg returns jsonb as str unless a connection-specific codec is set."""
+    if type(raw) is str:
+        try:
+            raw = json.loads(raw)
+        except (TypeError, ValueError):
+            raise V40EventInvalid("V40_TRADE_OUTBOX_JSON_INVALID") from None
+    if type(raw) is not dict:
+        raise V40EventInvalid("V40_TRADE_OUTBOX_JSON_INVALID")
+    return raw
+
+
 class V40TradeOutbox:
     """A transaction-backed pending Discord outbox; no venue methods.
 
@@ -182,7 +194,7 @@ class V40TradeOutbox:
         except Exception:
             raise V40EventInvalid("V40_TRADE_OUTBOX_WRITE_FAILED") from None
         if row is None or row["event_kind"] != event.kind or json.dumps(
-            row["payload"], sort_keys=True, separators=(",", ":")
+            _strict_json_object(row["payload"]), sort_keys=True, separators=(",", ":")
         ) != event.durable_json():
             raise V40EventInvalid("V40_TRADE_OUTBOX_IDEMPOTENCY_COLLISION")
         return True
@@ -205,10 +217,13 @@ class V40TradeOutbox:
             if (
                 type(row["event_key"]) is not str
                 or not re.fullmatch(r"[a-f0-9]{64}", row["event_key"])
-                or type(row["payload"]) is not dict
+                or not isinstance(row["payload"], (str, dict))
             ):
                 raise V40EventInvalid("V40_TRADE_OUTBOX_PAYLOAD_INVALID")
-        return tuple((r["event_key"], r["payload"]) for r in rows)
+        return tuple(
+            (r["event_key"], _strict_json_object(r["payload"]))
+            for r in rows
+        )
 
     async def mark_delivered(self, event_key: str) -> None:
         if type(event_key) is not str or re.fullmatch(r"[a-f0-9]{64}", event_key) is None:
