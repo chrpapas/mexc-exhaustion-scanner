@@ -112,6 +112,20 @@ class SignedGetTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(headers["Signature"],sig)
         self.assertFalse(hasattr(tr,"_private_post"))
 
+    async def test_account_assets_witness_allowed_get_only_no_trading_method(self):
+        mock=HTTP(MockResponse(dict(
+            success=True,code=0,
+            data=[{"currency":"USDT","positionMargin":0,"unrealized":0}],
+        )))
+        tr=GetOnlyMexcTransport(
+            mock,api_key=KEY,api_secret="0123456789abcdefXyz",
+        )
+        rows=await ReadOnlyMexcProbe(tr).raw_account_assets()
+        self.assertEqual(len(rows),1)
+        self.assertEqual(mock.calls[0][0],"/api/v1/private/account/assets")
+        self.assertEqual(len(mock.calls),1)
+        self.assertFalse(hasattr(tr,"_private_post"))
+
     async def test_endpoint_allowlist_blocks_mutation(self):
         mock=HTTP()
         tr=GetOnlyMexcTransport(
