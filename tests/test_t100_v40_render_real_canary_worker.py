@@ -95,10 +95,10 @@ def test_separate_venue_key_and_runtime_sql_role_mandatory():
     assert report.status=="V40_REAL_WORKER_SQL_ROLES_NOT_SEPARATED"
 
 
-def test_approved_external_review_can_reach_live_code_gate_without_an_order():
+def test_approved_external_review_cannot_release_global_legacy_adapter():
     r=m.validate_live_worker_config(valid_env(),approved())
-    assert r.status=="V40_REAL_WORKER_RELEASE_CONFIG_VERIFIED_NEEDS_CURRENT_SIGNED_EVIDENCE"
-    assert r.release_review_complete
+    assert r.status=="V40_REAL_WORKER_EXCHANGE_ADAPTER_NOT_CERTIFIED"
+    assert not r.release_review_complete
     assert not r.live_authorization and not r.entry_allowed
 
 
