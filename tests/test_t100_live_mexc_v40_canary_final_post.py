@@ -176,3 +176,32 @@ def test_canary_without_real_guardian_gate_cannot_post(monkeypatch):
     with pytest.raises(RuntimeError,match="GUARDIAN_GATE_MISSING_NO_POST"):
         asyncio.run(adapter.submit_short_with_stop(intent(),permit=permit()))
     assert client.posts==[]
+
+
+@pytest.mark.parametrize("ack", [
+    "739206374277809664", 739206374277809664,
+    {"orderId": "739206374277809664"},
+])
+def test_real_mexc_client_data_ack_is_a_scalar_and_never_resubmitted(
+    monkeypatch, ack,
+):
+    # The production MexcTradeClient returns payload["data"] directly.
+    monkeypatch.setattr(m, "require_certified_transport_permit", lambda x: x)
+    client = FakeClient(reply=ack)
+    adapter = m.LiveMexcAdapter(client, guardian_gate=clean_gate())
+    result = asyncio.run(adapter.submit_short_with_stop(
+        intent(), permit=permit(),
+    ))
+    assert result == "739206374277809664"
+    assert len(client.posts) == 1
+
+
+@pytest.mark.parametrize("ack", [None, "", " 123", "+123", "1.0", "１２３", False])
+def test_scalar_unknown_ack_freezes_after_exactly_one_post(monkeypatch, ack):
+    monkeypatch.setattr(m, "require_certified_transport_permit", lambda x: x)
+    client = FakeClient(reply={"orderId": "999"})
+    client.reply = ack
+    adapter = m.LiveMexcAdapter(client, guardian_gate=clean_gate())
+    with pytest.raises(RuntimeError, match="orderId"):
+        asyncio.run(adapter.submit_short_with_stop(intent(), permit=permit()))
+    assert len(client.posts) == 1
