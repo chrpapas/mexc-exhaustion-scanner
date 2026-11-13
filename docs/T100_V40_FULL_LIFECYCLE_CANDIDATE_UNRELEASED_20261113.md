@@ -30,6 +30,13 @@ Nothing in this branch is imported by the running Render worker.
   that a webhook ACK itself proves the exchange order.
 - `app/t100_v40_unreleased_trade_dispatcher.py`: single-instance
   notification-only delivery helper, no MEXC APIs.
+- `app/t100_v40_unreleased_event_attestation.py`: post-commit entry/native
+  SL and finished-stop/realized P&L event constructors. Requires typed fills,
+  exact checkpoint identity, native SL GET semantics and signed account
+  finality. Never announces an order based solely on a POST ACK.
+- `app/t100_v40_unreleased_full_portfolio.py`: deterministic, reference-only
+  four-slot LOW 25% / HIGH 62.5% target selection with VOL30, H4 and
+  same-bar capacity, explicitly NOT live leverage/lot-size authorization.
 - `migrations/041_v40_trade_event_outbox_UNRELEASED.sql`: immutable
   event fields with no runtime grants and no automatic application.
 - Regression tests covering modeled exit chronology and event semantics.
