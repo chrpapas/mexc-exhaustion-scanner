@@ -33,6 +33,8 @@ def controls(**changes):
 
 def evidence(**changes):
     d={name:True for name in V40FirstCanaryReadinessEvidence.__dataclass_fields__}
+    # Existing fully-reviewed canaries never implicitly waive live evidence.
+    d["production_first_trade_observation_waiver"]=False
     d.update(changes)
     return V40FirstCanaryReadinessEvidence(**d)
 
@@ -69,7 +71,10 @@ def test_first_pilot_does_not_unblock_legacy_tiny_pilot_globally(monkeypatch):
         require_certified_transport_permit(legacy)
 
 
-@pytest.mark.parametrize("field",tuple(V40FirstCanaryReadinessEvidence.__dataclass_fields__))
+@pytest.mark.parametrize("field",tuple(
+    key for key in V40FirstCanaryReadinessEvidence.__dataclass_fields__
+    if key!="production_first_trade_observation_waiver"
+))
 def test_independent_guardian_native_stop_and_each_prerequisite_mandatory(field):
     with pytest.raises(LiveAuthorizationHalted,match="V40_CANARY_AUTHORIZATION_BLOCKED"):
         issue(evidence=evidence(**{field:False}))
