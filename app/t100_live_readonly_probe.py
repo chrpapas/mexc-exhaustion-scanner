@@ -31,7 +31,13 @@ class ReadOnlyMexcProbe:
             data=await self._client._private_get(
                 "/api/v1/private/position/position_mode"
             )
-        except Exception:
+        except Exception as error:
+            from app.t100_v40_guardian_get_failure_codes import (
+                safe_wrapped_mode_reason,
+            )
+            category = safe_wrapped_mode_reason(error)
+            if category is not None:
+                raise VenueReadHalted(category) from None
             raise VenueReadHalted("POSITION_MODE_GET_FAILED") from None
         if type(data) is dict:
             if set(data)!={"positionMode"}:
