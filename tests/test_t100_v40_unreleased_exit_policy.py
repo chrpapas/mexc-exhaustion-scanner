@@ -119,3 +119,29 @@ def test_invalid_trail_state_and_price_tick_rejected():
         propose_next_completed_bar(
             checkpoint(), bar(), price_tick=D("0"), now_ts=BAR_TS+1800
         )
+
+
+def test_gap_up_past_initial_stop_matches_v39_open_worst_not_stop_fill():
+    candle = bar(high="195", low="70", close="160", open_="185")
+    outcome = review(checkpoint(), candle)
+    assert outcome.status == "NATIVE_STOP_MAY_HAVE_TRIGGERED_RECONCILE_ONLY"
+    assert outcome.model_exit_price == D("185")
+    assert outcome.requires_venue_exit_reconciliation is True
+    assert outcome.exchange_orders_sent == 0
+
+
+def test_gap_up_past_active_trail_uses_open_worst():
+    cp = checkpoint(
+        native_stop_price=D("80.50"),trail_armed=True,
+        best_profit_pct=D("20"),last_completed_open_ts=BAR_TS,
+    )
+    candle=bar(BAR_TS+1800,open_="84",high="90",low="70",close="78")
+    decision=review(cp,candle)
+    assert decision.status=="NATIVE_STOP_MAY_HAVE_TRIGGERED_RECONCILE_ONLY"
+    assert decision.model_exit_price==D("84")
+    assert decision.proposed_checkpoint is None
+
+
+def test_stop_touch_without_gap_models_exact_trigger_not_low_profit():
+    outcome = review(checkpoint(),bar(high="175",low="70",close="99",open_="100"))
+    assert outcome.model_exit_price == D("175")
