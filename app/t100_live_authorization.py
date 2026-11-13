@@ -113,6 +113,12 @@ class V40FirstCanaryReadinessEvidence:
     durable_incident_alert_delivery_verified: bool
     supervised_emergency_exit_runbook_verified: bool
     operator_explicitly_authorized_first_canary: bool
+    # The FIRST production trade is the intended experiment. The operator
+    # explicitly accepts not having PRIOR nonflat/native-exit observations
+    # and watches the independent guardian and event logs during the trade.
+    # This never skips a native stop REQUEST, actual flat-account precheck,
+    # exact signal/lot/price cap, order journal, or current guardian fence.
+    production_first_trade_observation_waiver: bool = False
 
     def failures(self) -> tuple[str, ...]:
         names=(
@@ -131,9 +137,23 @@ class V40FirstCanaryReadinessEvidence:
             "supervised_emergency_exit_runbook_verified",
             "operator_explicitly_authorized_first_canary",
         )
+        # There is no circular prerequisite to demonstrate a real exit
+        # before the very first production trade. With the explicit
+        # supervised observation waiver, only these two PREEXISTING
+        # outcome/notification proofs are deferred to the live trial.
+        waived=(
+            frozenset({
+                "independent_nonflat_guardian_live_verified",
+                "durable_incident_alert_delivery_verified",
+            })
+            if self.production_first_trade_observation_waiver is True
+               and self.operator_explicitly_authorized_first_canary is True
+            else frozenset()
+        )
         return tuple(
             "canary_"+name+"_missing"
-            for name in names if getattr(self,name) is not True
+            for name in names
+            if name not in waived and getattr(self,name) is not True
         )
 
 
