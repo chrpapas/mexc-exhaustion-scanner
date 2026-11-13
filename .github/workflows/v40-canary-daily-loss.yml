@@ -1,0 +1,27 @@
+name: V40 real-account daily loss GET-only checks
+
+on:
+  pull_request:
+    paths:
+      - "app/t100_v40_canary_daily_loss.py"
+      - "app/t100_v40_render_ws_supervisor.py"
+      - "tests/test_t100_v40_canary_daily_loss.py"
+      - "tests/test_t100_v40_render_ws_supervisor.py"
+      - ".github/workflows/v40-canary-daily-loss.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  daily-loss-get-only:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install -e ".[dev]"
+      - name: Test bounded signed GET-only PnL and companion supervisor
+        run: python -m pytest -q tests/test_t100_v40_canary_daily_loss.py tests/test_t100_v40_render_ws_supervisor.py
