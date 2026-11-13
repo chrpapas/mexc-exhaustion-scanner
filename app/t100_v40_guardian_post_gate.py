@@ -17,7 +17,7 @@ from typing import Any
 
 from app.t100_live_db_inspect import EXPECTED_DATABASE
 from app.t100_live_role_preflight import TARGET_ROLE
-from app.t100_v40_guardian_reviewed_generation import REVIEWED_SCOPE
+from app.t100_v40_guardian_reviewed_generation import ACTIVE_REVIEWED_SCOPE
 
 # The guardian scans at 3-5 seconds. Allow no stale (>15 sec) readiness.
 _MAX_AGE_SECONDS=15
@@ -73,7 +73,7 @@ class PostgresV40GuardianPostGate:
                                + interval '1 second' AS not_future
                            FROM public.t100_guardian_incident_state
                            WHERE scope_sha256=$1""",
-                        REVIEWED_SCOPE,
+                        ACTIVE_REVIEWED_SCOPE,
                     )
                     if (
                         state is None
@@ -99,7 +99,7 @@ class PostgresV40GuardianPostGate:
                              )::int AS pending_total
                            FROM public.t100_guardian_incident_outbox
                            WHERE scope_sha256=$1""",
-                        REVIEWED_SCOPE,
+                        ACTIVE_REVIEWED_SCOPE,
                     )
                     if (
                         outbox is None
