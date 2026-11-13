@@ -222,6 +222,7 @@ async def run(
     shared=env.get("T100_V40_GUARDIAN_REUSE_V40_RUNTIME_DB")=="true"
     if shared:
         from app.t100_v40_guardian_shared_db import (
+            V40SharedGuardianDatabaseHalted,
             shared_guardian_connection,
             verify_existing_runtime_for_guardian,
         )
