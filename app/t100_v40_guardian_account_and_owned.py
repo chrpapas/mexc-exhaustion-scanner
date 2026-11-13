@@ -37,6 +37,18 @@ from app.t100_live_four_slot_ledger_reader import PostgresFourSlotLedgerReader
 
 # Finite, internal coordinator statuses only. Never include a raw exception,
 # exchange JSON field, SQL value, account identifier, or arbitrary status.
+_SAFE_INVENTORY_CERT_FAILURES=frozenset({
+    "CURRENT_INVENTORY_COMPLETENESS_PROBE_HALTED",
+    "CURRENT_INVENTORY_COMPLETENESS_INPUT_AMBIGUOUS",
+    "CURRENT_TPSL_COUNT_CONTRACT_INVALID",
+    "CURRENT_INVENTORY_NOT_STABLE",
+    "POSITION_MARGIN_WITNESS_MISSING",
+    "CURRENT_TPSL_COUNT_MISMATCH",
+    "SYMBOL_SCOPED_REDUNDANCY_MISMATCH",
+    "CURRENT_INVENTORY_CONTRACT_INCOMPLETE",
+    "CURRENT_ACCOUNT_INVENTORY_COMPLETENESS_VERIFIED_NONATOMIC",
+})
+
 _SAFE_SNAPSHOT_NONREADY=frozenset({
     "SHARED_MODE_INPUT_INVALID",
     "LEDGER_READ_OR_CONTRACT_FAILED",
@@ -108,6 +120,16 @@ async def observe_v40_account_and_owned(
         snapshot.status!="NONFLAT_PROVENANCE_MATCHED_NONAUTHORIZING"
         or snapshot.occupied_slots!=1
     ):
+        if (
+            snapshot.status=="INVENTORY_COMPLETENESS_UNVERIFIED"
+            and type(snapshot.inventory) is dict
+            and snapshot.inventory.get("status") in _SAFE_INVENTORY_CERT_FAILURES
+        ):
+            # Only exact finite certificate codes; no MEXC response bodies.
+            return _halt(
+                "V40_GUARDIAN_INVENTORY_"+
+                snapshot.inventory["status"]+"_HALT"
+            )
         return _halt(
             "V40_GUARDIAN_SNAPSHOT_"+snapshot.status+"_HALT"
             if snapshot.status in _SAFE_SNAPSHOT_NONREADY else
