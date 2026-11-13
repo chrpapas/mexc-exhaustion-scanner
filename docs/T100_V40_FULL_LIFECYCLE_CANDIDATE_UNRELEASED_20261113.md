@@ -39,6 +39,16 @@ Nothing in this branch is imported by the running Render worker.
   same-bar capacity, explicitly NOT live leverage/lot-size authorization.
 - `migrations/041_v40_trade_event_outbox_UNRELEASED.sql`: immutable
   event fields with no runtime grants and no automatic application.
+- `app/t100_v40_unreleased_native_stop_cycle.py`: offline-wired bridge to
+  existing one-shot durable amendment and independent signed-GET checkpoint
+  recovery. The shipped native amendment gate remains explicitly blocked.
+- `app/t100_v40_unreleased_bar_cursor.py` and
+  `migrations/042_v40_exit_bar_cursor_UNRELEASED.sql`: per-position
+  consecutive Min30 cursor with one pending bar; unknown POST outcomes
+  cannot be advanced/replayed, and a completed bar cannot be committed
+  without a matching, independently verified durable position checkpoint.
+  Migration 042 has no production grants and is **not applied**.
+  Signed millisecond fill times round UP before determining first eligible bar.
 - Regression tests covering modeled exit chronology and event semantics.
 
 ## Still required before full-V40 release
