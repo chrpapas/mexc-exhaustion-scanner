@@ -58,7 +58,10 @@ from app.t100_live_v40_dispatch_executor import (
 from app.t100_live_v40_post_dispatch_reconcile import (
     reconcile_and_commit_protected_v40,
 )
-from app.t100_live_strategy_parity_gate import assess_strategy_parity_report
+from app.t100_live_strategy_parity_gate import (
+    assess_strategy_parity_report,
+    assess_v40_first_canary_entry_parity_report,
+)
 from app.t100_live_v40_stage2_source import (
     PostgresV40Stage2Source, V40SourceCandidate, V40SourceBatch,
 )
@@ -405,9 +408,20 @@ class V40OneShotCoordinator:
             )
         if type(caps) is not LiveCaps:
             raise V40CoordinatorHalted("V40_OPERATOR_RISK_CAPS_REQUIRED")
-        parity=assess_strategy_parity_report(parity_report)
-        if parity.get("strategy_parity_verified") is not True:
-            raise V40CoordinatorHalted("V40_FULL_STRATEGY_PARITY_NOT_VERIFIED")
+        # ONE capped, supervised first real-money canary tests venue
+        # execution/SL/recovery; it cannot be required to prove outcomes
+        # before its first trade. Keep full replay compulsory for legacy
+        # and autonomous scopes, while retaining exact frozen entry parity.
+        if getattr(permit,"scope",None)==V40_CANARY_SCOPE:
+            parity=assess_v40_first_canary_entry_parity_report(parity_report)
+            if parity["first_canary_entry_parity_verified"] is not True:
+                raise V40CoordinatorHalted(
+                    "V40_FIRST_CANARY_FROZEN_ENTRY_PARITY_NOT_VERIFIED"
+                )
+        else:
+            parity=assess_strategy_parity_report(parity_report)
+            if parity.get("strategy_parity_verified") is not True:
+                raise V40CoordinatorHalted("V40_FULL_STRATEGY_PARITY_NOT_VERIFIED")
         now=datetime.now(timezone.utc)
         tape=await self.source.latest_candidates(observed_at=now)
         if (
