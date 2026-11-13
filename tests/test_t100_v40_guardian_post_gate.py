@@ -8,7 +8,7 @@ import pytest
 
 from app.t100_live_db_inspect import EXPECTED_DATABASE
 from app.t100_live_role_preflight import TARGET_ROLE
-from app.t100_v40_guardian_reviewed_generation import ACTIVE_REVIEWED_SCOPE
+from app.t100_v40_guardian_recovery_003 import ACTIVE_REVIEWED_SCOPE
 from app.t100_v40_guardian_post_gate import (
     PostgresV40GuardianPostGate,
 )
