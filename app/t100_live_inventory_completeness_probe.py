@@ -54,24 +54,33 @@ async def run_current_inventory_completeness_probe(
         "entry_allowed": False,
         "live_authorization": False,
     }
+    stage="BEFORE_POSITIONS"
     try:
         before_positions = await probe.raw_open_positions()
+        stage="BEFORE_STOPS"
         before_stops = await probe.raw_open_stops()
 
+        stage="SYMBOL_CROSSCHECK"
         crosscheck = await crosscheck_symbol_scoped_inventory(
             probe,
             before_positions,
             before_stops,
         )
+        stage="ACCOUNT_ASSETS"
         assets = await probe.raw_account_assets()
+        stage="POSITION_MARGIN"
         margin = assess_position_margin_witness(
             before_positions,
             assets,
         )
+        stage="OPEN_ORDER_COUNTS"
         counts = await probe.raw_open_order_counts()
 
+        stage="AFTER_POSITIONS"
         after_positions = await probe.raw_open_positions()
+        stage="AFTER_STOPS"
         after_stops = await probe.raw_open_stops()
+        stage="CERTIFICATE"
 
         stable_positions = (
             _canonical(before_positions, CRITICAL_POSITION_FIELDS)
@@ -127,6 +136,7 @@ async def run_current_inventory_completeness_probe(
     except Exception as exc:
         result.update({
             "status": "CURRENT_INVENTORY_COMPLETENESS_PROBE_HALTED",
+            "failure_stage": stage,
             "failure_type": type(exc).__name__,
             "account_wide_completeness_verified": False,
         })
