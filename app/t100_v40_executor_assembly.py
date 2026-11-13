@@ -51,7 +51,6 @@ from app.t100_live_v40_candidate_market_witness import (
 from app.t100_live_v40_entry_coordinator import V40OneShotCoordinator
 from app.t100_live_v40_protected_commit import PostgresProtectedV40Commit
 from app.t100_live_v40_stage2_source import PostgresV40Stage2Source
-from app.t100_v40_first_canary_risk_witness import V40FirstCanaryRiskWitness
 
 
 class V40AssemblyHalted(RuntimeError):
@@ -161,6 +160,9 @@ def assemble_v40_first_pilot(
         raise V40AssemblyHalted(
             "V40_LIVE_TRANSPORT_AND_PERMIT_MUST_BE_SUPPLIED_TOGETHER"
         )
+    # Local import avoids the signed history reader -> assembly dependency
+    # during Python module initialization (all constructors remain inert).
+    from app.t100_v40_first_canary_risk_witness import V40FirstCanaryRiskWitness
     # Permit gate FIRST, before any DB, market or transport collaborator.
     # An active trade cannot accidentally use the intentionally negative
     # GET-only market.inspect witness as its account-risk certificate.
