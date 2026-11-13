@@ -1,0 +1,166 @@
+"""One-shot migration 040 via the EXISTING scanner database session.
+
+Render's separate external SQL interface cannot negotiate TLS to the
+private scanner DB; the existing scanner can. This routine runs ONLY on
+explicit opt-in on the known paper-only V40 source service, inside one SQL
+transaction, with exact database identity, owner authority, a dedicated
+advisory lock, fixed reviewed SQL bundle and post-commit verification.
+
+Do NOT run automatic schema upgrades, touch any existing table, or leak a
+database URL/error message. This does not authorize real MEXC POSTs.
+"""
+from __future__ import annotations
+
+from dataclasses import dataclass
+from importlib.resources import files
+from typing import Any,Mapping
+
+FLAG="T100_V40_MIGRATE_EMERGENCY_040_ONCE"
+_OWNER="mexc_scanner"
+_DB="mexc_exhaustion"
+_ASSET="v40_emergency_040.sql"
+_REL="public.t100_live_v40_emergency_close_claims"
+
+
+@dataclass(frozen=True)
+class V40Migration040Report:
+    status:str
+    account_flatness_unverified:bool=True
+    migration_committed:bool=False
+    postflight_permissions_verified:bool=False
+    prior_trading_journal_preserved:bool=True
+    mexc_posts:int=0
+    entry_allowed:bool=False
+    live_authorization:bool=False
+
+
+_SCHEMA_SQL="""
+SELECT
+  c.relkind='r' AS ordinary_table,
+  c.relname='t100_live_v40_emergency_close_claims' AS exact_table,
+  (SELECT count(*) FROM pg_attribute a
+   WHERE a.attrelid=c.oid AND a.attnum>0 AND NOT a.attisdropped)=11
+     AS exact_columns,
+  (SELECT count(*) FROM pg_constraint t
+   WHERE t.conrelid=c.oid AND t.contype='p')=1 AS has_primary_key,
+  EXISTS(
+    SELECT 1 FROM pg_trigger t
+    WHERE t.tgrelid=c.oid
+      AND t.tgname='t100_v40_emergency_claim_immutable'
+      AND NOT t.tgisinternal AND t.tgenabled='O'
+  ) AS immutable_trigger,
+  has_table_privilege('t100_live_executor_runtime',
+     'public.t100_live_v40_emergency_close_claims','SELECT') AS exec_select,
+  has_table_privilege('t100_live_executor_runtime',
+     'public.t100_live_v40_emergency_close_claims','INSERT') AS exec_insert,
+  has_table_privilege('t100_live_executor_runtime',
+     'public.t100_live_v40_emergency_close_claims',
+     'UPDATE,DELETE,TRUNCATE,TRIGGER') AS exec_mutation,
+  has_table_privilege('t100_v40_guardian_reader',
+     'public.t100_live_v40_emergency_close_claims','SELECT') AS guardian_select,
+  has_table_privilege('t100_v40_guardian_reader',
+     'public.t100_live_v40_emergency_close_claims','INSERT,UPDATE,DELETE')
+     AS guardian_mutation
+FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
+WHERE n.nspname='public' AND c.relname='t100_live_v40_emergency_close_claims'
+"""
+
+
+def enabled(env:Mapping[str,str])->bool:
+    return (
+        env.get(FLAG)=="true"
+        and env.get("T100_V40_RENDER_SCANNER_ENABLED")=="true"
+        and env.get("T100_EXECUTION_MODE")=="paper"
+        and env.get("T100_LIVE_ORDER_API_ENABLED")=="false"
+        and env.get("T100_LIVE_KILL_SWITCH")=="true"
+        and env.get("EXECUTION_ENABLED")=="false"
+        and env.get("TRADING_MODE")=="paper"
+    )
+
+
+def _reviewed_bundle()->str:
+    text=files("app").joinpath(_ASSET).read_text(encoding="utf-8")
+    if (
+        len(text)<1800 or len(text)>6000
+        or "CREATE TABLE public.t100_live_v40_emergency_close_claims" not in text
+        or "CREATE FUNCTION public.t100_v40_deny_emergency_claim_change" not in text
+        or "CREATE TRIGGER t100_v40_emergency_claim_immutable" not in text
+        or "GRANT SELECT, INSERT" not in text
+        or "GRANT SELECT" not in text
+        or "COMMIT;" in text or "\nBEGIN;" in text
+        or "DROP " in text or "TRUNCATE " in text
+        or "DELETE FROM" in text or "UPDATE public." in text
+        or "ALTER " in text
+    ):
+        raise ValueError("NON_REVIEWED_V40_SQL_BUNDLE")
+    return text
+
+
+async def migrate_scanner_040_once(
+    pool:Any,env:Mapping[str,str],
+)->V40Migration040Report:
+    block=lambda code:V40Migration040Report(code)
+    if pool is None or not enabled(env):
+        return block("V40_MIGRATION_040_OPT_IN_PAPER_SCANNER_REQUIRED")
+    try:
+        ddl=_reviewed_bundle()
+        async with pool.acquire() as conn:
+            async with conn.transaction(isolation="serializable"):
+                if (
+                    await conn.fetchval("SELECT current_user")!=_OWNER
+                    or await conn.fetchval("SELECT current_database()")!=_DB
+                    or await conn.fetchval(
+                        "SELECT current_setting('transaction_read_only')"
+                    )!="off"
+                    or await conn.fetchval(
+                        "SELECT current_setting('transaction_isolation')"
+                    )!="serializable"
+                    or await conn.fetchval(
+                        "SELECT has_schema_privilege(current_user,'public','CREATE')"
+                    ) is not True
+                ):
+                    return block("V40_MIGRATION_040_TRUSTED_OWNER_NOT_VERIFIED")
+                await conn.execute(
+                    "SET LOCAL statement_timeout = '15000ms'"
+                )
+                await conn.fetchval(
+                    "SELECT pg_advisory_xact_lock(10040,40)"
+                )
+                exists=await conn.fetchval(
+                    "SELECT to_regclass($1)::text",_REL,
+                )
+                created=False
+                if exists is None:
+                    # One reviewed CREATE-only bundle. If the runner fails
+                    # mid-query, the surrounding transaction rolls back.
+                    await conn.execute(ddl)
+                    created=True
+                elif exists!=_REL:
+                    return block("V40_MIGRATION_040_EXISTING_RELATION_CONFLICT")
+                shape=await conn.fetchrow(_SCHEMA_SQL)
+                if shape is None or any(
+                    shape[key] is not expected for key,expected in (
+                        ("ordinary_table",True),
+                        ("exact_table",True),
+                        ("exact_columns",True),
+                        ("has_primary_key",True),
+                        ("immutable_trigger",True),
+                        ("exec_select",True),
+                        ("exec_insert",True),
+                        ("exec_mutation",False),
+                        ("guardian_select",True),
+                        ("guardian_mutation",False),
+                    )
+                ):
+                    raise ValueError("V40_EMERGENCY_CLAIM_SCHEMA_OR_GRANTS_INVALID")
+                # No existing trading / incident rows updated or deleted.
+                report=V40Migration040Report(
+                    "V40_MIGRATION_040_CREATED_AND_GRANTS_VERIFIED"
+                    if created else "V40_MIGRATION_040_ALREADY_PRESENT_VERIFIED",
+                    migration_committed=True,
+                    postflight_permissions_verified=True,
+                )
+        # Success is returned only AFTER asyncpg confirmed COMMIT.
+        return report
+    except Exception:
+        return block("V40_MIGRATION_040_OWNER_OR_DB_TRANSACTION_HALTED")
