@@ -84,6 +84,9 @@ def project_frozen_sequential_lots_and_margin(
         or not 1 <= exchange_leverage_observed <= 125
     ):
         raise FourSlotMarginBridgeHalted("V40_SEQUENTIAL_COMPLETE_FROM_FLAT_ORIGIN_UNVERIFIED")
+    if any(type(e) is not V40ReferenceEntry or type(e.symbol) is not str
+           for e in historical.entries):
+        raise FourSlotMarginBridgeHalted("V40_SEQUENTIAL_ENTRY_MODEL_INVALID")
     symbols = [e.symbol for e in historical.entries]
     if len(set(symbols)) != len(symbols) or set(symbols) != set(contracts):
         raise FourSlotMarginBridgeHalted("V40_SEQUENTIAL_CONTRACT_SYMBOL_COVERAGE_INVALID")
