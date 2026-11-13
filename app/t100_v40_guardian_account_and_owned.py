@@ -93,18 +93,24 @@ async def observe_v40_account_and_owned(
         or hasattr(signed_get,"_private_post")
     ):
         return _halt("V40_GUARDIAN_INDEPENDENT_READER_OR_GET_INVALID_HALT")
-    venue,completeness=_components(signed_get)
     try:
-        # The exchange hedge mode is a separate signed GET; position
-        # openType=CROSS alone cannot attest the account's position mode.
+        venue,completeness=_components(signed_get)
+    except Exception:
+        return _halt("V40_GUARDIAN_READONLY_COMPONENTS_INIT_FAILED_HALT")
+    # Independent hedge-mode GET: a transient venue error is NOT evidence
+    # of a flat account. Keep fail-closed behavior while identifying stage.
+    try:
         mode=await ReadOnlyMexcProbe(signed_get).raw_position_mode()
-        if mode!=1:
-            return _halt("V40_GUARDIAN_ACCOUNT_HEDGE_MODE_UNVERIFIED_HALT")
+    except Exception:
+        return _halt("V40_GUARDIAN_HEDGE_MODE_SIGNED_GET_FAILED_HALT")
+    if mode!=1:
+        return _halt("V40_GUARDIAN_ACCOUNT_HEDGE_MODE_UNVERIFIED_HALT")
+    try:
         snapshot=await FourSlotSnapshotCoordinator(
             ledger=ledger,venue=venue,completeness=completeness,
         ).inspect()
     except Exception:
-        return _halt("V40_GUARDIAN_ACCOUNT_LEDGER_OR_GET_UNAVAILABLE_HALT")
+        return _halt("V40_GUARDIAN_SNAPSHOT_RUNTIME_EXCEPTION_HALT")
     if (
         snapshot.status=="FLAT_OBSERVED_NONAUTHORIZING"
         and snapshot.occupied_slots==0
