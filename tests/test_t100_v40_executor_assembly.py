@@ -206,3 +206,82 @@ def test_never_accepts_unpinned_http_hosts_or_same_account_secret_through_url():
             evil,api_key="testing-only-key-12345678",
             api_secret="testing-only-secret-12345678",
         ))
+
+
+
+def test_offline_live_canary_assembly_requires_same_get_and_post_api_identity(
+    monkeypatch,
+):
+    from app.mexc_trade import MexcTradeClient
+    from app.t100_live_mexc_adapter import LiveMexcAdapter
+    from app.t100_v40_guardian_post_gate import PostgresV40GuardianPostGate
+
+    # Test-only permit bypass does not affect the shipped NOT_IMPLEMENTED gate.
+    monkeypatch.setattr(m,"require_certified_transport_permit",lambda p:p)
+    reporter,signal_pool,runtime_pool,http,public=assemble()
+    signed=reporter.coordinator.witness.private._client
+
+    venue=object.__new__(MexcTradeClient)
+    venue.api_key=signed._key
+    venue.api_secret=signed._secret
+    venue.client=SimpleNamespace(base_url="https://api.mexc.com/")
+    gate=PostgresV40GuardianPostGate(runtime_pool)
+    adapter=LiveMexcAdapter(venue,guardian_gate=gate)
+    proof=SimpleNamespace(scope="V40_CANARY_ONE_SHOT")
+
+    report,_,_,_,_=assemble(
+        signal_reader_pool=signal_pool,
+        executor_runtime_pool=runtime_pool,
+        signed_get=signed,
+        public_get=public,
+        live_transport=adapter,permit=proof,
+    )
+    assert report.production_post_adapter_connected
+    assert report.coordinator.transport is adapter
+    assert http.calls==public.calls==[]
+    assert signal_pool.calls==runtime_pool.calls==[]
+
+    venue.api_key="different-subaccount-key"
+    with pytest.raises(m.V40AssemblyHalted,match="ACCOUNT_IDENTITY_INVALID"):
+        assemble(
+            signal_reader_pool=signal_pool,
+            executor_runtime_pool=runtime_pool,
+            signed_get=signed,
+            public_get=public,
+            live_transport=adapter,permit=proof,
+        )
+    venue.api_key=signed._key
+    venue.api_secret="different-subaccount-secret"
+    with pytest.raises(m.V40AssemblyHalted,match="ACCOUNT_IDENTITY_INVALID"):
+        assemble(
+            signal_reader_pool=signal_pool,
+            executor_runtime_pool=runtime_pool,
+            signed_get=signed,
+            public_get=public,
+            live_transport=adapter,permit=proof,
+        )
+
+
+def test_live_canary_assembly_cannot_use_unrelated_guardian_sql_pool(monkeypatch):
+    from app.mexc_trade import MexcTradeClient
+    from app.t100_live_mexc_adapter import LiveMexcAdapter
+    from app.t100_v40_guardian_post_gate import PostgresV40GuardianPostGate
+
+    monkeypatch.setattr(m,"require_certified_transport_permit",lambda p:p)
+    old,signal_pool,runtime_pool,_,public=assemble()
+    signed=old.coordinator.witness.private._client
+    venue=object.__new__(MexcTradeClient)
+    venue.api_key=signed._key
+    venue.api_secret=signed._secret
+    venue.client=SimpleNamespace(base_url="https://api.mexc.com")
+    adapter=LiveMexcAdapter(
+        venue,guardian_gate=PostgresV40GuardianPostGate(NoSql()),
+    )
+    with pytest.raises(m.V40AssemblyHalted,match="GUARDIAN_OR_ACCOUNT"):
+        assemble(
+            signal_reader_pool=signal_pool,
+            executor_runtime_pool=runtime_pool,
+            signed_get=signed,
+            public_get=public,
+            live_transport=adapter,permit=SimpleNamespace(scope="test"),
+        )
