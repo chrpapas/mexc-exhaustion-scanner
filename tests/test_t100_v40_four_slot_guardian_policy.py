@@ -84,7 +84,7 @@ def test_fifth_unowned_position_is_not_adopted():
         snapshot=snap,ledger=ld,
         account_positions=positions,account_stops=stops,
     )
-    assert out.status=="V40_FOUR_SLOT_GUARDIAN_ACCOUNT_OR_RECOVERY_INCOMPLETE"
+    assert out.status=="V40_FOUR_SLOT_GUARDIAN_VENUE_BOOKEND_DRIFT"
 
 
 def test_ledger_drift_is_not_treated_as_venue_stop_verification():
