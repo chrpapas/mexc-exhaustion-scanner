@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from decimal import Decimal as D, InvalidOperation
 import hashlib
 import re
-from typing import Any, Protocol
+from typing import Any, Protocol, Awaitable, Callable
 
 from app.t100_live_four_slot_snapshot_coordinator import LedgerSnapshot
 from app.t100_live_durable_recovery import (
@@ -268,6 +268,31 @@ class V40EmergencyCloseClaim(Protocol):
     async def reserve_one(self,target:V40EmergencyCloseTarget)->bool: ...
 
 
+_CLAIM_SENTINEL=object()
+
+
+@dataclass(frozen=True,init=False)
+class V40CommittedEmergencyClaim:
+    close_external_oid:str
+    position_id:str
+
+    def __init__(self,*,close_external_oid:str,position_id:str,
+                 _sentinel:object):
+        if _sentinel is not _CLAIM_SENTINEL:
+            raise V40EmergencyCloseHalted(
+                "V40_EMERGENCY_CLOSE_MUST_COMMIT_DATABASE_CLAIM"
+            )
+        object.__setattr__(self,"close_external_oid",close_external_oid)
+        object.__setattr__(self,"position_id",position_id)
+
+
+def _mint_after_claim(target:V40EmergencyCloseTarget)->V40CommittedEmergencyClaim:
+    return V40CommittedEmergencyClaim(
+        close_external_oid=target.close_external_oid,
+        position_id=target.position_id,_sentinel=_CLAIM_SENTINEL,
+    )
+
+
 class V40EmergencyCloseAdapter:
     """One documented close POST after a committed durable claim.
 
@@ -280,11 +305,13 @@ class V40EmergencyCloseAdapter:
 
     async def send_once(
         self,target:V40EmergencyCloseTarget,
-        *,committed_claim:bool,
+        *,committed_claim:V40CommittedEmergencyClaim,
     )->V40EmergencyCloseAck:
         if (
             type(target) is not V40EmergencyCloseTarget
-            or committed_claim is not True
+            or type(committed_claim) is not V40CommittedEmergencyClaim
+            or committed_claim.close_external_oid!=target.close_external_oid
+            or committed_claim.position_id!=target.position_id
             or _ID.fullmatch(target.position_id) is None
             or target.quantity_contracts<=0
             or target.original_notional_usdt>D("12.50")
@@ -331,6 +358,7 @@ async def close_once_after_durable_claim(
     *,target:V40EmergencyCloseTarget,
     claimant:V40EmergencyCloseClaim,
     adapter:V40EmergencyCloseAdapter,
+    pre_post_recheck:Callable[[],Awaitable[V40EmergencyCloseTarget]],
 )->V40EmergencyCloseAck:
     """SQL commit MUST finish before there is any possible venue POST."""
     if type(target) is not V40EmergencyCloseTarget:
@@ -345,4 +373,30 @@ async def close_once_after_durable_claim(
         raise V40EmergencyCloseHalted(
             "V40_EMERGENCY_CLOSE_ALREADY_CLAIMED_NO_SECOND_POST"
         )
-    return await adapter.send_once(target,committed_claim=True)
+    # The claim has ALREADY committed. A subsequent lost stop/position GET
+    # burns the claim without posting: never automatically re-arm it.
+    try:
+        checked=await pre_post_recheck()
+        if (
+            type(checked) is not V40EmergencyCloseTarget
+            or checked.symbol!=target.symbol
+            or checked.position_id!=target.position_id
+            or checked.entry_external_oid!=target.entry_external_oid
+            or checked.original_order_id!=target.original_order_id
+            or checked.stop_order_id!=target.stop_order_id
+            or checked.checkpoint_version!=target.checkpoint_version
+            or checked.quantity_contracts!=target.quantity_contracts
+            or checked.original_notional_usdt!=target.original_notional_usdt
+            or checked.close_external_oid!=target.close_external_oid
+            or checked.cause!=target.cause
+            or checked.reference_ask<=0
+            or not checked.reference_ask.is_finite()
+        ):
+            raise V40EmergencyCloseHalted("V40_EMERGENCY_CLOSE_PREPOST_DRIFT")
+    except BaseException:
+        raise V40EmergencyCloseHalted(
+            "V40_EMERGENCY_CLOSE_CLAIMED_PREPOST_UNVERIFIED_NO_POST_NO_RETRY"
+        ) from None
+    return await adapter.send_once(
+        checked,committed_claim=_mint_after_claim(checked),
+    )
