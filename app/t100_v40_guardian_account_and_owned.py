@@ -225,6 +225,8 @@ async def observe_v40_account_and_owned_network(
     import asyncpg
     import httpx
     pool=None
+    # Fixed diagnostic phases only: never include exception text or endpoints.
+    phase="LEDGER_POOL_CONNECT"
     try:
         if shared:
             # Actual runtime role identity and a READ ONLY repeatable-read
@@ -241,6 +243,7 @@ async def observe_v40_account_and_owned_network(
             timeout=9,command_timeout=12,
             server_settings={"default_transaction_read_only":"on"},
         )
+        phase="OBSERVATION"
         async with httpx.AsyncClient(
             base_url=GetOnlyMexcTransport.BASE_URL,
             trust_env=False,follow_redirects=False,
@@ -258,7 +261,11 @@ async def observe_v40_account_and_owned_network(
                 ),timeout=45,
             )
     except Exception:
-        return _halt("V40_GUARDIAN_INDEPENDENT_DB_OR_VENUE_GET_FAILED_HALT")
+        return _halt(
+            "V40_GUARDIAN_LEDGER_POOL_CONNECT_FAILED_HALT"
+            if phase=="LEDGER_POOL_CONNECT" else
+            "V40_GUARDIAN_OBSERVATION_RUNTIME_FAILED_HALT"
+        )
     finally:
         if pool is not None:
             await pool.close()
