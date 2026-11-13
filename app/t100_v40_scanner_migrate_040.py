@@ -102,10 +102,14 @@ async def migrate_scanner_040_once(
     block=lambda code:V40Migration040Report(code)
     if pool is None or not enabled(env):
         return block("V40_MIGRATION_040_OPT_IN_PAPER_SCANNER_REQUIRED")
+    stage="ASSET"
     try:
         ddl=_reviewed_bundle()
+        stage="CONNECT"
         async with pool.acquire() as conn:
+            stage="BEGIN"
             async with conn.transaction(isolation="serializable"):
+                stage="OWNER_CHECK"
                 if (
                     await conn.fetchval("SELECT current_user")!=_OWNER
                     or await conn.fetchval("SELECT current_database()")!=_DB
@@ -120,23 +124,28 @@ async def migrate_scanner_040_once(
                     ) is not True
                 ):
                     return block("V40_MIGRATION_040_TRUSTED_OWNER_NOT_VERIFIED")
+                stage="DEADLINE"
                 await conn.execute(
                     "SET LOCAL statement_timeout = '15000ms'"
                 )
+                stage="ADVISORY_LOCK"
                 await conn.fetchval(
                     "SELECT pg_advisory_xact_lock(10040,40)"
                 )
+                stage="EXISTENCE_READ"
                 exists=await conn.fetchval(
-                    "SELECT to_regclass($1)::text",_REL,
+                    "SELECT to_regclass($1) IS NOT NULL",_REL,
                 )
+                if type(exists) is not bool:
+                    raise ValueError("INVALID_EXISTENCE_RESULT")
                 created=False
-                if exists is None:
+                if exists is False:
                     # One reviewed CREATE-only bundle. If the runner fails
                     # mid-query, the surrounding transaction rolls back.
+                    stage="EXECUTE_DDL"
                     await conn.execute(ddl)
                     created=True
-                elif exists!=_REL:
-                    return block("V40_MIGRATION_040_EXISTING_RELATION_CONFLICT")
+                stage="VERIFY_SHAPE_AND_GRANTS"
                 shape=await conn.fetchrow(_SCHEMA_SQL)
                 if shape is None or any(
                     shape[key] is not expected for key,expected in (
@@ -163,4 +172,5 @@ async def migrate_scanner_040_once(
         # Success is returned only AFTER asyncpg confirmed COMMIT.
         return report
     except Exception:
-        return block("V40_MIGRATION_040_OWNER_OR_DB_TRANSACTION_HALTED")
+        # Stable enumerated stage, NEVER the raw SQL exception or DSN.
+        return block("V40_MIGRATION_040_HALTED_AT_"+stage)
