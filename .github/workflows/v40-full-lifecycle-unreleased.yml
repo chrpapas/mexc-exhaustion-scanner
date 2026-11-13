@@ -6,6 +6,7 @@ on:
       - "app/t100_v40_unreleased_*.py"
       - "tests/test_t100_v40_unreleased_*.py"
       - "migrations/041_v40_trade_event_outbox_UNRELEASED.sql"
+      - "migrations/042_v40_exit_bar_cursor_UNRELEASED.sql"
       - ".github/workflows/v40-full-lifecycle-unreleased.yml"
   push:
     branches:
@@ -37,7 +38,8 @@ jobs:
             tests/test_t100_v40_unreleased_event_attestation.py \
             tests/test_t100_v40_unreleased_full_portfolio.py \
             tests/test_t100_v40_unreleased_trade_dispatcher.py \
-            tests/test_t100_v40_unreleased_native_stop_cycle.py
+            tests/test_t100_v40_unreleased_native_stop_cycle.py \
+            tests/test_t100_v40_unreleased_bar_cursor.py
       - name: Ensure no production worker imports unreleased code
         run: |
           ! grep -R "t100_v40_unreleased_" \
