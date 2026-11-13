@@ -13,6 +13,7 @@ def valid_env():
     return {
         m.FLAG:"true","T100_V40_ACCOUNT_PROFILE":"DEDICATED_WEB_PILOT",
         "T100_V40_SINGLE_POSITION_PILOT":"true",
+        "T100_V40_EMERGENCY_EXIT_ENABLED":"true",
         "TRADING_MODE":"live","EXECUTION_ENABLED":"true",
         "T100_V40_EXECUTOR_DISABLED_WORKER":"false",
         "T100_EXECUTION_MODE":"live",
@@ -57,6 +58,8 @@ def test_production_never_inferrs_native_stop_or_emergency_release_from_live_fla
      "V40_REAL_WORKER_ACCOUNT_OR_KILL_ISOLATION_HALT"),
     ({"T100_V40_SINGLE_POSITION_PILOT":"false"},
      "V40_REAL_WORKER_ACCOUNT_OR_KILL_ISOLATION_HALT"),
+    ({"T100_V40_EMERGENCY_EXIT_ENABLED":"false"},
+     "V40_REAL_WORKER_EMERGENCY_CLOSE_WATCH_REQUIRED"),
     ({"DATABASE_URL":"postgresql://owner.invalid/private"},
      "V40_REAL_WORKER_ACCOUNT_OR_KILL_ISOLATION_HALT"),
     ({"T100_V40_EXECUTOR_DISABLED_WORKER":"true"},
@@ -176,3 +179,51 @@ def test_running_service_stays_default_disabled_not_live():
     }
     assert require_disabled_worker(env)
     assert m.validate_live_worker_config(env).release_review_complete is False
+
+
+def test_verified_protected_first_entry_hands_off_to_emergency_watch(monkeypatch,capsys):
+    calls=[]
+    async def entry(env):
+        calls.append("Genuine.Stage2.fenced.protected")
+        return m.V40CanaryWorkerStatus(
+            "V40_ONE_PROTECTED_ENTRY_RECOVERED_NOT_AUTONOMOUS",
+            genuine_signal_observed=True,
+            order_post_may_have_occurred=True,
+            release_review_complete=True,
+        )
+    async def watch(env):
+        assert env["T100_V40_EMERGENCY_EXIT_ENABLED"]=="true"
+        calls.append("EMERGENCY_WATCH")
+        return 0
+    monkeypatch.setattr(
+        m,"validate_live_worker_config",
+        lambda env,review=None:m.V40CanaryWorkerStatus(
+            "V40_REAL_WORKER_RELEASE_CONFIG_VERIFIED_NEEDS_CURRENT_SIGNED_EVIDENCE",
+            release_review_complete=True,
+        ),
+    )
+    result=asyncio.run(m.run_live_worker(
+        valid_env(),cycle=entry,emergency_watch=watch,
+        max_cycles=1,
+    ))
+    assert result==0
+    assert calls==["Genuine.Stage2.fenced.protected","EMERGENCY_WATCH"]
+
+
+def test_emergency_watch_failure_never_marks_successful_live_execution(monkeypatch):
+    async def entry(env):
+        return m.V40CanaryWorkerStatus(
+            "V40_ONE_PROTECTED_ENTRY_RECOVERED_NOT_AUTONOMOUS",
+        )
+    async def watch(env):
+        raise RuntimeError("MEXC_PRIVATE_KEY_UNAVAILABLE")
+    monkeypatch.setattr(
+        m,"validate_live_worker_config",
+        lambda env,review=None:m.V40CanaryWorkerStatus(
+            "V40_REAL_WORKER_RELEASE_CONFIG_VERIFIED_NEEDS_CURRENT_SIGNED_EVIDENCE",
+            release_review_complete=True,
+        ),
+    )
+    assert asyncio.run(m.run_live_worker(
+        valid_env(),cycle=entry,emergency_watch=watch,max_cycles=1,
+    ))==2
