@@ -463,7 +463,7 @@ def test_explicit_reviewed_generation_starts_flat_without_touching_legacy(monkey
     called=[]
     async def select(_connection,*,env,observe,pause):
         called.append("AUDITED_LEGACY_AND_DOUBLE_GET_PREFLIGHT")
-        return reviewed.REVIEWED_SCOPE,"NEW_REVIEWED_GENERATION_AFTER_DOUBLE_GET"
+        return reviewed.RECOVERY_SCOPE_003,"NEW_RECOVERY_003_AFTER_THREE_HISTORIC_ALERTS_AND_DOUBLE_GET"
     async def connect(_dsn,_ca):
         return db
     async def observe(_env):
