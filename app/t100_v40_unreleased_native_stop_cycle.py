@@ -185,7 +185,10 @@ async def reconcile_native_stop_after_one_attempt(
         or type(handoff) is not V40NativeStopCompletionHandoff
     ):
         raise V40UnreleasedStopCycleHalted("V40_TRAIL_POSTFLIGHT_INPUT_INVALID")
-    _require_contract_gate(permit, symbol=previous.symbol, signal_id=permit.signal_id)
+    _require_contract_gate(
+        permit, symbol=previous.symbol,
+        signal_id=getattr(permit, "signal_id", None),
+    )
     try:
         outcome = await handoff.commit_in_place_if_verified(
             amendment=amendment, previous=previous,
