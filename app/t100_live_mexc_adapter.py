@@ -17,6 +17,9 @@ from app.t100_live_authorization import (
     require_certified_transport_permit,
 )
 from app.t100_live_execution import EntryIntent, deterministic_t100_entry_oid
+from app.t100_v40_guardian_post_gate import (
+    PostgresV40GuardianPostGate,V40GuardianPostGateEvidence,
+)
 
 class LiveMexcAdapter:
     # Pinned MEXC futures openType=2 (CROSS) for the V40 tiny pilot.
@@ -24,8 +27,12 @@ class LiveMexcAdapter:
     # collateral, account completeness, native-stop atomicity or allow POST.
     open_type = 2
 
-    def __init__(self, client: MexcTradeClient) -> None:
+    def __init__(
+        self, client: MexcTradeClient,
+        *, guardian_gate: PostgresV40GuardianPostGate|None=None,
+    ) -> None:
         self.client = client
+        self.guardian_gate = guardian_gate
 
     async def order_by_external_oid(self, symbol: str, external_oid: str) -> dict[str, Any] | None:
         data = await self.client._private_get(f"/api/v1/private/order/external/{symbol}/{external_oid}")
@@ -100,6 +107,30 @@ class LiveMexcAdapter:
                 raise RuntimeError("V40_CANARY_FROZEN_ORDER_OR_SL75_INVALID_NO_POST")
         if intent.notional_usdt > permit.max_position_notional_usdt:
             raise RuntimeError("MEXC_ENTRY_EXCEEDS_PERMIT")
+        if getattr(permit,"scope",None)==V40_CANARY_SCOPE:
+            # A valid permit can become unsafe milliseconds later. Every
+            # *actual* V40 POST therefore requires a new restricted SQL
+            # read of the independent guardian (no cached readiness flags).
+            # Any missing gate, stale heartbeat, new critical incident or
+            # unacknowledged alert fails BEFORE the venue request.
+            if type(self.guardian_gate) is not PostgresV40GuardianPostGate:
+                raise RuntimeError("V40_CANARY_GUARDIAN_GATE_MISSING_NO_POST")
+            gate=await self.guardian_gate.verify()
+            if (
+                type(gate) is not V40GuardianPostGateEvidence
+                or gate.status!=(
+                    "V40_GUARDIAN_POST_GATE_CURRENT_FLAT_UNLATCHED_NONAUTHORIZING"
+                )
+                or gate.state_verified is not True
+                or gate.outbox_verified is not True
+                or gate.guardian_fresh is not True
+                or gate.critical_latch_absent is not True
+                or gate.entry_allowed is not False
+                or gate.live_authorization is not False
+                or gate.mexc_posts!=0
+                or gate.database_writes!=0
+            ):
+                raise RuntimeError("V40_CANARY_GUARDIAN_LATCHED_OR_STALE_NO_POST")
         result = await self.client._private_post(
             "/api/v1/private/order/create",
             {
