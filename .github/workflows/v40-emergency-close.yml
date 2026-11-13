@@ -6,9 +6,12 @@ on:
       - "app/t100_v40_emergency_close.py"
       - "app/t100_v40_emergency_close_claims.py"
       - "app/t100_v40_emergency_postflight.py"
+      - "app/t100_v40_emergency_completion.py"
+      - "app/t100_v40_emergency_observer.py"
       - "tests/test_t100_v40_emergency_close.py"
       - "tests/test_t100_v40_emergency_close_claims.py"
       - "tests/test_t100_v40_emergency_postflight.py"
+      - "tests/test_t100_v40_emergency_completion.py"
       - "migrations/040_v40_emergency_close_once_claim.sql"
       - ".github/workflows/v40-emergency-close.yml"
   workflow_dispatch:
@@ -27,4 +30,4 @@ jobs:
           python-version: "3.12"
       - run: python -m pip install -e ".[dev]"
       - name: Reversible real test boundary and immutable close claims (no live network)
-        run: python -m pytest -q tests/test_t100_v40_emergency_close.py tests/test_t100_v40_emergency_close_claims.py tests/test_t100_v40_emergency_postflight.py
+        run: python -m pytest -q tests/test_t100_v40_emergency_close.py tests/test_t100_v40_emergency_close_claims.py tests/test_t100_v40_emergency_postflight.py tests/test_t100_v40_emergency_completion.py
