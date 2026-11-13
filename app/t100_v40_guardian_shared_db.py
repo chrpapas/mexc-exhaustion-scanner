@@ -59,6 +59,21 @@ async def verify_existing_runtime_for_guardian(conn:Any)->None:
             raise V40SharedGuardianDatabaseHalted(
                 "V40_SHARED_GUARDIAN_NOT_RESTRICTED_EXECUTOR_ROLE"
             )
+        present=await conn.fetchrow(
+            """SELECT
+              to_regclass('public.t100_guardian_incident_state') IS NOT NULL
+                AS state_exists,
+              to_regclass('public.t100_guardian_incident_outbox') IS NOT NULL
+                AS outbox_exists"""
+        )
+        if (
+            present is None
+            or present["state_exists"] is not True
+            or present["outbox_exists"] is not True
+        ):
+            raise V40SharedGuardianDatabaseHalted(
+                "V40_SHARED_GUARDIAN_MIGRATION_035_MISSING"
+            )
         grants=await conn.fetch(
             """SELECT table_name,
                  has_table_privilege(current_user,table_name,
