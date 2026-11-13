@@ -119,12 +119,26 @@ class GetOnlyMexcTransport:
             )
             response.raise_for_status()
             payload = response.json()
-        except Exception:
+        except Exception as error:
+            if path == "/api/v1/private/position/position_mode":
+                from app.t100_v40_guardian_get_failure_codes import (
+                    classify_mode_transport_failure,
+                )
+                raise GuardianOnceHalted(
+                    classify_mode_transport_failure(error)
+                ) from None
             raise GuardianOnceHalted("MEXC_SIGNED_GET_TRANSPORT_FAILED") from None
         if (type(payload) is not dict or
                 payload.get("success") is not True or
                 type(payload.get("code")) is not int or
                 payload["code"] != 0):
+            if path == "/api/v1/private/position/position_mode":
+                from app.t100_v40_guardian_get_failure_codes import (
+                    classify_mode_api_rejection,
+                )
+                raise GuardianOnceHalted(
+                    classify_mode_api_rejection(payload)
+                ) from None
             raise GuardianOnceHalted("MEXC_SIGNED_GET_EXPLICITLY_REJECTED")
         return payload.get("data")
 
