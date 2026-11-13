@@ -85,6 +85,8 @@ _SAFE_STARTUP_REASONS=frozenset({
     "V40_SHARED_GUARDIAN_DATABASE_CONNECT_FAILED",
     "V40_SHARED_GUARDIAN_TLS_MODE_INVALID",
     "V40_SHARED_GUARDIAN_CONNECTION_STRING_MISSING",
+    "V40_SHARED_GUARDIAN_INCIDENT_GRANTS_NOT_APPLIED",
+    "V40_SHARED_GUARDIAN_DATABASE_PERMISSION_AUDIT_FAILED",
 })
 
 
@@ -320,8 +322,14 @@ async def run(
         raise V40DurableGuardianHalted("V40_DURABLE_GUARDIAN_UNEXPECTED_EXIT")
     except V40DurableGuardianHalted:
         raise
-    except Exception:
-        # Only fixed known stages; never embed a raw database/HTTP error.
+    except Exception as error:
+        # In opt-in shared DB mode preserve ONLY the hardcoded, redacted
+        # identity/grant failure codes. Existing two-role behavior stays
+        # unchanged and never prints arbitrary SQL/connection errors.
+        if shared and isinstance(error,V40SharedGuardianDatabaseHalted):
+            reason=str(error)
+            if reason in _SAFE_STARTUP_REASONS:
+                raise V40DurableGuardianHalted(reason) from None
         raise V40DurableGuardianHalted(
             "V40_DURABLE_"+stage+"_FAILED_SAFE_HALT"
         ) from None
