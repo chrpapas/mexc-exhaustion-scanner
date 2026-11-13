@@ -1,0 +1,28 @@
+name: V40 exact position emergency close safety contract
+
+on:
+  pull_request:
+    paths:
+      - "app/t100_v40_emergency_close.py"
+      - "app/t100_v40_emergency_close_claims.py"
+      - "tests/test_t100_v40_emergency_close.py"
+      - "tests/test_t100_v40_emergency_close_claims.py"
+      - "migrations/040_v40_emergency_close_once_claim.sql"
+      - ".github/workflows/v40-emergency-close.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  emergency-close:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install -e ".[dev]"
+      - name: Reversible real test boundary and immutable close claims (no live network)
+        run: python -m pytest -q tests/test_t100_v40_emergency_close.py tests/test_t100_v40_emergency_close_claims.py
