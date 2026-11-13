@@ -68,6 +68,7 @@ def order():
         symbol="DOGE_USDT",externalOid=ORIGIN,
         orderId="739206374277809664",positionId="9801",
         side=3,state=3,openType=2,leverage=1,dealVol="1",
+        stopLossPrice="175",
     )
 
 
