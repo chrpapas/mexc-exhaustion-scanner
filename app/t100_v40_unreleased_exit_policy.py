@@ -155,7 +155,12 @@ def propose_next_completed_bar(
     if bar.high >= previous.native_stop_price:
         return V40ExitDecision(
             status="NATIVE_STOP_MAY_HAVE_TRIGGERED_RECONCILE_ONLY",
-            model_exit_price=previous.native_stop_price,
+            # Frozen V39.1 open_worst exit convention: a short that gaps
+            # above its stop is modeled at the WORSE of bar OPEN and
+            # trigger, not optimistically at the pre-gap stop price.
+            # This remains MODEL ONLY; actual exchange fills must be GET
+            # reconciled independently.
+            model_exit_price=max(bar.open, previous.native_stop_price),
             observed_best_profit_pct=previous.best_profit_pct,
             requires_venue_exit_reconciliation=True,
         )
