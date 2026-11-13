@@ -181,7 +181,6 @@ def attest_missing_native_stop_close(
         or _ID.fullmatch(cp.exchange_order_id) is None
         or _ID.fullmatch(cp.stop_order_id) is None
         or cp.contracts<=0
-        or cp.stop_price<cp.entry_price*D("1.75")
     ):
         raise V40EmergencyCloseHalted(
             "V40_EMERGENCY_CLOSE_NOT_V40_PROTECTED_CHECKPOINT"
@@ -229,6 +228,8 @@ def attest_missing_native_stop_close(
         or origin_order.get("openType")!=2
         or origin_order.get("leverage")!=1
         or _num(origin_order.get("dealVol"))!=cp.contracts
+        or _num(origin_order.get("stopLossPrice"))<=0
+        or cp.stop_price>_num(origin_order.get("stopLossPrice"))
     ):
         raise V40EmergencyCloseHalted(
             "V40_EMERGENCY_CLOSE_ORIGIN_FILL_NOT_PROVEN"
