@@ -35,6 +35,29 @@ from app.t100_live_readonly_probe import ReadOnlyMexcProbe
 from app.t100_live_four_slot_ledger_reader import PostgresFourSlotLedgerReader
 
 
+# Finite, internal coordinator statuses only. Never include a raw exception,
+# exchange JSON field, SQL value, account identifier, or arbitrary status.
+_SAFE_SNAPSHOT_NONREADY=frozenset({
+    "SHARED_MODE_INPUT_INVALID",
+    "LEDGER_READ_OR_CONTRACT_FAILED",
+    "ACCOUNT_EXCEEDS_FOUR_SLOTS",
+    "INVENTORY_READ_OR_FORMAT_FAILED",
+    "ORIGIN_ORDER_UNAVAILABLE",
+    "CHECKPOINT_IDENTITY_INVALID",
+    "RECOVERY_BOOKEND_READ_FAILED",
+    "LEDGER_CHANGED_DURING_OBSERVATION",
+    "VENUE_CRITICAL_INVENTORY_CHANGED",
+    "INVENTORY_COMPLETENESS_UNVERIFIED",
+    "SHARED_ACCOUNT_POSITION_PARTITION_UNVERIFIED",
+    "SHARED_ACCOUNT_T100_LEDGER_HISTORY_UNVERIFIED",
+    "SHARED_ACCOUNT_T100_DURABLE_PROVENANCE_UNVERIFIED",
+    "POSITION_STOP_COUNT_MISMATCH",
+    "UNOWNED_OR_MISSING_CHECKPOINTS",
+    "FLAT_HISTORY_REQUIRES_CLOSED_LEDGER_AUDIT",
+    "DURABLE_EXCHANGE_PROVENANCE_MISMATCH",
+})
+
+
 def _halt(code:str)->V40CanaryGuardianHeartbeat:
     return V40CanaryGuardianHeartbeat(status=code)
 
@@ -85,7 +108,11 @@ async def observe_v40_account_and_owned(
         snapshot.status!="NONFLAT_PROVENANCE_MATCHED_NONAUTHORIZING"
         or snapshot.occupied_slots!=1
     ):
-        return _halt("V40_GUARDIAN_UNOWNED_OR_UNKNOWN_PENDING_MUTATION_HALT")
+        return _halt(
+            "V40_GUARDIAN_SNAPSHOT_"+snapshot.status+"_HALT"
+            if snapshot.status in _SAFE_SNAPSHOT_NONREADY else
+            "V40_GUARDIAN_UNOWNED_OR_UNKNOWN_PENDING_MUTATION_HALT"
+        )
     try:
         second_ledger=await ledger.read_snapshot()
         audited=assess_v40_owned_cross_guardian(
