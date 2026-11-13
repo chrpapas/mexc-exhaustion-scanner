@@ -7,7 +7,7 @@ from app.t100_v40_emergency_close_claims import (
     V40PostgresEmergencyCloseClaims,_INSERT,_READ_LINKED,
 )
 from app.t100_v40_emergency_close import V40EmergencyCloseHalted
-from tests.test_t100_v40_emergency_close import target
+from tests.test_t100_v40_emergency_close import target,ORIGIN
 
 
 class Tx:
@@ -70,7 +70,7 @@ class Pool:
             assert self.events.index("ACCOUNT_LOCK")<self.events.index(
                 "CLAIM_INSERT_ATTEMPT"
             )
-            assert args==(9801,"t100v1e"+"a"*20,target().close_external_oid,
+            assert args==(9801,ORIGIN,target().close_external_oid,
                           "739206374277809664","DOGE_USDT",
                           D("1"),D("10"),1,"NATIVE_STOP_MISSING_DOUBLE_GET")
             if self.inserted:
