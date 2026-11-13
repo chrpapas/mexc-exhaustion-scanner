@@ -25,7 +25,7 @@ class Conn:
         self.states[_SCOPES[-1][1]].update(revision=80,recent=True)
         self.counts={
             scope:dict(critical_total=3 if name=="recovery_003" else 1,
-                benign_class_count=3 if name=="recovery_003" else 1,
+                generic_class_count=3 if name=="recovery_003" else 1,
                 other_class_count=0,undelivered=0)
             for name,scope in _SCOPES
         }
