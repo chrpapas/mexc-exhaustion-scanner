@@ -25,7 +25,7 @@ dev = [
 include = ["app*"]
 
 [tool.setuptools.package-data]
-app = ["v40_frozen_entry_parity_evidence.json"]
+app = ["v40_frozen_entry_parity_evidence.json", "v40_emergency_040.sql"]
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
