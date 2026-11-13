@@ -30,7 +30,9 @@ from urllib.parse import urlsplit
 from app.t100_live_guardian_durable_worker import (
     default_alert_connection,verify_alert_writer_role,
 )
-from app.t100_live_guardian_incident_outbox import GuardianIncidentOutbox
+from app.t100_live_guardian_incident_outbox import (
+    GuardianIncidentHalted,GuardianIncidentOutbox,
+)
 from app.t100_live_ops_notifier import OpsNotice,T100LiveOpsNotifier
 from app.t100_v40_canary_account_guardian import (
     V40CanaryGuardianHeartbeat,V40CanaryGuardianHalted,
@@ -328,7 +330,21 @@ async def run(
             await verify_alert_writer_role(conn)
         stage="INCIDENT_SINGLETON"
         outbox=GuardianIncidentOutbox(conn,scope_sha256=SCOPE)
-        await outbox.acquire_singleton()
+        # During Render worker rollout the retiring observer can still
+        # hold the same PG advisory lock briefly. Do NOT permit concurrent
+        # account observation: only wait for a real singleton handoff.
+        # A different singleton error or prolonged contention fails closed.
+        for handoff in range(60):
+            try:
+                await outbox.acquire_singleton()
+                break
+            except GuardianIncidentHalted as error:
+                if (
+                    str(error)!="GUARDIAN_INCIDENT_ALREADY_RUNNING"
+                    or handoff==59
+                ):
+                    raise
+                await pause(3.0)
         stage="NOTIFIER_CONSTRUCT"
         notifier=notifier_factory(hook,cooldown_seconds=0)
         stage="INCIDENT_PERSIST_OR_DISCORD"
