@@ -35,7 +35,8 @@ jobs:
             tests/test_t100_v40_unreleased_exit_policy.py \
             tests/test_t100_v40_unreleased_trade_events.py \
             tests/test_t100_v40_unreleased_event_attestation.py \
-            tests/test_t100_v40_unreleased_full_portfolio.py
+            tests/test_t100_v40_unreleased_full_portfolio.py \
+            tests/test_t100_v40_unreleased_trade_dispatcher.py
       - name: Ensure no production worker imports unreleased code
         run: |
           ! grep -R "t100_v40_unreleased_" \
