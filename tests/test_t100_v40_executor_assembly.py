@@ -329,8 +329,9 @@ def test_canary_live_transport_never_uses_default_nonauthorizing_risk_witness(mo
     from app.t100_v40_guardian_post_gate import PostgresV40GuardianPostGate
 
     monkeypatch.setattr(m,"require_certified_transport_permit",lambda p:p)
-    base,signal,runtime,http,public=assemble(
-        executor_runtime_pool=PoolNoCalls(),
+    runtime=PoolNoCalls()
+    base,signal,_,http,public=assemble(
+        executor_runtime_pool=runtime,
     )
     signed=base.coordinator.witness.private._client
     venue=object.__new__(MexcTradeClient)
