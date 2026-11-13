@@ -344,3 +344,16 @@ def test_latched_status_explains_observer_stage_without_secret():
     assert result.guardian_outbox_committed is True
     assert result.entry_allowed is False and result.live_authorization is False
     assert json.loads(logs[0])["observer_detail"]==inner.status
+
+
+def test_diagnostic_snapshot_codes_are_bounded_not_secret_bearing():
+    good=V40CanaryGuardianHeartbeat(
+        "V40_GUARDIAN_SNAPSHOT_FLAT_HISTORY_REQUIRES_CLOSED_LEDGER_AUDIT_HALT"
+    )
+    assert m._safe_observer_detail(good)==good.status
+    bad=V40CanaryGuardianHeartbeat(
+        "V40_GUARDIAN_SNAPSHOT_PRIVATE_KEY_SECRET_HALT"
+    )
+    assert m._safe_observer_detail(bad)==(
+        "V40_GUARDIAN_UNCLASSIFIED_OBSERVER_HALT"
+    )
