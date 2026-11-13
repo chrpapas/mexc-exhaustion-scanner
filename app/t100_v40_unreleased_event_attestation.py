@@ -165,3 +165,76 @@ def verified_completed_stop_and_pnl_events(
             observed_at_utc=time,
         ),
     )
+
+
+def verified_trailing_stop_business_event(
+    *,
+    signal_id: int,
+    previous: PositionCheckpoint,
+    current: PositionCheckpoint,
+    amendment: Any,
+    completion: Any,
+    independent_restart_native_sl_verified: bool,
+    observed_at: datetime,
+) -> V40BusinessEvent:
+    """Purple alert ONLY after durable stop-amendment commit and restart GET."""
+    from app.t100_live_stop_journal import StopAmendment
+    from app.t100_live_v40_stop_completion_handoff import V40StopCompletionResult
+    if not (
+        type(previous) is PositionCheckpoint
+        and type(current) is PositionCheckpoint
+        and type(amendment) is StopAmendment
+        and type(completion) is V40StopCompletionResult
+        and completion.status == "STOP_COMPLETION_JOURNAL_CHECKPOINT_PERSISTED_RESTART_REQUIRED"
+        and completion.journal_checkpoint_committed is True
+        and independent_restart_native_sl_verified is True
+        and previous.lifecycle_state == current.lifecycle_state == "OPEN"
+        and current.checkpoint_version == previous.checkpoint_version + 1
+        and previous.position_id == current.position_id == amendment.position_id
+        and previous.symbol == current.symbol == amendment.symbol
+        and previous.stop_order_id == amendment.stop_order_id
+        and previous.stop_price == amendment.previous_stop
+        and current.stop_price <= amendment.proposed_stop < amendment.previous_stop
+        and current.best_profit_pct >= previous.best_profit_pct
+        and current.best_profit_pct >= D("14")
+        and current.armed is True
+        and previous.armed == (previous.best_profit_pct >= D("14"))
+    ):
+        raise V40EventInvalid("V40_TRAIL_BUSINESS_PROOF_NOT_FINAL")
+    kind = "TRAIL_TIGHTENED" if previous.armed else "TRAIL_ARMED"
+    return V40BusinessEvent(
+        kind=kind, symbol=current.symbol,signal_id=signal_id,
+        position_id=current.position_id,
+        price=current.stop_price,observed_at_utc=_utc(observed_at),
+        evidence_status="MEXC_TRAIL_STOP_GET_VERIFIED",
+        evidence_id="amend:"+amendment.external_id,
+    )
+
+
+def verified_plus_five_milestone(
+    *,
+    signal_id: int,
+    checkpoint: PositionCheckpoint,
+    signed_market_price: D,
+    independent_signed_quote_verified: bool,
+    observed_at: datetime,
+) -> V40BusinessEvent:
+    """An informational price move: NEVER claim TP execution or realized P&L."""
+    if not (
+        type(checkpoint) is PositionCheckpoint
+        and checkpoint.lifecycle_state == "OPEN"
+        and type(signed_market_price) is D
+        and signed_market_price.is_finite()
+        and signed_market_price > 0
+        and independent_signed_quote_verified is True
+        and (checkpoint.entry_price - signed_market_price)
+        / checkpoint.entry_price >= D("0.05")
+    ):
+        raise V40EventInvalid("V40_PLUS_FIVE_SIGNED_PRICE_NOT_VERIFIED")
+    return V40BusinessEvent(
+        kind="PROFIT_5_OBSERVED",symbol=checkpoint.symbol,
+        signal_id=signal_id,position_id=checkpoint.position_id,
+        price=signed_market_price,observed_at_utc=_utc(observed_at),
+        evidence_status="MEXC_MARKET_PRICE_VERIFIED",
+        evidence_id="milestone5:"+checkpoint.position_id,
+    )
