@@ -84,18 +84,18 @@ def linked():
     return {
         "position_id":9801,
         "symbol":"DOGE_USDT",
-        "external_oid":"t100v1e"+"a"*20,
+        "external_oid":ORIGIN,
         "exchange_order_id":"739206374277809664",
         "contracts":D("1"),"stop_order_id":"13511",
         "checkpoint_version":1,"lifecycle_state":"OPEN",
         "intent_symbol":"DOGE_USDT",
-        "intent_oid":"t100v1e"+"a"*20,
+        "intent_oid":ORIGIN,
         "intent_state":"ACK",
         "intent_order_id":"739206374277809664",
         "intent_contracts":D("1"),"intent_notional":D("10"),
         "intent_signal_id":727,
         "slot_state":"PROTECTED","slot_signal_id":727,
-        "slot_oid":"t100v1e"+"a"*20,
+        "slot_oid":ORIGIN,
     }
 
 
