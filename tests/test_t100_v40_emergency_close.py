@@ -6,12 +6,13 @@ from decimal import Decimal as D
 import pytest
 
 from app.t100_live_four_slot_snapshot_coordinator import LedgerSnapshot
+from app.t100_live_execution import deterministic_t100_entry_oid
 from app.t100_v40_emergency_close import (
     V40ExitFrame,V40EmergencyCloseHalted,V40EmergencyCloseAdapter,
     attest_missing_native_stop_close,close_once_after_durable_claim,
 )
 
-ORIGIN="t100v1e"+"a"*20
+ORIGIN=deterministic_t100_entry_oid(727,"DOGE_USDT")
 
 
 def checkpoint():
