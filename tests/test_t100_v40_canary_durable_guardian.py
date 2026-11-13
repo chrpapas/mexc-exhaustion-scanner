@@ -410,3 +410,46 @@ def test_sticky_latch_still_halts_on_new_unsafe_observation():
     assert result.critical_latched is True
     assert result.status=="OBSERVER_V40_CANARY_NONFLAT_UNKNOWN_OWNER"
     assert result.entry_allowed is False
+
+
+def test_waits_for_exclusive_guardian_lock_handoff_before_any_get():
+    class Handoff(FakeConnection):
+        def __init__(self):
+            super().__init__()
+            self.handoff_attempts=0
+        async def fetchval(self,sql,*args):
+            if "pg_try_advisory_lock" in sql:
+                self.handoff_attempts+=1
+                return self.handoff_attempts>=3
+            return await super().fetchval(sql,*args)
+    db=Handoff()
+    result,db,notifier,logs=asyncio.run(run_one([flat()],db=db))
+    assert db.handoff_attempts==3
+    assert db.revision==1
+    assert len(logs)==1
+    assert result.status=="OBSERVER_V40_CANARY_FLAT_DOUBLE_GET"
+    assert result.entry_allowed is False and result.mexc_posts==0
+
+
+def test_foreign_singleton_remains_fail_closed_never_observes_or_writes():
+    class Locked(FakeConnection):
+        def __init__(self):
+            super().__init__()
+            self.handoff_attempts=0
+        async def fetchval(self,sql,*args):
+            if "pg_try_advisory_lock" in sql:
+                self.handoff_attempts+=1
+                return False
+            return await super().fetchval(sql,*args)
+    db=Locked()
+    async def conn(_dsn,_ca):return db
+    async def obs(_env):raise AssertionError("MEXC SHOULD NEVER BE CALLED")
+    async def sleep(_seconds):pass
+    with pytest.raises(m.V40DurableGuardianHalted) as e:
+        asyncio.run(m.run(
+            env(),connect=conn,observe=obs,pause=sleep,max_cycles=1,
+        ))
+    assert str(e.value)=="V40_DURABLE_INCIDENT_SINGLETON_FAILED_SAFE_HALT"
+    assert db.handoff_attempts==60
+    assert db.revision==0
+    assert db.closed
