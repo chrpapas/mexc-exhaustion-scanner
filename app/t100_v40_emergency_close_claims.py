@@ -172,3 +172,80 @@ class V40PostgresEmergencyCloseClaims:
             raise V40EmergencyCloseHalted(
                 "V40_EMERGENCY_CLOSE_DB_CLAIM_UNCERTAIN_NO_POST"
             ) from None
+
+
+    async def read_prior_claim(self)->V40EmergencyCloseTarget|None:
+        """Signed-GET reconciliation identity ONLY. Never another close POST."""
+        try:
+            async with self.pool.acquire() as conn:
+                async with conn.transaction(
+                    isolation="repeatable_read",readonly=True,
+                ):
+                    if (
+                        await conn.fetchval("SELECT current_database()")
+                          !=EXPECTED_DATABASE
+                        or await conn.fetchval("SELECT current_user")
+                          !=TARGET_ROLE
+                        or await conn.fetchval(
+                            "SELECT current_setting('transaction_read_only')"
+                        )!="on"
+                    ):
+                        raise ValueError
+                    rows=await conn.fetch(
+                        """SELECT position_id,entry_external_oid,
+                                  close_external_oid,
+                                  original_exchange_order_id,symbol,
+                                  contracts,original_notional_usdt,
+                                  checkpoint_version,reason,claim_status
+                           FROM public.t100_live_v40_emergency_close_claims
+                           ORDER BY claimed_at,position_id
+                           LIMIT 2"""
+                    )
+                    if type(rows) not in (list,tuple) or len(rows)>1:
+                        raise ValueError
+                    if not rows:
+                        return None
+                    row=rows[0]
+                    if (
+                        row["reason"]!="NATIVE_STOP_MISSING_DOUBLE_GET"
+                        or row["claim_status"]!="POST_MAY_HAVE_OCCURRED"
+                        or type(row["checkpoint_version"]) is not int
+                        or row["checkpoint_version"]<=0
+                        or D(str(row["contracts"]))<=0
+                        or not D(0)<D(str(row["original_notional_usdt"]))
+                            <=D("12.50")
+                    ):
+                        raise ValueError
+                    # Existing claim remains immutable after a close.
+                    # Stop order ID is read from the original checkpoint
+                    # below; it cannot be guessed from a missing GET.
+                    cp=await conn.fetchrow(
+                        """SELECT stop_order_id FROM
+                           public.t100_live_position_checkpoints
+                           WHERE position_id=$1 AND external_oid=$2
+                             AND exchange_order_id=$3""",
+                        row["position_id"],row["entry_external_oid"],
+                        row["original_exchange_order_id"],
+                    )
+                    if cp is None:
+                        raise ValueError
+                    return V40EmergencyCloseTarget(
+                        symbol=row["symbol"],
+                        position_id=str(row["position_id"]),
+                        entry_external_oid=row["entry_external_oid"],
+                        original_order_id=row["original_exchange_order_id"],
+                        stop_order_id=str(cp["stop_order_id"]),
+                        checkpoint_version=row["checkpoint_version"],
+                        quantity_contracts=D(str(row["contracts"])),
+                        original_notional_usdt=D(
+                            str(row["original_notional_usdt"])
+                        ),
+                        close_external_oid=row["close_external_oid"],
+                        # Dummy positive value is NEVER used to POST:
+                        # this method returns reconciliation identity only.
+                        reference_ask=D("1"),
+                    )
+        except Exception:
+            raise V40EmergencyCloseHalted(
+                "V40_EMERGENCY_CLOSE_PRIOR_CLAIM_READ_FAILED_NO_POST"
+            ) from None
