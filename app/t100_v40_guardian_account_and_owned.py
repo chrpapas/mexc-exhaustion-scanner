@@ -37,6 +37,12 @@ from app.t100_live_four_slot_ledger_reader import PostgresFourSlotLedgerReader
 
 # Finite, internal coordinator statuses only. Never include a raw exception,
 # exchange JSON field, SQL value, account identifier, or arbitrary status.
+_SAFE_INVENTORY_PROBE_STAGES=frozenset({
+    "BEFORE_POSITIONS","BEFORE_STOPS","SYMBOL_CROSSCHECK",
+    "ACCOUNT_ASSETS","POSITION_MARGIN","OPEN_ORDER_COUNTS",
+    "AFTER_POSITIONS","AFTER_STOPS","CERTIFICATE",
+})
+
 _SAFE_INVENTORY_CERT_FAILURES=frozenset({
     "CURRENT_INVENTORY_COMPLETENESS_PROBE_HALTED",
     "CURRENT_INVENTORY_COMPLETENESS_INPUT_AMBIGUOUS",
@@ -125,7 +131,18 @@ async def observe_v40_account_and_owned(
             and type(snapshot.inventory) is dict
             and snapshot.inventory.get("status") in _SAFE_INVENTORY_CERT_FAILURES
         ):
-            # Only exact finite certificate codes; no MEXC response bodies.
+            # Only exact finite certificate codes/stages; no response bodies.
+            if (
+                snapshot.inventory["status"]==
+                    "CURRENT_INVENTORY_COMPLETENESS_PROBE_HALTED"
+                and snapshot.inventory.get(
+                    "failure_stage"
+                ) in _SAFE_INVENTORY_PROBE_STAGES
+            ):
+                return _halt(
+                    "V40_GUARDIAN_INVENTORY_STAGE_"+
+                    snapshot.inventory["failure_stage"]+"_HALT"
+                )
             return _halt(
                 "V40_GUARDIAN_INVENTORY_"+
                 snapshot.inventory["status"]+"_HALT"
