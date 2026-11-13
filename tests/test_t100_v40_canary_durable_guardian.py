@@ -457,18 +457,18 @@ def test_foreign_singleton_remains_fail_closed_never_observes_or_writes():
 
 
 def test_explicit_reviewed_generation_starts_flat_without_touching_legacy(monkeypatch):
-    import app.t100_v40_guardian_reviewed_generation as reviewed
+    import app.t100_v40_guardian_recovery_003 as reviewed
     logs=[]
     db=FakeConnection()
     called=[]
     async def select(_connection,*,env,observe,pause):
         called.append("AUDITED_LEGACY_AND_DOUBLE_GET_PREFLIGHT")
-        return reviewed.REVIEWED_SCOPE,"NEW_REVIEWED_GENERATION_AFTER_DOUBLE_GET"
+        return reviewed.RECOVERY_SCOPE_003,"NEW_RECOVERY_003_AFTER_THREE_HISTORIC_ALERTS_AND_DOUBLE_GET"
     async def connect(_dsn,_ca):
         return db
     async def observe(_env):
         return flat()
-    monkeypatch.setattr(reviewed,"select_second_reviewed_scope",select)
+    monkeypatch.setattr(reviewed,"select_third_reviewed_scope",select)
     result=asyncio.run(m.run(
         env(T100_V40_GUARDIAN_AUDITED_ROLLOVER="true"),
         connect=connect,observe=observe,max_cycles=1,emit=logs.append,

@@ -99,6 +99,11 @@ _SAFE_STARTUP_REASONS=frozenset({
     "V40_AUDITED_ROLLOVER_FRESH_FLAT_UNVERIFIED",
     "V40_AUDITED_ROLLOVER_NEW_SCOPE_NOT_CLEAN",
     "V40_AUDITED_ROLLOVER_DATABASE_REVIEW_UNAVAILABLE",
+    "V40_RECOVERY_003_PREDECESSOR_STATE_NOT_RECOVERED",
+    "V40_RECOVERY_003_PREDECESSOR_ALERT_NOT_REVIEWED",
+    "V40_RECOVERY_003_FRESH_FLAT_UNVERIFIED",
+    "V40_RECOVERY_003_NEW_SCOPE_NOT_CLEAN",
+    "V40_RECOVERY_003_DATABASE_REVIEW_UNAVAILABLE",
 })
 
 
@@ -305,8 +310,9 @@ async def run(
     reviewed=env.get("T100_V40_GUARDIAN_AUDITED_ROLLOVER")=="true"
     if reviewed:
         from app.t100_v40_guardian_reviewed_generation import (
-            V40GuardianReviewedGenerationHalted,select_second_reviewed_scope,
+            V40GuardianReviewedGenerationHalted,
         )
+        from app.t100_v40_guardian_recovery_003 import select_third_reviewed_scope
     if shared:
         from app.t100_v40_guardian_shared_db import (
             V40SharedGuardianDatabaseHalted,
@@ -365,7 +371,7 @@ async def run(
             # critical event and two *fresh* signed GET/ledger bookends.
             # Neither the old sticky latch nor its alert rows are modified.
             stage="AUDITED_ROLLOVER_REVIEW"
-            reviewed_scope,reviewed_reason=await select_second_reviewed_scope(
+            reviewed_scope,reviewed_reason=await select_third_reviewed_scope(
                 conn,env=env,observe=observer,pause=pause,
             )
             outbox=GuardianIncidentOutbox(
