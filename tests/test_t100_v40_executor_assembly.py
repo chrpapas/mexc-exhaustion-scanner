@@ -209,6 +209,11 @@ def test_never_accepts_unpinned_http_hosts_or_same_account_secret_through_url():
 
 
 
+class PoolNoCalls(NoSql):
+    def acquire(self):
+        raise AssertionError("NO_DATABASE_IO_IN_ASSEMBLY")
+
+
 def test_offline_live_canary_assembly_requires_same_get_and_post_api_identity(
     monkeypatch,
 ):
@@ -218,7 +223,10 @@ def test_offline_live_canary_assembly_requires_same_get_and_post_api_identity(
 
     # Test-only permit bypass does not affect the shipped NOT_IMPLEMENTED gate.
     monkeypatch.setattr(m,"require_certified_transport_permit",lambda p:p)
-    reporter,signal_pool,runtime_pool,http,public=assemble()
+    runtime_pool=PoolNoCalls()
+    reporter,signal_pool,_,http,public=assemble(
+        executor_runtime_pool=runtime_pool,
+    )
     signed=reporter.coordinator.witness.private._client
 
     venue=object.__new__(MexcTradeClient)
@@ -268,14 +276,17 @@ def test_live_canary_assembly_cannot_use_unrelated_guardian_sql_pool(monkeypatch
     from app.t100_v40_guardian_post_gate import PostgresV40GuardianPostGate
 
     monkeypatch.setattr(m,"require_certified_transport_permit",lambda p:p)
-    old,signal_pool,runtime_pool,_,public=assemble()
+    runtime_pool=PoolNoCalls()
+    old,signal_pool,_,_,public=assemble(
+        executor_runtime_pool=runtime_pool,
+    )
     signed=old.coordinator.witness.private._client
     venue=object.__new__(MexcTradeClient)
     venue.api_key=signed._key
     venue.api_secret=signed._secret
     venue.client=SimpleNamespace(base_url="https://api.mexc.com")
     adapter=LiveMexcAdapter(
-        venue,guardian_gate=PostgresV40GuardianPostGate(NoSql()),
+        venue,guardian_gate=PostgresV40GuardianPostGate(PoolNoCalls()),
     )
     with pytest.raises(m.V40AssemblyHalted,match="GUARDIAN_OR_ACCOUNT"):
         assemble(
