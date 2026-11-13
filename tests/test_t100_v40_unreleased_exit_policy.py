@@ -68,7 +68,7 @@ def test_trailing_uses_monotone_best_and_raises_stop_never():
     assert first.proposed_native_stop_price == D("80.50")
     second = review(
         first.proposed_checkpoint,
-        bar(BAR_TS+1800, high="80.4", low="81", close="81", open_="80"),
+        bar(BAR_TS+1800, high="80.4", low="80", close="80.1", open_="80"),
     )
     assert second.status == "KEEP_VERIFIED_NATIVE_STOP"
     assert second.proposed_checkpoint.native_stop_price == D("80.50")
