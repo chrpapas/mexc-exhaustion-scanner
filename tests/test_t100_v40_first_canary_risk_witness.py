@@ -134,6 +134,8 @@ def test_real_dedicated_flat_witness_produces_current_risk_and_terms_not_permit(
      "V40_CANARY_RISK_UNENCUMBERED_CROSS_WALLET_UNVERIFIED"),
     ({"quote_second":replace(quote(),account_available_usdt=D("50"))},
      "V40_CANARY_RISK_MARKET_OR_WALLET_BOOKEND_DRIFT"),
+    ({"quote_second":replace(quote(),observed_at_ms=int(NOW.timestamp()*1000)-31000)},
+     "V40_CANARY_RISK_MARKET_WITNESS_STALE"),
     ({"quote_first":replace(quote(),private_short_cross_1x_settings_bookended=False)},
      "V40_CANARY_RISK_MARKET_FLAT_CROSS_UNVERIFIED"),
     ({"key":replace(key(),futures_order_write_scope_verified=False)},
@@ -157,7 +159,7 @@ def test_production_witness_reobserves_account_after_history_and_sql():
     market=object.__new__(MexcV40CandidateMarketWitness)
     async def observe(signal):
         events.append("MEXC_FULL_BOOKEND")
-        return quote(int(NOW.timestamp()*1000)+len(events))
+        return quote(int(datetime.now(timezone.utc).timestamp()*1000))
     async def account_assets():
         events.append("MEXC_SIGNED_ASSETS")
         return assets()
