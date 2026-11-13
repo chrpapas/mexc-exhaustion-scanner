@@ -222,3 +222,40 @@ async def observe_daily_loss(
         return fail(str(exc))
     except Exception:
         return fail("V40_DAILY_LOSS_SIGNED_HISTORY_UNAVAILABLE")
+
+
+FLAG="T100_V40_DAILY_LOSS_GET_ONLY_ENABLED"
+
+
+async def observe_render_daily_loss(env:dict[str,str])->V40DailyLossEvidence:
+    """One bounded, credentialed GET-only reading from the Render V40 pilot."""
+    from app.t100_v40_render_executor_disabled_worker import (
+        require_disabled_worker,
+    )
+    if (
+        env.get(FLAG)!="true"
+        or env.get("T100_V40_ACCOUNT_PROFILE")!="DEDICATED_WEB_PILOT"
+        or not require_disabled_worker(env)
+    ):
+        return V40DailyLossEvidence("V40_DAILY_LOSS_PAPER_ISOLATION_REQUIRED")
+    key=env.get("MEXC_API_KEY","")
+    secret=env.get("MEXC_API_SECRET","")
+    if (
+        type(key) is not str or len(key)<12 or key!=key.strip()
+        or type(secret) is not str or len(secret)<16 or secret!=secret.strip()
+    ):
+        return V40DailyLossEvidence("V40_DAILY_LOSS_KEYS_UNAVAILABLE")
+    try:
+        import httpx
+        async with httpx.AsyncClient(
+            base_url="https://api.mexc.com",
+            trust_env=False,follow_redirects=False,
+            timeout=httpx.Timeout(9.0),
+        ) as http:
+            reader=V40HistoryGetOnly(http,api_key=key,api_secret=secret)
+            return await asyncio.wait_for(
+                observe_daily_loss(reader,now=datetime.now(timezone.utc)),
+                timeout=30.0,
+            )
+    except Exception:
+        return V40DailyLossEvidence("V40_DAILY_LOSS_NETWORK_OR_HISTORY_HALT")
