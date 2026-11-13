@@ -30,8 +30,11 @@ class Tx:
 
 
 class Conn:
-    def __init__(self,*,exists=False,role="mexc_scanner",create=True,fail=False):
+    def __init__(self,*,exists=False,role="mexc_scanner",create=True,
+                 fail=False,guardian_exists=True,runtime_exists=True):
         self.exists=exists;self.role=role;self.create=create
+        self.guardian_exists=guardian_exists
+        self.runtime_exists=runtime_exists
         self.fail=fail;self.events=[]
     async def __aenter__(self):return self
     async def __aexit__(self,*args):pass
@@ -40,6 +43,10 @@ class Conn:
         return Tx(self)
     async def fetchval(self,sql,*args):
         self.events.append("FETCH")
+        if "to_regrole('t100_live_executor_runtime')" in sql:
+            return self.runtime_exists
+        if "to_regrole('t100_v40_guardian_reader')" in sql:
+            return self.guardian_exists
         if "has_schema_privilege" in sql:return self.create
         if "current_user" in sql:return self.role
         if "current_database()" in sql:return "mexc_exhaustion"
@@ -58,6 +65,7 @@ class Conn:
             return
         assert "CREATE TABLE public.t100_live_v40_emergency_close_claims" in sql
         assert "CREATE TRIGGER t100_v40_emergency_claim_immutable" in sql
+        assert ("TO t100_v40_guardian_reader;" in sql) == self.guardian_exists
         assert "INSERT INTO" not in sql
         assert "DROP TABLE" not in sql and "TRUNCATE TABLE" not in sql
         self.events.append("CREATE_040")
@@ -71,7 +79,7 @@ class Conn:
             ordinary_table=True,exact_table=True,exact_columns=True,
             has_primary_key=True,immutable_trigger=True,
             exec_select=True,exec_insert=True,exec_mutation=False,
-            guardian_select=True,guardian_mutation=False,
+            guardian_select=self.guardian_exists,guardian_mutation=False,
         )
 
 
@@ -142,3 +150,25 @@ def test_failed_create_rolls_back_and_redacts_owner_secrets():
     assert conn.events[-1]=="ROLLBACK"
     assert not result.migration_committed
     assert "SENSITIVE" not in repr(result)
+
+
+def test_absent_optional_guardian_reader_role_is_reported_not_fabricated():
+    conn=Conn(guardian_exists=False)
+    result=go(conn)
+    assert result.status=="V40_MIGRATION_040_CREATED_RUNTIME_ONLY_GUARDIAN_ROLE_ABSENT"
+    assert result.migration_committed is True
+    assert result.postflight_permissions_verified is True
+    assert result.guardian_reader_grant_verified is False
+    assert conn.events.count("CREATE_040")==1
+
+    second=go(conn)
+    assert second.status=="V40_MIGRATION_040_RUNTIME_ONLY_GUARDIAN_ROLE_ABSENT"
+    assert conn.events.count("CREATE_040")==1
+
+
+def test_missing_executor_runtime_db_role_blocks_creation():
+    conn=Conn(runtime_exists=False)
+    r=go(conn)
+    assert r.status=="V40_MIGRATION_040_REQUIRED_EXECUTOR_ROLE_MISSING"
+    assert not r.migration_committed
+    assert "CREATE_040" not in conn.events
