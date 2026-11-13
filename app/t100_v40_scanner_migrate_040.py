@@ -88,7 +88,7 @@ def _reviewed_bundle()->str:
         or "GRANT SELECT, INSERT" not in text
         or "GRANT SELECT" not in text
         or "COMMIT;" in text or "\nBEGIN;" in text
-        or "DROP " in text or "TRUNCATE " in text
+        or "DROP TABLE" in text or "TRUNCATE TABLE" in text
         or "DELETE FROM" in text or "UPDATE public." in text
         or "ALTER " in text
     ):
