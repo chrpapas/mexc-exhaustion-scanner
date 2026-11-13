@@ -146,6 +146,17 @@ def _safe_observer_detail(heartbeat:object)->str:
         ]
         if certificate_code in _SAFE_INVENTORY_CERT_FAILURES:
             return code
+    if (
+        type(code) is str
+        and code.startswith("V40_GUARDIAN_INVENTORY_STAGE_")
+        and code.endswith("_HALT")
+    ):
+        from app.t100_v40_guardian_account_and_owned import (
+            _SAFE_INVENTORY_PROBE_STAGES,
+        )
+        stage=code[len("V40_GUARDIAN_INVENTORY_STAGE_"):-len("_HALT")]
+        if stage in _SAFE_INVENTORY_PROBE_STAGES:
+            return code
     return "V40_GUARDIAN_UNCLASSIFIED_OBSERVER_HALT"
 
 
