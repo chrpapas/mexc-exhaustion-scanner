@@ -170,7 +170,7 @@ class V40DurableBarCursor:
                 "NATIVE_STOP_TIGHTENING_PROPOSED_UNAUTHORIZED",
             )
             and candidate.position_id==previous.position_id==cursor.position_id
-            and cursor.signed_fill_at_ms//1000==previous.filled_at_ts
+            and (cursor.signed_fill_at_ms+999)//1000==previous.filled_at_ts
             and cursor.pending_open_ts is None
             and cursor.last_committed_open_ts==previous.last_completed_open_ts
             and cursor.confirmed_stop_price==previous.native_stop_price
