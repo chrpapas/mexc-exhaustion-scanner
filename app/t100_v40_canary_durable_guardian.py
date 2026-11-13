@@ -388,6 +388,26 @@ async def run(
             },sort_keys=True))
             if emit is print:
                 sys.stdout.flush()
+        # Opt-in one-shot SELECT-only forensic report. This does not change
+        # the sticky scope, alert delivery, monitoring, or POST gate.
+        if (
+            reviewed and
+            env.get("T100_V40_GUARDIAN_READONLY_ARCHIVE_AUDIT_ENABLED")=="true"
+        ):
+            try:
+                from app.t100_v40_guardian_incident_archive_audit import (
+                    audit_guardian_archive_readonly,
+                )
+                audit=await audit_guardian_archive_readonly(conn)
+                emit(json.dumps(audit.safe_json(),sort_keys=True))
+            except Exception:
+                emit(json.dumps({
+                    "status":"V40_GUARDIAN_ARCHIVE_READONLY_AUDIT_UNAVAILABLE",
+                    "entry_allowed":False,"live_authorization":False,
+                    "mexc_posts":0,"database_writes":0,
+                },sort_keys=True))
+            if emit is print:
+                sys.stdout.flush()
         stage="NOTIFIER_CONSTRUCT"
         notifier=notifier_factory(hook,cooldown_seconds=0)
         stage="INCIDENT_PERSIST_OR_DISCORD"
