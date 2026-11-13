@@ -12,6 +12,9 @@ import pytest
 import app.t100_live_mexc_adapter as m
 from app.t100_live_authorization import V40_CANARY_SCOPE
 from app.t100_live_execution import EntryIntent
+from app.t100_v40_guardian_post_gate import (
+    PostgresV40GuardianPostGate,V40GuardianPostGateEvidence,
+)
 
 
 class FakeClient:
@@ -39,9 +42,27 @@ def permit():
     )
 
 
-def call(i,p):
+def clean_gate():
+    # Deliberate test double, not a substitute for independent production SQL.
+    gate=PostgresV40GuardianPostGate(
+        SimpleNamespace(acquire=lambda:None),
+    )
+    async def verified():
+        return V40GuardianPostGateEvidence(
+            status="V40_GUARDIAN_POST_GATE_CURRENT_FLAT_UNLATCHED_NONAUTHORIZING",
+            state_verified=True,outbox_verified=True,guardian_fresh=True,
+            critical_latch_absent=True,
+        )
+    gate.verify=verified
+    return gate
+
+
+def call(i,p,*,guardian_gate=None):
     client=FakeClient()
-    adapter=m.LiveMexcAdapter(client)
+    adapter=m.LiveMexcAdapter(
+        client,guardian_gate=guardian_gate if guardian_gate is not None
+        else clean_gate(),
+    )
     async def send():
         return await adapter.submit_short_with_stop(i,permit=p)
     return client,adapter,send
@@ -121,8 +142,37 @@ def test_post_ack_invalid_caller_must_reconcile_never_auto_retry(
 ):
     monkeypatch.setattr(m,"require_certified_transport_permit",lambda x:x)
     client=FakeClient(reply=reply)
-    adapter=m.LiveMexcAdapter(client)
+    adapter=m.LiveMexcAdapter(client,guardian_gate=clean_gate())
     with pytest.raises(RuntimeError,match="orderId"):
         asyncio.run(adapter.submit_short_with_stop(intent(),permit=permit()))
     # One and only one POST attempt, even after an invalid ACK.
     assert len(client.posts)==1
+
+
+
+@pytest.mark.parametrize("bad_status",[
+    "V40_GUARDIAN_POST_GATE_LATCH_OR_FRESHNESS_HALT",
+    "V40_GUARDIAN_POST_GATE_OUTBOX_HALT",
+    "V40_GUARDIAN_POST_GATE_DATABASE_UNAVAILABLE_NO_POST",
+])
+def test_guardian_latched_stale_or_unavailable_refuses_exchange_post(
+    monkeypatch,bad_status,
+):
+    monkeypatch.setattr(m,"require_certified_transport_permit",lambda x:x)
+    gate=clean_gate()
+    async def failed():
+        return V40GuardianPostGateEvidence(status=bad_status)
+    gate.verify=failed
+    client,_,send=call(intent(),permit(),guardian_gate=gate)
+    with pytest.raises(RuntimeError,match="LATCHED_OR_STALE_NO_POST"):
+        asyncio.run(send())
+    assert client.posts==[]
+
+
+def test_canary_without_real_guardian_gate_cannot_post(monkeypatch):
+    monkeypatch.setattr(m,"require_certified_transport_permit",lambda x:x)
+    client=FakeClient()
+    adapter=m.LiveMexcAdapter(client)
+    with pytest.raises(RuntimeError,match="GUARDIAN_GATE_MISSING_NO_POST"):
+        asyncio.run(adapter.submit_short_with_stop(intent(),permit=permit()))
+    assert client.posts==[]
