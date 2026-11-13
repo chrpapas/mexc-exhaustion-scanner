@@ -137,6 +137,7 @@ async def observe_one_normal_v40_native_stop_exit(
     try:
         finished=await find_finished_stop_by_id(
             probe,stop_order_id=checkpoint.stop_order_id,
+            max_pages=4,
         )
         provenance=build_verified_stop_close_provenance(
             finished_stop=finished,
@@ -171,8 +172,7 @@ async def observe_one_normal_v40_native_stop_exit(
             return V40NormalStopObservation(
                 "V40_NORMAL_STOP_POST_HISTORY_FLAT_GET_UNVERIFIED_HALT"
             )
-    except (CloseProvenanceHalted,VerifiedFillLedgerHalted,
-            V40NormalStopObservationHalted,Exception):
+    except Exception:
         return V40NormalStopObservation(
             "V40_NORMAL_STOP_HISTORY_OR_FILLS_UNVERIFIED_HALT"
         )
