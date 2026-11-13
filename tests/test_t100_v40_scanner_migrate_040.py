@@ -59,7 +59,7 @@ class Conn:
         assert "CREATE TABLE public.t100_live_v40_emergency_close_claims" in sql
         assert "CREATE TRIGGER t100_v40_emergency_claim_immutable" in sql
         assert "INSERT INTO" not in sql
-        assert "MEXC" not in sql or "MEXC" in sql  # Only vetted DDL.
+        assert "DROP TABLE" not in sql and "TRUNCATE TABLE" not in sql
         self.events.append("CREATE_040")
         if self.fail:
             raise RuntimeError("SENSITIVE_DB_OWNER_PASS")
