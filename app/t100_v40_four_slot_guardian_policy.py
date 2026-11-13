@@ -22,7 +22,7 @@ from app.t100_live_durable_recovery import (
     DurableRecoveryHalted, checkpoint_from_row,
 )
 from app.t100_live_four_slot_snapshot_coordinator import (
-    FourSlotSnapshotResult, LedgerSnapshot, _ledger_digest,
+    FourSlotSnapshotResult, LedgerSnapshot, _ledger_digest, _venue_digest,
 )
 from app.t100_live_native_stop_execution_audit import (
     assess_native_short_market_stop_row,
@@ -74,6 +74,14 @@ def audit_frozen_four_slot_native_stops(
             return halt("V40_FOUR_SLOT_GUARDIAN_LEDGER_DRIFT")
     except Exception:
         return halt("V40_FOUR_SLOT_GUARDIAN_LEDGER_UNVERIFIED")
+    # The candidate position/stop arrays MUST be exactly the same signed
+    # venue bookend that the upstream coordinator audited. A caller must
+    # never substitute newer/different rows after the verified snapshot.
+    try:
+        if _venue_digest(account_positions,account_stops)!=snapshot.critical_inventory_hash:
+            return halt("V40_FOUR_SLOT_GUARDIAN_VENUE_BOOKEND_DRIFT")
+    except Exception:
+        return halt("V40_FOUR_SLOT_GUARDIAN_VENUE_DIGEST_UNVERIFIED")
     inv=snapshot.inventory
     if not (
         snapshot.status=="NONFLAT_PROVENANCE_MATCHED_NONAUTHORIZING"
