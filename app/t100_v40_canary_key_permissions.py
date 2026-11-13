@@ -79,22 +79,17 @@ def _inspect_response(payload:Any, key:str)->V40KeyPermissionObservation:
     )
 
 
-async def observe_v40_current_key_permissions(
-    env:Mapping[str,str], *, client:httpx.AsyncClient|None=None,
+
+async def read_v40_key_permissions_signed_get(
+    *,key:str,secret:str,client:httpx.AsyncClient|None=None,
     now_ms:int|None=None,
 )->V40KeyPermissionObservation:
+    """READ ONLY regardless of execution mode, strictly pinned same API key.
+
+    Called by the first-canary risk witness only after the process verifies
+    its dedicated MEXC subaccount scope. Never supplies a live permit.
+    """
     fail=lambda code:V40KeyPermissionObservation(code)
-    # This diagnostic never implicitly activates itself or changes controls.
-    if (
-        env.get(_FLAG)!="true"
-        or env.get("T100_V40_ACCOUNT_PROFILE")!="DEDICATED_WEB_PILOT"
-        or env.get("T100_EXECUTION_MODE")!="paper"
-        or env.get("T100_LIVE_KILL_SWITCH")!="true"
-        or env.get("T100_LIVE_ORDER_API_ENABLED")!="false"
-    ):
-        return fail("V40_KEY_INFO_READONLY_ISOLATION_REQUIRED")
-    key=env.get("MEXC_API_KEY","")
-    secret=env.get("MEXC_API_SECRET","")
     if (
         type(key) is not str or len(key)<12 or key!=key.strip()
         or type(secret) is not str or len(secret)<16 or secret!=secret.strip()
@@ -129,6 +124,27 @@ async def observe_v40_current_key_permissions(
     finally:
         if created:
             await client.aclose()
+
+
+async def observe_v40_current_key_permissions(
+    env:Mapping[str,str], *, client:httpx.AsyncClient|None=None,
+    now_ms:int|None=None,
+)->V40KeyPermissionObservation:
+    fail=lambda code:V40KeyPermissionObservation(code)
+    # Existing GET-only diagnostic remains hard paper/kill isolated.
+    if (
+        env.get(_FLAG)!="true"
+        or env.get("T100_V40_ACCOUNT_PROFILE")!="DEDICATED_WEB_PILOT"
+        or env.get("T100_EXECUTION_MODE")!="paper"
+        or env.get("T100_LIVE_KILL_SWITCH")!="true"
+        or env.get("T100_LIVE_ORDER_API_ENABLED")!="false"
+    ):
+        return fail("V40_KEY_INFO_READONLY_ISOLATION_REQUIRED")
+    return await read_v40_key_permissions_signed_get(
+        key=env.get("MEXC_API_KEY",""),
+        secret=env.get("MEXC_API_SECRET",""),
+        client=client,now_ms=now_ms,
+    )
 
 
 async def report_from_env(env:Mapping[str,str])->V40KeyPermissionObservation:
