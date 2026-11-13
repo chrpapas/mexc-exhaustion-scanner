@@ -46,6 +46,12 @@ def main() -> int:
         from app.t100_v40_render_real_canary_worker import run_live_worker
         import asyncio
         return asyncio.run(run_live_worker(dict(os.environ)))
+    # Emergency CLOSE-ONLY mode may be deployed independently of the
+    # signal-entry worker, but never runs when the usual paper flag is set.
+    if os.environ.get("T100_V40_EMERGENCY_EXIT_ENABLED")=="true":
+        from app.t100_v40_emergency_runner import run_emergency_watch
+        import asyncio
+        return asyncio.run(run_emergency_watch(dict(os.environ)))
     if not require_disabled_worker(os.environ):
         print(json.dumps({
             "status":"V40_DISABLED_WORKER_PAPER_OR_ISOLATION_HALT",
