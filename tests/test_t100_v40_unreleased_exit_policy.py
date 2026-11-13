@@ -9,7 +9,7 @@ from app.t100_v40_unreleased_exit_policy import (
 )
 
 ENTRY_TS = 1_800_001
-BAR_TS = 1_803_600
+BAR_TS = 1_801_800
 
 
 def checkpoint(**changes):
