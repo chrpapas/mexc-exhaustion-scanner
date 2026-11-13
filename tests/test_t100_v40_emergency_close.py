@@ -155,10 +155,17 @@ class FakePost:
         return self.reply
 
 
-def go(claim,post):
+def go(claim,post,*,changed=False,unavailable=False):
+    async def fresh():
+        if unavailable:
+            raise TimeoutError("SIGNED_GET_UNKNOWN")
+        if changed:
+            return replace(target(),quantity_contracts=D("2"))
+        return target()
     return asyncio.run(close_once_after_durable_claim(
         target=target(),claimant=claim,
         adapter=V40EmergencyCloseAdapter(post),
+        pre_post_recheck=fresh,
     ))
 
 
@@ -217,3 +224,29 @@ def test_malformed_exchange_ack_consumes_claim_no_second_post(reply):
     with pytest.raises(V40EmergencyCloseHalted):
         go(claim,post)
     assert len(post.posts)==1
+
+
+def test_after_durable_claim_last_get_drift_burns_claim_without_post():
+    claim,post=FakeClaim(),FakePost()
+    with pytest.raises(V40EmergencyCloseHalted,match="CLAIMED_PREPOST_UNVERIFIED"):
+        go(claim,post,changed=True)
+    assert claim.calls==1 and post.posts==[]
+    with pytest.raises(V40EmergencyCloseHalted,match="ALREADY_CLAIMED"):
+        go(claim,post)
+    assert post.posts==[]
+
+
+def test_after_durable_claim_failed_signed_get_cannot_send_any_order():
+    claim,post=FakeClaim(),FakePost()
+    with pytest.raises(V40EmergencyCloseHalted,match="CLAIMED_PREPOST_UNVERIFIED"):
+        go(claim,post,unavailable=True)
+    assert post.posts==[]
+
+
+def test_public_adapter_refuses_unminted_fake_claim_even_with_real_target():
+    post=FakePost()
+    with pytest.raises(V40EmergencyCloseHalted,match="POST_CLAIM_OR_IDENTITY"):
+        asyncio.run(V40EmergencyCloseAdapter(post).send_once(
+            target(),committed_claim=True,
+        ))
+    assert post.posts==[]
