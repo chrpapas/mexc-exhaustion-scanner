@@ -51,7 +51,10 @@ class DB:
 
 async def call(db,answers=None):
     seen=[]
-    results=list(answers if answers is not None else [\n        replace(flat(),ledger_provenance_verified=True),\n        replace(flat(),ledger_provenance_verified=True),\n    ])
+    results=list(answers if answers is not None else [
+        replace(flat(),ledger_provenance_verified=True),
+        replace(flat(),ledger_provenance_verified=True),
+    ])
     async def observer(_):
         seen.append("independent_signed_GET_and_ledger")
         event=results.pop(0)
