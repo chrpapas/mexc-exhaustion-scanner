@@ -383,3 +383,30 @@ def test_diagnostic_transport_stage_is_fixed_whitelist():
     assert m._safe_observer_detail(bad)==(
         "V40_GUARDIAN_UNCLASSIFIED_OBSERVER_HALT"
     )
+
+
+def test_sticky_latch_keeps_get_monitoring_when_current_account_is_safe():
+    db=FakeConnection()
+    db.latch=True
+    result,db,notifier,logs=asyncio.run(run_one(
+        [flat(),flat(),flat()],db=db,
+    ))
+    assert db.revision==3
+    assert len(logs)==3
+    assert result.account_flat_two_get is True
+    assert result.critical_latched is True
+    assert result.guardian_outbox_committed is True
+    assert result.entry_allowed is False and result.live_authorization is False
+
+
+def test_sticky_latch_still_halts_on_new_unsafe_observation():
+    db=FakeConnection()
+    db.latch=True
+    result,db,notifier,logs=asyncio.run(run_one(
+        [flat(),exposed(),flat()],db=db,
+    ))
+    assert db.revision==2
+    assert len(logs)==2
+    assert result.critical_latched is True
+    assert result.status=="OBSERVER_V40_CANARY_NONFLAT_UNKNOWN_OWNER"
+    assert result.entry_allowed is False
