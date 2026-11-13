@@ -1,7 +1,7 @@
 """V40 real first-position risk evidence is only promoted after all sources."""
 import asyncio
 from dataclasses import replace
-from datetime import datetime,timezone
+from datetime import datetime,timezone,timedelta
 from decimal import Decimal as D
 from types import SimpleNamespace
 import pytest
@@ -101,7 +101,7 @@ def evaluate(**overrides):
     args=dict(signal=signal(),quote_first=quote(),
               quote_second=quote(int(NOW.timestamp()*1000)+100),
               assets=assets(),key=key(),pnl=pnl(),
-              journal=journal(),observed_at=NOW)
+              journal=journal(),observed_at=NOW+timedelta(seconds=1))
     args.update(overrides)
     return assess_v40_first_canary_risk(**args)
 
