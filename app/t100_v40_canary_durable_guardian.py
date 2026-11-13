@@ -133,6 +133,19 @@ def _safe_observer_detail(heartbeat:object)->str:
         ]
         if snapshot_code in _SAFE_SNAPSHOT_NONREADY:
             return code
+    if (
+        type(code) is str
+        and code.startswith("V40_GUARDIAN_INVENTORY_")
+        and code.endswith("_HALT")
+    ):
+        from app.t100_v40_guardian_account_and_owned import (
+            _SAFE_INVENTORY_CERT_FAILURES,
+        )
+        certificate_code=code[
+            len("V40_GUARDIAN_INVENTORY_"):-len("_HALT")
+        ]
+        if certificate_code in _SAFE_INVENTORY_CERT_FAILURES:
+            return code
     return "V40_GUARDIAN_UNCLASSIFIED_OBSERVER_HALT"
 
 
