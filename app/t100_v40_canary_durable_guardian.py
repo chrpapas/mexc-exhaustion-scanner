@@ -93,6 +93,12 @@ _SAFE_STARTUP_REASONS=frozenset({
     "V40_SHARED_GUARDIAN_INCIDENT_GRANTS_NOT_APPLIED",
     "V40_SHARED_GUARDIAN_DATABASE_PERMISSION_AUDIT_FAILED",
     "V40_SHARED_GUARDIAN_MIGRATION_035_MISSING",
+    "V40_AUDITED_ROLLOVER_REVIEWED_STATE_INVALID",
+    "V40_AUDITED_ROLLOVER_LEGACY_NOT_RECOVERED",
+    "V40_AUDITED_ROLLOVER_UNREVIEWED_ALERTS",
+    "V40_AUDITED_ROLLOVER_FRESH_FLAT_UNVERIFIED",
+    "V40_AUDITED_ROLLOVER_NEW_SCOPE_NOT_CLEAN",
+    "V40_AUDITED_ROLLOVER_DATABASE_REVIEW_UNAVAILABLE",
 })
 
 
@@ -293,6 +299,11 @@ async def run(
 )->V40DurableGuardianStatus:
     dsn,ca,hook,interval=config(env)
     shared=env.get("T100_V40_GUARDIAN_REUSE_V40_RUNTIME_DB")=="true"
+    reviewed=env.get("T100_V40_GUARDIAN_AUDITED_ROLLOVER")=="true"
+    if reviewed:
+        from app.t100_v40_guardian_reviewed_generation import (
+            V40GuardianReviewedGenerationHalted,select_reviewed_scope,
+        )
     if shared:
         from app.t100_v40_guardian_shared_db import (
             V40SharedGuardianDatabaseHalted,
@@ -345,6 +356,28 @@ async def run(
                 ):
                     raise
                 await pause(3.0)
+        if reviewed:
+            # Atomic incident history is immutable. Recovery means starting
+            # a SECOND explicit scope only after strict review of the old
+            # critical event and two *fresh* signed GET/ledger bookends.
+            # Neither the old sticky latch nor its alert rows are modified.
+            stage="AUDITED_ROLLOVER_REVIEW"
+            reviewed_scope,reviewed_reason=await select_reviewed_scope(
+                conn,env=env,observe=observer,pause=pause,
+            )
+            outbox=GuardianIncidentOutbox(
+                conn,scope_sha256=reviewed_scope,
+            )
+            emit(json.dumps({
+                "status":"V40_AUDITED_GUARDIAN_REVIEWED_SCOPE_ACTIVE",
+                "reviewed_reason":reviewed_reason,
+                "old_latch_untouched":True,
+                "entry_allowed":False,
+                "live_authorization":False,
+                "mexc_posts":0,
+            },sort_keys=True))
+            if emit is print:
+                sys.stdout.flush()
         stage="NOTIFIER_CONSTRUCT"
         notifier=notifier_factory(hook,cooldown_seconds=0)
         stage="INCIDENT_PERSIST_OR_DISCORD"
@@ -420,9 +453,12 @@ async def run(
     except V40DurableGuardianHalted:
         raise
     except Exception as error:
-        # In opt-in shared DB mode preserve ONLY the hardcoded, redacted
-        # identity/grant failure codes. Existing two-role behavior stays
-        # unchanged and never prints arbitrary SQL/connection errors.
+        # Distinct fixed status codes may be exposed; never raw connection
+        # errors, API responses, SQL parameters or Discord URLs.
+        if reviewed and isinstance(error,V40GuardianReviewedGenerationHalted):
+            reason=str(error)
+            if reason in _SAFE_STARTUP_REASONS:
+                raise V40DurableGuardianHalted(reason) from None
         if shared and isinstance(error,V40SharedGuardianDatabaseHalted):
             reason=str(error)
             if reason in _SAFE_STARTUP_REASONS:
