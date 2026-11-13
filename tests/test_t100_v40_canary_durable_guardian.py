@@ -318,3 +318,29 @@ def test_shared_runtime_unknown_exception_remains_generic_redacted(monkeypatch):
         asyncio.run(m.run(cfg,connect=get_connection,max_cycles=1))
     assert str(e.value)=="V40_DURABLE_INCIDENT_WRITER_ROLE_FAILED_SAFE_HALT"
     assert "SECRET_PASSWORD" not in str(e.value)
+
+
+def test_guardian_status_reports_only_fixed_safe_observer_details():
+    bad=V40CanaryGuardianHeartbeat(
+        "https://discord.com/api/webhooks/123456789012345678/SECRET_PATH"
+    )
+    assert m._safe_observer_detail(bad)==(
+        "V40_GUARDIAN_UNCLASSIFIED_OBSERVER_HALT"
+    )
+    assert m._safe_observer_detail(object())==(
+        "V40_GUARDIAN_UNCLASSIFIED_OBSERVER_HALT"
+    )
+    assert m._safe_observer_detail(flat())==flat().status
+
+
+def test_latched_status_explains_observer_stage_without_secret():
+    inner=V40CanaryGuardianHeartbeat(
+        "V40_GUARDIAN_INDEPENDENT_DB_OR_VENUE_GET_FAILED_HALT"
+    )
+    result,db,notifier,logs=asyncio.run(run_one([inner]))
+    assert result.status=="OBSERVER_V40_CANARY_SIGNED_GET_OR_ACCOUNT_INVALID"
+    assert result.observer_detail==inner.status
+    assert result.critical_latched is True
+    assert result.guardian_outbox_committed is True
+    assert result.entry_allowed is False and result.live_authorization is False
+    assert json.loads(logs[0])["observer_detail"]==inner.status
