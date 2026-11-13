@@ -141,6 +141,7 @@ def assemble_v40_first_pilot(
     clock_ms:Callable[[],int]|None=None,
     live_transport:LiveMexcAdapter|None=None,
     permit:LiveMutationPermit|None=None,
+    risk_witness:V40FirstCanaryRiskWitness|None=None,
 ) -> V40ExecutorAssembly:
     """No-I/O injection of *real* V40 dependencies with strict identity.
 
@@ -159,7 +160,16 @@ def assemble_v40_first_pilot(
         raise V40AssemblyHalted(
             "V40_LIVE_TRANSPORT_AND_PERMIT_MUST_BE_SUPPLIED_TOGETHER"
         )
+    # Local import avoids the signed history reader -> assembly dependency
+    # during Python module initialization (all constructors remain inert).
+    from app.t100_v40_first_canary_risk_witness import V40FirstCanaryRiskWitness
     # Permit gate FIRST, before any DB, market or transport collaborator.
+    # An active trade cannot accidentally use the intentionally negative
+    # GET-only market.inspect witness as its account-risk certificate.
+    if live_transport is not None and type(risk_witness) is not V40FirstCanaryRiskWitness:
+        raise V40AssemblyHalted("V40_CANARY_LIVE_CURRENT_RISK_WITNESS_REQUIRED")
+    if live_transport is None and risk_witness is not None:
+        raise V40AssemblyHalted("V40_CANARY_RISK_WITNESS_WITHOUT_LIVE_PERMIT")
     if live_transport is not None:
         require_certified_transport_permit(permit)
         if type(live_transport) is not LiveMexcAdapter or live_transport.open_type!=2:
@@ -198,6 +208,13 @@ def assemble_v40_first_pilot(
     if str(getattr(http,"base_url",None)).rstrip("/")!="https://api.mexc.com":
         raise V40AssemblyHalted("V40_EXECUTOR_SIGNED_HOST_UNPINNED")
     clock=clock_ms if clock_ms is not None else lambda:int(time.time()*1000)
+    if live_transport is not None and (
+        risk_witness.market.private._client is not signed_get
+        or risk_witness.market.public is not public_get
+    ):
+        raise V40AssemblyHalted(
+            "V40_CANARY_RISK_WITNESS_DIFFERENT_EXCHANGE_CREDENTIALS"
+        )
 
     probe=ReadOnlyMexcProbe(signed_get)
     venue=FourSlotMexcReadVenue(probe)
@@ -214,7 +231,8 @@ def assemble_v40_first_pilot(
             ledger=PostgresFourSlotLedgerReader(executor_runtime_pool),
             venue=venue,completeness=completeness,
         ),
-        witness=market,depth=market,
+        witness=(risk_witness if risk_witness is not None else market),
+        depth=market,
         leaders=LeaderLeaseCoordinator(
             PostgresLeaderLeaseStore(executor_runtime_pool),
         ),
