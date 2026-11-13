@@ -157,6 +157,15 @@ def assess_v40_first_canary_risk(
             or quote.account_available_usdt<0
         ):
             return block("V40_CANARY_RISK_MARKET_FLAT_CROSS_UNVERIFIED")
+    # No cached observer timestamp can be promoted to a live risk witness.
+    now_ms=int(observed_at.timestamp()*1000)
+    if any(
+        type(quote.observed_at_ms) is not int
+        or not 0<=now_ms-quote.observed_at_ms<=30000
+        or quote.book_age_ms<0 or quote.book_age_ms>1500
+        for quote in (quote_first,quote_second)
+    ):
+        return block("V40_CANARY_RISK_MARKET_WITNESS_STALE")
     if (
         quote_first.account_equity_usdt!=quote_second.account_equity_usdt
         or quote_first.account_available_usdt!=quote_second.account_available_usdt
