@@ -15,6 +15,8 @@ CREATE TABLE IF NOT EXISTS public.t100_v40_exit_bar_cursor (
     'NATIVE_STOP_TIGHTENING_PROPOSED_UNAUTHORIZED'
   )),
   pending_stop_price numeric,
+  pending_best_profit_pct numeric,
+  pending_trail_armed boolean,
   checkpoint_version bigint NOT NULL CHECK (checkpoint_version >= 1),
   stop_order_id text NOT NULL,
   confirmed_stop_price numeric NOT NULL CHECK (confirmed_stop_price > 0),
@@ -25,10 +27,15 @@ CREATE TABLE IF NOT EXISTS public.t100_v40_exit_bar_cursor (
   updated_at timestamptz NOT NULL DEFAULT clock_timestamp(),
   CONSTRAINT v40_exit_pending_atomic CHECK (
     (pending_open_ts IS NULL AND pending_status IS NULL
-     AND pending_stop_price IS NULL)
+     AND pending_stop_price IS NULL
+     AND pending_best_profit_pct IS NULL AND pending_trail_armed IS NULL)
     OR
     (pending_open_ts IS NOT NULL AND pending_status IS NOT NULL
-     AND pending_stop_price IS NOT NULL)
+     AND pending_stop_price IS NOT NULL AND pending_stop_price>0
+     AND pending_best_profit_pct IS NOT NULL
+     AND pending_best_profit_pct>=best_profit_pct
+     AND pending_trail_armed IS NOT NULL
+     AND pending_trail_armed=(pending_best_profit_pct>=14))
   ),
   CONSTRAINT v40_exit_best_armed CHECK (trail_armed = (best_profit_pct >= 14))
 );
