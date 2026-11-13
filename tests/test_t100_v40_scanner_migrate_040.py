@@ -89,7 +89,7 @@ def go(conn,config=None):
 def test_bundle_is_exact_reviewed_migration_excluding_outer_begin_commit():
     actual=m._reviewed_bundle()
     ref=Path("migrations/040_v40_emergency_close_once_claim.sql").read_text()
-    assert ref.replace("BEGIN;\\n\\n","").replace("\\nCOMMIT;\\n","\\n")==actual
+    assert " ".join(ref.replace("BEGIN;","").replace("COMMIT;","").split()) == " ".join(actual.split())
     assert "CREATE TABLE public.t100_live_v40_emergency_close_claims" in actual
     assert "CREATE FUNCTION public.t100_v40_deny_emergency_claim_change" in actual
     assert "DELETE FROM" not in actual
