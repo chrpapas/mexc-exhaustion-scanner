@@ -21,6 +21,10 @@ from app.t100_v40_canary_key_permissions import (
     _FLAG as KEY_PERMISSION_FLAG,
     V40KeyPermissionObservation, report_from_env,
 )
+from app.t100_v40_canary_daily_loss import (
+    FLAG as DAILY_LOSS_FLAG,
+    V40DailyLossEvidence, observe_render_daily_loss,
+)
 
 
 async def run_with_optional_ws_preflight(
@@ -31,12 +35,15 @@ async def run_with_optional_ws_preflight(
         observe_v40_private_ws_get_only,
     key_observe:Callable[...,Awaitable[V40KeyPermissionObservation]]=
         report_from_env,
+    daily_observe:Callable[...,Awaitable[V40DailyLossEvidence]]=
+        observe_render_daily_loss,
     emit:Callable[[str],object]=print,
 ) -> int:
     """Start primary monitor immediately; neither diagnostic can block it."""
     do_ws=env.get(FLAG)=="true"
     do_key=env.get(KEY_PERMISSION_FLAG)=="true"
-    if not do_ws and not do_key:
+    do_daily=env.get(DAILY_LOSS_FLAG)=="true"
+    if not do_ws and not do_key and not do_daily:
         return await monitor(env)
 
     async def bounded_ws_diagnostic() -> None:
@@ -65,11 +72,26 @@ async def run_with_optional_ws_preflight(
                 "V40_KEY_INFO_UNEXPECTED_HALT",
             )),sort_keys=True))
 
+    async def bounded_daily_loss_diagnostic() -> None:
+        try:
+            report=await asyncio.wait_for(daily_observe(env),timeout=33)
+            if type(report) is not V40DailyLossEvidence:
+                raise ValueError("V40_DAILY_LOSS_REPORT_UNVERIFIED")
+            emit(json.dumps(asdict(report),sort_keys=True))
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            emit(json.dumps(asdict(V40DailyLossEvidence(
+                "V40_DAILY_LOSS_UNEXPECTED_OR_TIMED_OUT_HALT",
+            )),sort_keys=True))
+
     tasks=[]
     if do_ws:
         tasks.append(asyncio.create_task(bounded_ws_diagnostic()))
     if do_key:
         tasks.append(asyncio.create_task(bounded_key_diagnostic()))
+    if do_daily:
+        tasks.append(asyncio.create_task(bounded_daily_loss_diagnostic()))
     try:
         return await monitor(env)
     finally:
