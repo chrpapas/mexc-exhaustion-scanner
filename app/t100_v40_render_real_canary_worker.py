@@ -76,6 +76,9 @@ def validate_live_worker_config(
         or type(review) is not V40FirstCanaryReleaseReview
     ):
         return _redact("V40_REAL_WORKER_ACCOUNT_OR_KILL_ISOLATION_HALT")
+    # The first live entry requires a separately routed CLOSE-ONLY watch.
+    if env.get("T100_V40_EMERGENCY_EXIT_ENABLED")!="true":
+        return _redact("V40_REAL_WORKER_EMERGENCY_CLOSE_WATCH_REQUIRED")
     try:
         controls=T100ExecutionControls.from_env(env)
     except Exception:
@@ -282,6 +285,7 @@ async def run_live_worker(
     env:Mapping[str,str],*,max_cycles:int|None=None,
     cycle:Callable[...,Awaitable[V40CanaryWorkerStatus]]=run_real_first_canary_cycle,
     pause:Callable[[float],Awaitable[Any]]=asyncio.sleep,
+    emergency_watch:Callable[...,Awaitable[int]]|None=None,
 )->int:
     if max_cycles is not None and (
         type(max_cycles) is not int or max_cycles<1
@@ -301,10 +305,22 @@ async def run_live_worker(
         if type(report) is not V40CanaryWorkerStatus:
             report=_redact("V40_REAL_WORKER_UNTRUSTED_CYCLE_RESULT_HALT")
         print(json.dumps(asdict(report),sort_keys=True),flush=True)
+        if report.status=="V40_ONE_PROTECTED_ENTRY_RECOVERED_NOT_AUTONOMOUS":
+            # A successfully protected entry must not leave an unmanaged
+            # open position. This watch can CLOSE once, never OPEN again.
+            if emergency_watch is None:
+                from app.t100_v40_emergency_runner import run_emergency_watch
+                watcher=run_emergency_watch
+            else:
+                watcher=emergency_watch
+            try:
+                finished=await watcher(env)
+            except BaseException:
+                return 2
+            return 0 if finished==0 else 2
         if report.status!="V40_FIRST_CANARY_WAIT_FOR_GENUINE_STAGE2":
-            # Even successful protected entry requires independent ongoing
-            # nonflat supervisor; never send another order from this process.
-            return 0 if report.status=="V40_ONE_PROTECTED_ENTRY_RECOVERED_NOT_AUTONOMOUS" else 2
+            # UNKNOWN and failed admission may never be retried as entries.
+            return 2
         count+=1
         if max_cycles is None or count<max_cycles:
             await pause(INTERVAL_SECONDS)
