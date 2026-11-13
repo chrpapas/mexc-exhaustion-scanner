@@ -4,11 +4,16 @@ on:
   pull_request:
     paths:
       - "app/t100_v40_first_signal_execution.py"
+      - "app/t100_live_authorization.py"
+      - "app/t100_live_guards.py"
+      - "app/t100_v40_emergency_close_claims.py"
       - "app/t100_v40_render_real_canary_worker.py"
       - "app/t100_v40_canary_key_permissions.py"
       - "app/t100_v40_render_executor_disabled_worker.py"
       - "tests/test_t100_v40_first_signal_execution.py"
-      - "tests/test_t100_v40_render_real_canary_worker.py"
+      - "tests/test_t100_v40_production_first_trade_waiver.py"
+      - "tests/test_t100_live_guards.py"
+      - "tests/test_t100_v40_render_real_canary_worker.py tests/test_t100_v40_production_first_trade_waiver.py tests/test_t100_live_guards.py"
       - "tests/test_t100_v40_canary_key_permissions.py"
       - ".github/workflows/v40-first-signal-execution.yml"
   workflow_dispatch:
