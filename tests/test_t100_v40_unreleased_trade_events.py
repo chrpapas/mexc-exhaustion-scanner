@@ -140,3 +140,24 @@ async def test_outbox_key_collision_with_changed_content_halts():
         await outbox.enqueue(
             verified("ENTRY_FILLED", price=D("101.0"))
         )
+
+
+@pytest.mark.asyncio
+async def test_asyncpg_default_jsonb_string_codec_is_supported():
+    import json
+    class AsyncpgStringConn(FakeConn):
+        async def fetchrow(self, statement, *args):
+            r = await super().fetchrow(statement, *args)
+            return {**r, "payload": json.dumps(r["payload"])} if r is not None else None
+        async def fetch(self, statement, limit):
+            rows = await super().fetch(statement, limit)
+            return [
+                {**r, "payload": json.dumps(r["payload"])} for r in rows
+            ]
+    store = V40TradeOutbox(AsyncpgStringConn())
+    event = verified("ENTRY_FILLED")
+    assert await store.enqueue(event) is True
+    assert await store.enqueue(event) is True
+    pending = await store.pending()
+    assert len(pending) == 1
+    assert pending[0][1]["title"] == event.discord_embed()["title"]
