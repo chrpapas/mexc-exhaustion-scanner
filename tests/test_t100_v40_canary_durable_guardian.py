@@ -468,7 +468,7 @@ def test_explicit_reviewed_generation_starts_flat_without_touching_legacy(monkey
         return db
     async def observe(_env):
         return flat()
-    monkeypatch.setattr(reviewed,"select_reviewed_scope",select)
+    monkeypatch.setattr(reviewed,"select_second_reviewed_scope",select)
     result=asyncio.run(m.run(
         env(T100_V40_GUARDIAN_AUDITED_ROLLOVER="true"),
         connect=connect,observe=observe,max_cycles=1,emit=logs.append,
