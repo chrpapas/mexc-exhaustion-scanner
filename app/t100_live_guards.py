@@ -14,7 +14,11 @@ from decimal import Decimal, InvalidOperation
 from typing import Mapping
 
 LIVE_CONFIRMATION = "I_UNDERSTAND_MEXC_REAL_FUNDS_AT_RISK"
-LIVE_ADAPTER_STATUS = "NOT_IMPLEMENTED"
+# Scoped transport release: ONE real V40 signal-bound first canary ONLY.
+# This verifies the code path has been reviewed/tested, NOT that the venue's
+# native stop, fill or emergency exit has already been observed live.
+# Legacy paper/portfolio live permits still require "CERTIFIED" and HALT.
+LIVE_ADAPTER_STATUS = "V40_CANARY_RESTRICTED"
 # Legacy stoporder/change_plan_price is documented in older futures docs;
 # the current public reference needs independent scope/identity confirmation.
 LIVE_NATIVE_STOP_AMENDMENT_STATUS = "UNVERIFIED_CURRENT_DOCS"
