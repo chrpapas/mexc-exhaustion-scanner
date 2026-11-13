@@ -8,7 +8,7 @@ import pytest
 
 from app.t100_live_db_inspect import EXPECTED_DATABASE
 from app.t100_live_role_preflight import TARGET_ROLE
-from app.t100_v40_guardian_reviewed_generation import REVIEWED_SCOPE
+from app.t100_v40_guardian_reviewed_generation import ACTIVE_REVIEWED_SCOPE
 from app.t100_v40_guardian_post_gate import (
     PostgresV40GuardianPostGate,
 )
@@ -50,7 +50,7 @@ class FakeConnection:
         if "transaction_isolation" in sql:return self.isolation
         raise AssertionError("unexpected query")
     async def fetchrow(self,sql,*args):
-        assert args==(REVIEWED_SCOPE,)
+        assert args==(ACTIVE_REVIEWED_SCOPE,)
         self.queries.append(sql)
         if "t100_guardian_incident_state" in sql:
             assert "interval '15 seconds'" in sql
