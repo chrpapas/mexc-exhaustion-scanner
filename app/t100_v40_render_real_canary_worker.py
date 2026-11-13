@@ -202,6 +202,9 @@ async def run_real_first_canary_cycle(
         load_verified_frozen_v40_entry_parity,
     )
     from app.t100_live_guards import T100ExecutionControls
+    from app.t100_v40_emergency_close_claims import (
+        verify_runtime_first_canary_close_claim_schema,
+    )
     source_pool=runtime_pool=None
     try:
         # Source reader remains PostgreSQL SELECT-only even while executor
@@ -218,6 +221,8 @@ async def run_real_first_canary_cycle(
         # Distinct pools and credentials are both required.
         if source_pool is runtime_pool:
             return _redact("V40_REAL_WORKER_DATABASE_POOL_COLLISION")
+        if not await verify_runtime_first_canary_close_claim_schema(runtime_pool):
+            return _redact("V40_REAL_WORKER_EMERGENCY_CLOSE_SCHEMA_OR_PRIOR_CLAIM_HALT")
         source=PostgresV40Stage2Source(
             source_pool,restricted_source_reader=True,
         )
