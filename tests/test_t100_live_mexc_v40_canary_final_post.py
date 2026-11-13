@@ -205,3 +205,42 @@ def test_scalar_unknown_ack_freezes_after_exactly_one_post(monkeypatch, ack):
     with pytest.raises(RuntimeError, match="orderId"):
         asyncio.run(adapter.submit_short_with_stop(intent(), permit=permit()))
     assert len(client.posts) == 1
+
+
+def test_real_mexc_trade_client_scalar_envelope_flows_through_adapter(monkeypatch):
+    """Exercise the shipped transport's envelope extraction, not a dict fake."""
+    import httpx
+    from app.mexc_trade import MexcTradeClient
+
+    seen = []
+    def exchange(request):
+        seen.append(request)
+        return httpx.Response(
+            200, json={"success": True, "code": 0,
+                        "data": "739206374277809664"},
+        )
+    async def run():
+        transport = MexcTradeClient.__new__(MexcTradeClient)
+        transport.api_key = "TEST_KEY_NO_REAL_TRADING"
+        transport.api_secret = "TEST_SECRET_NO_REAL_TRADING"
+        transport.client = httpx.AsyncClient(
+            base_url="https://api.mexc.com",
+            transport=httpx.MockTransport(exchange),
+        )
+        transport._mutation_lock = asyncio.Lock()
+        transport._last_mutation_at = 0.
+        try:
+            adapter = m.LiveMexcAdapter(transport, guardian_gate=clean_gate())
+            return await adapter.submit_short_with_stop(
+                intent(), permit=permit(),
+            )
+        finally:
+            await transport.client.aclose()
+
+    monkeypatch.setattr(m, "require_certified_transport_permit", lambda x: x)
+    ack = asyncio.run(run())
+    assert ack == "739206374277809664"
+    assert len(seen) == 1
+    assert seen[0].method == "POST"
+    assert seen[0].url.path == "/api/v1/private/order/create"
+    assert b'"stopLossPrice":"175.00"' in seen[0].content
