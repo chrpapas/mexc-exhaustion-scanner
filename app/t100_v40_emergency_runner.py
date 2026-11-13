@@ -246,8 +246,120 @@ async def with_render_network(
                 await venue.close()
     except Exception:
         return V40EmergencyRunnerStatus(
-            "V40_EMERGENCY_EXIT_NETWORK_OR_DB_UNAVAILABLE_NO_RETRY"
+            "V40_EMERGENCY_EXIT_NETWORK_OR_DB_UNAVAILABLE_NO_RETRY",
+            exchange_close_post_may_have_occurred=True,
         )
     finally:
         if pool is not None:
             await pool.close()
+
+
+async def observe_independent_owned_guardian(
+    env:Mapping[str,str],
+):
+    """One readonly 15s guardian check; never a trading permit."""
+    from app.t100_v40_emergency_nonflat_gate import (
+        PostgresV40OwnedGuardianGate,V40OwnedGuardianHealth,
+    )
+    import asyncpg
+    dsn=env.get("T100_V40_EXECUTOR_RUNTIME_DSN","")
+    if (
+        type(dsn) is not str
+        or not dsn.startswith(("postgresql://","postgres://"))
+    ):
+        return V40OwnedGuardianHealth("V40_OWNED_GUARDIAN_RUNTIME_DSN_REQUIRED")
+    pool=None
+    try:
+        pool=await asyncpg.create_pool(
+            dsn=dsn,ssl="require",min_size=1,max_size=1,
+            timeout=10,command_timeout=12,
+            server_settings={"default_transaction_read_only":"on"},
+        )
+        return await PostgresV40OwnedGuardianGate(pool).verify()
+    except Exception:
+        return V40OwnedGuardianHealth("V40_OWNED_GUARDIAN_DB_UNAVAILABLE")
+    finally:
+        if pool is not None:
+            await pool.close()
+
+
+async def run_emergency_watch(
+    env:Mapping[str,str],*,
+    close_cycle:Callable[...,Awaitable[V40EmergencyRunnerStatus]]=with_render_network,
+    owned_guardian:Callable[...,Awaitable[Any]]=observe_independent_owned_guardian,
+    pause:Callable[[float],Awaitable[Any]]=asyncio.sleep,
+    emit:Callable[[str],Any]=print,
+    max_cycles:int|None=None,
+)->int:
+    """Monitors one protected first-canary position, never opens a trade.
+
+    If there is no missing native stop, keep watching ONLY when the separate
+    independently running guardian just confirmed an owned CROSS 1x short
+    with full-volume MARKET SL. No false healthy status on mere GET success.
+    Unknown claims always become GET-reconciliation-only after restart.
+    """
+    import json
+    if not emergency_environment(env):
+        emit(json.dumps({
+            "status":"V40_EMERGENCY_WATCH_LIVE_SCOPE_REQUIRED",
+            "new_entries_allowed":False,
+        },sort_keys=True))
+        return 2
+    if max_cycles is not None and (type(max_cycles) is not int or max_cycles<1):
+        return 2
+    n=0
+    while max_cycles is None or n<max_cycles:
+        n+=1
+        try:
+            close=await asyncio.wait_for(close_cycle(env),timeout=60)
+            if type(close) is not V40EmergencyRunnerStatus:
+                raise ValueError
+        except BaseException:
+            close=V40EmergencyRunnerStatus(
+                "V40_EMERGENCY_WATCH_CLOSE_CYCLE_UNVERIFIED",
+                exchange_close_post_may_have_occurred=True,
+            )
+        emit(json.dumps(asdict(close),sort_keys=True))
+        if close.durable_checkpoint_and_slot_closed is True:
+            return 0 if close.signed_close_and_flat_verified is True else 2
+        if close.status!="V40_EMERGENCY_EXIT_NO_CERTIFIED_MISSING_STOP_NO_POST":
+            # After a submitted/unknown claim, restart only reads that same
+            # immutable claim. Never invoke a second close POST in the loop.
+            return 2
+        try:
+            health=await asyncio.wait_for(owned_guardian(env),timeout=15)
+            from app.t100_v40_emergency_nonflat_gate import V40OwnedGuardianHealth
+            if (
+                type(health) is not V40OwnedGuardianHealth
+                or health.status!=
+                    "V40_ONE_OWNED_CROSS_NATIVE_MARKET_SL_INDEPENDENTLY_OBSERVED"
+                or health.owned_cross_native_sl_observed is not True
+                or health.fresh is not True or health.incident_clear is not True
+            ):
+                return 2
+        except BaseException:
+            return 2
+        if max_cycles is None or n<max_cycles:
+            await pause(5.)
+    # A finite diagnostic is not proof the ongoing guardian will stay live.
+    return 2
+
+
+def main()->int:
+    import argparse,json
+    p=argparse.ArgumentParser(description=__doc__)
+    p.add_argument("--once",action="store_true")
+    p.add_argument("--watch",action="store_true")
+    args=p.parse_args()
+    if args.once==args.watch:
+        return 2
+    env=dict(os.environ)
+    if args.watch:
+        return asyncio.run(run_emergency_watch(env))
+    result=asyncio.run(with_render_network(env))
+    print(json.dumps(asdict(result),sort_keys=True),flush=True)
+    return 0 if result.durable_checkpoint_and_slot_closed else 2
+
+
+if __name__=="__main__":
+    raise SystemExit(main())
