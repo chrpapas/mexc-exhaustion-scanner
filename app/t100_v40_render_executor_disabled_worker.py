@@ -39,6 +39,13 @@ def main() -> int:
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument("--run",action="store_true",required=True)
     p.parse_args()
+    # A separately reviewed future first-canary release may opt into the
+    # production first-signal dependency graph. Never inherit paper guards
+    # or silently transform GET-only supervisor flags into live mode.
+    if os.environ.get("T100_V40_FIRST_CANARY_ORDER_WORKER_ENABLED")=="true":
+        from app.t100_v40_render_real_canary_worker import run_live_worker
+        import asyncio
+        return asyncio.run(run_live_worker(dict(os.environ)))
     if not require_disabled_worker(os.environ):
         print(json.dumps({
             "status":"V40_DISABLED_WORKER_PAPER_OR_ISOLATION_HALT",
