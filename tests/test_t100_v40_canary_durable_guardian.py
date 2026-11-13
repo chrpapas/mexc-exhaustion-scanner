@@ -357,3 +357,16 @@ def test_diagnostic_snapshot_codes_are_bounded_not_secret_bearing():
     assert m._safe_observer_detail(bad)==(
         "V40_GUARDIAN_UNCLASSIFIED_OBSERVER_HALT"
     )
+
+
+def test_diagnostic_inventory_certificate_reason_is_bounded():
+    good=V40CanaryGuardianHeartbeat(
+        "V40_GUARDIAN_INVENTORY_POSITION_MARGIN_WITNESS_MISSING_HALT"
+    )
+    assert m._safe_observer_detail(good)==good.status
+    bad=V40CanaryGuardianHeartbeat(
+        "V40_GUARDIAN_INVENTORY_SECRET_API_PASSWORD_HALT"
+    )
+    assert m._safe_observer_detail(bad)==(
+        "V40_GUARDIAN_UNCLASSIFIED_OBSERVER_HALT"
+    )
