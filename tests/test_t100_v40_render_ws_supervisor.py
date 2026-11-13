@@ -161,3 +161,45 @@ def test_key_probe_is_not_started_when_not_explicitly_opted_in():
         {KEY_FLAG:"false"},monitor=monitor,key_observe=keys,
     ))==0
     assert events==["monitor"]
+
+
+def test_daily_loss_companion_never_upgrades_primary_signal_or_order_permission():
+    from app.t100_v40_canary_daily_loss import (
+        FLAG as LOSS_FLAG,V40DailyLossEvidence,
+    )
+    observed=[]
+    async def monitor(env):
+        await asyncio.sleep(.02)
+        return 0
+    async def daily(env):
+        return V40DailyLossEvidence(
+            "V40_DAILY_LOSS_TWO_COMPLETE_SIGNED_GET_PASSES_NONAUTHORIZING",
+            realized_today_loss_usdt="0",complete_two_passes=True,
+            complete_history_verified=True,safely_below_12_50=True,
+        )
+    out=asyncio.run(run_with_optional_ws_preflight(
+        {LOSS_FLAG:"true"},monitor=monitor,
+        daily_observe=daily,emit=observed.append,
+    ))
+    assert out==0 and len(observed)==1
+    r=json.loads(observed[0])
+    assert r["complete_history_verified"] is True
+    assert r["entry_allowed"] is False and r["live_authorization"] is False
+    assert r["mexc_posts"]==r["database_writes"]==0
+
+
+def test_daily_history_error_is_redacted_and_does_not_hide_monitor_failure():
+    from app.t100_v40_canary_daily_loss import FLAG as LOSS_FLAG
+    messages=[]
+    async def monitor(env):
+        await asyncio.sleep(.02)
+        return 2
+    async def daily(env):
+        raise RuntimeError("MEXC_PRIVATE_API_SECRET_LEAK")
+    out=asyncio.run(run_with_optional_ws_preflight(
+        {LOSS_FLAG:"true"},monitor=monitor,
+        daily_observe=daily,emit=messages.append,
+    ))
+    assert out==2 and len(messages)==1
+    assert "MEXC_PRIVATE" not in messages[0]
+    assert json.loads(messages[0])["status"]=="V40_DAILY_LOSS_UNEXPECTED_OR_TIMED_OUT_HALT"
