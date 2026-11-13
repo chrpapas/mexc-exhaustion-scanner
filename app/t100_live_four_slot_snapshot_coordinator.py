@@ -218,7 +218,11 @@ class FourSlotSnapshotCoordinator:
         if before_hash != after_hash:
             return FourSlotSnapshotResult("VENUE_CRITICAL_INVENTORY_CHANGED")
         if not _valid_counts(report, len(after_positions), len(after_stops)):
-            return FourSlotSnapshotResult("INVENTORY_COMPLETENESS_UNVERIFIED")
+            # Retain bounded GET-only completeness evidence for independent
+            # guardian diagnostics. No account identifiers are logged here.
+            return FourSlotSnapshotResult(
+                "INVENTORY_COMPLETENESS_UNVERIFIED", inventory=report,
+            )
         if shared_manual_observation:
             # Full-account counts, critical hashes and read-only ledger
             # equality are already proven above. Partition by durable
