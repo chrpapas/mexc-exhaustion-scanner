@@ -117,7 +117,7 @@ def test_exact_durable_original_and_double_signed_missing_stop_mints_only_target
     ({"original_notional_usdt":"12.51"},
      "V40_EMERGENCY_CLOSE_PILOT_CAP_OR_MARKET_PRICE_INVALID"),
     ({"reference_ask":"NaN"},
-     "V40_EMERGENCY_CLOSE_PILOT_CAP_OR_MARKET_PRICE_INVALID"),
+     "V40_EMERGENCY_CLOSE_NUMERIC_UNVERIFIED"),
     ({"ledger":replace(ledger(),readonly_repeatable_read=False)},
      "V40_EMERGENCY_CLOSE_DURABLE_SINGLE_OWNER_UNVERIFIED"),
     ({"ledger":replace(ledger(),revisions=[])},
