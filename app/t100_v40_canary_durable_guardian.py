@@ -23,6 +23,7 @@ import hashlib
 import json
 import os
 import re
+import sys
 from typing import Any,Awaitable,Callable,Mapping
 from urllib.parse import urlsplit
 
@@ -385,7 +386,11 @@ async def run(
                 ),
                 guardian_outbox_committed=True,
             )
-            emit(json.dumps(asdict(report),sort_keys=True),)
+            emit(json.dumps(asdict(report),sort_keys=True))
+            if emit is print:
+                # Long-running Render Python workers can buffer stdout,
+                # hiding the guardian's 5-second GET-only heartbeats.
+                sys.stdout.flush()
             # If a historical critical incident remains latched but the
             # current signed GET is healthy, keep observing every cycle.
             # Never silently clear the durable latch or give trade approval.
