@@ -370,3 +370,16 @@ def test_diagnostic_inventory_certificate_reason_is_bounded():
     assert m._safe_observer_detail(bad)==(
         "V40_GUARDIAN_UNCLASSIFIED_OBSERVER_HALT"
     )
+
+
+def test_diagnostic_transport_stage_is_fixed_whitelist():
+    good=V40CanaryGuardianHeartbeat(
+        "V40_GUARDIAN_INVENTORY_STAGE_OPEN_ORDER_COUNTS_HALT"
+    )
+    assert m._safe_observer_detail(good)==good.status
+    bad=V40CanaryGuardianHeartbeat(
+        "V40_GUARDIAN_INVENTORY_STAGE_PASSWORD_SECRET_HALT"
+    )
+    assert m._safe_observer_detail(bad)==(
+        "V40_GUARDIAN_UNCLASSIFIED_OBSERVER_HALT"
+    )
