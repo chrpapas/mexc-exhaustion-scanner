@@ -15,6 +15,7 @@ from typing import Any
 from app.t100_live_db_inspect import EXPECTED_DATABASE
 from app.t100_live_role_preflight import TARGET_ROLE
 from app.t100_live_four_slot_reservations import ACCOUNT_LOCK_SQL
+from app.t100_live_execution import deterministic_t100_entry_oid
 from app.t100_v40_emergency_close import (
     V40EmergencyCloseTarget,V40EmergencyCloseHalted,
 )
@@ -143,6 +144,9 @@ class V40PostgresEmergencyCloseClaims:
                         or type(linked["intent_signal_id"]) is not int
                         or linked["intent_signal_id"]<=0
                         or linked["slot_signal_id"]!=linked["intent_signal_id"]
+                        or deterministic_t100_entry_oid(
+                            linked["intent_signal_id"],target.symbol
+                        )!=target.entry_external_oid
                     ):
                         raise V40EmergencyCloseHalted(
                             "V40_EMERGENCY_CLOSE_DB_ORIGINAL_OWNER_DRIFT"
