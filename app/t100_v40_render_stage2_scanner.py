@@ -209,6 +209,22 @@ class V40Stage2RenderScanner(T100Scanner):
                     raise V40RenderCutoverHalted(
                         "V40_SCANNER_EXISTING_SCHEMA_OR_ROLE_INVALID"
                     )
+            if os.environ.get("T100_V40_MIGRATE_EMERGENCY_040_ONCE")=="true":
+                from app.t100_v40_scanner_migrate_040 import (
+                    migrate_scanner_040_once,
+                )
+                mig=await migrate_scanner_040_once(
+                    self.db.pool,dict(os.environ),
+                )
+                LOGGER.warning(
+                    "V40_EMERGENCY_040_MIGRATION status=%s committed=%s "
+                    "grants_verified=%s mexc_posts=0",
+                    mig.status,mig.migration_committed,
+                    mig.postflight_permissions_verified,
+                )
+                # A failed narrowly scoped migration is NOT a reason to
+                # stop fresh Stage2 signal generation. Live executor stays
+                # separately disabled until migration is observed.
             await self.refresh_contracts()
         except V40RenderCutoverHalted:
             raise
