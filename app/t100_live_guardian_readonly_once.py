@@ -51,6 +51,9 @@ class GetOnlyMexcTransport:
     """Restricted GET protocol; deliberately does NOT implement _private_post."""
 
     _FIXED = frozenset({
+        # Account-wide GET-only economic margin witness required by V40
+        # completeness. This transport has NO POST capability.
+        "/api/v1/private/account/assets",
         "/api/v1/private/order/open_order_total_count",
         "/api/v1/private/position/open_positions",
         "/api/v1/private/position/position_mode",
