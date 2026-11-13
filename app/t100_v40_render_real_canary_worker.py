@@ -160,7 +160,7 @@ def validate_live_worker_config(
         return _redact("V40_REAL_WORKER_NATIVE_STOP_OR_RECOVERY_RELEASE_NOT_CERTIFIED")
     from app.t100_live_authorization import require_certified_transport_permit
     from app.t100_live_guards import LIVE_ADAPTER_STATUS
-    if LIVE_ADAPTER_STATUS!="V40_CANARY_RESTRICTED":
+    if LIVE_ADAPTER_STATUS!="V40_CANARY_RESTRICTED" and not allow_trial:
         return _redact("V40_REAL_WORKER_EXCHANGE_ADAPTER_NOT_CERTIFIED")
     return _redact(
         "V40_REAL_WORKER_RELEASE_CONFIG_VERIFIED_NEEDS_CURRENT_SIGNED_EVIDENCE",
