@@ -150,7 +150,11 @@ class LiveMexcAdapter:
         # The current MEXC order/create response returns a numeric string
         # orderId. Never journal a boolean, signed, zero, Unicode or
         # nonintegral value as a successful exchange acknowledgement.
-        raw_id = result.get("orderId") if type(result) is dict else None
+        # MexcTradeClient._private_post returns response["data"], not the
+        # entire envelope. Current MEXC Futures order/create returns the
+        # ID as a scalar string; the older dict form is also supported.
+        # Any other shape is UNKNOWN after POST, never safe to retry.
+        raw_id = result.get("orderId") if type(result) is dict else result
         if (
             type(raw_id) not in (int, str)
             or re.fullmatch(r"[1-9][0-9]*", str(raw_id)) is None

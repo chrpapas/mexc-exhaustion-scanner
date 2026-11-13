@@ -1,0 +1,30 @@
+name: V40 first live order adapter contract (offline)
+
+on:
+  pull_request:
+    paths:
+      - "app/t100_live_mexc_adapter.py"
+      - "app/t100_v40_canary_key_permissions.py"
+      - "app/t100_v40_render_ws_supervisor.py"
+      - "tests/test_t100_live_mexc_v40_canary_final_post.py"
+      - "tests/test_t100_live_mexc_adapter.py"
+      - "tests/test_t100_v40_canary_key_permissions.py"
+      - "tests/test_t100_v40_render_ws_supervisor.py"
+      - ".github/workflows/v40-live-transport-checks.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  transport:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install -e ".[dev]"
+      - name: Live order adapter against offline MEXC HTTP fixture
+        run: python -m pytest -q tests/test_t100_live_mexc_v40_canary_final_post.py tests/test_t100_live_mexc_adapter.py tests/test_t100_v40_canary_key_permissions.py tests/test_t100_v40_render_ws_supervisor.py
