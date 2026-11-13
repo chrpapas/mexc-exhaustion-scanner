@@ -1,0 +1,27 @@
+name: V40 independent first-canary risk witness tests
+
+on:
+  pull_request:
+    paths:
+      - "app/t100_v40_first_canary_risk_witness.py"
+      - "tests/test_t100_v40_first_canary_risk_witness.py"
+      - "app/t100_v40_executor_assembly.py"
+      - "tests/test_t100_v40_executor_assembly.py"
+      - ".github/workflows/v40-real-first-canary-risk.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  canary-risk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install -e ".[dev]"
+      - name: Risk evidence and exact first-order assembly (no keys)
+        run: python -m pytest -q tests/test_t100_v40_first_canary_risk_witness.py tests/test_t100_v40_executor_assembly.py
