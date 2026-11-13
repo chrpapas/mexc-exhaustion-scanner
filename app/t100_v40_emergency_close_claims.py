@@ -249,3 +249,69 @@ class V40PostgresEmergencyCloseClaims:
             raise V40EmergencyCloseHalted(
                 "V40_EMERGENCY_CLOSE_PRIOR_CLAIM_READ_FAILED_NO_POST"
             ) from None
+
+
+async def verify_runtime_first_canary_close_claim_schema(pool:Any)->bool:
+    """Live pilot MUST see migrated 040 table and minimal runtime grants.
+
+    This READ ONLY check is independent of the scanner owner's earlier
+    migration log. Prior close claims mean this is no longer a first canary
+    and must NEVER be rearmed by a new process.
+    """
+    if pool is None:
+        return False
+    try:
+        async with pool.acquire() as conn:
+            async with conn.transaction(
+                isolation="repeatable_read",readonly=True,
+            ):
+                role=await conn.fetchval("SELECT current_user")
+                db=await conn.fetchval("SELECT current_database()")
+                read_only=await conn.fetchval(
+                    "SELECT current_setting('transaction_read_only')"
+                )
+                if (
+                    role!=TARGET_ROLE or db!=EXPECTED_DATABASE
+                    or read_only!="on"
+                ):
+                    return False
+                table=await conn.fetchval(
+                    "SELECT to_regclass('public.t100_live_v40_emergency_close_claims') IS NOT NULL"
+                )
+                if table is not True:
+                    return False
+                privileges=await conn.fetchrow(
+                    """SELECT
+                         has_table_privilege(current_user,
+                           'public.t100_live_v40_emergency_close_claims',
+                           'SELECT') AS can_select,
+                         has_table_privilege(current_user,
+                           'public.t100_live_v40_emergency_close_claims',
+                           'INSERT') AS can_insert,
+                         has_table_privilege(current_user,
+                           'public.t100_live_v40_emergency_close_claims',
+                           'UPDATE,DELETE,TRUNCATE,TRIGGER') AS can_mutate,
+                         EXISTS (
+                           SELECT 1 FROM pg_trigger t
+                           JOIN pg_class c ON c.oid=t.tgrelid
+                           JOIN pg_namespace n ON n.oid=c.relnamespace
+                           WHERE n.nspname='public'
+                             AND c.relname='t100_live_v40_emergency_close_claims'
+                             AND t.tgname='t100_v40_emergency_claim_immutable'
+                             AND t.tgenabled='O' AND NOT t.tgisinternal
+                         ) AS immutable_trigger"""
+                )
+                if privileges is None or any((
+                    privileges["can_select"] is not True,
+                    privileges["can_insert"] is not True,
+                    privileges["can_mutate"] is not False,
+                    privileges["immutable_trigger"] is not True,
+                )):
+                    return False
+                number=await conn.fetchval(
+                    """SELECT count(*)::int
+                       FROM public.t100_live_v40_emergency_close_claims"""
+                )
+                return type(number) is int and number==0
+    except Exception:
+        return False

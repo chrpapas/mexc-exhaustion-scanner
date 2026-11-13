@@ -95,10 +95,11 @@ def test_separate_venue_key_and_runtime_sql_role_mandatory():
     assert report.status=="V40_REAL_WORKER_SQL_ROLES_NOT_SEPARATED"
 
 
-def test_unreviewed_adapter_does_not_become_certified_by_approvals():
+def test_approved_external_review_cannot_release_global_legacy_adapter():
     r=m.validate_live_worker_config(valid_env(),approved())
     assert r.status=="V40_REAL_WORKER_EXCHANGE_ADAPTER_NOT_CERTIFIED"
     assert not r.release_review_complete
+    assert not r.live_authorization and not r.entry_allowed
 
 
 def test_only_in_offline_fixture_can_fully_reviewed_native_adapter_reach_io_gate(monkeypatch):
@@ -227,3 +228,45 @@ def test_emergency_watch_failure_never_marks_successful_live_execution(monkeypat
     assert asyncio.run(m.run_live_worker(
         valid_env(),cycle=entry,emergency_watch=watch,max_cycles=1,
     ))==2
+
+
+def test_user_accepted_first_real_trial_does_not_fabricate_nonflat_or_alert_evidence():
+    env=valid_env()
+    assert m.operator_requested_production_trial(env)==m.RELEASE_REVIEW
+    assert not m.validate_live_worker_config(
+        env,m.operator_requested_production_trial(env),
+    ).release_review_complete
+    env[m.TRIAL_FLAG]="true"
+    review=m.operator_requested_production_trial(env)
+    assert review.production_first_trade_observation_waiver is True
+    assert review.independent_nonflat_guardian_live_verified is False
+    assert review.durable_incident_alert_delivery_verified is False
+    assert review.supervised_emergency_exit_runbook_verified is True
+    assert review.native_attached_market_stop_request_contract_reviewed is True
+    result=m.validate_live_worker_config(env,review)
+    assert result.release_review_complete is True
+    assert not result.live_authorization and not result.entry_allowed
+
+
+@pytest.mark.parametrize("field",[
+    "code_revision_verified",
+    "native_attached_market_stop_request_contract_reviewed",
+    "post_fill_get_and_journal_reconciliation_reviewed",
+    "supervised_emergency_exit_runbook_verified",
+    "operator_explicitly_authorized_first_canary",
+])
+def test_first_live_trial_waiver_never_skips_real_stop_journal_or_human_gates(field):
+    env=valid_env();env[m.TRIAL_FLAG]="true"
+    review=replace(m.operator_requested_production_trial(env),**{field:False})
+    result=m.validate_live_worker_config(env,review)
+    assert not result.release_review_complete
+    assert not result.live_authorization
+
+
+def test_even_forged_waiver_does_not_allow_live_without_user_env_acceptance():
+    env=valid_env()
+    review=replace(approved(),production_first_trade_observation_waiver=True,
+                   independent_nonflat_guardian_live_verified=False,
+                   durable_incident_alert_delivery_verified=False)
+    result=m.validate_live_worker_config(env,review)
+    assert not result.release_review_complete

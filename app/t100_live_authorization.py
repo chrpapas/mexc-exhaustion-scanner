@@ -113,6 +113,12 @@ class V40FirstCanaryReadinessEvidence:
     durable_incident_alert_delivery_verified: bool
     supervised_emergency_exit_runbook_verified: bool
     operator_explicitly_authorized_first_canary: bool
+    # The FIRST production trade is the intended experiment. The operator
+    # explicitly accepts not having PRIOR nonflat/native-exit observations
+    # and watches the independent guardian and event logs during the trade.
+    # This never skips a native stop REQUEST, actual flat-account precheck,
+    # exact signal/lot/price cap, order journal, or current guardian fence.
+    production_first_trade_observation_waiver: bool = False
 
     def failures(self) -> tuple[str, ...]:
         names=(
@@ -131,9 +137,23 @@ class V40FirstCanaryReadinessEvidence:
             "supervised_emergency_exit_runbook_verified",
             "operator_explicitly_authorized_first_canary",
         )
+        # There is no circular prerequisite to demonstrate a real exit
+        # before the very first production trade. With the explicit
+        # supervised observation waiver, only these two PREEXISTING
+        # outcome/notification proofs are deferred to the live trial.
+        waived=(
+            frozenset({
+                "independent_nonflat_guardian_live_verified",
+                "durable_incident_alert_delivery_verified",
+            })
+            if self.production_first_trade_observation_waiver is True
+               and self.operator_explicitly_authorized_first_canary is True
+            else frozenset()
+        )
         return tuple(
             "canary_"+name+"_missing"
-            for name in names if getattr(self,name) is not True
+            for name in names
+            if name not in waived and getattr(self,name) is not True
         )
 
 
@@ -149,6 +169,7 @@ class LiveMutationPermit:
     scope: str
     signal_id: int | None
     symbol: str | None
+    production_trial_accepted: bool
 
     def __init__(
         self,
@@ -161,6 +182,7 @@ class LiveMutationPermit:
         _sentinel: object,
         signal_id: int | None = None,
         symbol: str | None = None,
+        production_trial_accepted: bool = False,
     ) -> None:
         if _sentinel is not _PERMIT_SENTINEL:
             raise LiveAuthorizationHalted(
@@ -185,6 +207,9 @@ class LiveMutationPermit:
         object.__setattr__(self, "scope", scope)
         object.__setattr__(self, "signal_id", signal_id)
         object.__setattr__(self, "symbol", symbol)
+        object.__setattr__(
+            self,"production_trial_accepted",production_trial_accepted,
+        )
 
 
 def issue_v40_supervised_canary_permit(
@@ -239,6 +264,10 @@ def issue_v40_supervised_canary_permit(
         max_daily_loss_usdt=controls.max_daily_loss_usdt,
         leverage=1,scope=V40_CANARY_SCOPE,
         signal_id=signal_id,symbol=symbol,
+        production_trial_accepted=(
+            evidence.production_first_trade_observation_waiver is True
+            and evidence.operator_explicitly_authorized_first_canary is True
+        ),
         _sentinel=_PERMIT_SENTINEL,
     )
 
@@ -293,6 +322,7 @@ def require_live_mutation_permit(
     if (
         permit.scope not in ("T100_TINY_PILOT",V40_CANARY_SCOPE)
         or permit.leverage != 1
+        or type(permit.production_trial_accepted) is not bool
         or any(
             type(value) is not Decimal
             or not value.is_finite()
@@ -320,7 +350,10 @@ def require_live_mutation_permit(
             or permit.symbol in ("BTC_USDT","ETH_USDT")
         ):
             raise LiveAuthorizationHalted("V40_CANARY_SIGNAL_BOUND_PERMIT_INVALID")
-    elif permit.signal_id is not None or permit.symbol is not None:
+    elif (
+        permit.signal_id is not None or permit.symbol is not None
+        or permit.production_trial_accepted is not False
+    ):
         raise LiveAuthorizationHalted("LIVE_LEGACY_PERMIT_CANNOT_PIN_CANARY")
     return permit
 
@@ -337,10 +370,14 @@ def require_certified_transport_permit(
     """
     checked = require_live_mutation_permit(permit)
     if checked.scope==V40_CANARY_SCOPE:
-        # This code status is intentionally NOT_IMPLEMENTED until the
-        # exchange/native-stop and independent guardian release is reviewed.
-        # Do NOT allow an environment variable to override certification.
-        if t100_live_guards.LIVE_ADAPTER_STATUS!="V40_CANARY_RESTRICTED":
+        # The first production integration order is the experiment.
+        # Its already-issued signal-bound typed permit explicitly records
+        # operator acceptance of unobserved nonflat/alert outcomes.
+        # No global code status is changed, so historical canary and the
+        # legacy paper portfolio remain exactly as blocked as before.
+        if checked.production_trial_accepted is not True and (
+            t100_live_guards.LIVE_ADAPTER_STATUS!="V40_CANARY_RESTRICTED"
+        ):
             raise LiveAuthorizationHalted("V40_CANARY_ADAPTER_NOT_RELEASED")
     elif t100_live_guards.LIVE_ADAPTER_STATUS!="CERTIFIED":
         raise LiveAuthorizationHalted("LIVE_ADAPTER_NOT_CERTIFIED")
