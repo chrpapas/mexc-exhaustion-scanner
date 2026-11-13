@@ -16,7 +16,7 @@ from app.t100_live_authorization import (
     LiveMutationPermit,
     require_certified_transport_permit,
 )
-from app.t100_live_execution import EntryIntent
+from app.t100_live_execution import EntryIntent, deterministic_t100_entry_oid
 
 class LiveMexcAdapter:
     # Pinned MEXC futures openType=2 (CROSS) for the V40 tiny pilot.
@@ -60,15 +60,44 @@ class LiveMexcAdapter:
         *,
         permit: LiveMutationPermit,
     ) -> str:
+        # The final send boundary must fail BEFORE any network call on a
+        # malformed immutable V40 origin, non-finite amount or missing SL75.
+        # This is defense in depth: the fenced coordinator also validates
+        # the tick-rounded stop, journal state, full risk and lease.
+        if type(intent) is not EntryIntent:
+            raise RuntimeError("MEXC_ENTRY_INTENT_TYPE_INVALID_NO_POST")
         permit = require_certified_transport_permit(permit)
         from app.t100_live_authorization import V40_CANARY_SCOPE
-        if getattr(permit,'scope',None)==V40_CANARY_SCOPE and (
-            permit.signal_id!=intent.signal_id
-            or permit.symbol!=intent.symbol
-            or intent.notional_usdt>D("12.50")
-            or self.open_type!=2
-        ):
-            raise RuntimeError("V40_CANARY_EXACT_SIGNAL_OR_CAP_REQUIRED")
+        if getattr(permit,'scope',None)==V40_CANARY_SCOPE:
+            values=(
+                intent.reference_price,intent.notional_usdt,
+                intent.volume_contracts,intent.stop_price,
+            )
+            if (
+                type(intent.signal_id) is not int
+                or intent.signal_id<=0
+                or type(intent.symbol) is not str
+                or re.fullmatch(r"[A-Z0-9]+_USDT",intent.symbol) is None
+                or intent.symbol in ("BTC_USDT","ETH_USDT")
+                or permit.signal_id!=intent.signal_id
+                or permit.symbol!=intent.symbol
+                or type(intent.external_oid) is not str
+                or intent.external_oid!=deterministic_t100_entry_oid(
+                    intent.signal_id,intent.symbol,
+                )
+                or any(
+                    type(value) is not D
+                    or not value.is_finite()
+                    or value<=0 for value in values
+                )
+                or intent.stop_price<
+                    intent.reference_price*D("1.75")
+                or intent.notional_usdt>D("12.50")
+                or intent.notional_usdt>permit.max_position_notional_usdt
+                or self.open_type!=2
+                or permit.leverage!=1
+            ):
+                raise RuntimeError("V40_CANARY_FROZEN_ORDER_OR_SL75_INVALID_NO_POST")
         if intent.notional_usdt > permit.max_position_notional_usdt:
             raise RuntimeError("MEXC_ENTRY_EXCEEDS_PERMIT")
         result = await self.client._private_post(
