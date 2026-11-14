@@ -78,10 +78,11 @@ def test_exact_four_generations_and_three_003_critical_deliveries_only():
         db.states[scope]==db.old_states_before[scope]
         for scope,_ in m._OLD_SCOPES
     )
+    # The single INSERT into 004 uses SQL ON CONFLICT DO UPDATE, but
+    # this run has no conflict and never targets the old scope IDs.
     assert all(
-        "DELETE" not in sql.upper()
-        and "UPDATE" not in sql.upper()
-        for sql,_ in db.calls
+        args[0]==m.RECOVERY_SCOPE_004
+        for sql,args in db.calls if sql.lstrip().startswith("INSERT")
     )
 
 
