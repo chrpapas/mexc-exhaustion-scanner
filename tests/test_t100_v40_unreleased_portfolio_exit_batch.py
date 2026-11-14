@@ -130,7 +130,7 @@ def test_missing_or_unknown_symbol_is_not_ignored():
     {"checkpoints":(checkpoint(0),checkpoint(0))},
     {"checkpoints":(checkpoint(0),replace(checkpoint(1),position_id="100"))},
     {"checkpoints":(checkpoint(0),replace(checkpoint(1),symbol="ALT0_USDT"))},
-    {"checkpoints":(object(),)},
+    {"checkpoints":(object(),),"bars":{},"ticks":{}},
     {"now":False},
 ])
 def test_invalid_slot_identity_or_count_rejected(changes):
