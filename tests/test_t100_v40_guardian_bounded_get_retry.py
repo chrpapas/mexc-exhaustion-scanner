@@ -104,11 +104,13 @@ async def test_second_transient_failure_still_halts_without_third_attempt():
 async def test_retry_does_not_trust_an_exchange_wrong_hedge_mode():
     get,client=make([429,{"success":True,"code":0,"data":0}])
     async def pause(_):pass
-    # The helper returns the observed actual mode; the caller requires 1.
-    mode=await _hedge_mode_bounded_get(
-        get,retry_transient=True,pause=pause,
-    )
-    assert mode==0 and client.calls==2
+    # The exchange probe rejects any response other than 1 or 2.
+    # An invalid mode is never treated as a recovered safe account.
+    with pytest.raises(VenueReadHalted,match="POSITION_MODE_RESPONSE_UNVERIFIED"):
+        await _hedge_mode_bounded_get(
+            get,retry_transient=True,pause=pause,
+        )
+    assert client.calls==2
 
 
 @pytest.mark.asyncio
