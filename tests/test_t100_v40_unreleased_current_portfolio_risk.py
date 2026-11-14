@@ -142,7 +142,7 @@ def test_tampering_or_missing_economics_never_grants_four_slot_risk(tamper):
     if tamper=="negative_equity":
         x["risk_read"].assets[0]["equity"]="-1"
     if tamper=="missing_assets":
-        x["risk_read"].assets=[]
+        x["risk_read"]=replace(x["risk_read"],assets=[])
     if tamper=="isolated_position":
         x["risk_read"].positions[0]["openType"]=1
     if tamper=="risk_read_incomplete":
