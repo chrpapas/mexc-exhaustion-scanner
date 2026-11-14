@@ -128,3 +128,66 @@ def test_mocked_0_slots_never_repurposed_into_exit_or_entry_permit():
     d["cursors"]=[]
     with pytest.raises(V40VerifiedExitHalted):
         project_verified_owned_v40_exits(**d)
+
+
+@pytest.mark.parametrize("due",[1,2,3])
+def test_due_subset_keeps_four_exchange_native_stops_verified(due):
+    d=bundle(4)
+    all_symbols=tuple(d["completed_bars_by_symbol"])
+    d["completed_bars_by_symbol"]={
+        k:v for k,v in d["completed_bars_by_symbol"].items()
+        if k in all_symbols[:due]
+    }
+    d["price_ticks_by_symbol"]={
+        k:v for k,v in d["price_ticks_by_symbol"].items()
+        if k in all_symbols[:due]
+    }
+    out=project_verified_owned_v40_exits(**d)
+    assert out.protected_position_count==4
+    assert len(out.batch.slots)==due
+    assert out.batch.unchanged_verified_stop_count==due
+    assert {s.symbol for s in out.batch.slots}==set(all_symbols[:due])
+    assert out.verified_exchange_and_ledger_bookends
+    assert out.verified_durable_bar_cursors
+    assert not out.position_release_permitted
+    assert out.exchange_posts==out.database_writes==0
+
+
+def test_one_due_stop_touch_does_not_skip_other_three_protection():
+    d=bundle(4)
+    first=d["ledger"].checkpoints[0]["symbol"]
+    d["completed_bars_by_symbol"]={first:V40CompletedBar(
+        open_ts=BAR_TS,open=D("180"),high=D("185"),
+        low=D("80"),close=D("100"),
+    )}
+    d["price_ticks_by_symbol"]={first:D(".01")}
+    out=project_verified_owned_v40_exits(**d)
+    assert out.protected_position_count==4
+    assert len(out.batch.slots)==1
+    assert out.batch.native_close_reconciliation_count==1
+    assert out.batch.slots[0].requires_native_order_reconciliation
+    assert out.position_release_permitted is False
+
+
+@pytest.mark.parametrize("kind",["none","unknown","extra_tick","missing_tick","unsafe_other_slot"])
+def test_due_partition_and_all_account_protection_still_fail_closed(kind):
+    d=bundle(4)
+    first=next(iter(d["completed_bars_by_symbol"]))
+    d["completed_bars_by_symbol"]={
+        first:d["completed_bars_by_symbol"][first]
+    }
+    d["price_ticks_by_symbol"]={first:D(".01")}
+    if kind=="none":
+        d["completed_bars_by_symbol"]={}
+        d["price_ticks_by_symbol"]={}
+    if kind=="unknown":
+        d["completed_bars_by_symbol"]={"FOREIGN_USDT":d["completed_bars_by_symbol"][first]}
+        d["price_ticks_by_symbol"]={"FOREIGN_USDT":D(".01")}
+    if kind=="extra_tick":
+        d["price_ticks_by_symbol"]["OTHER_USDT"]=D(".01")
+    if kind=="missing_tick":
+        d["price_ticks_by_symbol"]={}
+    if kind=="unsafe_other_slot":
+        d["signed_native_stops"][3]["stopLossPrice"]=D("176")
+    with pytest.raises(V40VerifiedExitHalted):
+        project_verified_owned_v40_exits(**d)
