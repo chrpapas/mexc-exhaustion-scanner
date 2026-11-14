@@ -76,7 +76,7 @@ def test_archive_audit_preserves_003_critical_and_reports_clean_004():
 def test_unknown_critical_class_or_pending_alert_does_not_look_recovered():
     c=Conn()
     k=_SCOPES[-1][1]
-    c.counts[k].update(critical_total=4,other_class_count=1,undelivered=2)
+    c.counts[k].update(critical_total=1,other_class_count=1,undelivered=2)
     x=asyncio.run(audit_guardian_archive_readonly(c))
     assert x.scopes[-1].critical_other_class_count==1
     assert x.scopes[-1].undelivered_total==2
