@@ -1,6 +1,7 @@
 """V40 flat-after-close restart: every archived trade needs final accounting."""
 import asyncio
 from copy import deepcopy
+from dataclasses import replace
 from decimal import Decimal as D
 
 import pytest
@@ -116,7 +117,7 @@ def test_any_historical_inconsistency_blocks_flat_restart(kind):
 async def test_post_close_flat_account_uses_exact_archive_audit():
     ledger,orders,positions,stops=fixture(0)
     expected,counts,rows=evidence()
-    ledger.intents=deepcopy(expected)
+    ledger=replace(ledger,intents=deepcopy(expected))
     reader=Ledger(ledger)
     called=[]
     async def audit_archive(*,expected_intents):
@@ -138,7 +139,7 @@ async def test_post_close_flat_account_uses_exact_archive_audit():
 @pytest.mark.asyncio
 async def test_dirty_historical_account_without_archive_proof_still_halts():
     ledger,orders,positions,stops=fixture(0)
-    ledger.intents=evidence()[0]
+    ledger=replace(ledger,intents=evidence()[0])
     result=await FourSlotSnapshotCoordinator(
         ledger=Ledger(ledger),
         venue=Venue(orders,positions,stops),
