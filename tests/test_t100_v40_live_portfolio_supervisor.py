@@ -76,7 +76,7 @@ async def flat(with_candidate=True):
 _ACTIVE_BASE={n:bundle(n) for n in (1,2,3,4)}
 
 
-def active(n=4, *,low="95",high="100",with_candidate=True):
+def active(n=4, *,low="95",high="100",with_candidate=True,due_indices=None):
     # Original audit fixture calls asyncio.run internally; build it only
     # once at import time, never within an async test's event loop.
     d=deepcopy(_ACTIVE_BASE[n])
@@ -90,9 +90,25 @@ def active(n=4, *,low="95",high="100",with_candidate=True):
         d["completed_bars_by_symbol"][sym]=replace(
             d["completed_bars_by_symbol"][sym],close=D(low),
         )
+    all_cps=d["ledger"].checkpoints
+    if due_indices is None:
+        due_indices=tuple(range(n))
+    assert type(due_indices) is tuple and 1<=len(due_indices)<=n
+    due_symbols={all_cps[i]["symbol"] for i in due_indices}
+    no_due_ids=tuple(cp["position_id"] for cp in all_cps
+                     if cp["symbol"] not in due_symbols)
+    d["completed_bars_by_symbol"]={
+        k:v for k,v in d["completed_bars_by_symbol"].items()
+        if k in due_symbols
+    }
+    d["price_ticks_by_symbol"]={
+        k:v for k,v in d["price_ticks_by_symbol"].items()
+        if k in due_symbols
+    }
     projection=project_verified_owned_v40_exits(**d)
     return V40PortfolioCycleFrame(
         d["snapshot"],owned_guardian(),source(with_candidate),projection,
+        no_bar_due_ids=no_due_ids,
     )
 
 
@@ -270,3 +286,47 @@ async def test_loop_monitors_no_signal_with_fresh_get_each_time():
     )
     assert result.status=="V40_SUPERVISOR_WAIT_GENUINE_STAGE2"
     assert p.calls==["get"]*3
+
+
+
+@pytest.mark.asyncio
+async def test_staggered_two_due_bars_commit_only_their_cursors():
+    p=Ports(active(4,due_indices=(0,2)))
+    out=await controller(p).run_one()
+    assert out.status=="V40_SUPERVISOR_BAR_COMMITTED_REOBSERVE"
+    assert out.observed_slots==4
+    assert len(p.frame.completed_exit.batch.slots)==2
+    assert len(p.frame.no_bar_due_ids)==2
+    assert p.calls==["get","cursor"]
+    assert not out.entries_allowed
+
+
+@pytest.mark.asyncio
+async def test_staggered_single_due_native_exit_prioritizes_close():
+    p=Ports(active(4,due_indices=(0,),high="180",low="80"))
+    out=await controller(p).run_one()
+    assert out.status=="V40_SUPERVISOR_NATIVE_EXIT_RECONCILE_DURABLE_RELEASE_REQUIRED"
+    assert p.calls==["get","close"]
+    assert len(p.frame.completed_exit.batch.slots)==1
+
+
+@pytest.mark.asyncio
+async def test_staggered_unaffected_stop_remains_protected_when_due_trails():
+    p=Ports(active(4,due_indices=(0,),low="86"))
+    out=await controller(p).run_one()
+    assert out.status=="V40_SUPERVISOR_STOP_PERMIT_UNAVAILABLE"
+    assert p.calls==["get"]
+
+
+@pytest.mark.asyncio
+async def test_staggered_fake_no_bar_due_complement_halts():
+    valid=active(4,due_indices=(0,2))
+    missing=replace(valid,no_bar_due_ids=valid.no_bar_due_ids[:1])
+    p=Ports(missing)
+    out=await controller(p).run_one()
+    assert out.status=="V40_SUPERVISOR_GUARDIAN_ACCOUNT_OR_SOURCE_HALT"
+    assert p.calls==["get"]
+    overlap=replace(valid,no_bar_due_ids=valid.no_bar_due_ids+(valid.completed_exit.batch.slots[0].position_id,))
+    p=Ports(overlap)
+    out=await controller(p).run_one()
+    assert out.status=="V40_SUPERVISOR_GUARDIAN_ACCOUNT_OR_SOURCE_HALT"
