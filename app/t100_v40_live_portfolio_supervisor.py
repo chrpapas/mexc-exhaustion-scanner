@@ -189,8 +189,7 @@ class V40PortfolioSupervisor:
         if projection is None:
             return set(frame.no_bar_due_ids) == set(ids)
         return (
-            frame.no_bar_due_ids == ()
-            and type(projection) is V40VerifiedExitProjection
+            type(projection) is V40VerifiedExitProjection
             and projection.status ==
                 "V40_VERIFIED_OWNED_ONE_TO_FOUR_EXITS_PROJECTED_NONAUTHORIZING"
             and projection.protected_position_count == len(ids)
@@ -201,8 +200,18 @@ class V40PortfolioSupervisor:
             and projection.stop_amendment_permitted is False
             and projection.position_release_permitted is False
             and projection.exchange_posts == projection.database_writes == 0
-            and len(projection.batch.slots) == len(ids)
-            and {s.position_id for s in projection.batch.slots} == set(ids)
+            # Each cursor advances independently, but all *other* open
+            # positions must remain accounted for and fully protected.
+            and 1 <= len(projection.batch.slots) <= len(ids)
+            and len({s.position_id for s in projection.batch.slots})
+                == len(projection.batch.slots)
+            and set(frame.no_bar_due_ids).isdisjoint(
+                {s.position_id for s in projection.batch.slots}
+            )
+            and (
+                set(frame.no_bar_due_ids) |
+                {s.position_id for s in projection.batch.slots}
+            ) == set(ids)
         )
 
     @staticmethod
@@ -272,7 +281,7 @@ class V40PortfolioSupervisor:
                     stop=stop.stop_post_may_have_occurred
                          or stop.requires_independent_reconciliation,
                 )
-            if batch.unchanged_verified_stop_count != slots:
+            if batch.unchanged_verified_stop_count != len(batch.slots):
                 return self._halt("V40_SUPERVISOR_EXIT_POLICY_DRIFT", slots=slots)
             try:
                 advanced = await self.ports.persist_unchanged_stop_checkpoint(projection)
@@ -287,7 +296,7 @@ class V40PortfolioSupervisor:
                 or advanced.durable_commit_verified is not True
                 or advanced.stop_bookends_verified is not True
                 or advanced.exchange_posts != 0
-                or len(advanced.position_ids) != slots
+                or len(advanced.position_ids) != len(batch.slots)
                 or set(advanced.position_ids) !=
                     {s.position_id for s in batch.slots}
             ):
