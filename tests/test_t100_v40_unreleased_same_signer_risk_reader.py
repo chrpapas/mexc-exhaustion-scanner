@@ -78,10 +78,16 @@ def run(monkeypatch, *,changes=None):
     monkeypatch.setattr(m,"FourSlotSnapshotCoordinator",FakeSnapshot)
     monkeypatch.setattr(m,"MexcReadOnlyCrossRiskCollector",FakeCollector)
     monkeypatch.setattr(m,"observe_cross_risk_window",observe_cross)
-    tick=1002000+changed.get("elapsed_ms",0)
+    clock_calls=0
+    def tick():
+        nonlocal clock_calls
+        clock_calls+=1
+        return 1002000 + (
+            changed.get("elapsed_ms",0) if clock_calls>=2 else 0
+        )
     client=m.V40SameSignerCurrentRiskReader(
         ledger=ledger,private=actual_probe,public=actual_public,
-        clock_ms=lambda:tick,
+        clock_ms=tick,
     )
     result=asyncio.run(client.observe_current())
     return result,inventory_calls,ledger_calls,market_calls
