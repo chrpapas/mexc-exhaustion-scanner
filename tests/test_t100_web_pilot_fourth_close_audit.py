@@ -13,6 +13,7 @@ def _scenario(monkeypatch, *, stop_price="103", close_external_exact=True):
         "close_oid": "TPWEB" + "b" * 24,
         "amend_post_attempted": True,
         "amend_ack_verified": True,
+        "ui_operator_confirmed_market_sl_before_amend": True,
         "amend_target_price": "103",
         "amend_stop_order_id": "123",
         "stop_price": "105",
@@ -92,6 +93,8 @@ def test_exact_manual_close_and_canceled_amended_stop(monkeypatch):
     assert result["finished_stop_price_matches_amended_target"] is True
     assert result["finished_stop_error_code"] == "NONZERO_REPORTED"
     assert result["manual_market_close_exactly_verified"] is True
+    assert result["operator_ui_trigger_market_sl_confirmed_before_amend"] is True
+    assert result["supervised_native_stop_full_one_contract_volume_observed"] is True
     assert result["native_sl_trigger_and_market_close_verified"] is False
     assert result["live_authorization"] is False
 
@@ -112,3 +115,13 @@ def test_unrelated_close_external_id_is_rejected(monkeypatch):
     result = asyncio.run(audit.audit_fourth_pilot(client, "synthetic"))
     assert result["status"] == "FOURTH_JOURNALED_CLOSE_ORDER_NOT_EXACT"
     assert result["live_authorization"] is False
+
+
+def test_ui_confirmation_and_full_volume_are_distinct_from_api_market_type(monkeypatch):
+    client = _scenario(monkeypatch)
+    result = asyncio.run(audit.audit_fourth_pilot(client, "synthetic"))
+    assert result["operator_ui_trigger_market_sl_confirmed_before_amend"]
+    assert result["supervised_native_stop_full_one_contract_volume_observed"]
+    assert not result["exchange_continuous_protection_certified"]
+    assert not result["native_amendment_live_certified_for_production"]
+    assert not result["live_authorization"]

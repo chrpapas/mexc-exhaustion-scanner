@@ -14,6 +14,9 @@ from decimal import Decimal, InvalidOperation
 from typing import Mapping
 
 LIVE_CONFIRMATION = "I_UNDERSTAND_MEXC_REAL_FUNDS_AT_RISK"
+# Global legacy adapter remains disabled, including every prior paper,
+# manual and historic canary path. The operator-approved FIRST V40 real
+# trial uses a separate narrowly scoped typed permit, never this status.
 LIVE_ADAPTER_STATUS = "NOT_IMPLEMENTED"
 # Legacy stoporder/change_plan_price is documented in older futures docs;
 # the current public reference needs independent scope/identity confirmation.

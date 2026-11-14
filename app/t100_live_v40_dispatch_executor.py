@@ -30,7 +30,10 @@ from app.t100_live_four_slot_planner import FourSlotPlan
 from app.t100_live_four_slot_attempt_journal import DurableAttemptStage
 from app.t100_live_four_slot_dispatch_claims import FourSlotDispatchClaim
 from app.t100_live_leader_fencing import LeaderLease
-from app.t100_live_strategy_parity_gate import assess_strategy_parity_report
+from app.t100_live_strategy_parity_gate import (
+    assess_strategy_parity_report,
+    assess_v40_first_canary_entry_parity_report,
+)
 from app.t100_v40_admission import V40Admission
 
 
@@ -110,6 +113,16 @@ def _preclaim_validate(
     # Actual permit issuer and adapter certification are separate. This
     # MUST be the first decision; never trust operator limits alone.
     require_certified_transport_permit(permit)
+    from app.t100_live_authorization import V40_CANARY_SCOPE
+    if getattr(permit,'scope',None)==V40_CANARY_SCOPE and (
+        permit.signal_id!=intent.signal_id or permit.symbol!=intent.symbol
+        or intent.notional_usdt> D("12.50")
+        or caps.max_order_usdt>D("12.50")
+        or caps.max_portfolio_usdt>D("12.50")
+        or caps.max_daily_loss_usdt>D("12.50")
+        or plan.occupied_slots!=0
+    ):
+        raise V40DispatchHalted("V40_CANARY_SIGNAL_OR_TINY_CAP_MISMATCH")
     if (
         type(plan) is not FourSlotPlan
         or plan.action != "ADMIT"
@@ -145,12 +158,22 @@ def _preclaim_validate(
     # Historic entry parity alone is NOT enough: full V40 chronological
     # strategy parity is a distinct release gate. Live equivalence still
     # requires independent testing beyond this report.
-    parity = assess_strategy_parity_report(parity_report)
-    if (
-        parity.get("strategy_parity_verified") is not True
-        or parity.get("live_authorization") is not False
-    ):
-        raise V40DispatchHalted("V40_FULL_STRATEGY_PARITY_NOT_VERIFIED")
+    if getattr(permit,"scope",None)==V40_CANARY_SCOPE:
+        parity=assess_v40_first_canary_entry_parity_report(parity_report)
+        if (
+            parity["first_canary_entry_parity_verified"] is not True
+            or parity["live_authorization"] is not False
+        ):
+            raise V40DispatchHalted(
+                "V40_FIRST_CANARY_FROZEN_ENTRY_PARITY_NOT_VERIFIED"
+            )
+    else:
+        parity=assess_strategy_parity_report(parity_report)
+        if (
+            parity.get("strategy_parity_verified") is not True
+            or parity.get("live_authorization") is not False
+        ):
+            raise V40DispatchHalted("V40_FULL_STRATEGY_PARITY_NOT_VERIFIED")
 
     if not (
         type(intent.signal_id) is int and intent.signal_id > 0

@@ -1,0 +1,49 @@
+name: V40 unreleased full-lifecycle offline checks
+
+on:
+  pull_request:
+    paths:
+      - "app/t100_v40_unreleased_*.py"
+      - "tests/test_t100_v40_unreleased_*.py"
+      - "migrations/041_v40_trade_event_outbox_UNRELEASED.sql"
+      - "migrations/042_v40_exit_bar_cursor_UNRELEASED.sql"
+      - ".github/workflows/v40-full-lifecycle-unreleased.yml"
+  push:
+    branches:
+      - "feature/v40-full-lifecycle-unreleased-*"
+    paths:
+      - "app/t100_v40_unreleased_*.py"
+      - "tests/test_t100_v40_unreleased_*.py"
+      - ".github/workflows/v40-full-lifecycle-unreleased.yml"
+
+jobs:
+  frozen-exits-and-event-proof:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install project test dependencies
+        run: python -m pip install -e ".[dev]"
+      - name: Compile unreleased modules
+        run: python -m compileall -q app/t100_v40_unreleased_*.py
+      - name: Adverse-first exit parity and Discord evidence tests
+        run: |
+          python -m pytest -q \
+            tests/test_t100_v40_unreleased_exit_policy.py \
+            tests/test_t100_v40_unreleased_trade_events.py \
+            tests/test_t100_v40_unreleased_event_attestation.py \
+            tests/test_t100_v40_unreleased_full_portfolio.py \
+            tests/test_t100_v40_unreleased_trade_dispatcher.py \
+            tests/test_t100_v40_unreleased_native_stop_cycle.py \
+            tests/test_t100_v40_unreleased_bar_cursor.py \
+            tests/test_t100_v40_unreleased_normal_stop_observer.py
+      - name: Ensure no production worker imports unreleased code
+        run: |
+          ! grep -R "t100_v40_unreleased_" \
+              app/t100_v40_render_real_canary_worker.py \
+              app/t100_v40_render_executor_disabled_worker.py \
+              app/t100_v40_canary_durable_guardian.py

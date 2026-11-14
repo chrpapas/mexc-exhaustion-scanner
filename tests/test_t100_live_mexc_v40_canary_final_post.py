@@ -1,0 +1,246 @@
+"""Final MEXC V40 short-entry POST is a one-shot, frozen SL75 boundary.
+
+Offline only. No real exchange calls or private credentials are used.
+"""
+import asyncio
+from dataclasses import replace
+from decimal import Decimal as D
+from types import SimpleNamespace
+
+import pytest
+
+import app.t100_live_mexc_adapter as m
+from app.t100_live_authorization import V40_CANARY_SCOPE
+from app.t100_live_execution import EntryIntent
+from app.t100_v40_guardian_post_gate import (
+    PostgresV40GuardianPostGate,V40GuardianPostGateEvidence,
+)
+
+
+class FakeClient:
+    def __init__(self,reply=None):
+        self.posts=[]
+        self.reply=reply if reply is not None else {"orderId":"123456789"}
+    async def _private_post(self,path,body):
+        self.posts.append((path,body))
+        return self.reply
+
+
+def intent():
+    return EntryIntent.build(
+        signal_id=496,symbol="SOL_USDT",reference_price="100",
+        notional_usdt="10",contract_size="0.001",
+        volume_step="1",min_volume="1",max_volume="1000",
+        price_tick="0.01",
+    )
+
+
+def permit():
+    return SimpleNamespace(
+        scope=V40_CANARY_SCOPE,signal_id=496,symbol="SOL_USDT",
+        max_position_notional_usdt=D("12.50"),leverage=1,
+    )
+
+
+def clean_gate():
+    # Deliberate test double, not a substitute for independent production SQL.
+    gate=PostgresV40GuardianPostGate(
+        SimpleNamespace(acquire=lambda:None),
+    )
+    async def verified():
+        return V40GuardianPostGateEvidence(
+            status="V40_GUARDIAN_POST_GATE_CURRENT_FLAT_UNLATCHED_NONAUTHORIZING",
+            state_verified=True,outbox_verified=True,guardian_fresh=True,
+            critical_latch_absent=True,
+        )
+    gate.verify=verified
+    return gate
+
+
+def call(i,p,*,guardian_gate=None):
+    client=FakeClient()
+    adapter=m.LiveMexcAdapter(
+        client,guardian_gate=guardian_gate if guardian_gate is not None
+        else clean_gate(),
+    )
+    async def send():
+        return await adapter.submit_short_with_stop(i,permit=p)
+    return client,adapter,send
+
+
+def test_canary_market_short_cross_one_x_attaches_exact_frozen_stop(monkeypatch):
+    monkeypatch.setattr(m,"require_certified_transport_permit",lambda x:x)
+    client,_,send=call(intent(),permit())
+    ack=asyncio.run(send())
+    assert ack=="123456789"
+    assert len(client.posts)==1
+    path,body=client.posts[0]
+    assert path=="/api/v1/private/order/create"
+    assert set(body)=={
+        "symbol","price","vol","leverage","side","type","openType",
+        "positionMode","externalOid","stopLossPrice","lossTrend",
+    }
+    assert body["symbol"]=="SOL_USDT"
+    assert body["side"]==3
+    assert body["type"]==5
+    assert body["openType"]==2
+    assert body["positionMode"]==1
+    assert body["leverage"]==1
+    assert body["lossTrend"]==1
+    assert body["externalOid"]==intent().external_oid
+    assert body["stopLossPrice"]=="175.00"
+
+
+@pytest.mark.parametrize("override",[
+    {"external_oid":"wrong-origin"},
+    {"stop_price":D("174.99")},
+    {"notional_usdt":D("12.51")},
+    {"volume_contracts":D("NaN")},
+    {"reference_price":D("-100")},
+    {"symbol":"BTC_USDT"},
+    {"symbol":"sol_USDT"},
+    {"signal_id":0},
+])
+def test_bad_frozen_entry_never_posts(monkeypatch,override):
+    monkeypatch.setattr(m,"require_certified_transport_permit",lambda x:x)
+    client,_,send=call(replace(intent(),**override),permit())
+    with pytest.raises(RuntimeError,match="NO_POST"):
+        asyncio.run(send())
+    assert client.posts==[]
+
+
+@pytest.mark.parametrize("change",[
+    {"signal_id":1234},
+    {"symbol":"ETH_USDT"},
+    {"leverage":2},
+    {"max_position_notional_usdt":D("4")},
+])
+def test_bad_permit_never_posts(monkeypatch,change):
+    monkeypatch.setattr(m,"require_certified_transport_permit",lambda x:x)
+    p=permit()
+    for k,v in change.items():setattr(p,k,v)
+    client,_,send=call(intent(),p)
+    with pytest.raises(RuntimeError,match="NO_POST"):
+        asyncio.run(send())
+    assert client.posts==[]
+
+
+def test_uncertified_adapter_never_posts_even_with_valid_intent():
+    # The shipped production policy is deliberately NOT_IMPLEMENTED.
+    client,_,send=call(intent(),permit())
+    with pytest.raises(Exception):
+        asyncio.run(send())
+    assert client.posts==[]
+
+
+@pytest.mark.parametrize("reply",[
+    {},{"orderId":0},{"orderId":True},{"orderId":"0"},
+    {"orderId":"-1"},{"orderId":"abc"},
+])
+def test_post_ack_invalid_caller_must_reconcile_never_auto_retry(
+    monkeypatch,reply,
+):
+    monkeypatch.setattr(m,"require_certified_transport_permit",lambda x:x)
+    client=FakeClient(reply=reply)
+    adapter=m.LiveMexcAdapter(client,guardian_gate=clean_gate())
+    with pytest.raises(RuntimeError,match="orderId"):
+        asyncio.run(adapter.submit_short_with_stop(intent(),permit=permit()))
+    # One and only one POST attempt, even after an invalid ACK.
+    assert len(client.posts)==1
+
+
+
+@pytest.mark.parametrize("bad_status",[
+    "V40_GUARDIAN_POST_GATE_LATCH_OR_FRESHNESS_HALT",
+    "V40_GUARDIAN_POST_GATE_OUTBOX_HALT",
+    "V40_GUARDIAN_POST_GATE_DATABASE_UNAVAILABLE_NO_POST",
+])
+def test_guardian_latched_stale_or_unavailable_refuses_exchange_post(
+    monkeypatch,bad_status,
+):
+    monkeypatch.setattr(m,"require_certified_transport_permit",lambda x:x)
+    gate=clean_gate()
+    async def failed():
+        return V40GuardianPostGateEvidence(status=bad_status)
+    gate.verify=failed
+    client,_,send=call(intent(),permit(),guardian_gate=gate)
+    with pytest.raises(RuntimeError,match="LATCHED_OR_STALE_NO_POST"):
+        asyncio.run(send())
+    assert client.posts==[]
+
+
+def test_canary_without_real_guardian_gate_cannot_post(monkeypatch):
+    monkeypatch.setattr(m,"require_certified_transport_permit",lambda x:x)
+    client=FakeClient()
+    adapter=m.LiveMexcAdapter(client)
+    with pytest.raises(RuntimeError,match="GUARDIAN_GATE_MISSING_NO_POST"):
+        asyncio.run(adapter.submit_short_with_stop(intent(),permit=permit()))
+    assert client.posts==[]
+
+
+@pytest.mark.parametrize("ack", [
+    "739206374277809664", 739206374277809664,
+    {"orderId": "739206374277809664"},
+])
+def test_real_mexc_client_data_ack_is_a_scalar_and_never_resubmitted(
+    monkeypatch, ack,
+):
+    # The production MexcTradeClient returns payload["data"] directly.
+    monkeypatch.setattr(m, "require_certified_transport_permit", lambda x: x)
+    client = FakeClient(reply=ack)
+    adapter = m.LiveMexcAdapter(client, guardian_gate=clean_gate())
+    result = asyncio.run(adapter.submit_short_with_stop(
+        intent(), permit=permit(),
+    ))
+    assert result == "739206374277809664"
+    assert len(client.posts) == 1
+
+
+@pytest.mark.parametrize("ack", [None, "", " 123", "+123", "1.0", "１２３", False])
+def test_scalar_unknown_ack_freezes_after_exactly_one_post(monkeypatch, ack):
+    monkeypatch.setattr(m, "require_certified_transport_permit", lambda x: x)
+    client = FakeClient(reply={"orderId": "999"})
+    client.reply = ack
+    adapter = m.LiveMexcAdapter(client, guardian_gate=clean_gate())
+    with pytest.raises(RuntimeError, match="orderId"):
+        asyncio.run(adapter.submit_short_with_stop(intent(), permit=permit()))
+    assert len(client.posts) == 1
+
+
+def test_real_mexc_trade_client_scalar_envelope_flows_through_adapter(monkeypatch):
+    """Exercise the shipped transport's envelope extraction, not a dict fake."""
+    import httpx
+    from app.mexc_trade import MexcTradeClient
+
+    seen = []
+    def exchange(request):
+        seen.append(request)
+        return httpx.Response(
+            200, json={"success": True, "code": 0,
+                        "data": "739206374277809664"},
+        )
+    async def run():
+        transport = MexcTradeClient.__new__(MexcTradeClient)
+        transport.api_key = "TEST_KEY_NO_REAL_TRADING"
+        transport.api_secret = "TEST_SECRET_NO_REAL_TRADING"
+        transport.client = httpx.AsyncClient(
+            base_url="https://api.mexc.com",
+            transport=httpx.MockTransport(exchange),
+        )
+        transport._mutation_lock = asyncio.Lock()
+        transport._last_mutation_at = 0.
+        try:
+            adapter = m.LiveMexcAdapter(transport, guardian_gate=clean_gate())
+            return await adapter.submit_short_with_stop(
+                intent(), permit=permit(),
+            )
+        finally:
+            await transport.client.aclose()
+
+    monkeypatch.setattr(m, "require_certified_transport_permit", lambda x: x)
+    ack = asyncio.run(run())
+    assert ack == "739206374277809664"
+    assert len(seen) == 1
+    assert seen[0].method == "POST"
+    assert seen[0].url.path == "/api/v1/private/order/create"
+    assert b'"stopLossPrice":"175.00"' in seen[0].content

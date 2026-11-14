@@ -20,6 +20,33 @@ class ReadOnlyMexcProbe:
     def __init__(self, client: PrivateGet):
         self._client = client
 
+    async def raw_position_mode(self) -> int:
+        """Signed GET: 1=hedge; 2=one-way. Unknown is NOT hedge.
+
+        Accept only the documented positionMode field or the direct integer
+        envelope data variant observed in client integrations. Never modify
+        account configuration to force an expected mode.
+        """
+        try:
+            data=await self._client._private_get(
+                "/api/v1/private/position/position_mode"
+            )
+        except Exception as error:
+            from app.t100_v40_guardian_get_failure_codes import (
+                safe_wrapped_mode_reason,
+            )
+            category = safe_wrapped_mode_reason(error)
+            if category is not None:
+                raise VenueReadHalted(category) from None
+            raise VenueReadHalted("POSITION_MODE_GET_FAILED") from None
+        if type(data) is dict:
+            if set(data)!={"positionMode"}:
+                raise VenueReadHalted("POSITION_MODE_RESPONSE_UNVERIFIED")
+            data=data["positionMode"]
+        if type(data) is not int or data not in (1,2):
+            raise VenueReadHalted("POSITION_MODE_RESPONSE_UNVERIFIED")
+        return data
+
     async def raw_account_assets(self) -> list[dict[str, Any]]:
         try:
             raw = await self._client._private_get(
@@ -32,6 +59,49 @@ class ReadOnlyMexcProbe:
             or any(not isinstance(row, dict) for row in raw)
         ):
             raise VenueReadHalted("ACCOUNT_ASSETS_RESPONSE_UNVERIFIED")
+        return raw
+
+    async def raw_position_leverage(
+        self, symbol: str,
+    ) -> list[dict[str, Any]]:
+        """Private signed GET of configured long/short leverage and margin.
+
+        Unlike account/risk_limit, this is the documented dedicated
+        position/leverage settings endpoint. It may omit 'symbol' from
+        its result rows, because the request is scoped and the official
+        example does. Never infer write permission, venue atomicity,
+        future stressed-tier safety or authorization to change settings.
+        """
+        if (
+            type(symbol) is not str
+            or re.fullmatch(r"[A-Z0-9]+_USDT",symbol) is None
+        ):
+            raise VenueReadHalted("INVALID_POSITION_LEVERAGE_SYMBOL")
+        try:
+            raw=await self._client._private_get(
+                "/api/v1/private/position/leverage",{"symbol":symbol},
+            )
+        except Exception:
+            raise VenueReadHalted("POSITION_LEVERAGE_GET_FAILED") from None
+        if (
+            type(raw) is not list or not 1<=len(raw)<=2
+            or any(type(row) is not dict for row in raw)
+        ):
+            raise VenueReadHalted("POSITION_LEVERAGE_RESPONSE_UNVERIFIED")
+        sides=set()
+        for row in raw:
+            side=row.get("positionType")
+            if (
+                type(side) is not int or side not in (1,2)
+                or side in sides
+                or ("symbol" in row and row["symbol"]!=symbol)
+                or type(row.get("openType")) is not int
+                or row["openType"] not in (1,2)
+                or type(row.get("leverage")) is not int
+                or not 1<=row["leverage"]<=1000
+            ):
+                raise VenueReadHalted("POSITION_LEVERAGE_ROW_UNVERIFIED")
+            sides.add(side)
         return raw
 
     async def raw_account_risk_limits(

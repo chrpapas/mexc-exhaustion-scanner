@@ -56,28 +56,29 @@ class StopJournalTests(unittest.IsolatedAsyncioTestCase):
         self.journal, self.exchange = Journal(), Exchange()
         self.a = amendment()
         self.assertTrue(await self.journal.prepare(self.a))
+        self.journal.states[self.a.external_id] = "SUBMITTING"
         self.reconciler = ReadOnlyStopReconciler(self.journal, self.exchange)
 
     async def test_unique_deterministic_intent(self):
         self.assertEqual(self.a.external_id, amendment().external_id)
         self.assertFalse(await self.journal.prepare(amendment()))
 
-    async def test_verified_stop(self):
-        self.assertEqual(await self.reconciler.verify(self.a), "VERIFIED_READ_ONLY")
-        self.assertEqual(self.journal.states[self.a.external_id], "VERIFIED")
+    async def test_stop_price_observed_but_journal_must_not_be_promoted(self):
         self.assertEqual(
-            self.journal.verified_stop_ids[self.a.external_id],
-            self.a.stop_order_id,
+            await self.reconciler.verify(self.a),
+            "STOP_PRICE_ONLY_OBSERVED_RECONCILIATION_REQUIRED",
         )
+        self.assertEqual(self.journal.states[self.a.external_id], "SUBMITTING")
+        self.assertEqual(self.journal.verified_stop_ids, {})
         self.assertEqual(self.exchange.reads, 1)
 
     async def test_idempotent_recheck(self):
         await self.reconciler.verify(self.a)
         await self.reconciler.verify(self.a)
-        self.assertEqual(len(self.journal.transitions), 1)
+        self.assertEqual(len(self.journal.transitions), 0)
 
     async def test_verified_recheck_requires_persisted_stop_identity(self):
-        await self.reconciler.verify(self.a)
+        self.journal.states[self.a.external_id] = "VERIFIED"
         self.journal.verified_stop_ids[self.a.external_id] = "different"
         with self.assertRaisesRegex(
             StopJournalHalted, "PERSISTENCE_MISMATCH"
@@ -88,7 +89,7 @@ class StopJournalTests(unittest.IsolatedAsyncioTestCase):
         self.exchange.stops[0]["stopLossPrice"] = "175"
         with self.assertRaisesRegex(StopJournalHalted, "STOP_NOT_TIGHTENED"):
             await self.reconciler.verify(self.a)
-        self.assertEqual(self.journal.states[self.a.external_id], "PREPARED")
+        self.assertEqual(self.journal.states[self.a.external_id], "SUBMITTING")
 
     async def test_loosened_stop_blocks(self):
         self.exchange.stops[0]["stopLossPrice"] = "176"
@@ -115,7 +116,29 @@ class StopJournalTests(unittest.IsolatedAsyncioTestCase):
             StopAmendment.build(symbol="SIREN_USDT", position_id="10", stop_order_id="20",
                                 previous_stop=D("175"), proposed_stop=D("175"))
 
-    async def test_unknown_state_still_requires_exchange_proof(self):
+    async def test_unknown_state_still_requires_complete_native_protection_audit(self):
         self.journal.states[self.a.external_id] = "UNKNOWN"
-        self.assertEqual(await self.reconciler.verify(self.a), "VERIFIED_READ_ONLY")
-        self.assertEqual(self.journal.transitions, [("UNKNOWN", "VERIFIED")])
+        self.assertEqual(
+            await self.reconciler.verify(self.a),
+            "STOP_PRICE_ONLY_OBSERVED_RECONCILIATION_REQUIRED",
+        )
+        self.assertEqual(self.journal.transitions, [])
+        self.assertEqual(self.journal.states[self.a.external_id], "UNKNOWN")
+
+    async def test_prepared_price_change_is_not_our_mutation(self):
+        self.journal.states[self.a.external_id] = "PREPARED"
+        with self.assertRaisesRegex(
+            StopJournalHalted, "NO_OWNED_POST_ATTEMPT"
+        ):
+            await self.reconciler.verify(self.a)
+        self.assertEqual(self.exchange.reads, 0)
+        self.assertEqual(self.journal.transitions, [])
+
+    async def test_verified_stop_price_only_reader_cannot_clear_recovery_latch(self):
+        self.journal.states[self.a.external_id] = "VERIFIED"
+        self.journal.verified_stop_ids[self.a.external_id] = self.a.stop_order_id
+        self.assertEqual(
+            await self.reconciler.verify(self.a),
+            "STOP_PRICE_ONLY_OBSERVED_RECONCILIATION_REQUIRED",
+        )
+        self.assertEqual(self.journal.transitions, [])

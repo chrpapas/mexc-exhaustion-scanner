@@ -54,6 +54,7 @@ class StopAmendmentLifecycleCoordinator:
         stops: Any,
         *,
         position_quantity: Decimal,
+        verified_filled_entry_order_id: str | None = None,
     ) -> None:
         """An exchange price match without complete native SL is not VERIFIED.
 
@@ -93,6 +94,7 @@ class StopAmendmentLifecycleCoordinator:
             position_id=amendment.position_id,
             position_quantity=position_quantity,
             maximum_short_stop_price=amendment.previous_stop,
+            verified_filled_entry_order_id=verified_filled_entry_order_id,
         )
         if (
             report.status
@@ -200,6 +202,7 @@ class StopAmendmentLifecycleCoordinator:
         after_stops: Any,
         position_quantity: Decimal,
         finished_stops: Any | None = None,
+        verified_filled_entry_order_id: str | None = None,
     ) -> StopReconciliationOutcome:
         state = await self._state(amendment)
         if state == "PREPARED":
@@ -221,9 +224,11 @@ class StopAmendmentLifecycleCoordinator:
         )
         self._require_native_short_stop_coverage(
             amendment, before_stops, position_quantity=position_quantity,
+            verified_filled_entry_order_id=verified_filled_entry_order_id,
         )
         self._require_native_short_stop_coverage(
             amendment, after_stops, position_quantity=position_quantity,
+            verified_filled_entry_order_id=verified_filled_entry_order_id,
         )
         report = assess_expected_stop_transition(
             before_stops=before_stops,
@@ -250,6 +255,7 @@ class StopAmendmentLifecycleCoordinator:
         current_stops: Any,
         position_quantity: Decimal,
         finished_stops: Any | None = None,
+        verified_filled_entry_order_id: str | None = None,
     ) -> StopReconciliationOutcome:
         """Reconcile after restart without a pre-mutation REST snapshot.
 
@@ -277,6 +283,7 @@ class StopAmendmentLifecycleCoordinator:
         )
         self._require_native_short_stop_coverage(
             amendment, current_stops, position_quantity=position_quantity,
+            verified_filled_entry_order_id=verified_filled_entry_order_id,
         )
         report = assess_expected_stop_current_outcome(
             current_stops=current_stops,

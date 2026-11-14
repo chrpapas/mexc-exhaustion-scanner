@@ -1,0 +1,172 @@
+{
+  "archive_manifest": {
+    "candidate_count": 146,
+    "no_exchange_keys_or_orders": true,
+    "preceding_candles_exported": 7154,
+    "sqlite_file": "historical-market-data-min30-v1.sqlite",
+    "stage_sha256": "94d41f5077324673d79dc367f5b66b41732ebf1c37e4e046c9ae09bc72b795ca",
+    "type": "READ_ONLY_SOURCE_PARITY_SAMPLE"
+  },
+  "candidates": 146,
+  "direct_policy_reference_notionals_exact": 648,
+  "discrepancies": 0,
+  "entry_diagnostic_comparisons_checked": 7560,
+  "gate_decisions_checked": 2376,
+  "limitations": [
+    "HYBRID/KNOWN_ONLY lot rounding cannot be exactly reproduced without the contract specification snapshot",
+    "The direct-policy comparison is restricted to exported entries where the shock budget was not binding",
+    "Existing marked portfolio exposure, fees, funding and exits were not independently replayed",
+    "V40 liquidity capacity is a historical candle turnover proxy, not live executable MEXC depth",
+    "No live order, exchange stop or live fill is certified",
+    "Gates are absent for signals rejected earlier by the original portfolio occupancy/duplicate logic"
+  ],
+  "prior_candles": 7154,
+  "reference_entry_notionals_exact": 648,
+  "scope": "historical gate decisions, causal volatility/turnover, and REFERENCE entries; not full replay, not actual fills",
+  "status": "V40_ENTRY_FILTER_AND_REFERENCE_CAPACITY_PARITY_PASS",
+  "tested_capitals": {
+    "2000": {
+      "baseline_hybrid_final_equity_usdt": 14476.81238416,
+      "baseline_hybrid_max_dd_pct": -54.8664,
+      "costs": {
+        "100": {
+          "HYBRID": {
+            "actual_entries": 108,
+            "gate_admitted": 108,
+            "gate_evaluated": 132,
+            "gate_skipped": 24
+          },
+          "KNOWN_ONLY": {
+            "actual_entries": 99,
+            "gate_admitted": 109,
+            "gate_evaluated": 133,
+            "gate_skipped": 24
+          },
+          "REFERENCE": {
+            "actual_entries": 108,
+            "gate_admitted": 108,
+            "gate_evaluated": 132,
+            "gate_skipped": 24
+          }
+        },
+        "200": {
+          "HYBRID": {
+            "actual_entries": 108,
+            "gate_admitted": 108,
+            "gate_evaluated": 132,
+            "gate_skipped": 24
+          },
+          "KNOWN_ONLY": {
+            "actual_entries": 99,
+            "gate_admitted": 109,
+            "gate_evaluated": 133,
+            "gate_skipped": 24
+          },
+          "REFERENCE": {
+            "actual_entries": 108,
+            "gate_admitted": 108,
+            "gate_evaluated": 132,
+            "gate_skipped": 24
+          }
+        }
+      },
+      "historical_venue_executable_certified": "False"
+    },
+    "10000": {
+      "baseline_hybrid_final_equity_usdt": 44210.73810799,
+      "baseline_hybrid_max_dd_pct": -36.8128,
+      "costs": {
+        "100": {
+          "HYBRID": {
+            "actual_entries": 108,
+            "gate_admitted": 108,
+            "gate_evaluated": 132,
+            "gate_skipped": 24
+          },
+          "KNOWN_ONLY": {
+            "actual_entries": 99,
+            "gate_admitted": 109,
+            "gate_evaluated": 133,
+            "gate_skipped": 24
+          },
+          "REFERENCE": {
+            "actual_entries": 108,
+            "gate_admitted": 108,
+            "gate_evaluated": 132,
+            "gate_skipped": 24
+          }
+        },
+        "200": {
+          "HYBRID": {
+            "actual_entries": 108,
+            "gate_admitted": 108,
+            "gate_evaluated": 132,
+            "gate_skipped": 24
+          },
+          "KNOWN_ONLY": {
+            "actual_entries": 99,
+            "gate_admitted": 109,
+            "gate_evaluated": 133,
+            "gate_skipped": 24
+          },
+          "REFERENCE": {
+            "actual_entries": 108,
+            "gate_admitted": 108,
+            "gate_evaluated": 132,
+            "gate_skipped": 24
+          }
+        }
+      },
+      "historical_venue_executable_certified": "False"
+    },
+    "100000": {
+      "baseline_hybrid_final_equity_usdt": 197724.2025475,
+      "baseline_hybrid_max_dd_pct": -22.62,
+      "costs": {
+        "100": {
+          "HYBRID": {
+            "actual_entries": 108,
+            "gate_admitted": 108,
+            "gate_evaluated": 131,
+            "gate_skipped": 23
+          },
+          "KNOWN_ONLY": {
+            "actual_entries": 99,
+            "gate_admitted": 109,
+            "gate_evaluated": 132,
+            "gate_skipped": 23
+          },
+          "REFERENCE": {
+            "actual_entries": 108,
+            "gate_admitted": 108,
+            "gate_evaluated": 131,
+            "gate_skipped": 23
+          }
+        },
+        "200": {
+          "HYBRID": {
+            "actual_entries": 108,
+            "gate_admitted": 108,
+            "gate_evaluated": 131,
+            "gate_skipped": 23
+          },
+          "KNOWN_ONLY": {
+            "actual_entries": 99,
+            "gate_admitted": 109,
+            "gate_evaluated": 132,
+            "gate_skipped": 23
+          },
+          "REFERENCE": {
+            "actual_entries": 108,
+            "gate_admitted": 108,
+            "gate_evaluated": 131,
+            "gate_skipped": 23
+          }
+        }
+      },
+      "historical_venue_executable_certified": "False"
+    }
+  },
+  "archive_sha256": "2918f4589e8d564ca55b6f24aa2e9a868b5d214653ad7d92acaf1729fd1e4cb5",
+  "original_library_report_provenance": "v40_parity_audit_report.json / 2026-10-23; frozen SHA from companion v40_historical_parity_report.md"
+}

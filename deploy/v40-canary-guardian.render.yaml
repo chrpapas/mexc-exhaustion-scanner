@@ -1,0 +1,58 @@
+# Isolated T100_V40 first-canary guardian only.
+# This Blueprint intentionally creates ONE NEW independent background worker.
+# It does NOT adopt, alter, or replace the original T100/225 shadow worker,
+# the V40 scanner/trader, the BOXWAVE subaccount, or existing Render databases.
+#
+# ALREADY DEPLOYED. To use simpler shared-DB mode on the EXISTING worker,
+# set only T100_V40_GUARDIAN_SHARED_DB_DSN to the existing V40 executor
+# runtime URL and reuse your existing Discord webhook. MEXC GET-only key
+# stays independent. Complete migration 035 + reviewed 037 grant first.
+# This is weaker DB credential isolation than the original two-role design.
+# This is a non-trading, no-POST worker. It fails closed if provisioned incorrectly.
+services:
+  - type: worker
+    name: mexc-t100-v40-canary-guardian
+    runtime: python
+    plan: starter
+    region: frankfurt
+    repo: https://github.com/chrpapas/mexc-exhaustion-scanner.git
+    branch: integration/t100-v40-live-signal-intake-20261108
+    autoDeployTrigger: off
+    buildCommand: pip install .
+    startCommand: python -m app.t100_v40_canary_durable_guardian --run
+    envVars:
+      - key: T100_EXECUTION_MODE
+        value: paper
+      - key: T100_LIVE_ORDER_API_ENABLED
+        value: "false"
+      - key: T100_LIVE_KILL_SWITCH
+        value: "true"
+      - key: T100_GUARDIAN_OBSERVER_ENABLED
+        value: "true"
+      - key: T100_V40_CANARY_GUARDIAN_ENABLED
+        value: "true"
+      - key: T100_V40_GUARDIAN_DURABLE_ALERTS_ENABLED
+        value: "true"
+      - key: T100_V40_GUARDIAN_CROSS_PROTECTION_REQUIRED
+        value: "true"
+      - key: T100_V40_GUARDIAN_ACCOUNT_SCOPE
+        value: V40_DEDICATED
+      - key: T100_V40_CANARY_GUARDIAN_INTERVAL_SECONDS
+        value: "5"
+      # Separate from any POST-capable API key. Never paste these into chat.
+      - key: T100_V40_GUARDIAN_READONLY_API_KEY
+        sync: false
+      - key: T100_V40_GUARDIAN_READONLY_API_SECRET
+        sync: false
+      # Simpler first-canary mode: SAME existing V40 EXECUTOR RUNTIME DSN
+      # for immutable journal SELECTs and durable incident writes.
+      # Weaker DB privilege isolation; do not use owner/scanner credentials.
+      - key: T100_V40_GUARDIAN_REUSE_V40_RUNTIME_DB
+        value: "true"
+      - key: T100_V40_GUARDIAN_SHARED_DB_DSN
+        sync: false
+      # No new Postgres users or CA-file paths. Requires migration 035
+      # and one-time grant 037 to existing t100_live_executor_runtime role.
+      # Durable, redacted alert delivery. Never shares the trading key.
+      - key: T100_V40_GUARDIAN_DISCORD_WEBHOOK_URL
+        sync: false

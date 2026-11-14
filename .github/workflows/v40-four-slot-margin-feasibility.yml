@@ -1,0 +1,37 @@
+name: V40 four-slot historical margin feasibility (offline)
+
+on:
+  push:
+    branches:
+      - "feature/v40-four-slot-margin-feasibility-*"
+  pull_request:
+    paths:
+      - "app/t100_v40_unreleased_four_slot_margin_bridge.py"
+      - "app/t100_v40_historical_margin_preview.py"
+      - "app/t100_v40_unreleased_sequential_lot_margin.py"
+      - "tests/test_t100_v40_unreleased_four_slot_margin_bridge.py"
+      - "tests/test_t100_v40_unreleased_sequential_lot_margin.py"
+      - ".github/workflows/v40-four-slot-margin-feasibility.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  offline-four-slot-margin-audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install repo and pytest
+        run: python -m pip install -e ".[dev]"
+      - name: Compile offline module
+        run: python -m compileall -q app/t100_v40_unreleased_four_slot_margin_bridge.py app/t100_v40_unreleased_sequential_lot_margin.py
+      - name: Run historical preview and four-slot feasibility regressions
+        run: |
+          python -m pytest -q \
+            tests/test_t100_v40_historical_margin_preview.py \
+            tests/test_t100_v40_unreleased_four_slot_margin_bridge.py \
+            tests/test_t100_v40_unreleased_sequential_lot_margin.py \
+            tests/test_t100_v40_unreleased_full_portfolio.py

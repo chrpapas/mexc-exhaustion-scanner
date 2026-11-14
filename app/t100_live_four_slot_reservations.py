@@ -10,7 +10,6 @@ not proof of a fresh live account. No live connector calls this yet.
 """
 from __future__ import annotations
 
-import hashlib
 import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -18,6 +17,7 @@ from decimal import Decimal
 from typing import Any
 
 from app.t100_live_db_inspect import EXPECTED_DATABASE
+from app.t100_live_execution import deterministic_t100_entry_oid
 from app.t100_live_four_slot_planner import FourSlotPlan
 from app.t100_live_four_slot_snapshot_coordinator import (
     FourSlotSnapshotResult, LedgerSnapshot, _ledger_digest,
@@ -216,9 +216,7 @@ class PostgresFourSlotReservations:
             lease=lease, signal_id=signal_id, symbol=symbol,
             shared_account_symbols=(scope.all_symbols if scope else None),
         )
-        oid = "t100v40r" + hashlib.sha256(
-            f"{signal_id}:{symbol}:FROZEN_V40".encode("utf-8")
-        ).hexdigest()[:20]
+        oid = deterministic_t100_entry_oid(signal_id, symbol)
         try:
             async with self.pool.acquire() as conn:
                 # READ COMMITTED: next SELECT sees changes committed while

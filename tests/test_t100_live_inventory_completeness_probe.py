@@ -121,6 +121,7 @@ class CompletenessProbeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             r["status"], "CURRENT_INVENTORY_COMPLETENESS_PROBE_HALTED"
         )
+        self.assertEqual(r["failure_stage"],"ACCOUNT_ASSETS")
 
     async def test_no_private_values_in_certificate(self):
         p = Probe()
