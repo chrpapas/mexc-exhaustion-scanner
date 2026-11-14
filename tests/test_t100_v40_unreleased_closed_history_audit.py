@@ -151,7 +151,7 @@ async def test_dirty_historical_account_without_archive_proof_still_halts():
 @pytest.mark.asyncio
 async def test_flat_after_close_never_accepts_fake_positive_archive():
     ledger,orders,positions,stops=fixture(0)
-    ledger.intents=evidence()[0]
+    ledger=replace(ledger,intents=evidence()[0])
     reader=Ledger(ledger)
     async def liar(*,expected_intents):
         return V40ArchivedHistoryAudit(
