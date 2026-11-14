@@ -1,0 +1,38 @@
+name: V40 archived closed-trade flat restart attestation (offline)
+
+on:
+  push:
+    branches:
+      - "feature/v40-audited-archived-close-flat-restart-*"
+  pull_request:
+    paths:
+      - "app/t100_v40_unreleased_closed_history_audit.py"
+      - "app/t100_live_four_slot_ledger_reader.py"
+      - "app/t100_live_four_slot_snapshot_coordinator.py"
+      - "tests/test_t100_v40_unreleased_closed_history_audit.py"
+      - ".github/workflows/v40-archived-close-flat-restart.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  archived-trade-evidence:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install -e ".[dev]"
+      - run: |
+          python -m compileall -q \
+            app/t100_v40_unreleased_closed_history_audit.py \
+            app/t100_live_four_slot_ledger_reader.py \
+            app/t100_live_four_slot_snapshot_coordinator.py
+      - run: |
+          python -m pytest -q \
+            tests/test_t100_v40_unreleased_closed_history_audit.py \
+            tests/test_t100_live_four_slot_ledger_reader.py \
+            tests/test_t100_live_four_slot_snapshot_coordinator.py \
+            tests/test_t100_v40_unreleased_verified_slot_release.py \
+            tests/test_t100_live_durable_recovery.py
