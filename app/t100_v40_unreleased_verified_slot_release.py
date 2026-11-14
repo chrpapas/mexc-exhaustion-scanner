@@ -64,7 +64,15 @@ def _proofs_match(
 ) -> None:
     if (
         type(witness) is not V40PortfolioCloseWitness
-        or witness.status not in (
+        or type(previous) is not PositionCheckpoint
+        or type(accounting) is not VerifiedClosedPositionAccounting
+        or type(lease) is not LeaderLease
+        or type(observed_at) is not datetime
+        or observed_at.tzinfo is None or observed_at.utcoffset() is None
+    ):
+        raise V40SlotReleaseHalted("V40_CLOSE_POSITIVE_EXCHANGE_OR_ACCOUNTING_EVIDENCE_INVALID")
+    if (
+        witness.status not in (
             "V40_PORTFOLIO_CLOSE_EXCHANGE_TP_LABEL_CONFLICT_UNRELEASED",
             "V40_PORTFOLIO_CLOSE_EXCHANGE_SL_LABEL_OBSERVED_UNRELEASED",
         )
