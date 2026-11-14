@@ -1,0 +1,37 @@
+name: V40 staggered 1–4 slot due-bar scheduling (offline)
+
+on:
+  push:
+    branches:
+      - "feature/v40-staggered-slot-bar-batches-*"
+  pull_request:
+    paths:
+      - "app/t100_v40_unreleased_verified_exit_handoff.py"
+      - "app/t100_v40_live_portfolio_supervisor.py"
+      - "tests/test_t100_v40_unreleased_verified_exit_handoff.py"
+      - "tests/test_t100_v40_live_portfolio_supervisor.py"
+      - ".github/workflows/v40-staggered-slot-bars.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  per-position-due-cursors:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install -e ".[dev]"
+      - run: |
+          python -m compileall -q \
+            app/t100_v40_unreleased_verified_exit_handoff.py \
+            app/t100_v40_live_portfolio_supervisor.py
+      - run: |
+          python -m pytest -q \
+            tests/test_t100_v40_unreleased_verified_exit_handoff.py \
+            tests/test_t100_v40_live_portfolio_supervisor.py \
+            tests/test_t100_v40_unreleased_portfolio_exit_batch.py \
+            tests/test_t100_v40_four_slot_guardian_policy.py \
+            tests/test_t100_v40_unreleased_bar_cursor.py
