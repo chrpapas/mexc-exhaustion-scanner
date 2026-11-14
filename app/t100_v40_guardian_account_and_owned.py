@@ -31,6 +31,9 @@ from app.t100_v40_guardian_ledger_reader import (
 from app.t100_v40_guardian_owned_cross import (
     assess_v40_owned_cross_guardian,
 )
+from app.t100_v40_four_slot_guardian_policy import (
+    audit_frozen_four_slot_native_stops,
+)
 from app.t100_live_readonly_probe import ReadOnlyMexcProbe, VenueReadHalted
 from app.t100_v40_guardian_get_failure_codes import guardian_mode_halt_from_venue_error
 from app.t100_live_four_slot_ledger_reader import PostgresFourSlotLedgerReader
@@ -175,7 +178,7 @@ async def observe_v40_account_and_owned(
         )
     if (
         snapshot.status!="NONFLAT_PROVENANCE_MATCHED_NONAUTHORIZING"
-        or snapshot.occupied_slots!=1
+        or not 1<=snapshot.occupied_slots<=4
     ):
         if (
             snapshot.status=="INVENTORY_COMPLETENESS_UNVERIFIED"
@@ -202,6 +205,44 @@ async def observe_v40_account_and_owned(
             "V40_GUARDIAN_SNAPSHOT_"+snapshot.status+"_HALT"
             if snapshot.status in _SAFE_SNAPSHOT_NONREADY else
             "V40_GUARDIAN_UNOWNED_OR_UNKNOWN_PENDING_MUTATION_HALT"
+        )
+    # Unreleased historical 1-4 slot provenance tests are now wired into
+    # the independent live guardian witness. For 2-4 SHORT positions every
+    # matched native MARKET SL and every durable checkpoint must survive the
+    # common exchange/ledger bookend audit. This is not a live trade permit.
+    if 2<=snapshot.occupied_slots<=4:
+        try:
+            second_ledger=await ledger.read_snapshot()
+            audited_four=audit_frozen_four_slot_native_stops(
+                snapshot=snapshot,ledger=second_ledger,
+                account_positions=venue.last_positions,
+                account_stops=venue.last_stops,
+            )
+        except Exception:
+            return _halt("V40_GUARDIAN_MULTI_OWNED_AUDIT_RUNTIME_HALT")
+        if not (
+            audited_four.status==
+                "V40_FOUR_SLOT_ACCOUNT_NATIVE_MARKET_SL_SIGNED_GET_NONAUTHORIZING"
+            and audited_four.protected_owned_positions==snapshot.occupied_slots
+            and audited_four.matching_native_market_stops==snapshot.occupied_slots
+            and audited_four.separate_symbols_verified is True
+            and audited_four.account_bookends_verified is True
+            and audited_four.ledger_bookends_verified is True
+            and audited_four.all_owned_cross_positions_verified is True
+            and audited_four.incident_alert is False
+            and audited_four.live_authorization is False
+            and audited_four.mexc_posts==audited_four.database_writes==0
+        ):
+            return _halt("V40_GUARDIAN_MULTI_OWNED_CROSS_OR_NATIVE_SL_UNVERIFIED_HALT")
+        return V40CanaryGuardianHeartbeat(
+            "V40_GUARDIAN_TWO_TO_FOUR_OWNED_CROSS_NATIVE_SL_OBSERVED_NONAUTHORIZING",
+            monitored_account_flat=False,
+            inventory_two_signed_get_bookends=True,
+            hedge_mode_verified=True,
+            ledger_provenance_verified=True,
+            incident_alert=False,
+            owned_cross_positions_count=snapshot.occupied_slots,
+            all_owned_cross_native_market_sl_verified=True,
         )
     try:
         second_ledger=await ledger.read_snapshot()
@@ -230,6 +271,8 @@ async def observe_v40_account_and_owned(
         incident_alert=False,
         ledger_provenance_verified=True,
         single_owned_cross_native_sl_verified=True,
+        owned_cross_positions_count=1,
+        all_owned_cross_native_market_sl_verified=True,
     )
 
 

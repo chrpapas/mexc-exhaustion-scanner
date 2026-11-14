@@ -49,6 +49,10 @@ class V40CanaryGuardianHeartbeat:
     emergency_close_allowed: bool=False
     mexc_posts: int=0
     database_writes: int=0
+    # Read-only proof of an EXACT 1-4 owned, independently protected
+    # account; no leverage/margin tier or trading authorization inferred.
+    owned_cross_positions_count: int=0
+    all_owned_cross_native_market_sl_verified: bool=False
 
 
 class AccountProbe(Protocol):
