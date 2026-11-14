@@ -15,6 +15,7 @@ from app.t100_v40_guardian_reviewed_generation import (
     GOOD_STATUS,HISTORIC_CRITICAL,
 )
 from app.t100_v40_guardian_recovery_003 import RECOVERY_SCOPE_003
+from app.t100_v40_guardian_recovery_004 import RECOVERY_SCOPE_004
 
 
 class GuardianArchiveAuditHalted(RuntimeError):
@@ -26,6 +27,7 @@ _SCOPES=(
     ("reviewed_001",REVIEWED_SCOPE),
     ("recovery_002",RECOVERY_SCOPE_002),
     ("recovery_003",RECOVERY_SCOPE_003),
+    ("recovery_004",RECOVERY_SCOPE_004),
 )
 
 
@@ -52,6 +54,8 @@ class GuardianArchiveAudit:
     every_critical_alert_delivered: bool
     active_scope_003_critical_latched: bool
     active_scope_003_currently_flat: bool
+    active_scope_004_critical_latched: bool
+    active_scope_004_currently_flat: bool
     incident_history_verified: bool = False
     live_authorization: bool = False
     entry_allowed: bool = False
@@ -124,15 +128,18 @@ async def audit_guardian_archive_readonly(conn: Any) -> GuardianArchiveAudit:
         raise
     except Exception:
         raise GuardianArchiveAuditHalted("V40_ARCHIVE_AUDIT_SELECT_UNAVAILABLE") from None
-    if len(found)!=4:
+    if len(found)!=5:
         raise GuardianArchiveAuditHalted("V40_ARCHIVE_AUDIT_SCOPE_COUNT_INVALID")
-    active=found[-1]
+    archived_003=found[3]
+    active=found[4]
     return GuardianArchiveAudit(
         status="V40_GUARDIAN_ARCHIVE_READONLY_AUDIT_COMPLETE_NONAUTHORIZING",
         scopes=tuple(found),
         all_scopes_present=all(s.state_exists for s in found),
         every_critical_alert_delivered=all(s.undelivered_total==0 for s in found),
-        active_scope_003_critical_latched=active.critical_latched is True,
-        active_scope_003_currently_flat=active.last_observation_flat,
+        active_scope_003_critical_latched=archived_003.critical_latched is True,
+        active_scope_003_currently_flat=archived_003.last_observation_flat,
+        active_scope_004_critical_latched=active.critical_latched is True,
+        active_scope_004_currently_flat=active.last_observation_flat,
         incident_history_verified=False,
     )
