@@ -81,9 +81,48 @@ def _halt(code:str)->V40CanaryGuardianHeartbeat:
     return V40CanaryGuardianHeartbeat(status=code)
 
 
+# GET operations are idempotent. This bounded retry can recover ONE
+# transient position-mode-only network/5xx/rate-limit failure. It NEVER
+# recovers auth/permissions, a wrong hedge mode, inventory drift, missing
+# native protection, or a latched critical incident. Crucially, a successful
+# retry is followed by the ordinary independent two-bookend account+ledger
+# inspection; a recovered mode GET alone proves NOTHING about safe inventory.
+_TRANSIENT_MODE_GET_REASONS=frozenset({
+    "POSITION_MODE_HTTP_429","POSITION_MODE_HTTP_5XX",
+    "POSITION_MODE_TIMEOUT","POSITION_MODE_NETWORK",
+    "POSITION_MODE_API_RATE_LIMIT","POSITION_MODE_API_SERVER",
+})
+
+
+async def _hedge_mode_bounded_get(
+    signed_get:GetOnlyMexcTransport,
+    *,
+    retry_transient:bool=False,
+    pause:Any=asyncio.sleep,
+)->int:
+    if type(retry_transient) is not bool or not callable(pause):
+        raise VenueReadHalted("V40_GUARDIAN_HEDGE_MODE_RETRY_POLICY_INVALID")
+    probe=ReadOnlyMexcProbe(signed_get)
+    try:
+        return await probe.raw_position_mode()
+    except VenueReadHalted as error:
+        code=error.args[0] if len(error.args)==1 else None
+        if (
+            not retry_transient or type(code) is not str
+            or code not in _TRANSIENT_MODE_GET_REASONS
+        ):
+            raise
+        # MEXC HTTP 429/API rate limit warrants a slower probe than network
+        # jitter. No POST, SQL mutation, order retry, or latch update here.
+        await pause(3.0 if "RATE_LIMIT" in code or "429" in code else 1.0)
+        # Only one retry, never a loop. The caller still halts on any failure.
+        return await probe.raw_position_mode()
+
+
 async def observe_v40_account_and_owned(
     *,ledger:PostgresV40GuardianLedgerReader|PostgresFourSlotLedgerReader,
     signed_get:GetOnlyMexcTransport,
+    retry_transient_mode_get:bool=False,
 ) -> V40CanaryGuardianHeartbeat:
     """Independent full-account inventory/ledger bookends, no mutation."""
     if (
@@ -101,7 +140,9 @@ async def observe_v40_account_and_owned(
     # Independent hedge-mode GET: a transient venue error is NOT evidence
     # of a flat account. Keep fail-closed behavior while identifying stage.
     try:
-        mode=await ReadOnlyMexcProbe(signed_get).raw_position_mode()
+        mode=await _hedge_mode_bounded_get(
+            signed_get,retry_transient=retry_transient_mode_get,
+        )
     except VenueReadHalted as error:
         # Diagnostic classification never permits entry or weakens the latch.
         return _halt(guardian_mode_halt_from_venue_error(error))
@@ -259,6 +300,10 @@ async def observe_v40_account_and_owned_network(
                 observe_v40_account_and_owned(
                     ledger=reader_class(pool),
                     signed_get=get_only,
+                    retry_transient_mode_get=(
+                        env.get("T100_V40_GUARDIAN_TRANSIENT_MODE_RETRY_ENABLED")
+                        =="true"
+                    ),
                 ),timeout=45,
             )
     except Exception:
