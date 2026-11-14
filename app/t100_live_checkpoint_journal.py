@@ -252,6 +252,52 @@ def build_verified_stop_checkpoint(
     )
 
 
+
+def build_verified_bar_checkpoint(
+    previous: PositionCheckpoint,
+    *,
+    stop: dict[str, Any],
+    best_profit_pct: Any,
+) -> PositionCheckpoint:
+    """Persist a favorable completed candle without mutating native SL.
+
+    Requires an independently supplied current native MARKET SL row,
+    exact same stop identity/price and complete original position quantity.
+    The author of the signed-GET frame must separately prove all-account
+    inventory completeness and fencing at the write boundary. A >=14% move
+    requires the separately journaled trail amendment instead.
+    """
+    from app.t100_live_native_stop_execution_audit import (
+        assess_native_short_market_stop_row,
+    )
+    if type(previous) is not PositionCheckpoint or previous.lifecycle_state!="OPEN":
+        raise CheckpointJournalHalted("BAR_OBSERVED_PREVIOUS_NOT_OPEN")
+    best=_nonnegative(best_profit_pct,"BAR_BEST_PROFIT_PCT")
+    if (
+        previous.armed is not False
+        or best<=previous.best_profit_pct or best>=Decimal("14")
+        or type(stop) is not dict
+        or str(stop.get("id") or "")!=previous.stop_order_id
+        or _positive(stop.get("stopLossPrice"),"BAR_NATIVE_STOP_PRICE")
+            !=previous.stop_price
+    ):
+        raise CheckpointJournalHalted("BAR_OBSERVED_BEST_OR_STOP_DRIFT")
+    proof=assess_native_short_market_stop_row(
+        stop=stop,symbol=previous.symbol,position_id=previous.position_id,
+        position_quantity=previous.contracts,
+        maximum_short_stop_price=previous.stop_price,
+        verified_filled_entry_order_id=previous.exchange_order_id,
+    )
+    if proof.active_native_full_volume_market_sl_observed is not True:
+        raise CheckpointJournalHalted("BAR_OBSERVED_NATIVE_STOP_NOT_FULLY_PROTECTED")
+    current=replace(
+        previous,best_profit_pct=best,
+        checkpoint_version=previous.checkpoint_version+1,
+    )
+    validate_checkpoint_transition(previous,current,reason=BAR_OBSERVED)
+    return current
+
+
 def build_lifecycle_checkpoint(
     previous: PositionCheckpoint,
     *,
