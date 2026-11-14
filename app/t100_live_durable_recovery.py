@@ -175,6 +175,7 @@ def _validate_revision_history(
             raise DurableRecoveryHalted("CHECKPOINT_REVISION_SEQUENCE_GAP")
 
         previous_stop: Decimal | None = None
+        previous_stop_id: str | None = None
         previous_best: Decimal | None = None
         previous_armed = False
 
@@ -191,7 +192,7 @@ def _validate_revision_history(
                     raise DurableRecoveryHalted(
                         "CHECKPOINT_REVISION_INITIAL_REASON_INVALID"
                     )
-            elif reason != "STOP_VERIFIED":
+            elif reason not in ("STOP_VERIFIED", "BAR_OBSERVED"):
                 raise DurableRecoveryHalted(
                     "CHECKPOINT_REVISION_OPEN_REASON_INVALID"
                 )
@@ -244,10 +245,21 @@ def _validate_revision_history(
                     "CHECKPOINT_REVISION_TRAILING_STATE_INCOHERENT"
                 )
 
-            if previous_stop is not None and stop_price >= previous_stop:
-                raise DurableRecoveryHalted(
-                    "CHECKPOINT_REVISION_STOP_NOT_STRICTLY_TIGHTER"
-                )
+            if previous_stop is not None:
+                if reason == "STOP_VERIFIED" and stop_price >= previous_stop:
+                    raise DurableRecoveryHalted(
+                        "CHECKPOINT_REVISION_STOP_NOT_STRICTLY_TIGHTER"
+                    )
+                if reason == "BAR_OBSERVED" and (
+                    stop_price != previous_stop
+                    or stop_order_id != previous_stop_id
+                    or best <= previous_best
+                    or best >= Decimal("14")
+                    or armed is not False or previous_armed is not False
+                ):
+                    raise DurableRecoveryHalted(
+                        "CHECKPOINT_REVISION_BAR_NO_STOP_IDENTITY_OR_BEST_DRIFT"
+                    )
             if previous_best is not None and best < previous_best:
                 raise DurableRecoveryHalted(
                     "CHECKPOINT_REVISION_BEST_PROFIT_REGRESSION"
@@ -258,6 +270,7 @@ def _validate_revision_history(
                 )
 
             previous_stop = stop_price
+            previous_stop_id = stop_order_id
             previous_best = best
             previous_armed = armed
 
@@ -415,6 +428,14 @@ def _validate_stop_amendments(
         for version in range(2, cp.checkpoint_version + 1):
             previous = revisions[version - 1]
             current = revisions[version]
+            if current.get("write_reason") == "BAR_OBSERVED":
+                # Favorable pre-arm high-watermark had NO exchange stop mutation.
+                # Immutable revision validator checks same stop ID/price above.
+                continue
+            if current.get("write_reason") != "STOP_VERIFIED":
+                raise DurableRecoveryHalted(
+                    "STOP_AMENDMENT_REVISION_REASON_INVALID"
+                )
             previous_stop = _positive(
                 previous.get("stop_price"),
                 "CHECKPOINT_REVISION_STOP_PRICE",

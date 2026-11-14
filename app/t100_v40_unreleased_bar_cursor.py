@@ -266,9 +266,21 @@ class V40DurableBarCursor:
                 (
                     plan.status=="KEEP_VERIFIED_NATIVE_STOP"
                     and candidate.native_stop_price==cursor.confirmed_stop_price
-                    and persisted_checkpoint.checkpoint_version==cursor.checkpoint_version
                     and persisted_checkpoint.stop_order_id==cursor.stop_order_id
-                    and persisted_checkpoint.best_profit_pct<=cursor.best_profit_pct
+                    and persisted_checkpoint.armed==candidate.trail_armed
+                    and (
+                        # Nothing improved; existing durable checkpoint matches.
+                        candidate.best_profit_pct==cursor.best_profit_pct
+                        and persisted_checkpoint.checkpoint_version==cursor.checkpoint_version
+                        and persisted_checkpoint.best_profit_pct==cursor.best_profit_pct
+                        or
+                        # Improved pre-arm high-watermark has a real BAR_OBSERVED
+                        # immutable revision, never just a cursor update.
+                        candidate.best_profit_pct>cursor.best_profit_pct
+                        and candidate.best_profit_pct<D("14")
+                        and persisted_checkpoint.checkpoint_version==cursor.checkpoint_version+1
+                        and persisted_checkpoint.best_profit_pct==candidate.best_profit_pct
+                    )
                 )
                 or
                 (
