@@ -23,6 +23,9 @@ class CheckpointJournalHalted(RuntimeError):
 
 ENTRY_PROTECTED = "ENTRY_PROTECTED"
 STOP_VERIFIED = "STOP_VERIFIED"
+# Exact favorable completed-bar high-watermark below the 14% arm threshold;
+# no venue stop price/identity change, but MUST be durably revisioned.
+BAR_OBSERVED = "BAR_OBSERVED"
 REVIEW_LATCHED = "REVIEW_LATCHED"
 CLOSING_LATCHED = "CLOSING_LATCHED"
 CLOSE_VERIFIED = "CLOSE_VERIFIED"
@@ -30,6 +33,7 @@ CLOSE_VERIFIED = "CLOSE_VERIFIED"
 WRITE_REASONS = frozenset({
     ENTRY_PROTECTED,
     STOP_VERIFIED,
+    BAR_OBSERVED,
     REVIEW_LATCHED,
     CLOSING_LATCHED,
     CLOSE_VERIFIED,
@@ -375,6 +379,16 @@ def validate_checkpoint_transition(
         expected = ("OPEN", "OPEN", STOP_VERIFIED)
         if current.stop_price >= previous.stop_price:
             raise CheckpointJournalHalted("STOP_VERIFIED_MUST_TIGHTEN")
+    elif reason == BAR_OBSERVED:
+        expected = ("OPEN", "OPEN", BAR_OBSERVED)
+        if (
+            previous.armed is not False or current.armed is not False
+            or current.best_profit_pct >= Decimal("14")
+            or current.best_profit_pct <= previous.best_profit_pct
+            or current.stop_price != previous.stop_price
+            or current.stop_order_id != previous.stop_order_id
+        ):
+            raise CheckpointJournalHalted("BAR_OBSERVED_MUST_ONLY_ADVANCE_PREARM_BEST")
     elif reason == REVIEW_LATCHED:
         if current.stop_order_id != previous.stop_order_id:
             raise CheckpointJournalHalted(
