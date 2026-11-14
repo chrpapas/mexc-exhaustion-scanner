@@ -1,7 +1,8 @@
 """V40 four-slot supervisor integration fault matrix (no real POST / DB)."""
 import asyncio
 from dataclasses import replace
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+from copy import deepcopy
 
 import pytest
 
@@ -39,7 +40,7 @@ async def clean_flat():
 def source(with_candidate=True):
     if with_candidate:
         sig,hist=fixtures()
-        candidate=inspect_stage2_candidate(sig,hist,observed_at=T)
+        candidate=inspect_stage2_candidate(sig,hist,observed_at=T+timedelta(seconds=25))
         return V40SourceBatch(
             "FROZEN_V40_STAGE2_SOURCE_VALIDATED_NONAUTHORIZING",
             observed_at=T,candidates=(candidate,),
@@ -72,8 +73,13 @@ async def flat(with_candidate=True):
     )
 
 
+_ACTIVE_BASE={n:bundle(n) for n in (1,2,3,4)}
+
+
 def active(n=4, *,low="95",high="100",with_candidate=True):
-    d=bundle(n)
+    # Original audit fixture calls asyncio.run internally; build it only
+    # once at import time, never within an async test's event loop.
+    d=deepcopy(_ACTIVE_BASE[n])
     cp=d["ledger"].checkpoints[0]
     sym=cp["symbol"]
     d["completed_bars_by_symbol"][sym]=replace(
