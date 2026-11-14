@@ -36,6 +36,9 @@ class V40SequentialLotMarginProjection:
     status: str
     margin: FourSlotMarginProjection
     hypothetical_child_orders: int
+    # Exact per-symbol lot plans for downstream independently attested
+    # venue-risk comparison; never an executable order intent.
+    lot_plans: tuple[HistoricalShortSlot, ...] = ()
     all_lots_quantized: bool = True
     exchange_contract_specs_authenticated: bool = False
     historical_full_exit_replay_certified: bool = False
@@ -171,4 +174,5 @@ def project_frozen_sequential_lots_and_margin(
     return V40SequentialLotMarginProjection(
         status="V40_SEQUENTIAL_LOT_AND_MARGIN_OFFLINE_NONAUTHORIZING",
         margin=margin,hypothetical_child_orders=children,
+        lot_plans=tuple(slots),
     )
