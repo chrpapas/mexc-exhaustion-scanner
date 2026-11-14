@@ -1,4 +1,4 @@
-"""Unreleased V40 owned 1–4-slot completed-bar handoff from durable facts.
+"""Unreleased V40 owned 1–4-slot independently due completed-bar handoff from durable facts.
 
 Ties together independently read-only account/stop bookends, immutable
 ledger checkpoints and durable Min30 bar cursors before using the frozen
@@ -142,9 +142,22 @@ def project_verified_owned_v40_exits(
             trail_armed=cp.armed,
             last_completed_open_ts=c.last_committed_open_ts,
         ))
+    # Cursor phase is independent per position: even during the same
+    # wall-clock Min30 interval, some positions can have no due bar.
+    # We audited ALL open positions and their exact native full-volume SLs
+    # above. Only due positions enter the no-POST decision batch.
+    all_symbols={x.symbol for x in policy_checkpoints}
+    due_symbols=set(completed_bars_by_symbol)
+    if (
+        not due_symbols
+        or not due_symbols.issubset(all_symbols)
+        or due_symbols!=set(price_ticks_by_symbol)
+    ):
+        raise V40VerifiedExitHalted("V40_VERIFIED_EXIT_DUE_BAR_SET_INVALID")
+    due_checkpoints=tuple(x for x in policy_checkpoints if x.symbol in due_symbols)
     try:
         batch=project_v40_portfolio_exit_batch(
-            checkpoints=tuple(policy_checkpoints),
+            checkpoints=due_checkpoints,
             completed_bars_by_symbol=completed_bars_by_symbol,
             price_ticks_by_symbol=price_ticks_by_symbol,
             now_ts=now_ts,
