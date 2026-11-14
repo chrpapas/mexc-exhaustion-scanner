@@ -1,0 +1,32 @@
+name: V40 exact 1-4 slot current fair-price and private-tier risk bridge
+
+on:
+  push:
+    branches:
+      - "feature/v40-exact-four-slot-current-risk-evidence-*"
+  pull_request:
+    paths:
+      - "app/t100_v40_unreleased_current_portfolio_risk.py"
+      - "tests/test_t100_v40_unreleased_current_portfolio_risk.py"
+      - ".github/workflows/v40-exact-four-slot-risk-bridge.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  current-private-risk-bridge:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install -e ".[dev]"
+      - run: python -m compileall -q app/t100_v40_unreleased_current_portfolio_risk.py
+      - run: |
+          python -m pytest -q \
+            tests/test_t100_v40_unreleased_current_portfolio_risk.py \
+            tests/test_t100_live_cross_risk_observation.py \
+            tests/test_t100_live_risk_tier_witness.py \
+            tests/test_t100_v40_four_slot_guardian_policy.py \
+            tests/test_t100_v40_unreleased_sequential_cross_risk.py
