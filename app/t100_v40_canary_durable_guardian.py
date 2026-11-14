@@ -105,6 +105,13 @@ _SAFE_STARTUP_REASONS=frozenset({
     "V40_RECOVERY_003_FRESH_FLAT_UNVERIFIED",
     "V40_RECOVERY_003_NEW_SCOPE_NOT_CLEAN",
     "V40_RECOVERY_003_DATABASE_REVIEW_UNAVAILABLE",
+    "V40_RECOVERY_004_DB_CONNECTION_INVALID",
+    "V40_RECOVERY_004_EXISTING_SCOPE_STATE_INVALID",
+    "V40_RECOVERY_004_PREDECESSOR_STATE_NOT_REVIEWED",
+    "V40_RECOVERY_004_PREDECESSOR_INCIDENT_MISMATCH",
+    "V40_RECOVERY_004_FRESH_ACCOUNT_GET_OR_LEDGER_UNVERIFIED",
+    "V40_RECOVERY_004_NEW_SCOPE_NOT_CLEAN",
+    "V40_RECOVERY_004_DATABASE_OR_OBSERVER_UNAVAILABLE",
 })
 
 
@@ -313,7 +320,9 @@ async def run(
         from app.t100_v40_guardian_reviewed_generation import (
             V40GuardianReviewedGenerationHalted,
         )
-        from app.t100_v40_guardian_recovery_003 import select_third_reviewed_scope
+        from app.t100_v40_guardian_recovery_004 import (
+            select_fourth_reviewed_scope,V40GuardianRecovery004Halted,
+        )
     if shared:
         from app.t100_v40_guardian_shared_db import (
             V40SharedGuardianDatabaseHalted,
@@ -368,11 +377,12 @@ async def run(
                 await pause(3.0)
         if reviewed:
             # Atomic incident history is immutable. Recovery means starting
-            # a SECOND explicit scope only after strict review of the old
-            # critical event and two *fresh* signed GET/ledger bookends.
+            # a final audited 004 scope only after verifying ALL four
+            # previous incident generations, delivery and two fresh
+            # independent signed GET/ledger bookends. Old latches persist.
             # Neither the old sticky latch nor its alert rows are modified.
             stage="AUDITED_ROLLOVER_REVIEW"
-            reviewed_scope,reviewed_reason=await select_third_reviewed_scope(
+            reviewed_scope,reviewed_reason=await select_fourth_reviewed_scope(
                 conn,env=env,observe=observer,pause=pause,
             )
             outbox=GuardianIncidentOutbox(
@@ -485,7 +495,9 @@ async def run(
     except Exception as error:
         # Distinct fixed status codes may be exposed; never raw connection
         # errors, API responses, SQL parameters or Discord URLs.
-        if reviewed and isinstance(error,V40GuardianReviewedGenerationHalted):
+        if reviewed and isinstance(error,(
+            V40GuardianReviewedGenerationHalted,V40GuardianRecovery004Halted,
+        )):
             reason=str(error)
             if reason in _SAFE_STARTUP_REASONS:
                 raise V40DurableGuardianHalted(reason) from None
