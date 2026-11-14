@@ -1,0 +1,32 @@
+name: V40 signed native SL and durable cursor exit composition
+
+on:
+  push:
+    branches:
+      - "feature/v40-verified-bookend-exit-batch-*"
+  pull_request:
+    paths:
+      - "app/t100_v40_unreleased_verified_exit_handoff.py"
+      - "tests/test_t100_v40_unreleased_verified_exit_handoff.py"
+      - ".github/workflows/v40-verified-exit-handoff.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  signed-source-exit-replay:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install -e ".[dev]"
+      - run: python -m compileall -q app/t100_v40_unreleased_verified_exit_handoff.py
+      - run: |
+          python -m pytest -q \
+            tests/test_t100_v40_unreleased_verified_exit_handoff.py \
+            tests/test_t100_v40_four_slot_guardian_policy.py \
+            tests/test_t100_v40_unreleased_portfolio_exit_batch.py \
+            tests/test_t100_v40_unreleased_bar_cursor.py \
+            tests/test_t100_live_four_slot_snapshot_coordinator.py
