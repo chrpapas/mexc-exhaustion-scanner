@@ -22,10 +22,13 @@ class Conn:
                 critical_latched=True,revision=5,recent=False)
             for _,scope in _SCOPES
         }
-        self.states[_SCOPES[-1][1]].update(revision=80,recent=True)
+        self.states[_SCOPES[-1][1]].update(
+            revision=80,recent=True,critical_latched=False,
+        )
         self.counts={
-            scope:dict(critical_total=3 if name=="recovery_003" else 1,
-                generic_class_count=3 if name=="recovery_003" else 1,
+            scope:dict(
+                critical_total=3 if name=="recovery_003" else (0 if name=="recovery_004" else 1),
+                generic_class_count=3 if name=="recovery_003" else (0 if name=="recovery_004" else 1),
                 other_class_count=0,undelivered=0)
             for name,scope in _SCOPES
         }
@@ -47,7 +50,7 @@ class Conn:
         raise AssertionError("unexpected SQL")
 
 
-def test_archive_audit_is_exact_select_only_and_reports_003_latched():
+def test_archive_audit_preserves_003_critical_and_reports_clean_004():
     c=Conn()
     x=asyncio.run(audit_guardian_archive_readonly(c))
     assert x.status=="V40_GUARDIAN_ARCHIVE_READONLY_AUDIT_COMPLETE_NONAUTHORIZING"
@@ -55,13 +58,16 @@ def test_archive_audit_is_exact_select_only_and_reports_003_latched():
     assert x.every_critical_alert_delivered
     assert x.active_scope_003_critical_latched
     assert x.active_scope_003_currently_flat
-    assert x.scopes[-1].critical_total==3
+    assert x.scopes[3].critical_total==3
+    assert x.scopes[-1].critical_total==0
+    assert x.active_scope_004_critical_latched is False
+    assert x.active_scope_004_currently_flat is True
     assert x.scopes[-1].critical_other_class_count==0
     assert x.scopes[-1].undelivered_total==0
     assert x.incident_history_verified is False
     assert not x.entry_allowed and not x.live_authorization
     assert x.mexc_posts==0 and x.database_writes==0
-    assert sum(k=="fetchrow" for k,*_ in c.calls)==8
+    assert sum(k=="fetchrow" for k,*_ in c.calls)==10
     assert all("UPDATE" not in op[1].upper() and "DELETE" not in op[1].upper()
                for op in c.calls if op[0] in ("fetchrow","fetchval"))
     assert "scope_sha256" not in str(x.safe_json())
@@ -76,6 +82,7 @@ def test_unknown_critical_class_or_pending_alert_does_not_look_recovered():
     assert x.scopes[-1].undelivered_total==2
     assert not x.every_critical_alert_delivered
     assert x.active_scope_003_critical_latched
+    assert not x.active_scope_004_critical_latched
     assert not x.live_authorization
 
 
@@ -98,4 +105,5 @@ def test_scope_missing_reports_missing_without_creating():
     x=asyncio.run(audit_guardian_archive_readonly(c))
     assert not x.all_scopes_present
     assert not x.scopes[0].state_exists
-    assert x.scopes[-1].critical_latched is True
+    assert x.scopes[3].critical_latched is True
+    assert x.scopes[-1].critical_latched is False
