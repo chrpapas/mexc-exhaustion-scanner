@@ -53,6 +53,7 @@ class V40DurableGuardianStatus:
     discord_delivered: int=0
     account_flat_two_get: bool=False
     owned_cross_native_sl_observed: bool=False
+    owned_cross_positions_count: int=0
     guardian_outbox_committed: bool=False
     independently_verified_by_trader: bool=False
     native_stop_lifecycle_verified: bool=False
@@ -128,6 +129,9 @@ _SAFE_OBSERVER_DETAILS=frozenset({
     "V40_GUARDIAN_UNOWNED_OR_UNKNOWN_PENDING_MUTATION_HALT",
     "V40_GUARDIAN_OWNED_CROSS_AUDIT_FAILED_HALT",
     "V40_GUARDIAN_OWNED_CROSS_OR_NATIVE_SL_UNVERIFIED_HALT",
+    "V40_GUARDIAN_MULTI_OWNED_AUDIT_RUNTIME_HALT",
+    "V40_GUARDIAN_MULTI_OWNED_CROSS_OR_NATIVE_SL_UNVERIFIED_HALT",
+    "V40_GUARDIAN_TWO_TO_FOUR_OWNED_CROSS_NATIVE_SL_OBSERVED_NONAUTHORIZING",
     "V40_GUARDIAN_FLAT_ACCOUNT_DOUBLE_GET_STANDBY_NONAUTHORIZING",
     "V40_GUARDIAN_ONE_OWNED_CROSS_SHORT_NATIVE_SL_OBSERVED_NONAUTHORIZING",
     "V40_GUARDIAN_SIGNED_GET_OR_RUNTIME_FAILED_HALT",
@@ -291,6 +295,21 @@ def _status_for_outbox(heartbeat:V40CanaryGuardianHeartbeat)->str:
         and heartbeat.incident_alert is False
         and heartbeat.mexc_posts==0
         and heartbeat.database_writes==0
+    ):
+        return "OBSERVER_V40_CANARY_OWNED_CROSS_NATIVE_MARKET_SL"
+    if (
+        type(heartbeat) is V40CanaryGuardianHeartbeat
+        and heartbeat.status==
+            "V40_GUARDIAN_TWO_TO_FOUR_OWNED_CROSS_NATIVE_SL_OBSERVED_NONAUTHORIZING"
+        and type(heartbeat.owned_cross_positions_count) is int
+        and 2 <= heartbeat.owned_cross_positions_count <= 4
+        and heartbeat.all_owned_cross_native_market_sl_verified is True
+        and heartbeat.single_owned_cross_native_sl_verified is False
+        and heartbeat.ledger_provenance_verified is True
+        and heartbeat.inventory_two_signed_get_bookends is True
+        and heartbeat.hedge_mode_verified is True
+        and heartbeat.incident_alert is False
+        and heartbeat.mexc_posts==heartbeat.database_writes==0
     ):
         return "OBSERVER_V40_CANARY_OWNED_CROSS_NATIVE_MARKET_SL"
     if (
@@ -472,6 +491,14 @@ async def run(
                 ),
                 owned_cross_native_sl_observed=(
                     code=="OBSERVER_V40_CANARY_OWNED_CROSS_NATIVE_MARKET_SL"
+                ),
+                owned_cross_positions_count=(
+                    heartbeat.owned_cross_positions_count if (
+                        type(heartbeat) is V40CanaryGuardianHeartbeat
+                        and type(heartbeat.owned_cross_positions_count) is int
+                        and 0<=heartbeat.owned_cross_positions_count<=4
+                        and code=="OBSERVER_V40_CANARY_OWNED_CROSS_NATIVE_MARKET_SL"
+                    ) else 0
                 ),
                 guardian_outbox_committed=True,
             )
