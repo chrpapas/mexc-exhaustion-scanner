@@ -1,0 +1,31 @@
+name: V40 nonflat owned CROSS guardian evidence (readonly)
+
+on:
+  push:
+    branches:
+      - "feature/v40-nonflat-guardian-postgate-evidence-*"
+  pull_request:
+    paths:
+      - "app/t100_v40_unreleased_nonflat_guardian_evidence.py"
+      - "tests/test_t100_v40_unreleased_nonflat_guardian_evidence.py"
+      - ".github/workflows/v40-nonflat-guardian-evidence.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  guardian-nonflat-source:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install -e ".[dev]"
+      - run: python -m compileall -q app/t100_v40_unreleased_nonflat_guardian_evidence.py
+      - run: |
+          python -m pytest -q \
+            tests/test_t100_v40_unreleased_nonflat_guardian_evidence.py \
+            tests/test_t100_v40_guardian_post_gate.py \
+            tests/test_t100_v40_guardian_recovery_004.py \
+            tests/test_t100_v40_four_slot_guardian_policy.py
