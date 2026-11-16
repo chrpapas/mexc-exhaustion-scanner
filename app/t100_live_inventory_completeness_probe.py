@@ -134,9 +134,14 @@ async def run_current_inventory_completeness_probe(
         })
         return result
     except Exception as exc:
+        from app.t100_v40_guardian_get_failure_codes import (
+            safe_inventory_exception_category,
+        )
         result.update({
             "status": "CURRENT_INVENTORY_COMPLETENESS_PROBE_HALTED",
             "failure_stage": stage,
+            "failure_category": safe_inventory_exception_category(exc),
+            # Kept for existing nonauthorizing callers; no exception message.
             "failure_type": type(exc).__name__,
             "account_wide_completeness_verified": False,
         })
