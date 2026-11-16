@@ -84,8 +84,12 @@ def test_stage_csv_tampering_fails_before_module_execution():
         stage.write_text("changed stage data")
         with patch.multiple(audit,**hashes):
             with pytest.raises(audit.FrozenCandidateSourceHalted,
-                               match="PINNED_SOURCE_SHA256_MISMATCH"):
+                               match="PINNED_SOURCE_SHA256_MISMATCH") as info:
                 audit.run(stage_csv=stage,archive=archive,source_dir=src)
+            assert info.value.input_hash_matches == {
+                "stage_csv":False, "archive":True,
+                "stage_module":True, "atr_module":True,
+            }
 
 
 def test_module_tampering_fails_before_import():
@@ -125,3 +129,39 @@ def test_missing_or_duplicate_candidate_identity_rejected():
     with pytest.raises(audit.FrozenCandidateSourceHalted,
                        match="CANDIDATE_ROW_COUNT_OR_FIELDS_INVALID"):
         audit.compare_candidate_rows([base],[base],expected_count=2)
+
+
+def test_pinned_source_hashes_match_nov2_replay_provenance():
+    # Catch transcription mistakes: the previously merged stage_reference
+    # constant accidentally contained 67 hex characters, making all
+    # legitimate original historical source checks fail closed.
+    provenance = json.loads(
+        (Path(__file__).resolve().parents[1] /
+         "docs/evidence/issue-14/provenance.json").read_text()
+    )
+    original = provenance["original_module_hashes"]
+    assert audit.FROZEN_ARCHIVE_SHA256 == provenance["frozen_archive_sha256"]
+    assert audit.FROZEN_STAGE_MODULE_SHA256 == original["stage_reference.py"]
+    assert audit.FROZEN_ATR_MODULE_SHA256 == original["atr_floor_v16.py"]
+    for hash_ in (
+        audit.FROZEN_ARCHIVE_SHA256,audit.FROZEN_STAGE_CSV_SHA256,
+        audit.FROZEN_STAGE_MODULE_SHA256,audit.FROZEN_ATR_MODULE_SHA256,
+    ):
+        assert len(hash_) == 64
+        assert set(hash_) <= set("0123456789abcdef")
+
+
+def test_source_hash_diagnostic_marks_all_unverified_sources_without_printing_values():
+    with tempfile.TemporaryDirectory() as tmp:
+        src,stage,archive,hashes = original_research_fixture(Path(tmp))
+        # Two independent mismatches must be visible in one invocation.
+        stage.write_bytes(b"bad stage data")
+        (src / "atr_floor_v16.py").write_bytes(b"bad source module")
+        with patch.multiple(audit,**hashes):
+            with pytest.raises(audit.FrozenCandidateSourceHalted,
+                               match="PINNED_SOURCE_SHA256_MISMATCH") as info:
+                audit.run(stage_csv=stage,archive=archive,source_dir=src)
+        assert info.value.input_hash_matches == {
+            "stage_csv":False,"archive":True,
+            "stage_module":True,"atr_module":False,
+        }
