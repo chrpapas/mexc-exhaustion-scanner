@@ -2,6 +2,9 @@
 import csv
 import importlib.util
 import sqlite3
+import subprocess
+import sys
+import json
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
@@ -139,3 +142,75 @@ def test_live_input_requires_complete_historical_window_and_specification_scope(
         root=Path(tmp)
         with pytest.raises(ValueError,match="CANDIDATE_REPLAY_REQUIRES_COMPLETE_FROZEN_HISTORICAL_PATH"):
             module.audit(root,{"historical":root},candidate_archive=root/"file.zip")
+
+
+def test_offline_pure_policy_matches_checked_in_v40_policy_for_admission_and_lots():
+    """Mirror and repository reference produce the same pure decisions."""
+    from app.t100_v40_admission import (
+        PriorBar as ReferenceBar, admission as reference_admission,
+        lot_quantize_v39 as reference_lot,
+    )
+    import math
+    for amount in (2_000.,10_000.,1_000_000.):
+        series=[
+            (T-(49-i)*BAR,100.+i*.1,99.+i*.1,amount)
+            for i in range(49)
+        ]
+        local=[module.PriorBar(*x) for x in series]
+        canonical=[ReferenceBar(*x) for x in series]
+        for cost in (100,200):
+            for equity,marked,active,duplicate in (
+                (2000.,0.,0,False),
+                (2000.,500.,1,False),
+                (2000.,1500.,3,False),
+                (2000.,0.,4,False),
+                (2000.,0.,1,True),
+            ):
+                kwargs={
+                    "admission_open_ts":T,
+                    "equity_usdt":equity,
+                    "marked_existing_usdt":marked,
+                    "stage1_atr7_pct":5.8,
+                    "active_positions":active,
+                    "already_open_symbol":duplicate,
+                    "used_same_bar_usdt":0.,
+                    "cost_bps":float(cost),
+                }
+                a=module.admission(prior_bars=local,**kwargs)
+                b=reference_admission(prior_bars=canonical,**kwargs)
+                for name in a.__dataclass_fields__:
+                    x,y=getattr(a,name),getattr(b,name)
+                    if isinstance(x,float):
+                        assert math.isclose(x,y,rel_tol=1e-12,abs_tol=1e-10)
+                    else:
+                        assert x==y
+    args=dict(modeled_notional=2000.,entry_price=100.,
+              contract_size="0.001",volume_step="1",
+              min_volume="1",max_volume="100")
+    assert module.lot_quantize_v39(**args)==reference_lot(**args)
+
+
+def test_downloaded_standalone_script_reaches_archive_hash_without_app_package():
+    """Exercise the candidate-audit code path under isolated Python -I."""
+    with tempfile.TemporaryDirectory() as tmp:
+        root=Path(tmp)
+        snapshot=root/"lot.json"
+        snapshot.write_text(json.dumps({
+            "NOT_HISTORICAL":True,
+            "purpose":"CURRENT_CONTRACT_SPEC_REFERENCE_ONLY",
+            "specifications":{},
+        }))
+        command=[
+            sys.executable,"-I",str(AUDIT_PATH),
+            "--folder",str(root),
+            "--candidate-archive",str(root/"missing-frozen-archive.zip"),
+            "--lot-snapshot",str(snapshot),
+        ]
+        completed=subprocess.run(command, cwd=root,
+                                 capture_output=True,text=True,timeout=20)
+        # Previous release raised ModuleNotFoundError on app before even
+        # examining the candidate ZIP. The standalone version must get
+        # as far as opening the absent file, proving no hidden package dep.
+        assert completed.returncode != 0
+        assert "FileNotFoundError" in completed.stderr
+        assert "No module named 'app'" not in completed.stderr
