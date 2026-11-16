@@ -181,15 +181,30 @@ class FourSlotSnapshotCoordinator:
         except Exception:
             return FourSlotSnapshotResult("LEDGER_READ_OR_CONTRACT_FAILED")
 
+        # Record only a finite probe stage and an allowlisted reason. Never
+        # preserve an exception string, URL, response body or account detail.
+        inventory_stage="FIRST_POSITIONS"
         try:
             before_positions = await self.venue.open_positions()
+            inventory_stage="FIRST_STOPS"
             before_stops = await self.venue.open_stop_orders()
+            inventory_stage="FIRST_DIGEST"
             before_hash = _venue_digest(before_positions, before_stops)
             if len(before_positions) > MAX_SLOTS:
                 return FourSlotSnapshotResult("ACCOUNT_EXCEEDS_FOUR_SLOTS")
+            inventory_stage="COMPLETENESS"
             report = await self.completeness.inspect()
-        except Exception:
-            return FourSlotSnapshotResult("INVENTORY_READ_OR_FORMAT_FAILED")
+        except Exception as error:
+            from app.t100_v40_guardian_get_failure_codes import (
+                safe_inventory_exception_category,
+            )
+            return FourSlotSnapshotResult(
+                "INVENTORY_READ_OR_FORMAT_FAILED",
+                mismatch_diagnostic={
+                    "stage": inventory_stage,
+                    "category": safe_inventory_exception_category(error),
+                },
+            )
 
         # Fetch the exact order origins from durable checkpoint identities.
         # A non-flat account without a checkpoint cannot be adopted.
