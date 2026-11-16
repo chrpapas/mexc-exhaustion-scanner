@@ -19,14 +19,18 @@ from zipfile import ZipFile
 
 FROZEN_ARCHIVE_SHA256 = "2918f4589e8d564ca55b6f24aa2e9a868b5d214653ad7d92acaf1729fd1e4cb5"
 FROZEN_STAGE_CSV_SHA256 = "94d41f5077324673d79dc367f5b66b41732ebf1c37e4e046c9ae09bc72b795ca"
-FROZEN_STAGE_MODULE_SHA256 = "7ff24d0bb4e55344698bfe9b6a27da7c2ac5c4ec7b09edce62733835b9927105ed4"
-FROZEN_ATR_MODULE_SHA256 = "8d81f8f5bb24fdd5993874da747a3c397e7e97ce86994db1144178be5ecd7141"
+FROZEN_STAGE_MODULE_SHA256 = "7ff24d0bb4e55344698bfe9d96f1611f09edce62733835b9927105ed4c97c2fe"
+FROZEN_ATR_MODULE_SHA256 = "8d81f8f5bb24fdd5993874da747a3a397e7e97ce86994db114eddd588eefe27d"
 EXPECTED_CANDIDATES = 146
 FIELDS = ("symbol", "entry_ts", "entry_reference_price", "stage1_atr7_pct", "episode_id")
 
 
 class FrozenCandidateSourceHalted(ValueError):
     """No sensitive local values or historical symbols in error codes."""
+
+    def __init__(self, code: str, *, input_hash_matches: dict[str, bool] | None = None):
+        super().__init__(code)
+        self.input_hash_matches = input_hash_matches
 
 
 def sha256_file(path: Path, *, limit: int) -> str:
@@ -93,8 +97,17 @@ def run(*, stage_csv: Path, archive: Path, source_dir: Path) -> dict[str, object
         "stage_module": FROZEN_STAGE_MODULE_SHA256,
         "atr_module": FROZEN_ATR_MODULE_SHA256,
     }
-    if actual_hashes != expected_hashes:
-        raise FrozenCandidateSourceHalted("PINNED_SOURCE_SHA256_MISMATCH")
+    input_hash_matches = {
+        name: actual_hashes[name] == expected_hashes[name]
+        for name in expected_hashes
+    }
+    if not all(input_hash_matches.values()):
+        # Identify which historical input differs without revealing any
+        # local filenames, symbols, file contents, or unverified hashes.
+        raise FrozenCandidateSourceHalted(
+            "PINNED_SOURCE_SHA256_MISMATCH",
+            input_hash_matches=input_hash_matches,
+        )
 
     with ZipFile(archive) as z:
         manifest = json.loads(z.read("manifest.json"))
@@ -184,6 +197,8 @@ def main() -> None:
             "live_authorization": False,
             "mexc_posts": 0,
         }
+        if type(exc) is FrozenCandidateSourceHalted and exc.input_hash_matches is not None:
+            result["input_hash_matches"] = exc.input_hash_matches
     print(json.dumps(result, indent=2, sort_keys=True))
     if result.get("status") != "V40_PINNED_ORIGINAL_146_CANDIDATES_REGENERATED":
         raise SystemExit(2)
