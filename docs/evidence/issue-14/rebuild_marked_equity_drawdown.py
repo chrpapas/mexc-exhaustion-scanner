@@ -492,7 +492,7 @@ def audit(root, folders, start=start, end=end, audit_trims=False, entry_specs=No
                     n = D(row["notional"])
                     price = entry_prices[(sym, t)]
                     if entry_specs is not None:
-                            history = [PriorBar(int(ts), float(hi), float(cl), float(amount)) for ts, hi, cl, amount in candles.execute(
+                        history = [PriorBar(int(ts), float(hi), float(cl), float(amount)) for ts, hi, cl, amount in candles.execute(
                             "SELECT open_ts,high,close,amount FROM candles WHERE symbol=? AND interval='Min30' AND open_ts>=? AND open_ts<? ORDER BY open_ts",
                             (sym, t-49*1800, t),
                         )]
