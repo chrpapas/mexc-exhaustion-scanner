@@ -39,6 +39,20 @@ def main() -> int:
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument("--run",action="store_true",required=True)
     p.parse_args()
+    # No interaction between GET-only four-slot wiring and any real POST path.
+    if (
+        os.environ.get("T100_V40_FOUR_SLOT_READONLY_WIRING_ENABLED") == "true"
+        and (
+            os.environ.get("T100_V40_FIRST_CANARY_ORDER_WORKER_ENABLED") == "true"
+            or os.environ.get("T100_V40_EMERGENCY_EXIT_ENABLED") == "true"
+        )
+    ):
+        print(json.dumps({
+            "status": "V40_FOUR_SLOT_READONLY_MUTATION_MODE_COLLISION_HALT",
+            "entry_allowed": False, "live_authorization": False,
+            "mexc_posts": 0, "database_writes": 0,
+        }, sort_keys=True), flush=True)
+        return 2
     # A separately reviewed future first-canary release may opt into the
     # production first-signal dependency graph. Never inherit paper guards
     # or silently transform GET-only supervisor flags into live mode.
@@ -59,6 +73,14 @@ def main() -> int:
             "mexc_posts":0,"database_writes":0,
         },sort_keys=True))
         return 2
+    # Optional real-data four-slot observation, with every mutation port
+    # deliberately absent. The paper kill switch remains mandatory.
+    if os.environ.get("T100_V40_FOUR_SLOT_READONLY_WIRING_ENABLED") == "true":
+        from app.t100_v40_render_four_slot_readonly_worker import (
+            run_readonly_monitor,
+        )
+        import asyncio
+        return asyncio.run(run_readonly_monitor(dict(os.environ)))
     # Explicit first-stage live-data activation. The existing startCommand
     # remains unchanged, but this branch reads genuine Stage2 signals and
     # sends only signed GETs while the paper kill switch stays engaged.
