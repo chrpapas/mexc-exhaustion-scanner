@@ -1,11 +1,15 @@
 """Research trace audit. Uses fixed exported trades, never executes the strategy or orders.
 
 --immutable-candles is ONLY for a verified and dormant historical SQLite
-snapshot, and refuses pending transaction side files. It does not certify
-causal strategy decisions, venue execution, or live trading.
+snapshot, and refuses pending transaction side files. Optional
+--candidate-archive re-evaluates 146 original Stage2 gate/occupancy/sizing
+decisions against per-bar recreated account state based on PRESCRIBED fills.
+It does not certify independent Stage2 discovery, independent exit fills,
+historical contract rules, venue execution, or live trading.
 """
 
-import csv, json, sqlite3
+import csv, json, sqlite3, hashlib, io
+from zipfile import ZipFile
 from collections import defaultdict
 from datetime import datetime
 from decimal import Decimal as D
@@ -13,6 +17,11 @@ from pathlib import Path
 
 start = int(datetime.fromisoformat("2023-02-03T02:30:00+00:00").timestamp())
 end = int(datetime.fromisoformat("2026-09-25T08:30:00+00:00").timestamp())
+
+EXPECTED_HISTORICAL_CANDIDATES = 146
+EXPECTED_HISTORICAL_GATE_SKIPS = 24
+EXPECTED_HISTORICAL_OCCUPANCY_REJECTS = 14
+EXPECTED_HISTORICAL_ADMISSIONS = 108
 
 
 def ts(s):
@@ -40,9 +49,73 @@ def conn(path, immutable=False):
     return c
 
 
+def _pinned_candidate_data(path):
+    """Load exactly the original 146 V40 Stage2 candidates and gated decisions."""
+    from app.t100_live_strategy_parity_gate import FROZEN_V40_ARCHIVE_SHA256
+    h=hashlib.sha256()
+    with Path(path).expanduser().open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024*1024),b""):
+            h.update(chunk)
+    if h.hexdigest()!=FROZEN_V40_ARCHIVE_SHA256:
+        raise ValueError("FROZEN_CANDIDATE_ARCHIVE_SHA_MISMATCH")
+    with ZipFile(path) as z:
+        def rows(name):
+            member=z.getinfo(name)
+            if not 0<member.file_size<10_000_000:
+                raise ValueError("FROZEN_ARCHIVE_MEMBER_SIZE_INVALID")
+            return list(csv.DictReader(io.StringIO(z.read(name).decode("utf-8-sig"))))
+        manifest=json.loads(z.read("manifest.json"))
+        if (manifest.get("candidate_count")!=146 or
+            manifest.get("preceding_candles_exported")!=7154 or
+            manifest.get("type")!="READ_ONLY_SOURCE_PARITY_SAMPLE"):
+            raise ValueError("FROZEN_CANDIDATE_MANIFEST_INVALID")
+        candidate_rows=rows("candidates.csv")
+        history_rows=rows("prior49_bars.csv")
+        gates={}
+        for cost in (100,200):
+            label=f"V32_VOL30_SKIP_H4_S{cost}_CAP5_V39_HYBRID"
+            gates[cost]={
+                (r["symbol"],ts(r["time"])):r["action"]
+                for r in rows("capital_2000/gate_decisions.csv")
+                if r["scenario"]==label
+            }
+    if len(candidate_rows)!=146 or len(history_rows)!=7154 or any(
+        len(gates[cost])!=132 for cost in (100,200)
+    ):
+        raise ValueError("FROZEN_CANDIDATE_COUNTS_INVALID")
+    by_time=defaultdict(list)
+    keys=set()
+    for r in candidate_rows:
+        key=(r["symbol"],int(r["entry_ts"]))
+        if key in keys or key[1]%1800:
+            raise ValueError("FROZEN_CANDIDATE_KEYS_INVALID")
+        keys.add(key)
+        by_time[key[1]].append(r)
+    if any(k not in keys or v not in ("ADMIT","SKIP")
+           for m in gates.values() for k,v in m.items()):
+        raise ValueError("FROZEN_GATES_INVALID")
+    bars=defaultdict(list)
+    for r in history_rows:
+        key=(r["signal_symbol"],int(r["admission_ts"]))
+        if key not in keys:
+            raise ValueError("FROZEN_CANDIDATE_PRIOR_BAR_ORPHAN")
+        bars[key].append((int(r["open_ts"]),r["high"],r["close"],r["amount"]))
+    if len(bars)!=146 or any(len(v)!=49 for v in bars.values()):
+        raise ValueError("FROZEN_CANDIDATE_PRIOR_BAR_COUNT_INVALID")
+    return by_time, gates, bars
+
+
 def audit(root, folders, start=start, end=end, audit_trims=False, entry_specs=None,
-          *, candles_path=None, funding_path=None, immutable_candles=False):
+          *, candles_path=None, funding_path=None, immutable_candles=False,
+          candidate_archive=None):
     """Audit prescribed historical ledgers, never execute live orders."""
+    if candidate_archive is not None and (
+        entry_specs is None or len(folders)!=1 or "historical" not in folders
+        or start!=globals()["start"] or end!=globals()["end"]
+    ):
+        raise ValueError("CANDIDATE_REPLAY_REQUIRES_COMPLETE_FROZEN_HISTORICAL_PATH")
+    candidate_data = (_pinned_candidate_data(candidate_archive)
+                      if candidate_archive is not None else None)
     candles = conn(
         candles_path or root / "historical-market-data-min30-v1/historical-market-data-min30-v1.sqlite",
         immutable=immutable_candles,
@@ -90,6 +163,10 @@ def audit(root, folders, start=start, end=end, audit_trims=False, entry_specs=No
             trim_fills = 0
             sizing_checked = 0
             sizing_max_difference = D(0)
+            candidate_decisions_checked = 0
+            candidate_gate_skips = 0
+            candidate_portfolio_rejects = 0
+            accepted_candidate_decisions = 0
 
             def equity(prices=None, index=0):
                 return cash + sum(
@@ -114,7 +191,9 @@ def audit(root, folders, start=start, end=end, audit_trims=False, entry_specs=No
                     del active[row["symbol"]]
 
             for t in range(start, end + 1, 1800):
-                syms = set(active) | {r["symbol"] for r in entries[t]}
+                staged_candidates=(candidate_data[0].get(t,[]) if candidate_data is not None else [])
+                syms = (set(active) | {r["symbol"] for r in entries[t]}
+                        | {r["symbol"] for r in staged_candidates})
                 if not syms:
                     continue
                 prices = {}
@@ -152,6 +231,93 @@ def audit(root, folders, start=start, end=end, audit_trims=False, entry_specs=No
                                 raise ValueError('TRIM_EXCEEDS_PRIOR_CLOSE_PLAN')
                             trim_fills += 1
                         close(row)
+                if candidate_data is not None and staged_candidates:
+                    from app.t100_v40_admission import PriorBar, admission, lot_quantize_v39
+                    ledger_entries={(r["symbol"],t):r for r in entries[t]}
+                    shadow={sym:dict(p) for sym,p in active.items()}
+                    shadow_cash=cash
+                    candidate_accepted=[]
+                    for candidate in staged_candidates:
+                        sym=candidate["symbol"]
+                        key=(sym,t)
+                        history=[PriorBar(ts0,float(hi),float(cl),float(amount))
+                                 for ts0,hi,cl,amount in candidate_data[2][key]]
+                        source_history=candles.execute(
+                            "SELECT open_ts,high,close,amount FROM candles "
+                            "WHERE symbol=? AND interval='Min30' AND open_ts>=? "
+                            "AND open_ts<? ORDER BY open_ts",
+                            (sym,t-49*1800,t)).fetchall()
+                        if len(source_history)!=49 or any(
+                            int(observed[0])!=b.open_ts or
+                            abs(float(observed[1])-b.high)>1e-6 or
+                            abs(float(observed[2])-b.close)>1e-6 or
+                            abs(float(observed[3])-b.amount_usdt)>max(1e-6,abs(b.amount_usdt)*1e-12)
+                            for observed,b in zip(source_history,history)
+                        ):
+                            raise ValueError("CANDIDATE_CAUSAL_HISTORY_MISMATCH")
+                        shadow_equity=shadow_cash+sum((
+                            p["n"]*(1-p["mark"]/p["entry"]) for p in shadow.values()
+                        ),D(0))
+                        marked=sum((p["n"]*p["mark"]/p["entry"] for p in shadow.values()),D(0))
+                        used=sum((
+                            D(x["notional"])*D(x["exit"])/D(x["entry"])
+                            for x in exits[t] if x["symbol"]==sym
+                            and x["kind"] in ("trim","delayed_exit")
+                        ),D(0))
+                        decision=admission(
+                            prior_bars=history, admission_open_ts=t,
+                            equity_usdt=float(shadow_equity),
+                            marked_existing_usdt=float(marked),
+                            stage1_atr7_pct=float(candidate["stage1_atr7_pct"]),
+                            active_positions=len(shadow),
+                            already_open_symbol=sym in shadow,
+                            used_same_bar_usdt=float(used),cost_bps=float(cost),
+                        )
+                        expected=candidate_data[1][cost].get(key)
+                        if expected is None:
+                            if (decision.action!="REJECT" or
+                                decision.reason not in ("duplicate_symbol","four_slot_limit")):
+                                raise ValueError("CANDIDATE_OMISSION_POLICY_DRIFT")
+                            candidate_portfolio_rejects+=1
+                        elif expected=="SKIP":
+                            if decision.action!="SKIP" or decision.reason!="vol_ge_30":
+                                raise ValueError("CANDIDATE_VOL30_POLICY_DRIFT")
+                            candidate_gate_skips+=1
+                        elif expected=="ADMIT":
+                            row=ledger_entries.get(key)
+                            if row is None or decision.action!="ADMIT":
+                                raise ValueError("CANDIDATE_ENTRY_POLICY_DRIFT")
+                            if abs(float(row["atr"])-float(candidate["stage1_atr7_pct"]))>1e-6:
+                                raise ValueError("CANDIDATE_ATR_SOURCE_DRIFT")
+                            requested=min(decision.desired_notional_usdt,decision.equity_budget_usdt)
+                            if abs(D(str(requested))-D(row["desired_before_liquidity"]))>D(".001"):
+                                raise ValueError("CANDIDATE_SHOCK_SIZE_DRIFT")
+                            expected_notional=D(str(decision.modeled_notional_usdt))
+                            if sym in entry_specs:
+                                spec=entry_specs[sym]
+                                _,expected_notional,_=lot_quantize_v39(
+                                    modeled_notional=decision.modeled_notional_usdt,
+                                    entry_price=float(entry_prices[key]),
+                                    contract_size=str(spec["contractSize"]),
+                                    volume_step=str(spec["volUnit"]),
+                                    min_volume=str(spec["minVol"]),
+                                    max_volume=str(spec["maxVol"]) if spec.get("maxVol") is not None else None,
+                                )
+                            actual_notional=D(row["notional"])
+                            if abs(expected_notional-actual_notional)>D(".001"):
+                                raise ValueError("CANDIDATE_ACCOUNT_STATE_ENTRY_SIZE_DRIFT")
+                            candidate_accepted.append(key)
+                            accepted_candidate_decisions+=1
+                            shadow_cash-=actual_notional*rate
+                            shadow[sym]={
+                                "time":t,"n":actual_notional,"entry":entry_prices[key],
+                                "mark":entry_prices[key],
+                            }
+                        else:
+                            raise ValueError("CANDIDATE_GATE_ACTION_INVALID")
+                        candidate_decisions_checked+=1
+                    if candidate_accepted!=[(r["symbol"],t) for r in entries[t]]:
+                        raise ValueError("CANDIDATE_SAME_BAR_ENTRY_PRIORITY_DRIFT")
                 for row in entries[t]:
                     sym = row["symbol"]
                     entry_diff = max(entry_diff, abs(equity() - D(row["equity_at_entry"])))
@@ -224,6 +390,23 @@ def audit(root, folders, start=start, end=end, audit_trims=False, entry_specs=No
                     maximum_entry_size_difference=str(sizing_max_difference),
                     rejected_candidates_certified=False,
                 )
+            if candidate_data is not None:
+                if (candidate_decisions_checked!=EXPECTED_HISTORICAL_CANDIDATES
+                    or candidate_gate_skips!=EXPECTED_HISTORICAL_GATE_SKIPS
+                    or candidate_portfolio_rejects!=EXPECTED_HISTORICAL_OCCUPANCY_REJECTS
+                    or accepted_candidate_decisions!=EXPECTED_HISTORICAL_ADMISSIONS):
+                    raise ValueError("CANDIDATE_REPLAY_FINAL_COUNTS_DRIFT")
+                results[f"{cohort}_{cost}"].update(
+                    candidate_decisions_checked=candidate_decisions_checked,
+                    candidate_gate_skips_checked=candidate_gate_skips,
+                    candidate_occupancy_rejects_checked=candidate_portfolio_rejects,
+                    candidate_admissions_and_sizes_checked=accepted_candidate_decisions,
+                    candidate_decisions_given_prescribed_fills_verified=True,
+                    independent_stage2_candidate_generation_certified=False,
+                    independent_exit_fill_decisions_certified=False,
+                    historical_point_in_time_specifications_certified=False,
+                    full_strategy_decisions_independently_certified=False,
+                )
             if audit_trims:
                 results[f"{cohort}_{cost}"].update(
                     prior_close_trim_plans=trim_plans, observed_trim_fills_checked=trim_fills,
@@ -253,14 +436,30 @@ if __name__ == "__main__":
                         help="Historical funding cache SQLite file")
     parser.add_argument("--immutable-candles", action="store_true",
                         help="Only for complete dormant offline SQLite snapshots")
+    parser.add_argument("--candidate-archive", type=Path,
+                        help="Pinned original 146-candidate ZIP; requires --folder and --lot-snapshot")
+    parser.add_argument("--lot-snapshot", type=Path,
+                        help="Current-reference MEXC contract metadata JSON (NOT historical)")
     args = parser.parse_args()
     if (args.baseline is None) != (args.filtered is None):
         parser.error("--baseline and --filtered must be used together")
     folders = ({"historical": args.folder} if args.folder is not None else
                {"baseline": args.baseline, "filtered": args.filtered})
+    if (args.candidate_archive is not None) != (args.lot_snapshot is not None):
+        parser.error("--candidate-archive and --lot-snapshot must be used together")
+    if args.candidate_archive is not None and args.folder is None:
+        parser.error("candidate replay requires --folder, not baseline/filtered")
+    specs=None
+    if args.lot_snapshot is not None:
+        payload=json.loads(args.lot_snapshot.expanduser().read_text())
+        if (payload.get("NOT_HISTORICAL") is not True or
+            payload.get("purpose")!="CURRENT_CONTRACT_SPEC_REFERENCE_ONLY"):
+            parser.error("snapshot must explicitly be NOT_HISTORICAL current reference")
+        specs=payload["specifications"]
     print(json.dumps(
         audit(args.data_root.resolve(), folders,
               candles_path=args.candles, funding_path=args.funding,
-              immutable_candles=args.immutable_candles),
+              immutable_candles=args.immutable_candles,
+              entry_specs=specs,candidate_archive=args.candidate_archive),
         indent=2,
     ))
