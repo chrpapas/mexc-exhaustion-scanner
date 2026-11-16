@@ -79,13 +79,20 @@ def lot_from_metadata(meta):
     if meta is None:
         return None
     size,step,minimum=(number(meta[k]) for k in ("contractSize","volUnit","minVol"))
-    if minimum%step:
-        raise ExitQuantityAuditHalted("LOT_MINIMUM_NOT_MULTIPLE_OF_STEP")
+    # Current MEXC metadata may express minVol in finer precision than
+    # volUnit. Valid tradeable quantities remain multiples of volUnit and
+    # are compared directly with the minimum; do not reject that schema.
     return Lot(size,step,minimum)
 
 
 def quote_capacity(prior_amount):
-    return number(prior_amount)*D(".05")
+    try:
+        amount=D(str(prior_amount))
+        if not amount.is_finite() or amount<0:
+            raise ValueError()
+        return amount*D(".05")
+    except (InvalidOperation,TypeError,ValueError):
+        raise ExitQuantityAuditHalted("INVALID_PRIOR30_TURNOVER") from None
 
 
 def allocate(remaining, entry, price, quota, *, lot=None, remaining_units=None):
