@@ -72,13 +72,17 @@ class GetOnlyMexcTransport:
     # fall back to retired contract.mexc.com or follow credentialed redirects.
     BASE_URL = "https://api.mexc.com"
 
-    def __init__(self, client: Any, *, api_key: str, api_secret: str):
+    def __init__(self, client: Any, *, api_key: str, api_secret: str,
+                 diagnostic_get_errors: bool = False):
+        if type(diagnostic_get_errors) is not bool:
+            raise GuardianOnceHalted("SIGNED_GET_DIAGNOSTIC_POLICY_INVALID")
         if (type(api_key) is not str or len(api_key) < 12 or
                 type(api_secret) is not str or len(api_secret) < 16):
             raise GuardianOnceHalted("SIGNED_GET_CREDENTIALS_NOT_CONFIGURED")
         self._client = client
         self._key = api_key
         self._secret = api_secret
+        self._diagnostic_get_errors = diagnostic_get_errors
 
     @classmethod
     def _allowed(cls, path: str) -> bool:
@@ -127,6 +131,13 @@ class GetOnlyMexcTransport:
                 raise GuardianOnceHalted(
                     classify_mode_transport_failure(error)
                 ) from None
+            if self._diagnostic_get_errors:
+                from app.t100_v40_guardian_get_failure_codes import (
+                    classify_inventory_get_transport_failure,
+                )
+                raise GuardianOnceHalted(
+                    classify_inventory_get_transport_failure(error)
+                ) from None
             raise GuardianOnceHalted("MEXC_SIGNED_GET_TRANSPORT_FAILED") from None
         if (type(payload) is not dict or
                 payload.get("success") is not True or
@@ -138,6 +149,13 @@ class GetOnlyMexcTransport:
                 )
                 raise GuardianOnceHalted(
                     classify_mode_api_rejection(payload)
+                ) from None
+            if self._diagnostic_get_errors:
+                from app.t100_v40_guardian_get_failure_codes import (
+                    classify_inventory_get_api_rejection,
+                )
+                raise GuardianOnceHalted(
+                    classify_inventory_get_api_rejection(payload)
                 ) from None
             raise GuardianOnceHalted("MEXC_SIGNED_GET_EXPLICITLY_REJECTED")
         return payload.get("data")

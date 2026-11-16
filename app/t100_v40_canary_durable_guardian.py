@@ -38,7 +38,9 @@ from app.t100_v40_canary_account_guardian import (
     V40CanaryGuardianHeartbeat,V40CanaryGuardianHalted,
     observe_v40_account_once,verify_guardian_environment,
 )
-from app.t100_v40_guardian_get_failure_codes import SAFE_GUARDIAN_MODE_HALTS
+from app.t100_v40_guardian_get_failure_codes import (
+    SAFE_GUARDIAN_MODE_HALTS, SAFE_GUARDIAN_INVENTORY_DIAGNOSTIC_HALTS,
+)
 
 SCOPE=hashlib.sha256(b"T100_V40_DEDICATED_FIRST_CANARY_GUARDIAN").hexdigest()
 
@@ -141,7 +143,7 @@ _SAFE_OBSERVER_DETAILS=frozenset({
     "V40_GUARDIAN_SIGNED_GET_UNAVAILABLE_HALT",
     "V40_GUARDIAN_ACCOUNT_SHAPE_OR_HEDGE_UNVERIFIED_HALT",
     "V40_GUARDIAN_ACCOUNT_BOOKENDS_DRIFT_HALT",
-}) | SAFE_GUARDIAN_MODE_HALTS
+}) | SAFE_GUARDIAN_MODE_HALTS | SAFE_GUARDIAN_INVENTORY_DIAGNOSTIC_HALTS
 
 
 def _safe_observer_detail(heartbeat:object)->str:

@@ -10,8 +10,11 @@ on:
       - "app/t100_live_guardian_readonly_once.py"
       - "app/t100_live_readonly_probe.py"
       - "app/t100_v40_guardian_account_and_owned.py"
+      - "app/t100_live_inventory_completeness_probe.py"
+      - "app/t100_live_four_slot_snapshot_coordinator.py"
       - "app/t100_v40_canary_durable_guardian.py"
       - "tests/test_t100_v40_guardian_get_failure_codes.py"
+      - "tests/test_t100_v40_guardian_inventory_diagnostics.py"
       - ".github/workflows/v40-guardian-get-failure-forensics.yml"
 
 permissions:
@@ -28,11 +31,13 @@ jobs:
       - name: Install
         run: python -m pip install -e ".[dev]"
       - name: Compile
-        run: python -m compileall -q app/t100_v40_guardian_get_failure_codes.py
+        run: |
+          python -m compileall -q             app/t100_v40_guardian_get_failure_codes.py             app/t100_live_guardian_readonly_once.py             app/t100_live_inventory_completeness_probe.py             app/t100_live_four_slot_snapshot_coordinator.py             app/t100_v40_guardian_account_and_owned.py             app/t100_v40_canary_durable_guardian.py
       - name: Verify errors, compatibility and no trade permits
         run: |
           python -m pytest -q \
             tests/test_t100_v40_guardian_get_failure_codes.py \
+            tests/test_t100_v40_guardian_inventory_diagnostics.py \
             tests/test_t100_live_guardian_readonly_once.py \
             tests/test_t100_live_readonly_probe.py \
             tests/test_t100_v40_canary_durable_guardian.py \
