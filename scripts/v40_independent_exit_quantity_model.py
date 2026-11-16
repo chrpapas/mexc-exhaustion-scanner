@@ -18,6 +18,7 @@ import json
 import sqlite3
 from collections import Counter, defaultdict
 from dataclasses import dataclass
+from itertools import chain
 from datetime import datetime
 from decimal import Decimal as D, ROUND_FLOOR, InvalidOperation
 from pathlib import Path
@@ -30,6 +31,10 @@ TOL=D("0.001")
 
 class ExitQuantityAuditHalted(ValueError):
     """Never include exchange credentials or source paths in messages."""
+
+    def __init__(self, code, *, details=None):
+        super().__init__(code)
+        self.details = details
 
 
 def number(s):
@@ -131,13 +136,17 @@ def allocate(remaining, entry, price, quota, *, lot=None, remaining_units=None):
 
 
 def generate_position(*, entry_ts,entry_price,entry_notional,entry_quote,
-                      candle_rows,lot=None,entry_units=None):
+                      candle_rows,lot=None,entry_units=None,end_ts=None):
     """Generate exits without any access to exported exit records.
 
-    candle_rows is a contiguous sequence (open_ts,open,high,low,close,
-    previous_30m_turnover). The previous bar is strictly causal.
+    Accepts a lazy iterable of (open_ts,open,high,low,close,
+    previous_30m_turnover) tuples. Only observations while the position
+    is open are relevant; a gap AFTER modeled full closure is not a
+    historical execution problem. Open positions must reach end_ts.
     """
-    if not candle_rows or candle_rows[0][0]!=entry_ts:
+    row_iterator=iter(candle_rows)
+    first=next(row_iterator,None)
+    if first is None or first[0]!=entry_ts:
         raise ExitQuantityAuditHalted("ENTRY_CANDLE_MISSING")
     ep=number(entry_price)
     original=number(entry_notional)
@@ -155,9 +164,13 @@ def generate_position(*, entry_ts,entry_price,entry_notional,entry_quote,
     events=[]
     previous=None
     triggers=0
-    for t,op,hi,lo,cl,prior in candle_rows:
+    for t,op,hi,lo,cl,prior in chain((first,),row_iterator):
         if previous is not None and t!=previous+BAR_SECONDS:
-            raise ExitQuantityAuditHalted("HISTORICAL_CANDLE_GAP")
+            raise ExitQuantityAuditHalted(
+                "HISTORICAL_CANDLE_GAP",
+                details={"expected_next_ts":previous+BAR_SECONDS,
+                         "observed_next_ts":t},
+            )
         previous=t
         op,hi,lo,cl=(number(x) for x in (op,hi,lo,cl))
         if not (lo<=min(op,cl)<=max(op,cl)<=hi):
@@ -225,10 +238,40 @@ def generate_position(*, entry_ts,entry_price,entry_notional,entry_quote,
             if profit>=14 or armed:
                 armed=True
                 best=max(best,profit)
+    if end_ts is not None and remaining>TOL and previous!=end_ts:
+        raise ExitQuantityAuditHalted(
+            "ACTIVE_POSITION_CANDLE_WINDOW_INCOMPLETE",
+            details={"expected_horizon_ts":end_ts,
+                     "last_observed_ts":previous},
+        )
     return {
         "events":events, "triggers":triggers, "pending":pending,
         "remaining_notional":remaining,
     }
+
+
+def iter_causal_candle_rows(db, symbol, entry_ts, end_ts):
+    """Stream only the consumed life of a trade from immutable/read-only SQL.
+
+    Before the entry, exactly one previous-bar observation is needed for
+    initial 5% turnover capacity. Do not prevalidate through the entire
+    backtest end for a position that may have already closed.
+    """
+    result=iter(db.execute(
+        "SELECT open_ts,open,high,low,close,amount FROM candles "
+        "WHERE symbol=? AND interval='Min30' AND open_ts>=? AND open_ts<=? "
+        "ORDER BY open_ts",
+        (symbol,entry_ts-BAR_SECONDS,end_ts),
+    ))
+    prior=next(result,None)
+    if prior is None or prior[0]!=entry_ts-BAR_SECONDS:
+        raise ExitQuantityAuditHalted("PRIOR_CANDLE_MISSING")
+    previous_amount=prior[5]
+    for ts,op,hi,lo,cl,amount in result:
+        if ts<entry_ts:
+            raise ExitQuantityAuditHalted("DUPLICATE_PRIOR_CANDLE")
+        yield (ts,op,hi,lo,cl,previous_amount)
+        previous_amount=amount
 
 
 def csv_rows(path):
@@ -318,29 +361,25 @@ def audit(folder,candles_path,snapshot_path,*,end_ts=None,immutable=False):
                 else:
                     counters["current_spec_lot_positions"]+=1
                     units=number(fill["current_contract_units"])
-                # Include the one STRICTLY PRIOR candle for entry-bar quota.
-                # It is needed even if a trigger fires on the entry candle.
-                candles=list(db.execute(
-                    "SELECT open_ts,open,high,low,close,amount FROM candles "
-                    "WHERE symbol=? AND interval='Min30' AND open_ts>=? AND open_ts<=? "
-                    "ORDER BY open_ts",(symbol,t-BAR_SECONDS,end_ts)))
-                if not candles or candles[0][0]!=t-BAR_SECONDS:
-                    raise ExitQuantityAuditHalted("PRIOR_CANDLE_MISSING")
-                modeled=[]
-                previous_ts=None
-                previous_amount=None
-                for ts,op,hi,lo,cl,amount in candles:
-                    if previous_ts is not None and ts!=previous_ts+BAR_SECONDS:
-                        raise ExitQuantityAuditHalted("HISTORICAL_CANDLE_GAP")
-                    if ts>=t:
-                        modeled.append((ts,op,hi,lo,cl,previous_amount))
-                    previous_ts=ts
-                    previous_amount=amount
-                result=generate_position(
-                    entry_ts=t,entry_price=ep,entry_notional=n,
-                    entry_quote=number(fill.get("filled_usdt",e["notional"])),
-                    candle_rows=modeled,lot=lot,entry_units=units,
-                )
+                # Only inspect candle continuity WHILE the modeled position
+                # is open. An unrelated gap years after its completed exit
+                # must never invalidate that trade. An active gap remains a
+                # hard failure with symbol and timestamp diagnostics.
+                try:
+                    result=generate_position(
+                        entry_ts=t,entry_price=ep,entry_notional=n,
+                        entry_quote=number(fill.get("filled_usdt",e["notional"])),
+                        candle_rows=iter_causal_candle_rows(
+                            db,symbol,t,end_ts,
+                        ),
+                        lot=lot,entry_units=units,end_ts=end_ts,
+                    )
+                except ExitQuantityAuditHalted as exc:
+                    raise ExitQuantityAuditHalted(
+                        str(exc),
+                        details={"symbol":symbol,"entry_ts":t,
+                                 **(exc.details or {})},
+                    ) from None
                 observed=sorted(rows,key=lambda r:time_of(r["exit_time"]))
                 compared=compare_generated(result["events"],observed)
                 counters["positions_modeled"]+=1
@@ -419,11 +458,14 @@ def main():
             sqlite3.DatabaseError,ArithmeticError) as exc:
         code=(str(exc) if type(exc) is ExitQuantityAuditHalted
               else "HISTORICAL_INPUT_OR_MODEL_INVALID")
-        print(json.dumps({
+        result={
             "status":"V40_EXIT_QUANTITY_AUDIT_HALTED",
             "failure_code":code,
             "entry_allowed":False,"live_authorization":False,"mexc_posts":0,
-        },indent=2))
+        }
+        if type(exc) is ExitQuantityAuditHalted and exc.details is not None:
+            result["diagnostic"]=exc.details
+        print(json.dumps(result,indent=2))
         raise SystemExit(2)
 
 
