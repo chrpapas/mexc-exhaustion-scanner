@@ -84,3 +84,32 @@ def test_opt_in_trim_mode_requires_current_lot_snapshot():
 def test_non_authorizing_model_remains_ledger_conditioned():
     assert "audit_trims" in module.audit.__code__.co_varnames
     assert "from scripts.v40_risk_trim_audit import planned_trims" not in FILE.read_text()
+
+
+def test_partial_trim_reason_is_determined_by_modeled_remaining_inventory():
+    # The historical S200 ZKSYNC trim is strictly partial: it removed
+    # 346.7825 of a substantially larger still-open position.
+    assert module.expected_trim_exit_reason(
+        modeled_basis="346.78250",
+        remaining_before_trim="5533.0",
+    )=="risk_trim_partial"
+    assert module.expected_trim_exit_reason(
+        modeled_basis="5533.0",
+        remaining_before_trim="5533.0",
+    )=="risk_trim"
+
+
+def test_reason_is_not_canonically_accepted_without_amount_evidence():
+    for modeled,remaining in (
+        ("0","500"),("501","500"),("NaN","500"),("500","0"),
+    ):
+        with pytest.raises(ValueError,match="TRIM_REASON_AMOUNT_INVALID"):
+            module.expected_trim_exit_reason(
+                modeled_basis=modeled,remaining_before_trim=remaining)
+
+
+def test_audit_retains_strict_reason_match_and_exposes_both_labels():
+    source=FILE.read_text()
+    assert 'if actual["reason"]!=expected_reason:' in source
+    assert '"recorded_exit_reason":actual["reason"]' in source
+    assert '"reconstructed_expected_reason":expected_reason' in source
