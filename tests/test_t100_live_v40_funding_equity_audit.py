@@ -44,6 +44,26 @@ class FundingEquityAuditTests(unittest.TestCase):
                 with (root / (name+'.csv')).open('w') as file:
                     writer=csv.DictWriter(file,fieldnames=list(values[0]));writer.writeheader();writer.writerows(values)
             result = audit_module.audit(root, {'baseline':root,'filtered':root})
+            # Exercise the explicit SSD copy paths and immutable read option.
+            source = directory / 'historical-market-data-min30-v1.sqlite'
+            funding_file = root / 'mexc-certification-cache-v1.sqlite'
+            copy_result = audit_module.audit(
+                root, {'ssd':root}, candles_path=source,
+                funding_path=funding_file, immutable_candles=True)
+            self.assertEqual(copy_result['ssd_100']['funding_difference'], '0.00')
+            self.assertEqual(copy_result['ssd_100']['final_equity_difference'], '0.000')
+            # Immutable readers must refuse potentially uncheckpointed data.
+            for suffix in ('-wal', '-journal'):
+                side = Path(str(source)+suffix)
+                side.write_bytes(b'pending')
+                try:
+                    with self.assertRaisesRegex(
+                        ValueError, 'IMMUTABLE_DATABASE_PENDING_JOURNAL'
+                    ):
+                        audit_module.audit(root,{'ssd':root},candles_path=source,
+                                           funding_path=funding_file,immutable_candles=True)
+                finally:
+                    side.unlink()
             for report in result.values():
                 self.assertEqual(report['funding_events'],1)
                 self.assertEqual(Decimal(report['funding_difference']),0)
