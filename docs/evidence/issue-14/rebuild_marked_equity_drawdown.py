@@ -10,6 +10,10 @@ It does not certify independent Stage2 discovery, independent exit fills,
 historical contract rules, venue execution, or live trading.
 """
 
+# Needed on the operator's macOS Python 3.9 for the embedded
+# pure V40 policy annotations (float | None, str | None).
+from __future__ import annotations
+
 import csv, json, sqlite3, hashlib, io
 from zipfile import ZipFile
 from collections import defaultdict
