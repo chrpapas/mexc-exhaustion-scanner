@@ -162,6 +162,40 @@ async def test_flat_without_signal_is_monitor_only():
 
 
 @pytest.mark.asyncio
+async def test_same_bar_multi_candidate_priority_halts_before_permit_or_entry(monkeypatch):
+    frame = await flat()
+    original = frame.source.candidates[0]
+    second = replace(original, signal_id=original.signal_id+1,
+                     symbol="SECOND_USDT")
+    source_two = replace(frame.source, candidates=(original, second))
+    p = Ports(replace(frame, source=source_two))
+    # Even a hypothetically valid future permit cannot choose first by
+    # arbitrary production source ID instead of frozen signal priority.
+    monkeypatch.setattr(V40PortfolioSupervisor,"_permit_valid",staticmethod(lambda _:True))
+    result = await controller(p).run_one(permit=object())
+    assert result.status == "V40_SUPERVISOR_SAME_BAR_PRIORITY_UNVERIFIED"
+    assert result.live_authorization is False
+    assert result.entries_allowed is False
+    assert p.calls == ["get"]
+
+
+@pytest.mark.asyncio
+async def test_same_bar_priority_unknown_is_terminal_not_retried(monkeypatch):
+    frame = await flat()
+    original = frame.source.candidates[0]
+    second = replace(original, signal_id=original.signal_id+1,
+                     symbol="SECOND_USDT")
+    p = Ports(replace(frame, source=replace(
+        frame.source,candidates=(original,second))))
+    monkeypatch.setattr(V40PortfolioSupervisor,"_permit_valid",staticmethod(lambda _:True))
+    result = await run_v40_portfolio_supervisor(
+        controller(p), permit=object(),max_cycles=10,
+        pause=lambda _: asyncio.sleep(0))
+    assert result.status == "V40_SUPERVISOR_SAME_BAR_PRIORITY_UNVERIFIED"
+    assert p.calls == ["get"]
+
+
+@pytest.mark.asyncio
 async def test_genuine_signal_does_not_reuse_first_canary_permit_or_post():
     p=Ports(await flat())
     out=await controller(p).run_one()
