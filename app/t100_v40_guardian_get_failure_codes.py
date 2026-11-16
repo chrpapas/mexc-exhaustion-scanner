@@ -6,7 +6,6 @@ inventory or grant a trade permit. The original sticky latch remains intact.
 """
 from __future__ import annotations
 
-import httpx
 
 MODE_PATH = "/api/v1/private/position/position_mode"
 
@@ -28,7 +27,12 @@ _CODES = frozenset({
 
 
 def classify_mode_transport_failure(error: Exception) -> str:
-    """Status/exception *type* only; never print or preserve exception text."""
+    """Status/exception *type* only; never print or preserve exception text.
+
+    Import httpx only on actual network failures, so pure policy and snapshot
+    modules remain dependency-free in their offline safety test environment.
+    """
+    import httpx
     if isinstance(error, httpx.TimeoutException):
         return "POSITION_MODE_TIMEOUT"
     if isinstance(error, httpx.HTTPStatusError):
