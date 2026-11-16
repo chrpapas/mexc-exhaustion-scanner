@@ -9,7 +9,8 @@ import pytest
 
 from scripts.v40_independent_exit_quantity_model import (
     ExitQuantityAuditHalted, Lot, allocate, generate_position,
-    compare_generated, open_offline_db, quote_capacity, audit
+    compare_generated, open_offline_db, quote_capacity, audit,
+    iter_causal_candle_rows
 )
 
 
@@ -165,3 +166,88 @@ def test_entry_cannot_use_more_than_prior_bar_total_quota():
             entry_ts=0,entry_price=100,entry_notional=100,entry_quote=100,
             candle_rows=[(0,100,180,90,110,100)],
         )
+
+
+
+def _gap_test_db(path):
+    with sqlite3.connect(path) as db:
+        db.execute(
+            "CREATE TABLE candles(symbol TEXT,interval TEXT,open_ts INTEGER,"
+            "open REAL,high REAL,low REAL,close REAL,amount REAL)"
+        )
+        db.executemany("INSERT INTO candles VALUES (?,?,?,?,?,?,?,?)",[
+            ("TEST_USDT","Min30",-1800,100,110,90,100,4000),
+            ("TEST_USDT","Min30",0,100,180,90,110,2000),
+            ("TEST_USDT","Min30",1800,110,120,95,105,2000),
+            # Missing 01:00 bar after the modeled position closes on 00:30.
+            ("TEST_USDT","Min30",5400,110,120,95,105,2000),
+        ])
+
+
+def test_postclosure_gap_does_not_invalidate_reconstructed_exit():
+    with tempfile.TemporaryDirectory() as tmp:
+        path=Path(tmp)/"offline.sqlite"
+        _gap_test_db(path)
+        with open_offline_db(path,immutable=True) as db:
+            result=generate_position(
+                entry_ts=0,entry_price=100,entry_notional=100,
+                entry_quote=100,
+                candle_rows=iter_causal_candle_rows(
+                    db,"TEST_USDT",0,5400),
+                end_ts=5400,
+            )
+        assert result["triggers"]==1
+        assert result["remaining_notional"]==0
+        assert [e["time"] for e in result["events"]]==[0,1800]
+
+
+def test_gap_during_open_trade_still_halts_with_exact_expected_observed_timestamps():
+    with tempfile.TemporaryDirectory() as tmp:
+        path=Path(tmp)/"offline.sqlite"
+        _gap_test_db(path)
+        # No stop is reached and the trailing arm stays off; this position
+        # is still open when the missing 01:00 candle should occur.
+        with sqlite3.connect(path) as db:
+            db.execute(
+                "UPDATE candles SET open=100,high=110,low=95,close=100 "
+                "WHERE open_ts IN (0,1800)"
+            )
+        with open_offline_db(path,immutable=True) as db:
+            with pytest.raises(ExitQuantityAuditHalted,match="HISTORICAL_CANDLE_GAP") as error:
+                generate_position(
+                    entry_ts=0,entry_price=100,entry_notional=100,
+                    entry_quote=100,candle_rows=iter_causal_candle_rows(
+                        db,"TEST_USDT",0,5400),
+                    end_ts=5400,
+                )
+        assert error.value.details=={
+            "expected_next_ts":3600,"observed_next_ts":5400
+        }
+
+
+def test_unclosed_position_requires_full_historical_horizon():
+    result=[(0,100,100,90,100,4000),(1800,100,100,90,100,4000)]
+    with pytest.raises(ExitQuantityAuditHalted,
+                       match="ACTIVE_POSITION_CANDLE_WINDOW_INCOMPLETE") as error:
+        generate_position(entry_ts=0,entry_price=100,entry_notional=100,
+                          entry_quote=100,candle_rows=result,end_ts=5400)
+    assert error.value.details["last_observed_ts"]==1800
+
+
+def test_corrupt_preentry_bar_is_not_silently_skipped():
+    with tempfile.TemporaryDirectory() as tmp:
+        path=Path(tmp)/"offline.sqlite"
+        with sqlite3.connect(path) as db:
+            db.execute(
+                "CREATE TABLE candles(symbol TEXT,interval TEXT,open_ts INTEGER,"
+                "open REAL,high REAL,low REAL,close REAL,amount REAL)"
+            )
+            db.execute("INSERT INTO candles VALUES (?,?,?,?,?,?,?,?)",
+                       ("TEST_USDT","Min30",0,100,180,90,110,4000))
+        with open_offline_db(path,immutable=True) as db:
+            with pytest.raises(ExitQuantityAuditHalted,match="PRIOR_CANDLE_MISSING"):
+                generate_position(
+                    entry_ts=0,entry_price=100,entry_notional=100,
+                    entry_quote=100,
+                    candle_rows=iter_causal_candle_rows(db,"TEST_USDT",0,5400),
+                )
