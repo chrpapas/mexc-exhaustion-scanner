@@ -1,0 +1,23 @@
+name: V40 independent risk trim amount witness
+
+on:
+  pull_request:
+    paths:
+      - "docs/evidence/issue-14/rebuild_marked_equity_drawdown.py"
+      - "tests/test_t100_v40_marked_trim_quantity_audit.py"
+      - ".github/workflows/v40-independent-risk-trim-quantity.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  offline-risk-trim:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install -e ".[dev]"
+      - run: python -m compileall -q docs/evidence/issue-14/rebuild_marked_equity_drawdown.py
+      - run: python -m pytest -q tests/test_t100_v40_marked_trim_quantity_audit.py tests/test_t100_v40_146_candidate_account_state_replay.py tests/test_t100_live_v40_funding_equity_audit.py
