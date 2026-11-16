@@ -1,0 +1,23 @@
+name: V40 independent exit quantity reference replay
+
+on:
+  pull_request:
+    paths:
+      - "scripts/v40_independent_exit_quantity_model.py"
+      - "tests/test_t100_v40_independent_exit_quantity_model.py"
+      - ".github/workflows/v40-independent-exit-quantity.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  offline-exit-amounts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install -e ".[dev]"
+      - run: python -m compileall -q scripts/v40_independent_exit_quantity_model.py
+      - run: python -m pytest -q tests/test_t100_v40_independent_exit_quantity_model.py tests/test_t100_live_v40_exit_trigger_audit.py tests/test_t100_live_v40_replay_cashflow_audit.py
