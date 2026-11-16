@@ -1,7 +1,8 @@
 """Unreleased reference-only full four-slot V40 VOL30/H4 sizing projection.
 
 Retains the frozen multi-slot admission economics instead of promoting the
-one-position 12.50-USDT 1x canary into a misleading 'full strategy'. This
+one-position 12.50-USDT 1x canary into a misleading 'full strategy'.
+Prior-30-minute volume quota is PER SYMBOL, not pooled across the portfolio. This
 module has ZERO exchange/DB APIs, no trade permit and no risk approval.
 Historical 5x shock budgeting is NOT a live leverage recommendation.
 """
@@ -9,7 +10,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from math import isfinite
-from typing import Sequence
+from typing import Mapping, Sequence
 
 from app.t100_200_strategy import STRATEGY_ID, LOW_TIER, HIGH_TIER
 from app.t100_live_v40_stage2_source import V40SourceBatch, V40SourceCandidate
@@ -52,6 +53,7 @@ def project_frozen_v40_multi_slot(
     marked_existing_usdt: float,
     owned_open_symbols: Sequence[str],
     used_same_bar_usdt: float = 0.0,
+    used_same_bar_by_symbol: Mapping[str, float] | None = None,
     cost_bps: float = 100.0,
 ) -> V40FullPortfolioProjection:
     if (
@@ -62,6 +64,7 @@ def project_frozen_v40_multi_slot(
         or source.entry_allowed is not False
         or source.live_authorization is not False
         or type(source.candidates) is not tuple
+        or any(type(c) is not V40SourceCandidate for c in source.candidates)
         or type(owned_open_symbols) not in (tuple, list)
         or not 0 <= len(owned_open_symbols) <= MAX_POSITIONS
         or len(set(owned_open_symbols)) != len(owned_open_symbols)
@@ -77,6 +80,32 @@ def project_frozen_v40_multi_slot(
     ):
         raise V40FullPortfolioHalted("V40_FULL_REFERENCE_INPUT_UNVERIFIED")
 
+    # The prior-30m turnover quota belongs to each contract, not the
+    # aggregate portfolio. The old scalar is safe only for one symbol.
+    # Multi-symbol callers with pre-consumed quota MUST provide a complete
+    # per-symbol map to avoid quietly applying one symbol's fills to another.
+    symbols = {c.symbol for c in source.candidates}
+    if used_same_bar_by_symbol is None:
+        if used_same_bar_usdt and len(symbols) > 1:
+            raise V40FullPortfolioHalted(
+                "V40_FULL_REFERENCE_SCALAR_QUOTA_MULTI_SYMBOL_AMBIGUOUS"
+            )
+        quota_used = {s: used_same_bar_usdt for s in symbols}
+    else:
+        if (
+            type(used_same_bar_by_symbol) is not dict
+            or used_same_bar_usdt != 0.
+            or set(used_same_bar_by_symbol) != symbols
+            or any(
+                type(v) is not float or not isfinite(v) or v < 0
+                for v in used_same_bar_by_symbol.values()
+            )
+        ):
+            raise V40FullPortfolioHalted(
+                "V40_FULL_REFERENCE_PER_SYMBOL_QUOTA_UNVERIFIED"
+            )
+        quota_used = dict(used_same_bar_by_symbol)
+
     ordered = sorted(
         source.candidates, key=lambda c: (c.admission_open_ts, c.signal_id)
     )
@@ -90,7 +119,7 @@ def project_frozen_v40_multi_slot(
     entries: list[V40ReferenceEntry] = []
     skips: list[tuple[int, str]] = []
     marked = marked_existing_usdt
-    already_used = used_same_bar_usdt
+
 
     for candidate in ordered:
         if not (
@@ -131,7 +160,7 @@ def project_frozen_v40_multi_slot(
             stage1_atr7_pct=candidate.stage1_atr7_pct,
             active_positions=len(owned),
             already_open_symbol=candidate.symbol in owned,
-            used_same_bar_usdt=already_used,
+            used_same_bar_usdt=quota_used[candidate.symbol],
             cost_bps=cost_bps,
         )
         if decision.action != "ADMIT":
@@ -151,7 +180,9 @@ def project_frozen_v40_multi_slot(
             stressed_exit_capacity_usdt=decision.stressed_exit_capacity_usdt,
         ))
         owned.add(candidate.symbol)
-        already_used += modeled
+        # A new fill would consume only this symbol's turnover quota.
+        # Any repeated symbol is already blocked by the occupied-symbol
+        # admission rule, so no cross-symbol quota propagation is valid.
         marked += modeled
 
     return V40FullPortfolioProjection(
