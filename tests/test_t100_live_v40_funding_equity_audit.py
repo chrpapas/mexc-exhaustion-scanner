@@ -83,6 +83,39 @@ class FundingEquityAuditTests(unittest.TestCase):
                 self.assertEqual(Decimal(report['high_drawdown_pct']), expected_high)
                 self.assertFalse(report['strategy_decisions_independently_certified'])
 
+            # Exercise verified SSD immutable candles and explicit funding path
+            # for the existing marked-equity/drawdown reconstruction.
+            ssd_reports = marked.audit(
+                root, {'ssd': root}, epoch, epoch+3600,
+                candles_path=source, funding_path=funding_file,
+                immutable_candles=True)
+            for cost in (100, 200):
+                self.assertEqual(
+                    ssd_reports[f'ssd_{cost}'], reports[f'baseline_{cost}'])
+            # Never silently ignore an uncheckpointed rollback/WAL file.
+            for path in (source, funding_file):
+                for suffix in ('-wal', '-journal'):
+                    side_file = Path(str(path) + suffix)
+                    side_file.write_bytes(b'pending')
+                    try:
+                        with self.assertRaisesRegex(
+                            ValueError, 'UNSNAPSHOTTED_SQLITE_JOURNAL'
+                        ):
+                            marked.audit(
+                                root, {'ssd': root}, epoch, epoch+3600,
+                                candles_path=source, funding_path=funding_file,
+                                immutable_candles=True)
+                    finally:
+                        side_file.unlink()
+            # Also refuse a missing database; mode=ro must never create one.
+            missing_db = root / 'missing.sqlite'
+            with self.assertRaisesRegex(ValueError, 'HISTORICAL_DATABASE_NOT_FOUND'):
+                marked.audit(
+                    root, {'ssd': root}, epoch, epoch+3600,
+                    candles_path=missing_db, funding_path=funding_file,
+                    immutable_candles=True)
+            self.assertFalse(missing_db.exists())
+
             # Prescribed entry records must not bypass missing causal history.
             with self.assertRaisesRegex(ValueError, 'RECONSTRUCTED_ENTRY_NOT_ADMITTED'):
                 marked.audit(root, {'baseline': root, 'filtered': root}, epoch, epoch+3600, entry_specs={})

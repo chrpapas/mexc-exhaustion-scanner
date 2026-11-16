@@ -1,4 +1,9 @@
-"""Research trace audit. Uses fixed exported trades, never executes the strategy or orders."""
+"""Research trace audit. Uses fixed exported trades, never executes the strategy or orders.
+
+--immutable-candles is ONLY for a verified and dormant historical SQLite
+snapshot, and refuses pending transaction side files. It does not certify
+causal strategy decisions, venue execution, or live trading.
+"""
 
 import csv, json, sqlite3
 from collections import defaultdict
@@ -15,20 +20,38 @@ def ts(s):
 
 
 def conn(path, immutable=False):
-    if immutable and Path(str(path) + "-wal").exists():
-        raise ValueError("UNSNAPSHOTTED_WAL")
-    c = sqlite3.connect(path.as_uri() + "?mode=ro" + ("&immutable=1" if immutable else ""), uri=True)
-    c.execute("PRAGMA query_only=ON")
-    c.execute("BEGIN")
+    path = Path(path).expanduser().resolve()
+    if not path.is_file():
+        raise ValueError("HISTORICAL_DATABASE_NOT_FOUND")
+    if immutable and any(
+        Path(str(path) + suffix).exists() for suffix in ("-wal", "-journal")
+    ):
+        raise ValueError("UNSNAPSHOTTED_SQLITE_JOURNAL")
+    c = sqlite3.connect(
+        path.as_uri() + "?mode=ro" + ("&immutable=1" if immutable else ""),
+        uri=True,
+    )
+    try:
+        c.execute("PRAGMA query_only=ON")
+        c.execute("BEGIN")
+    except BaseException:
+        c.close()
+        raise
     return c
 
 
-def audit(root, folders, start=start, end=end, audit_trims=False, entry_specs=None):
-    candles = conn(root / "historical-market-data-min30-v1/historical-market-data-min30-v1.sqlite")
-    funds = conn(root / "mexc-certification-cache-v1.sqlite", True)
+def audit(root, folders, start=start, end=end, audit_trims=False, entry_specs=None,
+          *, candles_path=None, funding_path=None, immutable_candles=False):
+    """Audit prescribed historical ledgers, never execute live orders."""
+    candles = conn(
+        candles_path or root / "historical-market-data-min30-v1/historical-market-data-min30-v1.sqlite",
+        immutable=immutable_candles,
+    )
+    funds = conn(
+        funding_path or root / "mexc-certification-cache-v1.sqlite", True
+    )
     results = {}
-    for cohort in ("baseline", "filtered"):
-        folder = folders[cohort]
+    for cohort, folder in folders.items():
         raw = {
             n: list(csv.DictReader((folder / (n + ".csv")).open()))
             for n in ("entries", "exits", "fills", "metrics")
@@ -217,12 +240,27 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description="Independent marked equity audit of prescribed replay trades; no decision or venue certification."
     )
-    parser.add_argument("--data-root", type=Path, required=True)
-    parser.add_argument("--baseline", type=Path, required=True)
-    parser.add_argument("--filtered", type=Path, required=True)
+    parser.add_argument("--data-root", type=Path, default=Path.home() / "trader-backtest")
+    group = parser.add_mutually_exclusive_group(required=True)
+    group.add_argument("--folder", type=Path,
+                       help="Original V40 output folder containing entries/exits/fills/metrics CSVs")
+    group.add_argument("--baseline", type=Path)
+    parser.add_argument("--filtered", type=Path,
+                        help="Required if --baseline is given")
+    parser.add_argument("--candles", type=Path,
+                        help="Historical Min30 SQLite file, e.g. verified SSD copy")
+    parser.add_argument("--funding", type=Path,
+                        help="Historical funding cache SQLite file")
+    parser.add_argument("--immutable-candles", action="store_true",
+                        help="Only for complete dormant offline SQLite snapshots")
     args = parser.parse_args()
-    print(
-        json.dumps(
-            audit(args.data_root.resolve(), {"baseline": args.baseline, "filtered": args.filtered}), indent=2
-        )
-    )
+    if (args.baseline is None) != (args.filtered is None):
+        parser.error("--baseline and --filtered must be used together")
+    folders = ({"historical": args.folder} if args.folder is not None else
+               {"baseline": args.baseline, "filtered": args.filtered})
+    print(json.dumps(
+        audit(args.data_root.resolve(), folders,
+              candles_path=args.candles, funding_path=args.funding,
+              immutable_candles=args.immutable_candles),
+        indent=2,
+    ))
