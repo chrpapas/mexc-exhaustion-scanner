@@ -134,6 +134,7 @@ def generate_position(*, entry_ts,entry_price,entry_notional,entry_quote,
         raise ExitQuantityAuditHalted("ENTRY_CANDLE_MISSING")
     ep=number(entry_price)
     original=number(entry_notional)
+    entry_quote=number(entry_quote)
     remaining=original
     units=entry_units
     if lot is not None:
@@ -155,9 +156,17 @@ def generate_position(*, entry_ts,entry_price,entry_notional,entry_quote,
         if not (lo<=min(op,cl)<=max(op,cl)<=hi):
             raise ExitQuantityAuditHalted("INVALID_CANDLE_OHLC")
         quota=quote_capacity(prior)
+        if t==entry_ts:
+            # No quota double-spend: entry already consumed the same
+            # contract's prior-30m 5% budget before a same-bar stop.
+            if entry_quote>quota+TOL:
+                raise ExitQuantityAuditHalted("ENTRY_EXCEEDS_PRIOR30_QUOTA")
+            quota=max(D(0),quota-entry_quote)
         if pending:
-            basis,quote,newunits=allocate(
-                remaining,ep,op,quota,lot=lot,remaining_units=units)
+            basis,quote,newunits=(
+                allocate(remaining,ep,op,quota,lot=lot,remaining_units=units)
+                if quota>0 else (D(0),D(0),units)
+            )
             if basis>0:
                 remaining-=basis
                 if lot is not None:
@@ -182,8 +191,10 @@ def generate_position(*, entry_ts,entry_price,entry_notional,entry_quote,
         if hi>=stop:
             triggers+=1
             price=max(op,stop)
-            basis,quote,newunits=allocate(
-                remaining,ep,price,quota,lot=lot,remaining_units=units)
+            basis,quote,newunits=(
+                allocate(remaining,ep,price,quota,lot=lot,remaining_units=units)
+                if quota>0 else (D(0),D(0),units)
+            )
             if basis>0:
                 remaining-=basis
                 if lot is not None:
