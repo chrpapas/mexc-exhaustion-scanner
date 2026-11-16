@@ -50,8 +50,8 @@ class FundingEquityAuditTests(unittest.TestCase):
             copy_result = audit_module.audit(
                 root, {'ssd':root}, candles_path=source,
                 funding_path=funding_file, immutable_candles=True)
-            self.assertEqual(copy_result['ssd_100']['funding_difference'], '0.00')
-            self.assertEqual(copy_result['ssd_100']['final_equity_difference'], '0.000')
+            self.assertEqual(Decimal(copy_result['ssd_100']['funding_difference']), 0)
+            self.assertEqual(Decimal(copy_result['ssd_100']['final_equity_difference']), 0)
             # Immutable readers must refuse potentially uncheckpointed data.
             for suffix in ('-wal', '-journal'):
                 side = Path(str(source)+suffix)
