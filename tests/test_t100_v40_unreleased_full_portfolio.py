@@ -1,4 +1,5 @@
 """V40 full-sizing reference tests, never trade or use MEXC secrets."""
+from dataclasses import replace
 from datetime import datetime, timezone
 
 import pytest
@@ -85,3 +86,70 @@ def test_full_account_projection_never_allows_real_orders():
     )
     assert projection.risk_leverage_approved is False
     assert projection.native_exchange_execution_verified is False
+
+def low_turnover_batch(n=2):
+    """Small independent per-contract turnover quotas for two symbols."""
+    original = batch(n)
+    resized = []
+    for candidate in original.candidates:
+        prior = tuple(
+            replace(bar, amount_usdt=10_000.) for bar in candidate.prior_bars
+        )
+        resized.append(replace(candidate, prior_bars=prior))
+    return replace(original, candidates=tuple(resized))
+
+
+def test_distinct_symbols_do_not_share_one_symbol_prior30_quota():
+    # Both symbols have 10k prior 30m turnover: 5% cap = 500 each.
+    # Previously, accepting ALT1 consumed ALT2's *unrelated* quota,
+    # incorrectly omitting the second trade.
+    result = project_frozen_v40_multi_slot(
+        source=low_turnover_batch(), equity_usdt=2000.,
+        marked_existing_usdt=0., owned_open_symbols=(),
+    )
+    assert [round(e.modeled_notional_usdt, 6) for e in result.entries] == [500.,500.]
+    assert result.resulting_slot_count == 2
+    assert result.total_modeled_new_notional_usdt == 1000.
+    assert result.exchange_posts == 0 and result.live_authorization is False
+
+
+def test_per_symbol_previous_usage_only_clips_same_contract():
+    result = project_frozen_v40_multi_slot(
+        source=low_turnover_batch(), equity_usdt=2000.,
+        marked_existing_usdt=0., owned_open_symbols=(),
+        used_same_bar_by_symbol={"ALT1_USDT":400., "ALT2_USDT":0.},
+    )
+    assert [round(e.modeled_notional_usdt, 6) for e in result.entries] == [100.,500.]
+    assert result.resulting_slot_count == 2
+
+
+def test_ambiguous_global_quota_cannot_be_applied_to_two_symbols():
+    with pytest.raises(V40FullPortfolioHalted, match="SCALAR_QUOTA_MULTI_SYMBOL_AMBIGUOUS"):
+        project_frozen_v40_multi_slot(
+            source=low_turnover_batch(), equity_usdt=2000.,
+            marked_existing_usdt=0., owned_open_symbols=(),
+            used_same_bar_usdt=100.,
+        )
+
+
+def test_incomplete_or_invalid_per_symbol_usage_fails_closed():
+    for bad in (
+        {"ALT1_USDT":0.},
+        {"ALT1_USDT":-1., "ALT2_USDT":0.},
+        {"ALT1_USDT":0., "ALT2_USDT":float("nan")},
+    ):
+        with pytest.raises(V40FullPortfolioHalted, match="PER_SYMBOL_QUOTA_UNVERIFIED"):
+            project_frozen_v40_multi_slot(
+                source=low_turnover_batch(), equity_usdt=2000.,
+                marked_existing_usdt=0., owned_open_symbols=(),
+                used_same_bar_by_symbol=bad,
+            )
+
+
+def test_single_symbol_legacy_used_quota_remains_supported():
+    result = project_frozen_v40_multi_slot(
+        source=low_turnover_batch(1), equity_usdt=2000.,
+        marked_existing_usdt=0., owned_open_symbols=(),
+        used_same_bar_usdt=400.,
+    )
+    assert round(result.entries[0].modeled_notional_usdt, 6) == 100.
