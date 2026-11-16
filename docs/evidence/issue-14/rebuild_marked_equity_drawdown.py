@@ -189,6 +189,82 @@ def lot_quantize_v39(*, modeled_notional: float, entry_price: float,
     return volume, volume * size * price, children
 
 
+
+def prior_close_trim_plans(equity, marked_by_symbol, cost_bps):
+    """Prior-close frozen V40 risk reduction; not exchange liquidation."""
+    equity=D(str(equity))
+    marked={sym:D(str(amount)) for sym,amount in marked_by_symbol.items()}
+    if (not equity.is_finite()
+        or any(not x.is_finite() or x<0 for x in marked.values())
+        or cost_bps not in (100,200)):
+        raise ValueError("INVALID_TRIM_ACCOUNT_SNAPSHOT")
+    gross=sum(marked.values(),D(0))
+    b=D(".20")+D("1.20")/(D(5)*D(".95"))
+    costs=D(".0008")+D(cost_bps)/D(10000)
+    reduction=(gross if equity<=0 else
+               min(gross,max(D(0),(b*gross-equity*D(".998"))/(b-costs))))
+    plans={}
+    for sym,amount in sorted(marked.items(),key=lambda item:(-item[1],item[0])):
+        if amount>0 and reduction>D("1e-8"):
+            fraction=min(D(1),reduction/amount)
+            plans[sym]=fraction
+            reduction-=amount*fraction
+    return plans
+
+
+def model_risk_trim_quantity(*, original_basis, entry_price,
+                             opening_price, plan_fraction,
+                             prior_turnover, contract_spec):
+    """Requested trim after causal prior-close planning, before viewing fills.
+
+    Entry-price basis is quantized by current-reference lot metadata if
+    present. Quota is 5% of the strictly prior 30m candle, not order-book
+    liquidity. No observed trim notional or child-fill quantity is used.
+    """
+    original=D(str(original_basis))
+    entry=D(str(entry_price))
+    opening=D(str(opening_price))
+    fraction=D(str(plan_fraction))
+    turnover=D(str(prior_turnover))
+    if (not all(x.is_finite() for x in
+                (original,entry,opening,fraction,turnover))
+        or min(original,entry,opening)<=0 or turnover<0
+        or not 0<fraction<=1):
+        raise ValueError("INVALID_TRIM_QUANTITY_INPUT")
+    requested=original*fraction
+    quote_limit=turnover*D(".05")
+    if contract_spec is None:
+        quantity=min(requested,quote_limit*entry/opening)
+        return quantity,requested,False
+    spec=contract_spec
+    size,step,minimum=(D(str(spec[k])) for k in
+                       ("contractSize","volUnit","minVol"))
+    if (not all(x.is_finite() and x>0 for x in
+                (size,step,minimum))):
+        raise ValueError("TRIM_CONTRACT_REFERENCE_INVALID")
+    owned=(original/(entry*size)/step).to_integral_value(
+        rounding=ROUND_FLOOR)*step
+    if abs(owned*size*entry-original)>D(".001"):
+        raise ValueError("TRIM_ORIGINAL_LOT_INVENTORY_UNVERIFIED")
+    wanted=(requested/(entry*size)/step).to_integral_value(
+        rounding=ROUND_FLOOR)*step
+    capacity=(quote_limit/(opening*size)/step).to_integral_value(
+        rounding=ROUND_FLOOR)*step
+    units=min(owned,wanted,capacity)
+    if units<minimum:
+        return D(0),requested,True
+    if 0<owned-units<minimum:
+        units=(max(D(0),owned-minimum)/step).to_integral_value(
+            rounding=ROUND_FLOOR)*step
+    if units<minimum:
+        return D(0),requested,True
+    result=units*size*entry
+    if (result>original+D(".001")
+        or result*opening/entry>quote_limit+D(".001")):
+        raise ValueError("TRIM_QUOTA_OR_INVENTORY_EXCEEDED")
+    return result,requested,True
+
+
 def ts(s):
     return int(datetime.fromisoformat(s).timestamp())
 
@@ -276,6 +352,8 @@ def audit(root, folders, start=start, end=end, audit_trims=False, entry_specs=No
           *, candles_path=None, funding_path=None, immutable_candles=False,
           candidate_archive=None):
     """Audit prescribed historical ledgers, never execute live orders."""
+    if audit_trims and entry_specs is None:
+        raise ValueError("TRIM_REPLAY_REQUIRES_CURRENT_REFERENCE_SPECS")
     if candidate_archive is not None and (
         entry_specs is None or len(folders)!=1 or "historical" not in folders
         or start!=globals()["start"] or end!=globals()["end"]
@@ -328,6 +406,7 @@ def audit(root, folders, start=start, end=end, audit_trims=False, entry_specs=No
             event_count = 0
             trim_plans = 0
             trim_fills = 0
+            trim_generated = []
             sizing_checked = 0
             sizing_max_difference = D(0)
             candidate_decisions_checked = 0
@@ -382,11 +461,40 @@ def audit(root, folders, start=start, end=end, audit_trims=False, entry_specs=No
                         fund += v
                         event_count += 1
                 if audit_trims:
-                    from scripts.v40_risk_trim_audit import planned_trims
-                    plans = planned_trims(equity(), {
+                    # Compute WITHOUT consulting the recorded trim quantities:
+                    # previous-close marks, pre-opening funding and V40 risk
+                    # fraction. Only then apply independent opening capacity.
+                    plans = prior_close_trim_plans(equity(), {
                         sym: p["n"]*p["mark"]/p["entry"] for sym, p in active.items()
                     }, cost)
                     trim_plans += len(plans)
+                    for sym, fraction in plans.items():
+                        if sym not in prices:
+                            raise ValueError("TRIM_OPENING_CANDLE_MISSING")
+                        if any(r["symbol"]==sym and r["kind"]=="delayed_exit"
+                               for r in exits[t]):
+                            raise ValueError("TRIM_AND_DELAYED_EXIT_COMPETE_SAME_BAR")
+                        prior = candles.execute(
+                            "SELECT amount FROM candles WHERE symbol=? "
+                            "AND interval='Min30' AND open_ts=?",
+                            (sym,t-1800)).fetchall()
+                        if len(prior)!=1:
+                            raise ValueError("TRIM_PRIOR_CANDLE_MISSING_OR_DUPLICATE")
+                        basis,requested,known = model_risk_trim_quantity(
+                            original_basis=active[sym]["n"],
+                            entry_price=active[sym]["entry"],
+                            opening_price=prices[sym][0],
+                            plan_fraction=fraction,
+                            prior_turnover=prior[0][0],
+                            contract_spec=entry_specs.get(sym),
+                        )
+                        if basis>0:
+                            trim_generated.append({
+                                "symbol":sym,"entry_time":active[sym]["time"],
+                                "exit_time":t,"price":prices[sym][0],
+                                "notional":basis,"requested_notional":requested,
+                                "fraction":fraction,"current_lot_reference":known,
+                            })
                 for sym, p in active.items():
                     if sym in prices:
                         p["mark"] = prices[sym][0]
@@ -573,8 +681,60 @@ def audit(root, folders, start=start, end=end, audit_trims=False, entry_specs=No
                     full_strategy_decisions_independently_certified=False,
                 )
             if audit_trims:
+                observed=sorted(
+                    (r for r in rows["exits"] if r["kind"]=="trim"),
+                    key=lambda r:(ts(r["exit_time"]),r["symbol"]),
+                )
+                modeled=sorted(trim_generated,key=lambda r:(
+                    r["exit_time"],r["symbol"]))
+                differences={
+                    "trim_count_mismatch":int(len(observed)!=len(modeled)),
+                    "trim_identity_mismatches":0,
+                    "trim_price_mismatches":0,
+                    "trim_quantity_mismatches":0,
+                    "trim_reason_mismatches":0,
+                }
+                witnesses=[]
+                for actual,predicted in zip(observed,modeled):
+                    if not (
+                        actual["symbol"]==predicted["symbol"] and
+                        ts(actual["entry_time"])==predicted["entry_time"] and
+                        ts(actual["exit_time"])==predicted["exit_time"]
+                    ):
+                        differences["trim_identity_mismatches"]+=1
+                        continue
+                    if abs(D(actual["exit"])-predicted["price"])>D(".001"):
+                        differences["trim_price_mismatches"]+=1
+                    delta=predicted["notional"]-D(actual["notional"])
+                    if abs(delta)>D(".001"):
+                        differences["trim_quantity_mismatches"]+=1
+                    if actual["reason"]!="risk_trim":
+                        differences["trim_reason_mismatches"]+=1
+                    witnesses.append({
+                        "symbol":predicted["symbol"],
+                        "entry_ts":predicted["entry_time"],
+                        "trim_ts":predicted["exit_time"],
+                        "reconstructed_plan_fraction":str(predicted["fraction"]),
+                        "requested_entry_basis_usdt":str(predicted["requested_notional"]),
+                        "modeled_trim_entry_basis_usdt":str(predicted["notional"]),
+                        "recorded_trim_entry_basis_usdt":actual["notional"],
+                        "entry_basis_difference_usdt":str(delta),
+                        "current_reference_contract_spec_available":
+                            predicted["current_lot_reference"],
+                    })
+                plan_reconciled=(
+                    not any(differences.values()) and
+                    len(observed)==len(modeled)==trim_plans
+                )
                 results[f"{cohort}_{cost}"].update(
-                    prior_close_trim_plans=trim_plans, observed_trim_fills_checked=trim_fills,
+                    prior_close_trim_plans=trim_plans,
+                    observed_trim_fills_checked=trim_fills,
+                    independently_generated_trim_fills=len(modeled),
+                    trim_prediction_differences=differences,
+                    trim_prediction_witnesses=witnesses,
+                    trim_amount_given_prescribed_fills_reconciled=plan_reconciled,
+                    original_historical_specifications_certified=False,
+                    independent_full_portfolio_exit_execution_certified=False,
                     trim_fill_quantities_certified=False,
                 )
     candles.close()
@@ -605,6 +765,8 @@ if __name__ == "__main__":
                         help="Pinned original 146-candidate ZIP; requires --folder and --lot-snapshot")
     parser.add_argument("--lot-snapshot", type=Path,
                         help="Current-reference MEXC contract metadata JSON (NOT historical)")
+    parser.add_argument("--audit-trims", action="store_true",
+                        help="Recreate causal pre-close risk trim plans and quota/lot quantities; no orders")
     args = parser.parse_args()
     if (args.baseline is None) != (args.filtered is None):
         parser.error("--baseline and --filtered must be used together")
@@ -625,6 +787,7 @@ if __name__ == "__main__":
         audit(args.data_root.resolve(), folders,
               candles_path=args.candles, funding_path=args.funding,
               immutable_candles=args.immutable_candles,
-              entry_specs=specs,candidate_archive=args.candidate_archive),
+              entry_specs=specs,candidate_archive=args.candidate_archive,
+              audit_trims=args.audit_trims),
         indent=2,
     ))
