@@ -10,10 +10,6 @@ It does not certify independent Stage2 discovery, independent exit fills,
 historical contract rules, venue execution, or live trading.
 """
 
-# Needed on the operator's macOS Python 3.9 for the embedded
-# pure V40 policy annotations (float | None, str | None).
-from __future__ import annotations
-
 import csv, json, sqlite3, hashlib, io
 from zipfile import ZipFile
 from collections import defaultdict
@@ -38,7 +34,7 @@ import math
 import statistics
 from dataclasses import dataclass
 from decimal import Decimal, ROUND_CEILING, ROUND_FLOOR
-from typing import Sequence
+from typing import Optional, Sequence
 
 BAR_SECONDS = 1800
 MAX_POSITIONS = 4
@@ -62,11 +58,11 @@ class V40Admission:
     equity_budget_usdt: float = 0.0
     max_entry_liquidity_usdt: float = 0.0
     stressed_exit_capacity_usdt: float = 0.0
-    pre24_vol_pct: float | None = None
-    tier_allocation_pct: float | None = None
-    p25_turnover_usdt: float | None = None
-    p10_turnover_usdt: float | None = None
-    prior30_turnover_usdt: float | None = None
+    pre24_vol_pct: Optional[float] = None
+    tier_allocation_pct: Optional[float] = None
+    p25_turnover_usdt: Optional[float] = None
+    p10_turnover_usdt: Optional[float] = None
+    prior30_turnover_usdt: Optional[float] = None
 
 
 def _positive(x: float) -> bool:
@@ -167,7 +163,7 @@ def admission(*, prior_bars: Sequence[PriorBar], admission_open_ts: int,
 
 def lot_quantize_v39(*, modeled_notional: float, entry_price: float,
                      contract_size: str, volume_step: str,
-                     min_volume: str, max_volume: str | None):
+                     min_volume: str, max_volume: Optional[str]):
     """V39 rounding and same-price order child count; NOT real child fills."""
     size, step, minimum = map(Decimal, (contract_size, volume_step, min_volume))
     maximum = Decimal(max_volume) if max_volume is not None else None
