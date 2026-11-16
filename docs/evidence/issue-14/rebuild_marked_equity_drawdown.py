@@ -265,6 +265,24 @@ def model_risk_trim_quantity(*, original_basis, entry_price,
     return result,requested,True
 
 
+def expected_trim_exit_reason(*, modeled_basis, remaining_before_trim):
+    """Freeze the same partial/full vocabulary as v40_exit_trigger_audit.
+
+    Determine the reason from independently modeled quantities before
+    comparing to exported exit rows. A genuine partial fill MUST use
+    risk_trim_partial, not risk_trim. No arbitrary reason aliases.
+    """
+    modeled = D(str(modeled_basis))
+    remaining = D(str(remaining_before_trim))
+    if (
+        not modeled.is_finite() or not remaining.is_finite()
+        or modeled <= 0 or remaining <= 0 or modeled > remaining + D(".001")
+    ):
+        raise ValueError("TRIM_REASON_AMOUNT_INVALID")
+    return ("risk_trim_partial" if modeled < remaining - D(".001")
+            else "risk_trim")
+
+
 def ts(s):
     return int(datetime.fromisoformat(s).timestamp())
 
@@ -493,6 +511,7 @@ def audit(root, folders, start=start, end=end, audit_trims=False, entry_specs=No
                                 "symbol":sym,"entry_time":active[sym]["time"],
                                 "exit_time":t,"price":prices[sym][0],
                                 "notional":basis,"requested_notional":requested,
+                                "position_before_trim_basis":active[sym]["n"],
                                 "fraction":fraction,"current_lot_reference":known,
                             })
                 for sym, p in active.items():
@@ -708,9 +727,15 @@ def audit(root, folders, start=start, end=end, audit_trims=False, entry_specs=No
                     delta=predicted["notional"]-D(actual["notional"])
                     if abs(delta)>D(".001"):
                         differences["trim_quantity_mismatches"]+=1
-                    if actual["reason"]!="risk_trim":
+                    expected_reason=expected_trim_exit_reason(
+                        modeled_basis=predicted["notional"],
+                        remaining_before_trim=predicted["position_before_trim_basis"],
+                    )
+                    if actual["reason"]!=expected_reason:
                         differences["trim_reason_mismatches"]+=1
                     witnesses.append({
+                        "reconstructed_expected_reason":expected_reason,
+                        "recorded_exit_reason":actual["reason"],
                         "symbol":predicted["symbol"],
                         "entry_ts":predicted["entry_time"],
                         "trim_ts":predicted["exit_time"],
