@@ -18,6 +18,11 @@ from pathlib import Path
 start = int(datetime.fromisoformat("2023-02-03T02:30:00+00:00").timestamp())
 end = int(datetime.fromisoformat("2026-09-25T08:30:00+00:00").timestamp())
 
+EXPECTED_HISTORICAL_CANDIDATES = 146
+EXPECTED_HISTORICAL_GATE_SKIPS = 24
+EXPECTED_HISTORICAL_OCCUPANCY_REJECTS = 14
+EXPECTED_HISTORICAL_ADMISSIONS = 108
+
 
 def ts(s):
     return int(datetime.fromisoformat(s).timestamp())
@@ -386,8 +391,10 @@ def audit(root, folders, start=start, end=end, audit_trims=False, entry_specs=No
                     rejected_candidates_certified=False,
                 )
             if candidate_data is not None:
-                if (candidate_decisions_checked!=146 or candidate_gate_skips!=24
-                    or candidate_portfolio_rejects!=14 or accepted_candidate_decisions!=108):
+                if (candidate_decisions_checked!=EXPECTED_HISTORICAL_CANDIDATES
+                    or candidate_gate_skips!=EXPECTED_HISTORICAL_GATE_SKIPS
+                    or candidate_portfolio_rejects!=EXPECTED_HISTORICAL_OCCUPANCY_REJECTS
+                    or accepted_candidate_decisions!=EXPECTED_HISTORICAL_ADMISSIONS):
                     raise ValueError("CANDIDATE_REPLAY_FINAL_COUNTS_DRIFT")
                 results[f"{cohort}_{cost}"].update(
                     candidate_decisions_checked=candidate_decisions_checked,
