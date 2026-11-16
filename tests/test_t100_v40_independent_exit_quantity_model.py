@@ -205,10 +205,17 @@ def test_gap_during_open_trade_still_halts_with_exact_expected_observed_timestam
     with tempfile.TemporaryDirectory() as tmp:
         path=Path(tmp)/"offline.sqlite"
         _gap_test_db(path)
+        # No stop is reached and the trailing arm stays off; this position
+        # is still open when the missing 01:00 candle should occur.
+        with sqlite3.connect(path) as db:
+            db.execute(
+                "UPDATE candles SET open=100,high=110,low=95,close=100 "
+                "WHERE open_ts IN (0,1800)"
+            )
         with open_offline_db(path,immutable=True) as db:
             with pytest.raises(ExitQuantityAuditHalted,match="HISTORICAL_CANDLE_GAP") as error:
                 generate_position(
-                    entry_ts=0,entry_price=200,entry_notional=100,
+                    entry_ts=0,entry_price=100,entry_notional=100,
                     entry_quote=100,candle_rows=iter_causal_candle_rows(
                         db,"TEST_USDT",0,5400),
                     end_ts=5400,
