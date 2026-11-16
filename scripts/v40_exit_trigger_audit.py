@@ -2,6 +2,11 @@
 
 No simulator imports, exchange client, or execution authorization. Opening
 trim decisions and capacity-limited quantities remain prescribed inputs.
+
+The optional immutable SQLite read mode is for a fully copied, dormant
+historical DB (such as a verified SSD copy). It deliberately halts if
+write-ahead-log or rollback-journal side files exist: immutable mode would
+ignore their potentially uncheckpointed content.
 """
 from __future__ import annotations
 
@@ -100,13 +105,37 @@ def audit_position(entry_price, notional, candles, exits, *, start=None, end=Non
     return dict(counts, pending=pending, remaining_notional=str(max(D(0), remaining)))
 
 
-def audit(folder, candles_path, end):
+def open_candle_database(path: Path, *, immutable: bool = False):
+    """Open existing historical candle data without permitting SQL writes.
+
+    Immutable mode is an EXPLICIT opt-in for a stable, already validated
+    offline copy. Never ignore a pending SQLite WAL/rollback journal.
+    """
+    if type(immutable) is not bool or not isinstance(path, Path):
+        raise ValueError("INVALID_SQLITE_READ_MODE")
+    if not path.is_file():
+        raise ValueError("HISTORICAL_CANDLE_DATABASE_MISSING")
+    if immutable and any(
+        Path(str(path) + suffix).exists()
+        for suffix in ("-wal", "-journal")
+    ):
+        raise ValueError("IMMUTABLE_CANDLE_DB_HAS_PENDING_JOURNAL")
+    suffix = "?mode=ro&immutable=1" if immutable else "?mode=ro"
+    db = sqlite3.connect(path.resolve().as_uri() + suffix, uri=True)
+    try:
+        db.execute("PRAGMA query_only=ON")
+    except BaseException:
+        db.close()
+        raise
+    return db
+
+
+def audit(folder, candles_path, end, *, immutable: bool = False):
     def read(name):
         with (folder/(name+'.csv')).open() as handle:
             return list(csv.DictReader(handle))
     entries, exits, fills = (read(n) for n in ('entries', 'exits', 'fills'))
-    db = sqlite3.connect(candles_path.resolve().as_uri()+'?mode=ro', uri=True)
-    db.execute('PRAGMA query_only=ON')
+    db = open_candle_database(candles_path, immutable=immutable)
     db.execute('BEGIN')
     results = {}
     try:
@@ -141,5 +170,8 @@ if __name__ == '__main__':
     p.add_argument('--folder', type=Path, required=True)
     p.add_argument('--candles', type=Path, required=True)
     p.add_argument('--end', default='2026-09-25T08:30:00+00:00')
+    p.add_argument('--immutable', action='store_true',
+                   help='Use only on a stable offline DB copy with no WAL/journal')
     args = p.parse_args()
-    print(json.dumps(audit(args.folder, args.candles, timestamp(args.end)), indent=2))
+    print(json.dumps(audit(args.folder, args.candles, timestamp(args.end),
+                           immutable=args.immutable), indent=2))
