@@ -18,7 +18,7 @@ def test_partial_trigger_and_next_bar_delayed_full_close():
         entry_ts=0,entry_price="100",entry_notional="100",
         entry_quote="100",
         candle_rows=[
-            (0,100,180,90,110,2000), # 5% of strictly prior candle = 100
+            (0,100,180,90,110,4000), # 5% of strictly prior candle = 100
             (1800,110,120,95,105,2000),
         ],
     )
@@ -53,7 +53,7 @@ def test_known_lot_exit_partial_and_delayed_quantity_are_independent():
         entry_ts=0,entry_price=100,entry_notional=100,
         entry_quote=100,lot=lot,entry_units=D(100),
         candle_rows=[
-            (0,100,180,90,110,2000),
+            (0,100,180,90,110,4000),
             (1800,110,120,95,105,2000),
         ],
     )
@@ -69,7 +69,7 @@ def test_minimum_lot_cannot_fill_tiny_quote_quota_and_delays():
         entry_ts=0,entry_price=100,entry_notional=100,
         entry_quote=100,lot=lot,entry_units=D(1),
         candle_rows=[
-            (0,100,180,90,110,100), # 5 USDT cannot close 1 whole contract
+            (0,100,180,90,110,2100), # 105 quota less 100 entry = 5 left; not one contract
             (1800,110,120,95,105,5000),
         ],
     )
@@ -82,7 +82,7 @@ def test_minimum_lot_cannot_fill_tiny_quote_quota_and_delays():
 def test_event_comparison_detects_quantities_prices_and_missing_delays():
     modeled=generate_position(
         entry_ts=0,entry_price=100,entry_notional=100,entry_quote=100,
-        candle_rows=[(0,100,180,90,110,2000),(1800,110,120,95,105,2000)],
+        candle_rows=[(0,100,180,90,110,4000),(1800,110,120,95,105,2000)],
     )["events"]
     def observed(rows):
         return [{"exit_time":f"1970-01-01T00:{i:02d}:00+00:00",
@@ -113,7 +113,7 @@ def test_missing_or_contiguous_candles_and_unsafe_entry_lots_halt():
     with pytest.raises(ExitQuantityAuditHalted,match="ENTRY_LOT_NOTIONAL_DRIFT"):
         generate_position(entry_ts=0,entry_price=100,entry_notional=100,entry_quote=100,
                           lot=Lot(D(1),D(1),D(1)),entry_units=D(2),
-                          candle_rows=[(0,100,180,90,110,2000)])
+                          candle_rows=[(0,100,180,90,110,4000)])
 
 
 def test_sqlite_immutable_source_refuses_pending_wal_and_writes():
@@ -142,3 +142,26 @@ def test_current_lot_reference_required_for_dataset_audit():
         bad.write_text(json.dumps({"specifications":{},"NOT_HISTORICAL":False}))
         with pytest.raises(ExitQuantityAuditHalted,match="SNAPSHOT_PROVENANCE_UNVERIFIED"):
             audit(root,root/"irrelevant.sqlite",bad,immutable=True)
+
+
+def test_entry_consumes_same_bar_quota_before_stop():
+    result=generate_position(
+        entry_ts=0,entry_price=100,entry_notional=100,entry_quote=100,
+        candle_rows=[
+            (0,100,180,90,110,2000), # exactly 100 quota spent by entry
+            (1800,110,120,95,105,5000),
+        ],
+    )
+    assert result["triggers"]==1
+    assert len(result["events"])==1
+    assert result["events"][0]["kind"]=="delayed_exit"
+    assert result["events"][0]["time"]==1800
+    assert result["events"][0]["notional"]==D(100)
+
+
+def test_entry_cannot_use_more_than_prior_bar_total_quota():
+    with pytest.raises(ExitQuantityAuditHalted,match="ENTRY_EXCEEDS_PRIOR30_QUOTA"):
+        generate_position(
+            entry_ts=0,entry_price=100,entry_notional=100,entry_quote=100,
+            candle_rows=[(0,100,180,90,110,100)],
+        )
