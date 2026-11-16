@@ -374,10 +374,15 @@ def audit(folder,candles_path,snapshot_path,*,end_ts=None,immutable=False):
             issue_count=sum(discrepancies[k] for k in (
                 "event_count_mismatch","event_identity_mismatches",
                 "price_mismatches","quantity_mismatches","reason_mismatches"))
+            complete=(issue_count==0
+                      and counters["positions_modeled"]==108
+                      and not counters["portfolio_trim_positions_not_modeled"]
+                      and not counters["model_pending_positions"]
+                      and counters["compared_exported_exit_rows"]==len(closing))
             reports[str(cost)]={
                 "status":("V40_EXIT_QUANTITY_REFERENCE_MODEL_MATCH"
-                          if issue_count==0 and not counters["portfolio_trim_positions_not_modeled"]
-                          else "V40_EXIT_QUANTITY_MODEL_REVIEW_REQUIRED"),
+                          if complete else "V40_EXIT_QUANTITY_MODEL_REVIEW_REQUIRED"),
+                "all_positions_and_exit_rows_compared":complete,
                 **dict(counters),
                 "differences":{
                     name:discrepancies[name] for name in (
