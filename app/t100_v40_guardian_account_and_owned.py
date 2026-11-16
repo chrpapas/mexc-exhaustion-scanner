@@ -180,6 +180,19 @@ async def observe_v40_account_and_owned(
         snapshot.status!="NONFLAT_PROVENANCE_MATCHED_NONAUTHORIZING"
         or not 1<=snapshot.occupied_slots<=4
     ):
+        from app.t100_v40_guardian_get_failure_codes import (
+            guardian_inventory_diagnostic_halt,
+        )
+        if (
+            snapshot.status=="INVENTORY_READ_OR_FORMAT_FAILED"
+            and type(snapshot.mismatch_diagnostic) is dict
+        ):
+            coded=guardian_inventory_diagnostic_halt(
+                snapshot.mismatch_diagnostic.get("stage"),
+                snapshot.mismatch_diagnostic.get("category"),
+            )
+            if coded is not None:
+                return _halt(coded)
         if (
             snapshot.status=="INVENTORY_COMPLETENESS_UNVERIFIED"
             and type(snapshot.inventory) is dict
@@ -193,6 +206,12 @@ async def observe_v40_account_and_owned(
                     "failure_stage"
                 ) in _SAFE_INVENTORY_PROBE_STAGES
             ):
+                coded=guardian_inventory_diagnostic_halt(
+                    snapshot.inventory.get("failure_stage"),
+                    snapshot.inventory.get("failure_category"),
+                )
+                if coded is not None:
+                    return _halt(coded)
                 return _halt(
                     "V40_GUARDIAN_INVENTORY_STAGE_"+
                     snapshot.inventory["failure_stage"]+"_HALT"
@@ -338,6 +357,7 @@ async def observe_v40_account_and_owned_network(
                 client,
                 api_key=env["T100_V40_GUARDIAN_READONLY_API_KEY"],
                 api_secret=env["T100_V40_GUARDIAN_READONLY_API_SECRET"],
+                diagnostic_get_errors=True,
             )
             return await asyncio.wait_for(
                 observe_v40_account_and_owned(
