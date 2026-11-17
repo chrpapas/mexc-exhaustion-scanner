@@ -235,8 +235,10 @@ class LiveOrderGateway:
         from app.t100_live_authorization import (
             V40_CANARY_SCOPE, V40_PORTFOLIO_SCOPE,
         )
-        if getattr(permit,'scope',None) in (V40_CANARY_SCOPE,V40_PORTFOLIO_SCOPE):
-            raise ExecutionHalted("V40_SCOPED_LEGACY_ORDER_GATEWAY_FORBIDDEN")
+        if getattr(permit,'scope',None)==V40_CANARY_SCOPE:
+            raise ExecutionHalted("V40_CANARY_LEGACY_ORDER_GATEWAY_FORBIDDEN")
+        if getattr(permit,'scope',None)==V40_PORTFOLIO_SCOPE:
+            raise ExecutionHalted("V40_PORTFOLIO_LEGACY_ORDER_GATEWAY_FORBIDDEN")
         # Double-check transport and configured cap agree before creating a
         # journal intent. A legacy isolated adapter can never silently place
         # a trade when the approved pilot is CROSS.
