@@ -7,7 +7,10 @@ on:
   pull_request:
     paths:
       - "app/t100_v40_owned_completed_bar_reader.py"
+      - "app/t100_v40_nonflat_exit_frame_reader.py"
+      - "app/t100_v40_render_four_slot_readonly_worker.py"
       - "tests/test_t100_v40_owned_completed_bar_reader.py"
+      - "tests/test_t100_v40_render_four_slot_readonly_worker.py"
       - ".github/workflows/v40-real-owned-min30-readonly.yml"
 
 permissions:
@@ -24,11 +27,16 @@ jobs:
       - name: Install
         run: python -m pip install -e ".[dev]"
       - name: Compile
-        run: python -m compileall -q app/t100_v40_owned_completed_bar_reader.py
+        run: |
+          python -m compileall -q \
+            app/t100_v40_owned_completed_bar_reader.py \
+            app/t100_v40_nonflat_exit_frame_reader.py \
+            app/t100_v40_render_four_slot_readonly_worker.py
       - name: Test exact next bar and source roles
         run: |
           python -m pytest -q \
             tests/test_t100_v40_owned_completed_bar_reader.py \
+            tests/test_t100_v40_render_four_slot_readonly_worker.py \
             tests/test_t100_v40_unreleased_bar_cursor.py \
             tests/test_t100_v40_unreleased_verified_exit_handoff.py \
             tests/test_t100_v40_unreleased_exit_policy.py
