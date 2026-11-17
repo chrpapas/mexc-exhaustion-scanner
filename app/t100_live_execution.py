@@ -33,6 +33,9 @@ class LiveCaps:
     max_book_age_ms: int = 1500
     leverage: int = 1
     margin_type: int = 2
+    # Explicitly segregated from the original tiny/paper/legacy pathways.
+    # This is not an exchange setting or permit by itself.
+    risk_profile: str = "T100_TINY_PILOT"
 
     def __post_init__(self) -> None:
         for field in ("max_order_usdt", "max_portfolio_usdt", "max_daily_loss_usdt"):
@@ -43,8 +46,16 @@ class LiveCaps:
             raise ValueError("unsafe slippage setting")
         if self.max_book_age_ms < 0 or self.max_book_age_ms > 2000:
             raise ValueError("book age limit out of bounds")
-        if self.leverage != 1 or self.margin_type != 2:
-            raise ValueError("cross-margin tiny pilot requires CROSS 1x only")
+        if self.margin_type != 2 or type(self.leverage) is not int:
+            raise ValueError("CROSS margin with integer selected leverage required")
+        if self.risk_profile == "T100_TINY_PILOT":
+            if self.leverage != 1:
+                raise ValueError("cross-margin tiny pilot requires CROSS 1x only")
+        elif self.risk_profile == "T100_V40_FOUR_SLOT_PRODUCTION_TRIAL":
+            if not 1 <= self.leverage <= 5:
+                raise ValueError("V40 portfolio leverage outside reviewed 1-5x range")
+        else:
+            raise ValueError("unknown live risk profile")
 
 
 def deterministic_t100_entry_oid(signal_id: int, symbol: str) -> str:
@@ -221,9 +232,11 @@ class LiveOrderGateway:
         # A scoped V40 first-canary permit can ONLY execute through the
         # immutable V40 Stage2/leader/claim/reconcile coordinator. Never
         # allow reuse by the older general-purpose order gateway.
-        from app.t100_live_authorization import V40_CANARY_SCOPE
-        if getattr(permit,'scope',None)==V40_CANARY_SCOPE:
-            raise ExecutionHalted("V40_CANARY_LEGACY_ORDER_GATEWAY_FORBIDDEN")
+        from app.t100_live_authorization import (
+            V40_CANARY_SCOPE, V40_PORTFOLIO_SCOPE,
+        )
+        if getattr(permit,'scope',None) in (V40_CANARY_SCOPE,V40_PORTFOLIO_SCOPE):
+            raise ExecutionHalted("V40_SCOPED_LEGACY_ORDER_GATEWAY_FORBIDDEN")
         # Double-check transport and configured cap agree before creating a
         # journal intent. A legacy isolated adapter can never silently place
         # a trade when the approved pilot is CROSS.
