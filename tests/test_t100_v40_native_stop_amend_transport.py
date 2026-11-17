@@ -75,6 +75,16 @@ def healthy_guardian():
     )
 
 
+class GuardianReader:
+    def __init__(self, evidence):
+        self.evidence=evidence
+        self.calls=0
+
+    async def verify(self):
+        self.calls+=1
+        return self.evidence
+
+
 def canary_permit():
     values={
         "T100_EXECUTION_MODE":"live",
@@ -140,7 +150,9 @@ def transport(client, **kwargs):
         target_position_id=kwargs.get("target_position_id","52"),
         target_signal_id=kwargs.get("target_signal_id",497),
         preflight=kwargs.get("preflight",preflight()),
-        guardian=kwargs.get("guardian",healthy_guardian()),
+        guardian_reader=kwargs.get(
+            "guardian_reader",GuardianReader(healthy_guardian()),
+        ),
     )
 
 
@@ -221,10 +233,35 @@ async def test_guardian_latched_no_get_no_post(monkeypatch):
     g=replace(healthy_guardian(),no_current_scope_critical_or_pending_incidents=False)
     with patch("app.t100_live_guards.LIVE_NATIVE_STOP_AMENDMENT_STATUS","CERTIFIED"):
         with pytest.raises(
-            m.V40StopAmendmentContractHalted,match="CURRENT_PROVENANCE_UNVERIFIED",
+            m.V40StopAmendmentContractHalted,match="GUARDIAN_LATCH_OR_FRESHNESS",
         ):
-            await execute(transport(client,guardian=g))
+            await execute(transport(client,guardian_reader=GuardianReader(g)))
     assert client.gets==0 and client.posts==[]
+
+
+@pytest.mark.asyncio
+async def test_guardian_latches_between_bookends_and_post_never_sends(monkeypatch):
+    client=Client()
+    client._private_post=post_for(client)
+    reader=GuardianReader(healthy_guardian())
+    async def flip():
+        reader.calls+=1
+        if reader.calls==1:
+            return healthy_guardian()
+        return replace(
+            healthy_guardian(),
+            no_current_scope_critical_or_pending_incidents=False,
+        )
+    reader.verify=flip
+    monkeypatch.setattr(m,"run_current_inventory_completeness_probe",cert)
+    with patch("app.t100_live_guards.LIVE_NATIVE_STOP_AMENDMENT_STATUS","CERTIFIED"):
+        with pytest.raises(
+            m.V40StopAmendmentContractHalted,match="GUARDIAN_LATCH_OR_FRESHNESS",
+        ):
+            await execute(transport(client,guardian_reader=reader))
+    assert reader.calls==2
+    assert client.gets>=8
+    assert client.posts==[]
 
 
 @pytest.mark.asyncio
