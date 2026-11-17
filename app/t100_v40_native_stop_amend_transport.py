@@ -167,7 +167,7 @@ class V40DocumentedNativeStopAmendTransport:
         checkpoints: Sequence[PositionCheckpoint],
         target_position_id: str, target_signal_id: int,
         preflight: TrailingProposalReview,
-        guardian: V40NonflatGuardianEvidence,
+        guardian_reader: Any,
     ) -> None:
         if (
             not callable(getattr(client,"_private_get",None))
@@ -178,7 +178,7 @@ class V40DocumentedNativeStopAmendTransport:
             or type(target_position_id) is not str or _id(target_position_id) is None
             or type(target_signal_id) is not int or target_signal_id<=0
             or type(preflight) is not TrailingProposalReview
-            or type(guardian) is not V40NonflatGuardianEvidence
+            or not callable(getattr(guardian_reader,"verify",None))
         ):
             raise V40StopAmendmentContractHalted("V40_STOP_AMENDMENT_BINDING_INVALID")
         self.client=client
@@ -186,7 +186,27 @@ class V40DocumentedNativeStopAmendTransport:
         self.target_position_id=target_position_id
         self.target_signal_id=target_signal_id
         self.preflight=preflight
-        self.guardian=guardian
+        self.guardian_reader=guardian_reader
+
+    async def _require_fresh_guardian(self) -> None:
+        try:
+            g=await self.guardian_reader.verify()
+        except Exception:
+            raise V40StopAmendmentContractHalted(
+                "V40_NATIVE_STOP_GUARDIAN_DATABASE_UNAVAILABLE"
+            ) from None
+        if (
+            type(g) is not V40NonflatGuardianEvidence
+            or g.status!=GOOD_GUARDIAN
+            or g.guardian_protected_observation_fresh is not True
+            or g.no_current_scope_critical_or_pending_incidents is not True
+            or g.live_authorization is not False
+            or g.next_entry_allowed is not False
+            or g.exchange_posts!=0 or g.database_writes!=0
+        ):
+            raise V40StopAmendmentContractHalted(
+                "V40_NATIVE_STOP_GUARDIAN_LATCH_OR_FRESHNESS_HALT"
+            )
 
     async def _frame(self, probe: ReadOnlyMexcProbe) -> str:
         positions=await probe.raw_open_positions()
@@ -231,7 +251,7 @@ class V40DocumentedNativeStopAmendTransport:
         new=_num(new_stop_price)
         p=self.preflight
         proposal=p.proposal
-        g=self.guardian
+
         if (
             type(stop_order_id) is not int
             or stop_order_id<=0 or str(stop_order_id)!=cp.stop_order_id
@@ -249,15 +269,14 @@ class V40DocumentedNativeStopAmendTransport:
             or proposal.position_id!=cp.position_id
             or proposal.stop_order_id!=cp.stop_order_id
             or proposal.old_stop!=old or proposal.proposed_stop!=new
-            or g.status!=GOOD_GUARDIAN
-            or g.guardian_protected_observation_fresh is not True
-            or g.no_current_scope_critical_or_pending_incidents is not True
-            or g.live_authorization is not False
-            or g.next_entry_allowed is not False
         ):
             raise V40StopAmendmentContractHalted(
                 "V40_NATIVE_STOP_CURRENT_PROVENANCE_UNVERIFIED"
             )
+        # A cached guardian dataclass would be unsafe: re-read the
+        # independent database/outbox scope now and again after both venue
+        # snapshots, immediately before one possible POST.
+        await self._require_fresh_guardian()
         probe=ReadOnlyMexcProbe(self.client)
         try:
             first=await self._frame(probe)
@@ -270,6 +289,7 @@ class V40DocumentedNativeStopAmendTransport:
             raise V40StopAmendmentContractHalted(
                 "V40_NATIVE_STOP_CURRENT_BOOKEND_DRIFT"
             )
+        await self._require_fresh_guardian()
         # Do NOT pass takeProfitPrice=0 or an empty parameter; those values
         # may cancel a TP/SL. Reconcile the same native ID after the POST.
         body={
