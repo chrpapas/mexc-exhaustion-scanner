@@ -138,11 +138,11 @@ async def test_nonflat_ledger_and_guardian_are_not_used_to_invent_stop_bar(monke
         guardian=FakeGate(None), nonflat_guardian=gate,
         observed_at=datetime.now(timezone.utc),
     )
-    assert result.status=="V40_FOUR_SLOT_NONFLAT_BAR_EXIT_RUNTIME_NOT_CONNECTED_HALT"
+    assert result.status=="V40_FOUR_SLOT_OWNED_BAR_SOURCE_UNCONNECTED_HALT"
     assert result.observed_slots==2
     assert result.complete_exit_runtime_connected is False
     assert result.entry_allowed is False and result.live_authorization is False
-    assert source.calls==0 and gate.calls==1
+    assert source.calls==0 and gate.calls==0
     assert result.exchange_posts==result.database_writes==0
 
 
@@ -201,3 +201,80 @@ async def test_repeating_monitor_healthy_flat_still_never_trades(monkeypatch,cap
     code=await run_readonly_monitor(configuration(),max_cycles=1)
     assert code==0 and calls==1
     assert '"exchange_posts": 0' in capsys.readouterr().out
+
+
+
+@pytest.mark.asyncio
+async def test_real_nonflat_projection_wired_without_mutation_or_release(monkeypatch):
+    """Positive typed one-to-four slot frame is report-only, no exchange POST."""
+    from app.t100_v40_owned_completed_bar_reader import PostgresV40OwnedBarReader
+    from app import t100_v40_nonflat_exit_frame_reader as frame_module
+    frame=active(2,low="86",high="100",with_candidate=True)
+    mock_snapshot(monkeypatch,frame)
+    called=[]
+    async def observe_real(self, **kwargs):
+        called.append(kwargs)
+        return frame
+    monkeypatch.setattr(frame_module.V40RealNonflatExitFrameReader,"observe",observe_real)
+    # No actual GET/SQL in this test, only constructor type injection.
+    reader=PostgresV40OwnedBarReader.__new__(PostgresV40OwnedBarReader)
+    report=await examine_wired_readonly(
+        source=FakeSource(frame.source),ledger=object(),signed_get=object(),
+        guardian=FakeGate(None),nonflat_guardian=FakeGate(frame.guardian),
+        owned_bars=reader,observed_at=datetime.now(timezone.utc),
+    )
+    assert len(called)==1
+    assert report.status=="V40_FOUR_SLOT_OWNED_NONFLAT_DUE_PROJECTION_READONLY"
+    assert report.observed_slots==2
+    assert report.due_bar_count==2
+    assert report.no_bar_due_count==0
+    assert report.proposed_stop_amendments==1
+    assert report.suspected_native_exits==0
+    assert report.complete_exit_runtime_connected is False
+    assert report.entry_allowed is False and report.live_authorization is False
+    assert report.exchange_posts==report.database_writes==0
+
+
+@pytest.mark.asyncio
+async def test_nonflat_missing_or_invalid_supervisor_frame_never_proves_due_cycle(monkeypatch):
+    from app.t100_v40_owned_completed_bar_reader import PostgresV40OwnedBarReader
+    from app import t100_v40_nonflat_exit_frame_reader as frame_module
+    frame=active(2,due_indices=(0,),low="95",high="100")
+    mock_snapshot(monkeypatch,frame)
+    async def bad_frame(self,**kwargs):
+        return replace(frame, no_bar_due_ids=())
+    monkeypatch.setattr(frame_module.V40RealNonflatExitFrameReader,"observe",bad_frame)
+    result=await examine_wired_readonly(
+        source=FakeSource(frame.source),ledger=object(),signed_get=object(),
+        guardian=FakeGate(None),nonflat_guardian=FakeGate(frame.guardian),
+        owned_bars=PostgresV40OwnedBarReader.__new__(
+            PostgresV40OwnedBarReader,
+        ),
+        observed_at=datetime.now(timezone.utc),
+    )
+    assert result.status=="V40_FOUR_SLOT_NONFLAT_PROJECTION_SUPERVISOR_REJECTED"
+    assert not result.complete_exit_runtime_connected
+    assert not result.entry_allowed and not result.live_authorization
+    assert result.exchange_posts==result.database_writes==0
+
+
+@pytest.mark.asyncio
+async def test_nonflat_signed_get_or_cursor_exception_fail_closed(monkeypatch):
+    from app.t100_v40_owned_completed_bar_reader import PostgresV40OwnedBarReader
+    from app import t100_v40_nonflat_exit_frame_reader as frame_module
+    frame=active(2)
+    mock_snapshot(monkeypatch,frame)
+    async def raise_error(self,**kwargs):
+        raise RuntimeError("private account token should never appear")
+    monkeypatch.setattr(frame_module.V40RealNonflatExitFrameReader,"observe",raise_error)
+    result=await examine_wired_readonly(
+        source=FakeSource(frame.source),ledger=object(),signed_get=object(),
+        guardian=FakeGate(None),nonflat_guardian=FakeGate(frame.guardian),
+        owned_bars=PostgresV40OwnedBarReader.__new__(
+            PostgresV40OwnedBarReader,
+        ),
+        observed_at=datetime.now(timezone.utc),
+    )
+    assert result.status=="V40_FOUR_SLOT_OWNED_NONFLAT_BAR_OR_GUARDIAN_HALT"
+    assert "token" not in str(result)
+    assert result.exchange_posts==result.database_writes==0
