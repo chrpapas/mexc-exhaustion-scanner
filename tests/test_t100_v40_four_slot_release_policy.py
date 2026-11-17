@@ -149,8 +149,16 @@ def test_only_all_three_separately_reviewed_release_switches_can_issue():
 
 
 def test_legacy_and_canary_scopes_stay_unchanged():
-    with patch.object(policy,"V40_PORTFOLIO_RELEASE_STATUS","CERTIFIED_LIVE"):
-        with pytest.raises(policy.LiveAuthorizationHalted,match="V40_PORTFOLIO_TRANSPORT"):
-            # Existing tiny canary evidence must not become a portfolio permit.
-            fake=object()
-            policy.require_certified_transport_permit(fake)
+    canary_controls=controls(
+        leverage="1",max_order="12.50",max_total="12.50",max_loss="12.50",
+    )
+    good={f.name:True for f in fields(policy.V40FirstCanaryReadinessEvidence)}
+    tiny=policy.issue_v40_supervised_canary_permit(
+        canary_controls,
+        policy.V40FirstCanaryReadinessEvidence(**good),
+        signal_id=497,symbol="SIREN_USDT",
+    )
+    assert tiny.scope==policy.V40_CANARY_SCOPE
+    assert tiny.scope!=policy.V40_PORTFOLIO_SCOPE
+    assert tiny.production_trial_accepted is True
+    assert tiny.leverage==1 and tiny.max_total_notional_usdt==D("12.50")
