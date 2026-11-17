@@ -114,6 +114,19 @@ async def test_bad_release_ack_stays_reconciliation_only():
 @pytest.mark.asyncio
 async def test_two_suspected_simultaneous_native_closes_never_release_only_one():
     p=PositivePorts(active(4,due_indices=(0,1),high="180",low="80"))
+    # The shared fixture touches only the first due symbol's stop. Model
+    # a second unresolved native close in the same batch explicitly.
+    projection=p.frame.completed_exit
+    two_closes=replace(
+        projection.batch,native_close_reconciliation_count=2,
+    )
+    p.frame=replace(
+        p.frame,
+        completed_exit=replace(
+            projection,batch=two_closes,
+            native_close_reconciliation_count=2,
+        ),
+    )
     out=await controller(p).run_one()
     assert out.status=="V40_SUPERVISOR_NATIVE_EXIT_RECONCILE_DURABLE_RELEASE_REQUIRED"
     assert p.calls==["get","close"]
