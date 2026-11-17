@@ -277,6 +277,13 @@ class V40PortfolioSupervisor:
                     and closed.portfolio_unchanged_across_bookends is True
                     and closed.surviving_protected_slots==slots-1
                     and closed.closing_fills is not None
+                    and closed.closing_fills.position_id==due[0].position_id
+                    and closed.closing_fills.symbol==due[0].symbol
+                    and closed.closing_fills.side=="CLOSE_SHORT"
+                    and closed.closing_fills.order_id==closed.exact_close_order_id
+                    and closed.closing_fills.deal_volume==
+                        next(p.contracts for p in frame.snapshot.recovery.recovered
+                             if p.position_id==due[0].position_id)
                     and closed.closing_fills.final_order_fill_history_complete is True
                     and closed.closing_fills.strategy_fully_filled_order_complete is True
                     and closed.native_terminal is not None
