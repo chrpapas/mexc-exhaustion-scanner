@@ -327,7 +327,13 @@ def require_live_mutation_permit(
         raise LiveAuthorizationHalted("LIVE_MUTATION_PERMIT_REQUIRED")
     if (
         permit.scope not in ("T100_TINY_PILOT",V40_CANARY_SCOPE,V40_PORTFOLIO_SCOPE)
-        or permit.leverage != 1
+        or (
+            permit.scope != V40_PORTFOLIO_SCOPE and permit.leverage != 1
+        )
+        or (
+            permit.scope == V40_PORTFOLIO_SCOPE
+            and (type(permit.leverage) is not int or not 1 <= permit.leverage <= 2)
+        )
         or type(permit.production_trial_accepted) is not bool
         or any(
             type(value) is not Decimal
