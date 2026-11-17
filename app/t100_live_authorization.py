@@ -332,7 +332,7 @@ def require_live_mutation_permit(
         )
         or (
             permit.scope == V40_PORTFOLIO_SCOPE
-            and (type(permit.leverage) is not int or not 1 <= permit.leverage <= 2)
+            and (type(permit.leverage) is not int or not 1 <= permit.leverage <= 5)
         )
         or type(permit.production_trial_accepted) is not bool
         or any(
@@ -442,6 +442,10 @@ class V40FourSlotReleaseEvidence:
     projected_gross_notional_after_entry_usdt: Decimal
     projected_open_position_count_after_entry: int
     modeled_sl75_stress_collateral_surplus_usdt: Decimal
+    # An independently obtained exact-lot leverage review is REQUIRED for
+    # any four-slot permit. This is only nominal initial-margin feasibility,
+    # and cannot substitute for the SL75 liquidation stress proof above.
+    exchange_leverage_plan: "V40CrossLeveragePlan | None" = None
     # Additional gross-exposure checks need historical strategy sizing
     # parity, not a hidden reduction to tiny pilot notional caps.
 
@@ -528,6 +532,28 @@ def issue_v40_four_slot_portfolio_permit(
         or type(controls.max_daily_loss_usdt) is not Decimal
     ):
         problems.append("exact_live_limits_required")
+    from app.t100_v40_exchange_leverage_plan import (
+        V40CrossLeveragePlan, STATUS_FEASIBLE,
+    )
+    leverage_plan=evidence.exchange_leverage_plan
+    if (
+        type(leverage_plan) is not V40CrossLeveragePlan
+        or leverage_plan.status!=STATUS_FEASIBLE
+        or leverage_plan.signal_id!=signal_id
+        or leverage_plan.symbol!=symbol
+        or leverage_plan.selected_exchange_cross_leverage!=controls.leverage
+        or leverage_plan.portfolio_gross_after_entry_usdt!=gross
+        or leverage_plan.observed_equity_usdt!=equity
+        or leverage_plan.nominal_initial_margin_fits is not True
+        or leverage_plan.frozen_strategy_notional_unchanged is not True
+        or leverage_plan.account_observations_verified is not True
+        or leverage_plan.liquidation_or_stop_survival_certified is not False
+        or leverage_plan.live_change_allowed is not False
+        or leverage_plan.live_authorization is not False
+        or leverage_plan.mexc_posts!=0
+        or leverage_plan.database_writes!=0
+    ):
+        problems.append("exact_frozen_notional_exchange_leverage_unverified")
     if problems:
         raise LiveAuthorizationHalted(
             "V40_PORTFOLIO_RELEASE_BLOCKED:"+",".join(dict.fromkeys(problems))
