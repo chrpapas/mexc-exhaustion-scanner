@@ -13,6 +13,9 @@ from app.t100_live_guards import (
     T100ExecutionControls,LIVE_CONFIRMATION,
 )
 from app import t100_live_authorization as policy
+from app.t100_v40_exchange_leverage_plan import (
+    V40CrossLeverageInputs,assess_exact_v40_cross_leverage,
+)
 
 
 def controls(*, leverage="2",max_order="60",max_total="140",max_loss="40"):
@@ -35,6 +38,26 @@ def evidence(**overrides):
         projected_gross_notional_after_entry_usdt=D("130"),
         projected_open_position_count_after_entry=3,
         modeled_sl75_stress_collateral_surplus_usdt=D("10"),
+        exchange_leverage_plan=assess_exact_v40_cross_leverage(
+            V40CrossLeverageInputs(
+                signal_id=497,symbol="SIREN_USDT",
+                frozen_lot_notional_usdt=D("60"),
+                executable_intent_notional_usdt=D("60"),
+                current_gross_notional_usdt=D("70"),
+                account_equity_usdt=D("75"),
+                signed_available_initial_margin_usdt=D("60"),
+                independent_fee_reserve_usdt=D("1"),
+                required_remaining_margin_headroom_usdt=D("10"),
+                observed_contract_max_cross_leverage=5,
+                observed_account_max_cross_leverage=10,
+                operator_max_cross_leverage=5,
+                account_cross_mode_verified=True,
+                account_identity_bookended_verified=True,
+                available_margin_private_signed_get_verified=True,
+                per_contract_and_private_leverage_tiers_verified=True,
+                frozen_strategy_lot_and_signal_verified=True,
+            )
+        ),
     )
     facts.update(overrides)
     return policy.V40FourSlotReleaseEvidence(**facts)
@@ -162,3 +185,89 @@ def test_legacy_and_canary_scopes_stay_unchanged():
     assert tiny.scope!=policy.V40_PORTFOLIO_SCOPE
     assert tiny.production_trial_accepted is True
     assert tiny.leverage==1 and tiny.max_total_notional_usdt==D("12.50")
+
+
+def test_positive_margin_numbers_but_no_independent_leverage_plan_always_block():
+    with pytest.raises(
+        policy.LiveAuthorizationHalted,
+        match="exact_frozen_notional_exchange_leverage_unverified",
+    ):
+        issue(e=evidence(exchange_leverage_plan=None))
+
+
+def test_portfolio_controls_can_select_3x_from_separate_profile_only():
+    from app.t100_live_guards import T100ExecutionControls
+    basic={
+        "T100_EXECUTION_MODE":"live",
+        "T100_LIVE_ORDER_API_ENABLED":"true",
+        "T100_LIVE_KILL_SWITCH":"false",
+        "T100_LIVE_OPERATOR_CONFIRM":LIVE_CONFIRMATION,
+        "T100_LIVE_MAX_POSITION_NOTIONAL_USDT":"5000",
+        "T100_LIVE_MAX_TOTAL_NOTIONAL_USDT":"5000",
+        "T100_LIVE_MAX_DAILY_LOSS_USDT":"500",
+        "T100_LIVE_LEVERAGE":"1",
+        "T100_V40_PORTFOLIO_EXCHANGE_LEVERAGE":"3",
+    }
+    portfolio=T100ExecutionControls.from_v40_portfolio_env(basic)
+    assert portfolio.leverage==3
+    assert T100ExecutionControls.from_env(basic).leverage==1
+    with pytest.raises(ValueError,match="between 1 and 2"):
+        T100ExecutionControls.from_env({
+            **basic,"T100_LIVE_LEVERAGE":"3",
+        })
+    with pytest.raises(ValueError,match="explicitly set"):
+        T100ExecutionControls.from_v40_portfolio_env({
+            k:v for k,v in basic.items()
+            if k!="T100_V40_PORTFOLIO_EXCHANGE_LEVERAGE"
+        })
+    with pytest.raises(ValueError,match="between 1 and 5"):
+        T100ExecutionControls.from_v40_portfolio_env({
+            **basic,"T100_V40_PORTFOLIO_EXCHANGE_LEVERAGE":"25",
+        })
+
+
+def test_3x_portfolio_permit_exact_notional_without_rewriting_historical_size():
+    from app.t100_live_guards import T100ExecutionControls
+    values={
+        "T100_EXECUTION_MODE":"live",
+        "T100_LIVE_ORDER_API_ENABLED":"true",
+        "T100_LIVE_KILL_SWITCH":"false",
+        "T100_LIVE_OPERATOR_CONFIRM":LIVE_CONFIRMATION,
+        "T100_LIVE_MAX_POSITION_NOTIONAL_USDT":"4180",
+        "T100_LIVE_MAX_TOTAL_NOTIONAL_USDT":"5000",
+        "T100_LIVE_MAX_DAILY_LOSS_USDT":"1000",
+        "T100_V40_PORTFOLIO_EXCHANGE_LEVERAGE":"3",
+    }
+    c=T100ExecutionControls.from_v40_portfolio_env(values)
+    p=assess_exact_v40_cross_leverage(V40CrossLeverageInputs(
+        signal_id=497,symbol="SIREN_USDT",
+        frozen_lot_notional_usdt=D("4180"),
+        executable_intent_notional_usdt=D("4180"),
+        current_gross_notional_usdt=D("0"),
+        account_equity_usdt=D("2000"),
+        signed_available_initial_margin_usdt=D("2000"),
+        independent_fee_reserve_usdt=D("20"),
+        required_remaining_margin_headroom_usdt=D("100"),
+        observed_contract_max_cross_leverage=5,
+        observed_account_max_cross_leverage=10,
+        operator_max_cross_leverage=5,
+        account_cross_mode_verified=True,
+        account_identity_bookended_verified=True,
+        available_margin_private_signed_get_verified=True,
+        per_contract_and_private_leverage_tiers_verified=True,
+        frozen_strategy_lot_and_signal_verified=True,
+    ))
+    e=evidence(
+        observed_equity_usdt=D("2000"),
+        projected_gross_notional_after_entry_usdt=D("4180"),
+        exchange_leverage_plan=p,
+    )
+    a,b,d=release_gate()
+    with a,b,d:
+        permit=issue(c=c,e=e)
+        assert permit.leverage==3
+        assert permit.max_total_notional_usdt==D("5000")
+        assert p.exact_order_notional_usdt==D("4180")
+        assert policy.require_certified_transport_permit(permit) is permit
+    with pytest.raises(policy.LiveAuthorizationHalted,match="PRODUCTION_RELEASE_NOT_CERTIFIED"):
+        policy.require_certified_transport_permit(permit)

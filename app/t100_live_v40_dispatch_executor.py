@@ -63,6 +63,9 @@ class V40CurrentRiskEvidence:
     contract_trading_access_verified: bool = False
     hedge_mode_verified: bool = False
     no_unresolved_mutations: bool = False
+    # Required only for the distinct four-slot production scope. The
+    # one-position canary must not obtain leverage permission from it.
+    cross_leverage_plan: object | None = None
 
 
 @dataclass(frozen=True)
@@ -113,7 +116,11 @@ def _preclaim_validate(
     # Actual permit issuer and adapter certification are separate. This
     # MUST be the first decision; never trust operator limits alone.
     require_certified_transport_permit(permit)
-    from app.t100_live_authorization import V40_CANARY_SCOPE
+    from app.t100_live_authorization import V40_CANARY_SCOPE, V40_PORTFOLIO_SCOPE
+    from app.t100_v40_exchange_leverage_plan import (
+        V40CrossLeveragePlan, STATUS_FEASIBLE,
+    )
+    portfolio_scope = getattr(permit,"scope",None)==V40_PORTFOLIO_SCOPE
     if getattr(permit,'scope',None)==V40_CANARY_SCOPE and (
         permit.signal_id!=intent.signal_id or permit.symbol!=intent.symbol
         or intent.notional_usdt> D("12.50")
@@ -150,8 +157,15 @@ def _preclaim_validate(
         or type(getattr(transport, "open_type", None)) is not int
         or transport.open_type != 2
         or caps.margin_type != 2
-        or caps.leverage != 1
-        or permit.leverage != 1
+        or (portfolio_scope and (
+            caps.risk_profile!="T100_V40_FOUR_SLOT_PRODUCTION_TRIAL"
+            or caps.leverage!=permit.leverage
+            or not 1<=caps.leverage<=5
+        ))
+        or (not portfolio_scope and (
+            caps.risk_profile!="T100_TINY_PILOT"
+            or caps.leverage!=1 or permit.leverage!=1
+        ))
     ):
         raise V40DispatchHalted("V40_DISPATCH_ORIGIN_OR_CROSS_MODE_INVALID")
 
@@ -222,6 +236,33 @@ def _preclaim_validate(
     ):
         raise V40DispatchHalted("V40_ACCOUNT_RISK_OR_FRESHNESS_NOT_CERTIFIED")
 
+    # A distinct portfolio permit must match the frozen LOT exactly.
+    # The selected exchange leverage changes only initial margin demand,
+    # never the strategy notional or the number of contracts.
+    if portfolio_scope:
+        if (
+            permit.signal_id!=intent.signal_id
+            or permit.symbol!=intent.symbol
+        ):
+            raise V40DispatchHalted("V40_PORTFOLIO_PERMIT_SIGNAL_MISMATCH")
+        lv=risk.cross_leverage_plan
+        if (
+            type(lv) is not V40CrossLeveragePlan
+            or lv.status!=STATUS_FEASIBLE
+            or lv.signal_id!=intent.signal_id or lv.symbol!=intent.symbol
+            or lv.exact_order_notional_usdt!=intent.notional_usdt
+            or lv.portfolio_gross_after_entry_usdt!=
+                risk.portfolio_notional_usdt+intent.notional_usdt
+            or lv.observed_equity_usdt!=risk.current_account_equity_usdt
+            or lv.selected_exchange_cross_leverage!=caps.leverage
+            or lv.nominal_initial_margin_fits is not True
+            or lv.frozen_strategy_notional_unchanged is not True
+            or lv.account_observations_verified is not True
+            or lv.live_change_allowed is not False
+            or lv.liquidation_or_stop_survival_certified is not False
+        ):
+            raise V40DispatchHalted("V40_PORTFOLIO_EXACT_LEVERAGE_OR_LOT_UNVERIFIED")
+
     if (
         intent.notional_usdt > min(
             caps.max_order_usdt, permit.max_position_notional_usdt,
@@ -232,7 +273,7 @@ def _preclaim_validate(
         or risk.realized_today_loss_usdt >= min(
             caps.max_daily_loss_usdt, permit.max_daily_loss_usdt,
         )
-        or intent.notional_usdt > risk.available_margin_usdt
+        or intent.notional_usdt / D(caps.leverage)>risk.available_margin_usdt
     ):
         raise V40DispatchHalted("V40_OPERATOR_RISK_CAP_OR_MARGIN_EXCEEDED")
 

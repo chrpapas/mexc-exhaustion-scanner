@@ -1,0 +1,52 @@
+name: V40 frozen notional / independent MEXC CROSS leverage review
+
+on:
+  push:
+    branches:
+      - "feat/v40-cross-exchange-leverage-parity-*"
+  pull_request:
+    paths:
+      - "app/t100_v40_exchange_leverage_plan.py"
+      - "app/t100_live_guards.py"
+      - "app/t100_live_execution.py"
+      - "app/t100_live_authorization.py"
+      - "app/t100_live_v40_dispatch_executor.py"
+      - "app/t100_live_mexc_adapter.py"
+      - "tests/test_t100_v40_exchange_leverage_plan.py"
+      - "tests/test_t100_v40_four_slot_release_policy.py"
+      - "tests/test_t100_v40_cross_leverage_dispatch.py"
+      - ".github/workflows/v40-cross-exchange-leverage-parity.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  leverage-not-sizing:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install
+        run: python -m pip install -e ".[dev]"
+      - name: Syntax verification
+        run: |
+          python -m compileall -q \
+            app/t100_v40_exchange_leverage_plan.py \
+            app/t100_live_guards.py \
+            app/t100_live_execution.py \
+            app/t100_live_authorization.py \
+            app/t100_live_v40_dispatch_executor.py \
+            app/t100_live_mexc_adapter.py
+      - name: Frozen sizing / leverage selection / no-POST barriers
+        run: |
+          python -m pytest -q \
+            tests/test_t100_v40_exchange_leverage_plan.py \
+            tests/test_t100_v40_four_slot_release_policy.py \
+            tests/test_t100_v40_cross_leverage_dispatch.py \
+            tests/test_t100_live_v40_dispatch_executor.py \
+            tests/test_t100_live_mexc_adapter.py \
+            tests/test_t100_live_authorization.py \
+            tests/test_t100_live_execution.py \
+            tests/test_t100_v40_live_portfolio_supervisor.py

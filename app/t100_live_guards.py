@@ -81,6 +81,34 @@ class T100ExecutionControls:
             leverage=leverage,
         )
 
+    @classmethod
+    def from_v40_portfolio_env(
+        cls, values: Mapping[str, str] | None = None,
+    ) -> "T100ExecutionControls":
+        """Separately configured V40 CROSS leverage; legacy remains 1–2x.
+
+        The production portfolio can only obtain this configuration via the
+        distinct typed permit and independent current signed venue evidence.
+        This method NEVER changes leverage on MEXC or enables order posts.
+        """
+        from dataclasses import replace
+        env = os.environ if values is None else values
+        raw = env.get("T100_V40_PORTFOLIO_EXCHANGE_LEVERAGE")
+        if type(raw) is not str or not raw.isascii() or not raw.isdecimal():
+            raise ValueError(
+                "T100_V40_PORTFOLIO_EXCHANGE_LEVERAGE must be explicitly set"
+            )
+        selected = int(raw)
+        if not 1 <= selected <= 5:
+            raise ValueError(
+                "V40 portfolio CROSS leverage must be between 1 and 5"
+            )
+        # Force the separate *legacy parsing path* to 1x so the existing
+        # legacy/canary environment control remains untouched and cannot
+        # silently be interpreted as the portfolio leverage setting.
+        base = cls.from_env({**dict(env), "T100_LIVE_LEVERAGE": "1"})
+        return replace(base, leverage=selected)
+
     def readiness_failures(self) -> tuple[str, ...]:
         """Operator configuration checks; passing does NOT authorize trading."""
         if self.mode == "paper":

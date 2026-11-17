@@ -74,7 +74,18 @@ class LiveMexcAdapter:
         if type(intent) is not EntryIntent:
             raise RuntimeError("MEXC_ENTRY_INTENT_TYPE_INVALID_NO_POST")
         permit = require_certified_transport_permit(permit)
-        from app.t100_live_authorization import V40_CANARY_SCOPE
+        from app.t100_live_authorization import (
+            V40_CANARY_SCOPE,V40_PORTFOLIO_SCOPE,
+        )
+        # The original adapter's guardian gate is *flat-only*. It cannot
+        # authorize the second/third/fourth entry of an already-owned
+        # portfolio. Explicitly forbid a scoped portfolio order until a
+        # separate nonflat, fresh post-time portfolio clearance is wired.
+        # In particular, DO NOT silently send leverage=1 for a 3x permit.
+        if getattr(permit,'scope',None)==V40_PORTFOLIO_SCOPE:
+            raise RuntimeError(
+                "V40_PORTFOLIO_NONFLAT_POST_GUARD_NOT_CONNECTED_NO_POST"
+            )
         if getattr(permit,'scope',None)==V40_CANARY_SCOPE:
             values=(
                 intent.reference_price,intent.notional_usdt,
@@ -137,7 +148,7 @@ class LiveMexcAdapter:
                 "symbol": intent.symbol,
                 "price": str(intent.reference_price),
                 "vol": str(intent.volume_contracts),
-                "leverage": 1,
+                "leverage": permit.leverage,
                 "side": 3,
                 "type": 5,
                 "openType": self.open_type,
