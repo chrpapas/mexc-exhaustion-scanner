@@ -26,6 +26,9 @@ from app.t100_v40_unreleased_nonflat_guardian_evidence import V40NonflatGuardian
 from app.t100_v40_unreleased_verified_exit_handoff import V40VerifiedExitProjection
 from app.t100_v40_unreleased_native_stop_cycle import V40UnreleasedStopCycleResult
 from app.t100_v40_unreleased_portfolio_native_close import V40PortfolioCloseWitness
+from app.t100_v40_native_close_release_handoff import (
+    V40NativeCloseReleaseHandoffReport,
+)
 
 # This is not an existing permit scope. New four-slot issuance and the
 # corresponding final MEXC transport gate must be independently reviewed.
@@ -76,6 +79,10 @@ class V40PortfolioPorts(Protocol):
     async def reconcile_native_close(
         self, projection: V40VerifiedExitProjection,
     ) -> V40PortfolioCloseWitness: ...
+    async def release_verified_native_close(
+        self, projection: V40VerifiedExitProjection,
+        witness: V40PortfolioCloseWitness,
+    ) -> V40NativeCloseReleaseHandoffReport: ...
     async def tighten_one_stop(
         self, projection: V40VerifiedExitProjection, *, permit: LiveMutationPermit,
     ) -> V40UnreleasedStopCycleResult: ...
@@ -108,13 +115,13 @@ class V40PortfolioSupervisor:
     @staticmethod
     def _halt(
         code: str, *, slots: int = 0, signal: int | None = None,
-        entry: bool = False, stop: bool = False,
+        entry: bool = False, stop: bool = False, reconcile: bool = False,
     ) -> V40PortfolioSupervisorReport:
         return V40PortfolioSupervisorReport(
             code, observed_slots=slots, signal_id=signal,
             origin_may_have_mutated=entry,
             stop_post_may_have_occurred=stop,
-            must_reconcile_before_next_cycle=entry or stop,
+            must_reconcile_before_next_cycle=entry or stop or reconcile,
         )
 
     @staticmethod
@@ -250,9 +257,77 @@ class V40PortfolioSupervisor:
                     or closed.mexc_posts != 0 or closed.database_writes != 0
                 ):
                     return self._halt("V40_SUPERVISOR_CLOSE_RESULT_INVALID", slots=slots)
+                # Only ONE exact positively evidenced CLOSED short may
+                # advance to the existing atomic DB release adapter. A
+                # missing/untested/ambiguous native stop or two simultaneous
+                # suspected closes cannot authorize a position slot release.
+                due=tuple(
+                    x for x in batch.slots
+                    if x.requires_native_order_reconciliation is True
+                )
+                if not (
+                    batch.native_close_reconciliation_count==1
+                    and len(due)==1
+                    and closed.status in (
+                        "V40_PORTFOLIO_CLOSE_EXCHANGE_TP_LABEL_CONFLICT_UNRELEASED",
+                        "V40_PORTFOLIO_CLOSE_EXCHANGE_SL_LABEL_OBSERVED_UNRELEASED",
+                    )
+                    and closed.closed_position_id==due[0].position_id
+                    and closed.exact_closed_position_history_verified is True
+                    and closed.portfolio_unchanged_across_bookends is True
+                    and closed.surviving_protected_slots==slots-1
+                    and closed.closing_fills is not None
+                    and closed.closing_fills.position_id==due[0].position_id
+                    and closed.closing_fills.symbol==due[0].symbol
+                    and closed.closing_fills.side=="CLOSE_SHORT"
+                    and closed.closing_fills.order_id==closed.exact_close_order_id
+                    and closed.closing_fills.deal_volume==
+                        next(p.contracts for p in frame.snapshot.recovery.recovered
+                             if p.position_id==due[0].position_id)
+                    and closed.closing_fills.final_order_fill_history_complete is True
+                    and closed.closing_fills.strategy_fully_filled_order_complete is True
+                    and closed.native_terminal is not None
+                    and closed.native_terminal.native_stop_terminal_verified is True
+                    and closed.native_terminal.linked_venue_close_filled is True
+                    and closed.native_terminal.owned_position_closed_verified is True
+                ):
+                    return self._halt(
+                        "V40_SUPERVISOR_NATIVE_EXIT_RECONCILE_DURABLE_RELEASE_REQUIRED",
+                        slots=slots,
+                    )
+                # This port MUST re-observe the signed MEXC close and query
+                # complete persisted funding/accounting before DB release.
+                # The coordinator never retries a possibly committed SQL TX.
+                try:
+                    released=await self.ports.release_verified_native_close(
+                        projection,witness=closed,
+                    )
+                except BaseException:
+                    return self._halt(
+                        "V40_SUPERVISOR_NATIVE_CLOSE_DB_OUTCOME_UNKNOWN_RECONCILE",
+                        slots=slots,reconcile=True,
+                    )
+                if not (
+                    type(released) is V40NativeCloseReleaseHandoffReport
+                    and released.status==
+                        "V40_CLOSE_HANDOFF_ONE_SLOT_DURABLY_RELEASED_NEW_GET_REQUIRED"
+                    and released.closed_position_id==closed.closed_position_id
+                    and released.exact_exchange_close_verified is True
+                    and released.persisted_accounting_verified is True
+                    and released.durable_slot_release_verified is True
+                    and released.database_commit_may_have_occurred is True
+                    and released.fresh_account_ledger_guardian_recheck_required is True
+                    and released.next_entry_allowed is False
+                    and released.live_authorization is False
+                    and released.mexc_posts==0
+                ):
+                    return self._halt(
+                        "V40_SUPERVISOR_NATIVE_CLOSE_RELEASE_UNVERIFIED_RECONCILE",
+                        slots=slots,reconcile=True,
+                    )
                 return self._halt(
-                    "V40_SUPERVISOR_NATIVE_EXIT_RECONCILE_DURABLE_RELEASE_REQUIRED",
-                    slots=slots,
+                    "V40_SUPERVISOR_ONE_CLOSED_SLOT_RELEASED_NEW_GET_REQUIRED",
+                    slots=slots,reconcile=True,
                 )
             if batch.proposed_stop_amendment_count:
                 if not self._permit_valid(permit):
