@@ -37,6 +37,10 @@ class V40FourSlotWiringReport:
     account_snapshot_connected: bool = False
     guardian_connected: bool = False
     complete_exit_runtime_connected: bool = False
+    due_bar_count: int = 0
+    no_bar_due_count: int = 0
+    proposed_stop_amendments: int = 0
+    suspected_native_exits: int = 0
     exchange_posts: int = 0
     database_writes: int = 0
     entry_allowed: bool = False
@@ -113,6 +117,7 @@ class V40ReadOnlyPortfolioPorts:
 async def examine_wired_readonly(
     *, source: Any, ledger: Any, signed_get: Any, guardian: Any,
     nonflat_guardian: Any, observed_at: datetime,
+    owned_bars: Any = None,
 ) -> V40FourSlotWiringReport:
     """Actual adapter composition, but never calls a live mutation port."""
     from app.t100_live_four_slot_mexc_readonly import _components
@@ -141,23 +146,71 @@ async def examine_wired_readonly(
             observed_slots=snap.occupied_slots,
         )
     if snap.status == "NONFLAT_PROVENANCE_MATCHED_NONAUTHORIZING":
-        try:
-            nonflat = await nonflat_guardian.verify()
-        except Exception:
+        # Observed, owned positions cannot reuse the flat-entry guardian.
+        # Every due slot is projected only after independent complete Min30
+        # candle, cursor, stop coverage and exchange/ledger bookend checks.
+        from app.t100_v40_owned_completed_bar_reader import (
+            PostgresV40OwnedBarReader,
+        )
+        from app.t100_v40_nonflat_exit_frame_reader import (
+            V40RealNonflatExitFrameReader,V40NonflatFrameHalted,
+        )
+        if type(owned_bars) is not PostgresV40OwnedBarReader:
             return V40FourSlotWiringReport(
-                "V40_FOUR_SLOT_NONFLAT_GUARDIAN_GET_OR_SQL_HALT",
+                "V40_FOUR_SLOT_OWNED_BAR_SOURCE_UNCONNECTED_HALT",
                 observed_slots=snap.occupied_slots,
                 account_snapshot_connected=True,
             )
-        # Never synthesize a "no bar due" statement or assume that a native
-        # stop/touch has completed. The live exit handoff is still unreleased.
-        return V40FourSlotWiringReport(
-            "V40_FOUR_SLOT_NONFLAT_BAR_EXIT_RUNTIME_NOT_CONNECTED_HALT",
-            observed_slots=snap.occupied_slots,
-            guardian_status=nonflat.status,
-            account_snapshot_connected=True,
-            guardian_connected=nonflat.guardian_protected_observation_fresh is True,
-        )
+        try:
+            frame=await V40RealNonflatExitFrameReader(
+                owned_bars=owned_bars,nonflat_guardian=nonflat_guardian,
+            ).observe(
+                snap=snap,venue=venue,ledger=ledger,
+                source=source,observed_at=observed_at,
+            )
+            # Use the actual supervisor's typed/identity validation, but
+            # do not run mutating stop/cursor/close ports without a permit.
+            if not V40PortfolioSupervisor._frame_valid(frame):
+                return V40FourSlotWiringReport(
+                    "V40_FOUR_SLOT_NONFLAT_PROJECTION_SUPERVISOR_REJECTED",
+                    observed_slots=snap.occupied_slots,
+                    account_snapshot_connected=True,
+                )
+            projection=frame.completed_exit
+            return V40FourSlotWiringReport(
+                status="V40_FOUR_SLOT_OWNED_NONFLAT_DUE_PROJECTION_READONLY",
+                observed_slots=snap.occupied_slots,
+                candidate_count=len(frame.source.candidates),
+                guardian_status=frame.guardian.status,
+                source_status=frame.source.status,
+                scanner_connected=frame.source.history_complete is True
+                    and frame.source.read_only_repeatable_read is True,
+                account_snapshot_connected=True,
+                guardian_connected=True,
+                # The completed-bar *observation* is connected. The real
+                # amendment/close/cursor mutation ports are NOT connected.
+                complete_exit_runtime_connected=False,
+                due_bar_count=(
+                    len(projection.batch.slots) if projection else 0
+                ),
+                no_bar_due_count=len(frame.no_bar_due_ids),
+                proposed_stop_amendments=(
+                    projection.candidate_native_stop_amendment_count
+                    if projection else 0
+                ),
+                suspected_native_exits=(
+                    projection.native_close_reconciliation_count
+                    if projection else 0
+                ),
+            )
+        except Exception:
+            # An invalid native stop, pending cursor or venue/SQL failure
+            # must never turn into "no bar due" or "free slot" claims.
+            return V40FourSlotWiringReport(
+                "V40_FOUR_SLOT_OWNED_NONFLAT_BAR_OR_GUARDIAN_HALT",
+                observed_slots=snap.occupied_slots,
+                account_snapshot_connected=True,
+            )
     if snap.occupied_slots != 0:
         return V40FourSlotWiringReport("V40_FOUR_SLOT_FLAT_COUNT_INVALID_HALT")
 
@@ -221,6 +274,9 @@ async def run_once(env: Mapping[str, str]) -> V40FourSlotWiringReport:
     from app.t100_v40_unreleased_nonflat_guardian_evidence import (
         PostgresV40NonflatGuardianEvidence,
     )
+    from app.t100_v40_owned_completed_bar_reader import (
+        PostgresV40OwnedBarReader,
+    )
 
     source_pool = ledger_pool = None
     try:
@@ -254,6 +310,11 @@ async def run_once(env: Mapping[str, str]) -> V40FourSlotWiringReport:
                     guardian=PostgresV40GuardianPostGate(ledger_pool),
                     nonflat_guardian=PostgresV40NonflatGuardianEvidence(
                         ledger_pool,
+                    ),
+                    owned_bars=PostgresV40OwnedBarReader(
+                        scanner_pool=source_pool,
+                        runtime_pool=ledger_pool,
+                        public_get=client,
                     ),
                     observed_at=datetime.now(timezone.utc),
                 ),
