@@ -240,6 +240,11 @@ def _preclaim_validate(
     # The selected exchange leverage changes only initial margin demand,
     # never the strategy notional or the number of contracts.
     if portfolio_scope:
+        if (
+            permit.signal_id!=intent.signal_id
+            or permit.symbol!=intent.symbol
+        ):
+            raise V40DispatchHalted("V40_PORTFOLIO_PERMIT_SIGNAL_MISMATCH")
         lv=risk.cross_leverage_plan
         if (
             type(lv) is not V40CrossLeveragePlan
