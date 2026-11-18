@@ -1,6 +1,8 @@
 """Supervisor must re-observe after proven native close + SQL slot release.
 
-Synthetic typed close/fill witnesses; no MEXC network, SQL writes or permit.
+Synthetic typed close/fill witnesses; no MEXC network or SQL writes.
+A test-only simulated permit is injected for positive release assertions;
+production permit issuance and transport certification remain untouched.
 """
 from dataclasses import replace
 from decimal import Decimal as D
@@ -48,7 +50,8 @@ class PositivePorts(Ports):
             surviving_protected_slots=self.frame.snapshot.occupied_slots-1,
         )
 
-    async def release_verified_native_close(self,projection,witness):
+    async def release_verified_native_close(self,projection,witness,*,permit):
+        assert permit is not None
         self.calls.append("release")
         if self.fault is not None:
             raise self.fault
@@ -67,10 +70,33 @@ class PositivePorts(Ports):
         )
 
 
+@pytest.fixture
+def simulated_portfolio_permit(monkeypatch):
+    """Authorize only an exact test sentinel; never alter production gates."""
+    approved=object()
+    monkeypatch.setattr(
+        V40PortfolioSupervisor,"_permit_valid",
+        staticmethod(lambda permit:permit is approved),
+    )
+    return approved
+
+
 @pytest.mark.asyncio
-async def test_verified_one_native_close_db_release_never_enters_same_cycle():
+async def test_verified_one_native_close_without_permit_never_releases():
     p=PositivePorts(active(4,due_indices=(0,),high="180",low="80"))
     out=await controller(p).run_one()
+    assert out.status=="V40_SUPERVISOR_CLOSE_RELEASE_PERMIT_UNAVAILABLE"
+    assert out.must_reconcile_before_next_cycle is True
+    assert out.live_authorization is False and out.entries_allowed is False
+    assert p.calls==["get","close"]
+
+
+@pytest.mark.asyncio
+async def test_verified_one_native_close_db_release_never_enters_same_cycle(
+    simulated_portfolio_permit,
+):
+    p=PositivePorts(active(4,due_indices=(0,),high="180",low="80"))
+    out=await controller(p).run_one(permit=simulated_portfolio_permit)
     assert out.status=="V40_SUPERVISOR_ONE_CLOSED_SLOT_RELEASED_NEW_GET_REQUIRED"
     assert out.must_reconcile_before_next_cycle is True
     assert out.origin_may_have_mutated is False
@@ -90,10 +116,10 @@ async def test_inaccurate_native_close_provenance_blocks_db_release(attribute):
 
 
 @pytest.mark.asyncio
-async def test_ambiguous_sql_release_is_terminal_no_retry():
+async def test_ambiguous_sql_release_is_terminal_no_retry(simulated_portfolio_permit):
     p=PositivePorts(active(3,due_indices=(0,),high="180",low="80"))
     p.fault=TimeoutError("SECRET DB COMMIT STATUS UNKNOWN")
-    out=await controller(p).run_one()
+    out=await controller(p).run_one(permit=simulated_portfolio_permit)
     assert out.status=="V40_SUPERVISOR_NATIVE_CLOSE_DB_OUTCOME_UNKNOWN_RECONCILE"
     assert out.must_reconcile_before_next_cycle is True
     assert out.live_authorization is False
@@ -102,10 +128,10 @@ async def test_ambiguous_sql_release_is_terminal_no_retry():
 
 
 @pytest.mark.asyncio
-async def test_bad_release_ack_stays_reconciliation_only():
+async def test_bad_release_ack_stays_reconciliation_only(simulated_portfolio_permit):
     p=PositivePorts(active(3,due_indices=(0,),high="180",low="80"))
     p.bad_ack=True
-    out=await controller(p).run_one()
+    out=await controller(p).run_one(permit=simulated_portfolio_permit)
     assert out.status=="V40_SUPERVISOR_NATIVE_CLOSE_RELEASE_UNVERIFIED_RECONCILE"
     assert out.must_reconcile_before_next_cycle is True
     assert p.calls==["get","close","release"]
@@ -134,11 +160,12 @@ async def test_two_suspected_simultaneous_native_closes_never_release_only_one()
 
 
 @pytest.mark.asyncio
-async def test_run_loop_does_not_repeat_after_positive_release():
+async def test_run_loop_does_not_repeat_after_positive_release(simulated_portfolio_permit):
     from app.t100_v40_live_portfolio_supervisor import run_v40_portfolio_supervisor
     p=PositivePorts(active(2,due_indices=(0,),high="180",low="80"))
     out=await run_v40_portfolio_supervisor(
-        controller(p),max_cycles=20,interval_seconds=3,
+        controller(p),permit=simulated_portfolio_permit,
+        max_cycles=20,interval_seconds=3,
     )
     assert out.status=="V40_SUPERVISOR_ONE_CLOSED_SLOT_RELEASED_NEW_GET_REQUIRED"
     assert p.calls==["get","close","release"]
