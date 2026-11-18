@@ -79,6 +79,7 @@ class DB:
         self.exited_exception=None
         self.lease_ok=True
         self.accounting_ok=True
+        self.accounting_drift=None
         self.checkpoint_ok=True
         self.pending=False
         self.fail_update=False
@@ -110,12 +111,25 @@ class DB:
         if "FROM public.t100_live_final_position_accounting" in sql:
             if not self.accounting_ok:return None
             a=self.inputs["accounting"]
-            return dict(entry_order_id=a.entry_order_id,
-                        close_order_id=a.close_order_id,
-                        stop_order_id=a.stop_order_id,
-                        opened_contracts=a.reconciliation.opened_contracts,
-                        closed_contracts=a.reconciliation.closed_contracts,
-                        realized_net_usdt=a.reconciliation.realized_net_usdt)
+            rec=a.reconciliation
+            result=dict(
+                position_id=rec.position_id,
+                entry_order_id=a.entry_order_id,
+                close_order_id=a.close_order_id,
+                stop_order_id=a.stop_order_id,
+                opened_contracts=rec.opened_contracts,
+                closed_contracts=rec.closed_contracts,
+                open_notional_usdt=rec.open_notional_usdt,
+                close_notional_usdt=rec.close_notional_usdt,
+                realized_gross_usdt=rec.realized_gross_usdt,
+                fees_usdt=rec.fees_usdt,
+                funding_cashflow_usdt=rec.funding_cashflow_usdt,
+                realized_net_usdt=rec.realized_net_usdt,
+            )
+            if self.accounting_drift is not None:
+                field,value=self.accounting_drift
+                result[field]=value
+            return result
         raise AssertionError("unexpected fetchrow")
 
     async def fetch(self,sql,*args):
@@ -192,6 +206,40 @@ def test_stale_fence_absent_accounting_unknown_attempt_or_owner_blocks_before_wr
     with pytest.raises(V40SlotReleaseHalted):
         run(**condition)
 
+
+
+@pytest.mark.parametrize("name,corruption",[
+    ("position_id", "11"),
+    ("entry_order_id", "201"),
+    ("close_order_id", "999"),
+    ("stop_order_id", "998"),
+    ("opened_contracts", D("1")),
+    ("closed_contracts", D("1")),
+    ("open_notional_usdt", D("201")),
+    ("close_notional_usdt", D("181")),
+    ("realized_gross_usdt", D("22")),
+    ("fees_usdt", D("0.4")),
+    ("funding_cashflow_usdt", D("1.2")),
+    ("realized_net_usdt", D("20.9")),
+])
+def test_close_release_rechecks_all_twelve_immutable_accounting_fields(
+    name,corruption,
+):
+    with pytest.raises(
+        V40SlotReleaseHalted,match="FINAL_ACCOUNTING_NOT_PERSISTED",
+    ):
+        run(accounting_drift=(name,corruption))
+
+
+def test_same_net_but_changed_fee_and_funding_cannot_release():
+    # An identical net PnL is not proof of the same fee/funding economics.
+    for field,value in (
+        ("fees_usdt",D("0.4")),
+        ("funding_cashflow_usdt",D("1.2")),
+    ):
+        with pytest.raises(V40SlotReleaseHalted,
+                           match="FINAL_ACCOUNTING_NOT_PERSISTED"):
+            run(accounting_drift=(field,value))
 
 def test_lost_postgres_commit_ack_is_unknown_no_retry():
     with pytest.raises(V40SlotReleaseHalted,match="SQL_OUTCOME_UNKNOWN"):
