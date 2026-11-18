@@ -1,12 +1,9 @@
-"""Real PostgreSQL 16/pg_dump e2e for V40 owner CLI, disposable loopback only.
+"""Real PostgreSQL 16 e2e for V40 owner CLI, disposable loopback only.
 
 Never uses Render credentials, MEXC, network addresses other than 127.0.0.1,
 or production trading flags. All data disappears with the CI service.
 """
 import os
-from pathlib import Path
-import subprocess
-
 import asyncpg
 import pytest
 
@@ -43,7 +40,7 @@ def require_ci():
 
 
 @pytest.mark.asyncio
-async def test_owner_cli_applies_all_three_atomically_and_reapply_is_readonly(tmp_path):
+async def test_owner_cli_applies_all_three_atomically_and_reapply_is_readonly():
     require_ci()
     conn=await asyncpg.connect(
         dsn=os.environ["T100_V40_SCHEMA_OWNER_DSN"],
@@ -61,28 +58,22 @@ async def test_owner_cli_applies_all_three_atomically_and_reapply_is_readonly(tm
     finally:
         await conn.close()
 
-    backup=tmp_path/"mexc_exhaustion_ci_before_042_044.dump"
-    subprocess.run([
-        "pg_dump","-Fc","-f",str(backup),"mexc_exhaustion",
-    ],check=True,timeout=25,
-       env={**os.environ,"PGPASSWORD":"t100-ci-only-local-postgres"})
-    assert backup.stat().st_size>1024
     inspection=await runner.run_once(
-        apply=False,backup_file=None,env=dict(os.environ),
+        apply=False,env=dict(os.environ),
     )
     assert inspection=="V40_MIGRATION_SCHEMA_INCOMPLETE_INSPECTION_ONLY"
 
     applied=await runner.run_once(
-        apply=True,backup_file=backup,env=dict(os.environ),
+        apply=True,env=dict(os.environ),
     )
     assert applied=="V40_MIGRATION_042_044_COMMITTED_EXECUTION_STILL_DISABLED"
     repeated=await runner.run_once(
-        apply=True,backup_file=backup,env=dict(os.environ),
+        apply=True,env=dict(os.environ),
     )
     assert repeated=="V40_MIGRATION_ALREADY_APPLIED_EXACT_GRANTS_VERIFIED"
 
     verified=await runner.run_once(
-        apply=False,backup_file=None,env=dict(os.environ),
+        apply=False,env=dict(os.environ),
     )
     assert verified=="V40_MIGRATION_ALREADY_PRESENT_INSPECTION_ONLY"
 

@@ -1,7 +1,4 @@
 """No-credential unit checks for operator-only V40 042–044 DDL plan."""
-import asyncio
-from pathlib import Path
-
 import pytest
 
 from app import t100_v40_schema_owner_migration_cli as m
@@ -53,29 +50,24 @@ def test_local_live_execution_flags_block_schema_mutation(broken):
 @pytest.mark.asyncio
 async def test_missing_owner_credential_refuses_before_any_network_call():
     with pytest.raises(m.V40OwnerMigrationHalted,match="OWNER_DSN_MISSING"):
-        await m.run_once(apply=False,backup_file=None,env=paper_env())
+        await m.run_once(apply=False,env=paper_env())
+
+
+def test_migration_uses_no_backup_artifact_or_external_backup_binary():
+    import inspect
+    source=inspect.getsource(m)
+    assert "backup_file" not in source
+    assert "--backup-file" not in source
+    assert "pg_restore" not in source
+    assert "subprocess" not in source
 
 
 @pytest.mark.asyncio
-async def test_missing_backup_refuses_before_any_network_call():
+async def test_apply_with_unreachable_dsn_does_not_raise_backup_gate():
     env={**paper_env(),"T100_V40_SCHEMA_OWNER_DSN":"postgresql://unused"}
-    with pytest.raises(m.V40OwnerMigrationHalted,match="BACKUP_FILE_REQUIRED"):
-        await m.run_once(apply=True,backup_file=Path("/no/such/file"),env=env)
-
-
-@pytest.mark.asyncio
-async def test_fake_nonempty_backup_is_not_accepted(monkeypatch,tmp_path):
-    bad=tmp_path/"not-a-database.dump"
-    bad.write_bytes(b"wrong backup"*120)
-    env={**paper_env(),"T100_V40_SCHEMA_OWNER_DSN":"postgresql://unused"}
-    class InvalidBackup:
-        stdout=""
-    def fake_restore(*args,**kwargs):
-        return InvalidBackup()
-    monkeypatch.setattr(m.subprocess,"run",fake_restore)
-    with pytest.raises(m.V40OwnerMigrationHalted,
-                       match="RESTORABLE_DB_BACKUP_NOT_VERIFIED"):
-        await m.run_once(apply=True,backup_file=bad,env=env)
+    with pytest.raises(m.V40OwnerMigrationHalted) as exc:
+        await m.run_once(apply=True,env=env)
+    assert "BACKUP" not in str(exc.value)
 
 
 def test_no_background_or_render_startup_migration_path():

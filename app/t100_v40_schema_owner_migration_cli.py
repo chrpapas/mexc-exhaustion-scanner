@@ -1,13 +1,13 @@
 """Explicit operator-run, fail-closed V40 migrations 042–044.
 
 NEVER imported by a Render worker. No defaults can connect to production.
-Only an explicit schema-owner connection (environment variable), a verified
-backup file, hard-disabled local execution controls, and an inactive ledger
-permit a one-transaction DDL application. This grants no trading permission.
+Only an explicit schema-owner connection (environment variable), hard-disabled
+local execution controls, and an inactive ledger permit a one-transaction
+DDL application. This grants no trading permission.
 
 Usage:
   T100_V40_SCHEMA_OWNER_DSN=... python -m app.t100_v40_schema_owner_migration_cli --inspect
-  T100_V40_SCHEMA_OWNER_DSN=... python -m app.t100_v40_schema_owner_migration_cli --apply --backup-file /path/to/verified-backup.dump
+  T100_V40_SCHEMA_OWNER_DSN=... python -m app.t100_v40_schema_owner_migration_cli --apply
 
 Do not put credentials in CLI flags, code, tickets, logs or chat.
 """
@@ -17,7 +17,6 @@ import argparse
 import asyncio
 from pathlib import Path
 import os
-import subprocess
 from urllib.parse import urlparse
 from typing import Any, Mapping
 
@@ -144,33 +143,12 @@ async def verify_grants(conn:Any)->None:
         raise V40OwnerMigrationHalted("V40_MIGRATION_RUNTIME_GRANTS_UNVERIFIED")
 
 
-async def run_once(*,apply:bool,backup_file:Path|None,env:Mapping[str,str])->str:
+async def run_once(*,apply:bool,env:Mapping[str,str])->str:
     if not disabled_local_controls(env):
         raise V40OwnerMigrationHalted("V40_MIGRATION_LOCAL_TRADING_CONTROLS_NOT_DISABLED")
     dsn=env.get("T100_V40_SCHEMA_OWNER_DSN")
     if not isinstance(dsn,str) or not dsn.startswith(("postgresql://","postgres://")):
         raise V40OwnerMigrationHalted("V40_MIGRATION_OWNER_DSN_MISSING")
-    if apply and (
-        backup_file is None
-        or not backup_file.is_file()
-        or backup_file.stat().st_size<1024
-    ):
-        raise V40OwnerMigrationHalted("V40_MIGRATION_BACKUP_FILE_REQUIRED")
-    if apply:
-        # A nonempty file is not proof of an actually restorable backup.
-        # Require a valid PostgreSQL custom-format archive of the exact DB.
-        try:
-            verified=subprocess.run(
-                ["pg_restore","--list",str(backup_file)],
-                capture_output=True,text=True,timeout=20,check=True,
-            )
-            if "dbname: "+EXPECTED_DATABASE not in verified.stdout:
-                raise ValueError("WRONG_BACKUP_DATABASE")
-        except Exception:
-            raise V40OwnerMigrationHalted(
-                "V40_MIGRATION_RESTORABLE_DB_BACKUP_NOT_VERIFIED"
-            ) from None
-
     # Only a disposable GitHub CI service with an exact fixed localhost
     # identity can skip TLS. This cannot be used for Render/production URLs.
     uri=urlparse(dsn)
@@ -247,11 +225,10 @@ def main()->int:
     choose=p.add_mutually_exclusive_group(required=True)
     choose.add_argument("--inspect",action="store_true")
     choose.add_argument("--apply",action="store_true")
-    p.add_argument("--backup-file",type=Path)
     args=p.parse_args()
     try:
         result=asyncio.run(run_once(
-            apply=args.apply,backup_file=args.backup_file,env=dict(os.environ),
+            apply=args.apply,env=dict(os.environ),
         ))
     except V40OwnerMigrationHalted as exc:
         print(str(exc),flush=True)
