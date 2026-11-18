@@ -52,6 +52,16 @@ class V40FourSlotWiringReport:
     exit_cursor_table_present: bool | None = None
     at_entry_contract_specs_table_present: bool | None = None
     checkpoint_bar_observed_supported: bool | None = None
+    owner_role_catalog_observed: bool = False
+    owner_candidate_role_exists: bool | None = None
+    owner_candidate_can_create_public: bool | None = None
+    owner_checkpoint_table_owner: str | None = None
+    owner_revision_table_owner: str | None = None
+    owner_candidate_can_reference_reservations: bool | None = None
+    owner_runtime_role_exists: bool | None = None
+    owner_candidate_ddl_privileges_sufficient: bool = False
+    owner_authenticated: bool = False
+    owner_ddl_applied: bool = False
 
 
 def validate_readonly_config(env: Mapping[str, str]) -> bool:
@@ -276,6 +286,7 @@ async def run_once(env: Mapping[str, str]) -> V40FourSlotWiringReport:
     import httpx
     from app.t100_live_guardian_readonly_once import GetOnlyMexcTransport
     from app.t100_v40_runtime_schema_probe import observe_runtime_catalog
+    from app.t100_v40_schema_owner_role_probe import observe_owner_role_catalog
     from app.t100_live_v40_stage2_source import PostgresV40Stage2Source
     from app.t100_live_four_slot_ledger_reader import PostgresFourSlotLedgerReader
     from app.t100_v40_guardian_post_gate import PostgresV40GuardianPostGate
@@ -301,6 +312,7 @@ async def run_once(env: Mapping[str, str]) -> V40FourSlotWiringReport:
         # Catalog-only SQL; missing tables or unreadable metadata must never
         # be inferred from scanner/guardian success. No DDL or writes.
         catalog = await observe_runtime_catalog(ledger_pool)
+        ownership = await observe_owner_role_catalog(ledger_pool)
         async with httpx.AsyncClient(
             base_url=GetOnlyMexcTransport.BASE_URL,
             trust_env=False, follow_redirects=False,
@@ -343,6 +355,19 @@ async def run_once(env: Mapping[str, str]) -> V40FourSlotWiringReport:
                     catalog.at_entry_contract_specs_table_present,
                 checkpoint_bar_observed_supported=
                     catalog.checkpoint_bar_observed_supported,
+                owner_role_catalog_observed=ownership.catalog_observed,
+                owner_candidate_role_exists=ownership.candidate_role_exists,
+                owner_candidate_can_create_public=
+                    ownership.candidate_can_create_public,
+                owner_checkpoint_table_owner=ownership.checkpoint_table_owner,
+                owner_revision_table_owner=ownership.revision_table_owner,
+                owner_candidate_can_reference_reservations=
+                    ownership.candidate_can_reference_slot_reservations,
+                owner_runtime_role_exists=ownership.runtime_role_exists,
+                owner_candidate_ddl_privileges_sufficient=
+                    ownership.owner_role_permissions_sufficient_on_catalog,
+                owner_authenticated=ownership.authenticated_as_owner,
+                owner_ddl_applied=ownership.production_ddl_applied,
             )
     except Exception:
         # No exception text, DSN, URL, account data or token in Render logs.
