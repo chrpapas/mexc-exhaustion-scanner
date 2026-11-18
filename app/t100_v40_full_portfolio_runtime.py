@@ -133,7 +133,15 @@ class V40LivePortfolioPorts:
             or entry.source is not source or entry.snapshots is not snapshots
             or entry.get_venue is not venue
             or entry.completeness is not completeness
+            or snapshots.ledger is not ledger
+            or snapshots.venue is not venue
+            or snapshots.completeness is not completeness
+            or completeness.venue is not venue
             or stop.ledger is not ledger
+            or flat_guard.pool is not ledger.pool
+            or nonflat_guard.pool is not ledger.pool
+            or owned_bars.runtime_pool is not ledger.pool
+            or owned_bars.scanner_pool is not source.pool
             or (not callable(getattr(cursor,"commit",None)))
             or (not callable(getattr(close,"observe",None)))
             or (not callable(getattr(release,"release",None)))
@@ -144,9 +152,14 @@ class V40LivePortfolioPorts:
         # Reject disabled/canary or no-POST transport as the supposed live
         # four-slot executable.
         from app.t100_v40_portfolio_order_transport import V40FourSlotMexcOrderTransport
-        if type(entry.transport) is not V40FourSlotMexcOrderTransport:
+        if (
+            type(entry.transport) is not V40FourSlotMexcOrderTransport
+            or entry.transport.client is not stop.client
+            or entry.transport.guard.client is not stop.client
+            or entry.transport.guard.ledger is not ledger
+        ):
             raise V40RuntimeAssemblyHalted(
-                "V40_FULL_PORTFOLIO_TYPED_NATIVE_POST_TRANSPORT_REQUIRED"
+                "V40_FULL_PORTFOLIO_TYPED_SAME_ACCOUNT_POST_TRANSPORT_REQUIRED"
             )
         self.source=source
         self.ledger=ledger
