@@ -101,7 +101,7 @@ class PositionAccountingTests(unittest.TestCase):
         close=fillset("200","CLOSE_SHORT",[
             fill("c1","200","CLOSE_SHORT","1","90","0.1")],"90")
         with self.assertRaisesRegex(
-            PositionAccountingHalted,"RECONCILIATION_FAILED"):
+            PositionAccountingHalted,"PROVENANCE_MISMATCH"):
             reconcile_verified_closed_position(
                 contract_size=D("1"),entry_fills=entry,
                 close_provenance=provenance(),close_fills=close,
