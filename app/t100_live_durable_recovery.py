@@ -429,7 +429,9 @@ def _validate_stop_amendments(
             previous = revisions[version - 1]
             current = revisions[version]
             if current.get("write_reason") == "BAR_OBSERVED":
-                # Favorable pre-arm high-watermark had NO exchange stop mutation.
+                # Favorable best-price revision had NO exchange stop mutation,
+                # including already-armed states where tick rounding leaves
+                # the previously verified native SL unchanged.
                 # Immutable revision validator checks same stop ID/price above.
                 continue
             if current.get("write_reason") != "STOP_VERIFIED":
