@@ -337,3 +337,76 @@ async def test_native_exit_mismatch_never_uses_generic_close_or_unbound_probe(
     assert p.close.calls==[]
     assert p.release.calls==[]
     assert p.cursor.calls==[]
+
+
+
+@pytest.mark.asyncio
+async def test_closing_funded_artifacts_is_separate_from_trade_permit(monkeypatch):
+    """A reconciliation-only SQL stage cannot be promoted to a live entry."""
+    from app.t100_live_leader_fencing import LeaderLease
+    from app.t100_live_readonly_probe import ReadOnlyMexcProbe
+    from app.t100_v40_at_entry_contract_specs import PostgresV40AtEntryContractSpecReader
+    from app.t100_v40_portfolio_close_financial_reader import V40NativeCloseFinancialReadPort
+    from app.t100_v40_native_close_mismatch_recovery import V40NativeCloseMismatchRecovery
+    from app.t100_v40_close_financial_artifact_staging import (
+        V40CloseOnlyFinancialArtifactStaging,V40CloseArtifactReceipt,
+    )
+    from app.t100_live_four_slot_snapshot_coordinator import FourSlotSnapshotResult
+    d=bundle()
+    probe=object.__new__(ReadOnlyMexcProbe)
+    d["venue"].probe=probe
+    native=object.__new__(V40NativeCloseMismatchRecovery)
+    native.ledger=d["ledger"]
+    native.venue=d["venue"]
+    native.probe=probe
+    finance=object.__new__(V40NativeCloseFinancialReadPort)
+    finance.probe=probe
+    archive=object.__new__(PostgresV40AtEntryContractSpecReader)
+    archive.pool=d["ledger"].pool
+    finance.entry_contracts=archive
+    staging=object.__new__(V40CloseOnlyFinancialArtifactStaging)
+    staging.ledger=d["ledger"]
+    staging.native=native
+    staging.finance=finance
+    d["financial_staging"]=staging
+    p=runtime.V40LivePortfolioPorts(**d)
+    result=V40CloseArtifactReceipt(
+        status="V40_CLOSE_FILLS_AND_FUNDING_DURABLY_STAGED_FINAL_ACCOUNTING_NOT_CERTIFIED",
+        position_id="999",
+        immutable_entry_fills_verified=True,
+        immutable_close_fills_verified=True,
+        immutable_funding_verified=True,
+        database_commit_may_have_occurred=True,
+    )
+    seen=[]
+    async def close_only(*,snapshot,lease):
+        seen.append((snapshot.status,lease.fencing_token))
+        return result
+    staging.stage_once=close_only
+    lease=LeaderLease("t100-live-executor","test-holder",2,45)
+    frame=FourSlotSnapshotResult("UNOWNED_OR_MISSING_CHECKPOINTS")
+    observed=await p.stage_verified_native_close_financial_artifacts(
+        snapshot=frame,lease=lease,
+    )
+    assert observed is result
+    assert observed.final_accounting_verified is False
+    assert observed.slot_released is False
+    assert observed.live_authorization is False
+    assert seen==[("UNOWNED_OR_MISSING_CHECKPOINTS",2)]
+    with pytest.raises(runtime.V40RuntimeAssemblyHalted,match="PORTFOLIO_PERMIT"):
+        await p.enter_one(permit=object())
+
+
+@pytest.mark.asyncio
+async def test_generic_or_unbound_portfolio_cannot_stage_funding():
+    from app.t100_live_leader_fencing import LeaderLease
+    from app.t100_live_four_slot_snapshot_coordinator import FourSlotSnapshotResult
+    p=build()
+    lease=LeaderLease("t100-live-executor","test-holder",2,45)
+    with pytest.raises(runtime.V40RuntimeAssemblyHalted,match="NOT_CONNECTED"):
+        await p.stage_verified_native_close_financial_artifacts(
+            snapshot=FourSlotSnapshotResult("UNOWNED_OR_MISSING_CHECKPOINTS"),
+            lease=lease,
+        )
+    assert not p.release.calls
+    assert not p.cursor.calls

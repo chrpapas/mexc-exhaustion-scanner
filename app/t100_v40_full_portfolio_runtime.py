@@ -48,6 +48,11 @@ from app.t100_v40_portfolio_stop_supervisor_port import (
 )
 from app.t100_v40_unreleased_portfolio_native_close import V40PortfolioCloseWitness
 from app.t100_v40_native_close_mismatch_recovery import V40NativeCloseMismatchEvidence
+from app.t100_live_four_slot_snapshot_coordinator import FourSlotSnapshotResult
+from app.t100_live_leader_fencing import LeaderLease
+from app.t100_v40_close_financial_artifact_staging import (
+    V40CloseOnlyFinancialArtifactStaging,V40CloseArtifactReceipt,
+)
 from app.t100_v40_native_close_release_handoff import (
     V40NativeCloseReleaseHandoffReport,
 )
@@ -115,6 +120,7 @@ class V40LivePortfolioPorts:
         cursor:V40UnchangedBarCommitPort|None,
         close:V40NativeCloseWitnessPort|None,
         release:V40NativeCloseReleasePort|None,
+        financial_staging:V40CloseOnlyFinancialArtifactStaging|None=None,
     )->None:
         # Do not accept an incomplete production lifecycle. A missing SQL
         # cursor commit is as consequential as a missing exchange stop POST;
@@ -146,6 +152,14 @@ class V40LivePortfolioPorts:
             or (not callable(getattr(cursor,"commit",None)))
             or (not callable(getattr(close,"observe",None)))
             or (not callable(getattr(release,"release",None)))
+            or (financial_staging is not None and (
+                type(financial_staging) is not V40CloseOnlyFinancialArtifactStaging
+                or financial_staging.ledger is not ledger
+                or financial_staging.native.ledger is not ledger
+                or financial_staging.native.venue is not venue
+                or financial_staging.finance.probe is not venue.probe
+                or financial_staging.finance.entry_contracts.pool is not ledger.pool
+            ))
         ):
             raise V40RuntimeAssemblyHalted(
                 "V40_FULL_FOUR_SLOT_RUNTIME_PORTS_MISSING_OR_DIFFERENT_ACCOUNT"
@@ -174,6 +188,7 @@ class V40LivePortfolioPorts:
         self.cursor=cursor
         self.close=close
         self.release=release
+        self.financial_staging=financial_staging
         self._action=asyncio.Lock()
 
     async def observe(self)->V40PortfolioCycleFrame|V40NativeCloseMismatchEvidence:
@@ -288,6 +303,31 @@ class V40LivePortfolioPorts:
         # Read-only native terminal proof can be obtained without permit,
         # but this method must not persist accounting or release a slot.
         return await self.close.observe(projection)
+
+    async def stage_verified_native_close_financial_artifacts(
+        self, *, snapshot:FourSlotSnapshotResult,lease:LeaderLease,
+    )->V40CloseArtifactReceipt:
+        """Separate, close-only fenced SQL custody; never an entry permit.
+
+        Preserves all prior GET/ledger mismatch guards. This is intentionally
+        not invoked by the read-only worker. No final P&L or slot release
+        can be inferred from its receipt.
+        """
+        if (
+            type(self.financial_staging) is not V40CloseOnlyFinancialArtifactStaging
+            or type(snapshot) is not FourSlotSnapshotResult
+            or snapshot.status!="UNOWNED_OR_MISSING_CHECKPOINTS"
+            or type(lease) is not LeaderLease
+        ):
+            raise V40RuntimeAssemblyHalted(
+                "V40_FULL_RUNTIME_CLOSE_ONLY_STAGE_NOT_CONNECTED"
+            )
+        if self._action.locked():
+            raise V40RuntimeAssemblyHalted("V40_FULL_RUNTIME_CONCURRENT_MUTATION")
+        async with self._action:
+            return await self.financial_staging.stage_once(
+                snapshot=snapshot,lease=lease,
+            )
 
     async def release_verified_native_close(
         self, projection:V40VerifiedExitProjection,
