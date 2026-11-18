@@ -1,0 +1,41 @@
+name: V40 four-slot exact native trailing SL POST (offline)
+
+on:
+  push:
+    branches:
+      - "feat/v40-four-slot-native-stop-execution-*"
+  pull_request:
+    paths:
+      - "app/t100_v40_portfolio_native_stop_transport.py"
+      - "tests/test_t100_v40_portfolio_native_stop_transport.py"
+      - ".github/workflows/v40-four-slot-native-stop-post.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  protected-four-slot-stop:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install
+        run: python -m pip install -e ".[dev]"
+      - name: Syntax
+        run: |
+          python -m compileall -q \
+            app/t100_v40_portfolio_native_stop_transport.py \
+            app/t100_v40_native_stop_amend_transport.py
+      - name: Four-slot native amendment, durable journal and full stop safety
+        run: |
+          python -m pytest -q \
+            tests/test_t100_v40_portfolio_native_stop_transport.py \
+            tests/test_t100_v40_native_stop_amend_transport.py \
+            tests/test_t100_live_stop_mutation_executor.py \
+            tests/test_t100_live_stop_amendment_coordinator.py \
+            tests/test_t100_v40_unreleased_native_stop_cycle.py \
+            tests/test_t100_v40_live_portfolio_supervisor.py \
+            tests/test_t100_v40_portfolio_order_transport.py \
+            tests/test_t100_v40_four_slot_release_policy.py
