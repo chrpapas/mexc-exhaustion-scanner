@@ -254,8 +254,8 @@ def _validate_revision_history(
                     stop_price != previous_stop
                     or stop_order_id != previous_stop_id
                     or best <= previous_best
-                    or best >= Decimal("14")
-                    or armed is not False or previous_armed is not False
+                    or armed is not previous_armed
+                    or (not previous_armed and best >= Decimal("14"))
                 ):
                     raise DurableRecoveryHalted(
                         "CHECKPOINT_REVISION_BAR_NO_STOP_IDENTITY_OR_BEST_DRIFT"
@@ -429,7 +429,9 @@ def _validate_stop_amendments(
             previous = revisions[version - 1]
             current = revisions[version]
             if current.get("write_reason") == "BAR_OBSERVED":
-                # Favorable pre-arm high-watermark had NO exchange stop mutation.
+                # Favorable best-price revision had NO exchange stop mutation,
+                # including already-armed states where tick rounding leaves
+                # the previously verified native SL unchanged.
                 # Immutable revision validator checks same stop ID/price above.
                 continue
             if current.get("write_reason") != "STOP_VERIFIED":

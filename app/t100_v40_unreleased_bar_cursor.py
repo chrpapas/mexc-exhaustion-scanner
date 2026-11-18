@@ -274,10 +274,14 @@ class V40DurableBarCursor:
                         and persisted_checkpoint.checkpoint_version==cursor.checkpoint_version
                         and persisted_checkpoint.best_profit_pct==cursor.best_profit_pct
                         or
-                        # Improved pre-arm high-watermark has a real BAR_OBSERVED
-                        # immutable revision, never just a cursor update.
+                        # Any improved high-watermark needs a real BAR_OBSERVED
+                        # immutable revision. Already-armed best can rise
+                        # without a native stop change at coarse exchange ticks.
                         candidate.best_profit_pct>cursor.best_profit_pct
-                        and candidate.best_profit_pct<D("14")
+                        and (
+                            cursor.trail_armed is True
+                            or candidate.best_profit_pct<D("14")
+                        )
                         and persisted_checkpoint.checkpoint_version==cursor.checkpoint_version+1
                         and persisted_checkpoint.best_profit_pct==candidate.best_profit_pct
                     )

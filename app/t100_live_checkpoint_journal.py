@@ -264,8 +264,10 @@ def build_verified_bar_checkpoint(
     Requires an independently supplied current native MARKET SL row,
     exact same stop identity/price and complete original position quantity.
     The author of the signed-GET frame must separately prove all-account
-    inventory completeness and fencing at the write boundary. A >=14% move
-    requires the separately journaled trail amendment instead.
+    inventory completeness and fencing at the write boundary. An unarmed
+    short cannot cross 14% without a real SL amendment. An already armed
+    short can record an improved best when the existing stop remains as
+    tight as frozen-policy tick rounding requires.
     """
     from app.t100_live_native_stop_execution_audit import (
         assess_native_short_market_stop_row,
@@ -274,8 +276,8 @@ def build_verified_bar_checkpoint(
         raise CheckpointJournalHalted("BAR_OBSERVED_PREVIOUS_NOT_OPEN")
     best=_nonnegative(best_profit_pct,"BAR_BEST_PROFIT_PCT")
     if (
-        previous.armed is not False
-        or best<=previous.best_profit_pct or best>=Decimal("14")
+        best<=previous.best_profit_pct
+        or (not previous.armed and best>=Decimal("14"))
         or type(stop) is not dict
         or str(stop.get("id") or "")!=previous.stop_order_id
         or _positive(stop.get("stopLossPrice"),"BAR_NATIVE_STOP_PRICE")
@@ -428,13 +430,13 @@ def validate_checkpoint_transition(
     elif reason == BAR_OBSERVED:
         expected = ("OPEN", "OPEN", BAR_OBSERVED)
         if (
-            previous.armed is not False or current.armed is not False
-            or current.best_profit_pct >= Decimal("14")
+            current.armed is not previous.armed
+            or (not previous.armed and current.best_profit_pct >= Decimal("14"))
             or current.best_profit_pct <= previous.best_profit_pct
             or current.stop_price != previous.stop_price
             or current.stop_order_id != previous.stop_order_id
         ):
-            raise CheckpointJournalHalted("BAR_OBSERVED_MUST_ONLY_ADVANCE_PREARM_BEST")
+            raise CheckpointJournalHalted("BAR_OBSERVED_MUST_ONLY_ADVANCE_SAME_ARMED_BEST")
     elif reason == REVIEW_LATCHED:
         if current.stop_order_id != previous.stop_order_id:
             raise CheckpointJournalHalted(
