@@ -47,6 +47,7 @@ from app.t100_v40_portfolio_stop_supervisor_port import (
     V40FourSlotStopLifecyclePort,
 )
 from app.t100_v40_unreleased_portfolio_native_close import V40PortfolioCloseWitness
+from app.t100_v40_native_close_mismatch_recovery import V40NativeCloseMismatchEvidence
 from app.t100_v40_native_close_release_handoff import (
     V40NativeCloseReleaseHandoffReport,
 )
@@ -175,7 +176,7 @@ class V40LivePortfolioPorts:
         self.release=release
         self._action=asyncio.Lock()
 
-    async def observe(self)->V40PortfolioCycleFrame:
+    async def observe(self)->V40PortfolioCycleFrame|V40NativeCloseMismatchEvidence:
         try:
             snap=await self.snapshots.inspect()
             now=datetime.now(timezone.utc)
@@ -231,9 +232,7 @@ class V40LivePortfolioPorts:
                     raise V40RuntimeAssemblyHalted(
                         "V40_FULL_RUNTIME_NATIVE_CLOSE_MISMATCH_UNVERIFIED"
                     )
-                raise V40RuntimeAssemblyHalted(
-                    "V40_FULL_RUNTIME_NATIVE_EXIT_POSITIVE_SETTLEMENT_REQUIRED"
-                )
+                return observed
             raise V40RuntimeAssemblyHalted(
                 "V40_FULL_RUNTIME_UNVERIFIED_ACCOUNT_INVENTORY"
             )
