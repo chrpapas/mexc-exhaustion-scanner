@@ -199,3 +199,40 @@ async def test_invalid_or_ambiguous_multiplier_never_certifies_exit_accounting(m
         m.V40CloseFinancialReadHalted,match="CONTRACT_IDENTITY_UNVERIFIED",
     ):
         await port.observe(previous=previous,witness=witness)
+
+
+
+def test_fixture_strict_order_fill_and_funding_are_independently_valid():
+    from app.t100_live_funding_ledger import (
+        build_verified_closed_position_funding_set,
+    )
+    from app.t100_live_position_accounting import (
+        reconcile_verified_closed_position,
+    )
+    a,da=order_and_deals("100",3,100,2000)
+    b,db=order_and_deals("200",2,90,3000)
+    entry=build_verified_order_fill_set(order_id="100",order=a,fills=da)
+    close=build_verified_order_fill_set(order_id="200",order=b,fills=db)
+    assert entry.side=="OPEN_SHORT" and close.side=="CLOSE_SHORT"
+    funds=build_verified_closed_position_funding_set(
+        position_id="10",
+        first=pages([funding_row(
+            1,settleTime=2500,
+            positionValue=100,funding=0.1,rate=0.001,
+        )]),
+        second=pages([funding_row(
+            1,settleTime=2500,
+            positionValue=100,funding=0.1,rate=0.001,
+        )]),
+    )
+    assert funds.economics_verified
+    provenance=m.VerifiedStopCloseProvenance(
+        stop_order_id="99",position_id="10",symbol="SIREN_USDT",
+        close_order_id="200",contracts=D("2"),
+        trigger_side="VENUE_LABEL_CONFLICT",
+    )
+    accounting=reconcile_verified_closed_position(
+        contract_size=D("1"),entry_fills=entry,
+        close_provenance=provenance,close_fills=close,funding=funds,
+    )
+    assert accounting.reconciliation.status=="CLOSED_RECONCILED"
