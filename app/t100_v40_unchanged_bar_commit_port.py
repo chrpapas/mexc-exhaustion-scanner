@@ -37,7 +37,7 @@ from app.t100_live_four_slot_ledger_reader import (
     PostgresFourSlotLedgerReader,
 )
 from app.t100_live_four_slot_snapshot_coordinator import (
-    LedgerSnapshot,_ledger_digest,_venue_digest,
+    LedgerSnapshot,_hash_rows,_venue_digest,
 )
 from app.t100_live_leader_fencing import LeaderLease
 from app.t100_live_role_preflight import TARGET_ROLE
@@ -76,7 +76,17 @@ async def _read_locked_ledger(conn:Any)->LedgerSnapshot:
                 "V40_CURSOR_LOCKED_LEDGER_RESPONSE_INVALID"
             )
         tables.append([dict(row) for row in rows])
-    return LedgerSnapshot(*tables,readonly_repeatable_read=True)
+    return LedgerSnapshot(*tables,readonly_repeatable_read=False)
+
+
+def _locked_digest(snap:LedgerSnapshot)->str:
+    """Compare same canonical rows without falsely claiming readonly TX."""
+    return _hash_rows({
+        "checkpoints":snap.checkpoints,
+        "revisions":snap.revisions,
+        "intents":snap.intents,
+        "amendments":snap.stop_amendments,
+    })
 
 
 class PostgresV40UnchangedBarCommit:
@@ -233,9 +243,8 @@ class PostgresV40UnchangedBarCommit:
                         raise V40UnchangedCursorCommitHalted(
                             "V40_CURSOR_SIGNED_GET_BOOKEND_TOO_OLD"
                         )
-                    if _ledger_digest(await _read_locked_ledger(conn))!=(
-                        frame.snapshot.ledger_hash
-                    ):
+                    locked_ledger=await _read_locked_ledger(conn)
+                    if _locked_digest(locked_ledger)!=frame.snapshot.ledger_hash:
                         raise V40UnchangedCursorCommitHalted(
                             "V40_CURSOR_LOCKED_LEDGER_CHANGED"
                         )
@@ -273,7 +282,7 @@ class PostgresV40UnchangedBarCommit:
                     cursor_writer=V40DurableBarCursor(conn)
                     checkpoint_rows={
                         str(x["position_id"]):x
-                        for x in (await _read_locked_ledger(conn)).checkpoints
+                        for x in locked_ledger.checkpoints
                     }
                     by_stop={
                         str(s["positionId"]):s for s in stops
