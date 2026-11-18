@@ -467,10 +467,7 @@ class V40OneShotCoordinator:
             ):
                 raise V40CoordinatorHalted("V40_MONITORED_SIGNAL_IDENTITY_INVALID")
             if (
-                (is_four_slot_portfolio and len(tape.candidates)!=1)
-                or (getattr(permit,"scope",None)==V40_CANARY_SCOPE
-                    and len(tape.candidates)!=1)
-                or not tape.candidates
+                len(tape.candidates)!=1
                 or tape.candidates[0].signal_id != monitored_signal_id
                 or tape.candidates[0].symbol != monitored_symbol
                 or tape.candidates[0].tier != monitored_tier
