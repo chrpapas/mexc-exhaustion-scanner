@@ -18,6 +18,7 @@ import asyncio
 from pathlib import Path
 import os
 import subprocess
+from urllib.parse import urlparse
 from typing import Any, Mapping
 
 from app.t100_live_db_inspect import EXPECTED_DATABASE
@@ -169,12 +170,27 @@ async def run_once(*,apply:bool,backup_file:Path|None,env:Mapping[str,str])->str
             raise V40OwnerMigrationHalted(
                 "V40_MIGRATION_RESTORABLE_DB_BACKUP_NOT_VERIFIED"
             ) from None
+
+    # Only a disposable GitHub CI service with an exact fixed localhost
+    # identity can skip TLS. This cannot be used for Render/production URLs.
+    uri=urlparse(dsn)
+    disposable_ci=all((
+        env.get("CI")=="true",
+        env.get("T100_V40_SCHEMA_MIGRATION_CI_ONLY")=="yes",
+        uri.hostname=="127.0.0.1",
+        uri.port==5432,
+        uri.username=="postgres",
+        uri.password=="t100-ci-only-local-postgres",
+        uri.path=="/mexc_exhaustion",
+    ))
     # Import only after all offline guards, never pass DSN to logger.
     import asyncpg
     conn=None
     try:
-        conn=await asyncpg.connect(dsn=dsn,ssl="require",timeout=12,
-                                   command_timeout=20)
+        conn=await asyncpg.connect(
+            dsn=dsn,ssl="disable" if disposable_ci else "require",
+            timeout=12,command_timeout=20,
+        )
         # Read-only inspection never invokes a DDL statement.
         if not apply:
             async with conn.transaction(readonly=True):

@@ -1,0 +1,56 @@
+name: V40 guarded owner migration e2e on ephemeral PostgreSQL
+
+on:
+  push:
+    branches:
+      - "test/v40-owner-migration-postgres-e2e-*"
+  pull_request:
+    paths:
+      - "app/t100_v40_schema_owner_migration_cli.py"
+      - "tests/test_t100_v40_schema_owner_migration_postgres_e2e.py"
+      - ".github/workflows/v40-owner-migration-postgres-e2e.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  isolated-schema-owner-apply:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: mexc_exhaustion
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: t100-ci-only-local-postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d mexc_exhaustion"
+          --health-interval 3s
+          --health-timeout 3s
+          --health-retries 12
+    env:
+      CI: 'true'
+      T100_V40_SCHEMA_MIGRATION_CI_ONLY: 'yes'
+      T100_V40_SCHEMA_OWNER_DSN: postgresql://postgres:t100-ci-only-local-postgres@127.0.0.1:5432/mexc_exhaustion
+      T100_EXECUTION_MODE: paper
+      T100_LIVE_ORDER_API_ENABLED: 'false'
+      T100_LIVE_KILL_SWITCH: 'true'
+      EXECUTION_ENABLED: 'false'
+      TRADING_MODE: paper
+      PGHOST: 127.0.0.1
+      PGPORT: '5432'
+      PGDATABASE: mexc_exhaustion
+      PGUSER: postgres
+      PGPASSWORD: t100-ci-only-local-postgres
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install -e ".[dev]"
+      - name: Validate actual one-transaction migrations and exact restore backup
+        run: |
+          python -m pytest -q tests/test_t100_v40_schema_owner_migration_cli.py tests/test_t100_v40_schema_owner_migration_postgres_e2e.py
