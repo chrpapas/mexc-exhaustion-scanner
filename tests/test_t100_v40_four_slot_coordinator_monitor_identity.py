@@ -99,14 +99,35 @@ async def test_portfolio_scope_wrong_signal_never_reads_or_claims():
 
 
 @pytest.mark.asyncio
-async def test_portfolio_scope_same_bar_competition_never_claims(monkeypatch):
+async def test_portfolio_scope_same_bar_frozen_first_can_reach_fenced_acquire(monkeypatch):
     tape=source(True)
     row=tape.candidates[0]
-    second=replace(row,signal_id=row.signal_id+1)
+    second=replace(row,signal_id=row.signal_id+1,symbol="SECOND_USDT")
     c=runner(replace(tape,candidates=(row,second)))
     p=permit(tape)
     args=options(p)
     args["monitored_tier"]=row.tier
+    monkeypatch.setattr(
+        "app.t100_live_v40_entry_coordinator.assess_strategy_parity_report",
+        lambda _:{"strategy_parity_verified":True},
+    )
+    with patch(
+        "app.t100_live_v40_entry_coordinator.require_certified_transport_permit",
+        lambda x:x,
+    ):
+        with pytest.raises(RuntimeError,match="STOP_BEFORE_LEASE_TEST"):
+            await c.run_one(**args)
+    assert c.source.calls==1 and c.leaders.calls==1
+
+
+@pytest.mark.asyncio
+async def test_portfolio_scope_reordered_same_bar_never_acquires_lease(monkeypatch):
+    tape=source(True)
+    first=tape.candidates[0]
+    later=replace(first,signal_id=first.signal_id+1,symbol="SECOND_USDT")
+    c=runner(replace(tape,candidates=(later,first)))
+    args=options(permit(tape))
+    args["monitored_tier"]=first.tier
     monkeypatch.setattr(
         "app.t100_live_v40_entry_coordinator.assess_strategy_parity_report",
         lambda _:{"strategy_parity_verified":True},

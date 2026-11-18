@@ -467,7 +467,14 @@ class V40OneShotCoordinator:
             ):
                 raise V40CoordinatorHalted("V40_MONITORED_SIGNAL_IDENTITY_INVALID")
             if (
-                len(tape.candidates)!=1
+                not tape.candidates
+                or any(type(x) is not V40SourceCandidate for x in tape.candidates)
+                or len({x.signal_id for x in tape.candidates}) != len(tape.candidates)
+                or len({x.symbol for x in tape.candidates}) != len(tape.candidates)
+                or tuple(sorted(tape.candidates,
+                                key=lambda x:(x.admission_open_ts,x.signal_id)))
+                   != tape.candidates
+                or (not is_four_slot_portfolio and len(tape.candidates) != 1)
                 or tape.candidates[0].signal_id != monitored_signal_id
                 or tape.candidates[0].symbol != monitored_symbol
                 or tape.candidates[0].tier != monitored_tier
@@ -501,7 +508,14 @@ class V40OneShotCoordinator:
                 raise V40CoordinatorHalted(
                     "V40_INITIAL_PILOT_REQUIRES_FLAT_ACCOUNT_NO_LEGACY_EXPOSURE"
                 )
-            for signal in tape.candidates:
+            # The portfolio supervisor selected the first frozen-priority
+            # signal. With a pinned permit, NEVER fall through to a later
+            # signal when the first fails admission or depth/risk evidence.
+            # Other same-bar signals need their own fresh fenced cycles.
+            eligible_for_this_attempt=(
+                tape.candidates[:1] if monitored else tape.candidates
+            )
+            for signal in eligible_for_this_attempt:
                 risk, terms=await self.witness.inspect(signal)
                 # Tiny real-money pilot is an explicit capped-size
                 # execution variation, not a replacement for the frozen
@@ -730,8 +744,20 @@ class V40OneShotCoordinator:
                         and final_tape.read_only_repeatable_read is True
                         and final_tape.entry_allowed is False
                         and final_tape.live_authorization is False
-                        and len(final_tape.candidates)==1
-                        and type(final_tape.candidates[0]) is V40SourceCandidate
+                        and type(final_tape.candidates) is tuple
+                        and len(final_tape.candidates)>=1
+                        and (is_four_slot_portfolio
+                             or len(final_tape.candidates)==1)
+                        and all(type(x) is V40SourceCandidate
+                                for x in final_tape.candidates)
+                        and len({x.signal_id for x in final_tape.candidates})
+                            == len(final_tape.candidates)
+                        and len({x.symbol for x in final_tape.candidates})
+                            == len(final_tape.candidates)
+                        and tuple(sorted(final_tape.candidates,
+                                         key=lambda x:(x.admission_open_ts,
+                                                       x.signal_id)))
+                            == final_tape.candidates
                         and (
                             final_tape.candidates[0].signal_id,
                             final_tape.candidates[0].symbol,
@@ -739,6 +765,13 @@ class V40OneShotCoordinator:
                             final_tape.candidates[0].admission_open_ts,
                             final_tape.candidates[0].entry_reference_price,
                         )==identity
+                        # The source timestamp/age may advance, but the
+                        # entire chosen candidate (including all 49 prior
+                        # candles and VOL30 features) must remain unchanged.
+                        and dataclass_replace(
+                            final_tape.candidates[0],
+                            observed_age_seconds=selected.signal.observed_age_seconds,
+                        ) == selected.signal
                         and 0<=final_tape.candidates[0].observed_age_seconds<=900
                     )
                 except Exception:
