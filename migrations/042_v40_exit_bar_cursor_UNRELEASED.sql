@@ -4,6 +4,8 @@
 -- source of truth for actual MEXC stop mutations and venue fills.
 
 BEGIN;
+SET LOCAL lock_timeout='5s';
+SET LOCAL statement_timeout='15s';
 CREATE TABLE IF NOT EXISTS public.t100_v40_exit_bar_cursor (
   position_id text PRIMARY KEY CHECK (position_id ~ '^[1-9][0-9]*$'),
   entry_external_oid text NOT NULL,
@@ -40,6 +42,28 @@ CREATE TABLE IF NOT EXISTS public.t100_v40_exit_bar_cursor (
   CONSTRAINT v40_exit_best_armed CHECK (trail_armed = (best_profit_pct >= 14))
 );
 REVOKE ALL ON public.t100_v40_exit_bar_cursor FROM PUBLIC;
+-- The fenced four-slot cursor writer uses this limited state machine.
+-- Immutable enrollment identity (position_id, entry_external_oid,
+-- signed_fill_at_ms) cannot be changed by the runtime.
+GRANT SELECT, INSERT ON public.t100_v40_exit_bar_cursor
+  TO t100_live_executor_runtime;
+GRANT UPDATE (
+  last_committed_open_ts,pending_open_ts,pending_status,
+  pending_stop_price,pending_best_profit_pct,pending_trail_armed,
+  checkpoint_version,stop_order_id,confirmed_stop_price,
+  best_profit_pct,trail_armed,cursor_revision,updated_at
+) ON public.t100_v40_exit_bar_cursor TO t100_live_executor_runtime;
+
+CREATE FUNCTION public.t100_v40_reject_exit_cursor_delete()
+RETURNS trigger LANGUAGE plpgsql AS $cursor_no_delete$
+BEGIN
+    RAISE EXCEPTION 'V40_EXIT_CURSOR_DELETE_FORBIDDEN' USING ERRCODE='P0001';
+END;
+$cursor_no_delete$;
+CREATE TRIGGER t100_v40_exit_cursor_no_delete
+BEFORE DELETE ON public.t100_v40_exit_bar_cursor
+FOR EACH ROW EXECUTE FUNCTION public.t100_v40_reject_exit_cursor_delete();
+
 COMMENT ON TABLE public.t100_v40_exit_bar_cursor IS
-  'UNRELEASED V40 30m cursor; no production grants or migration yet';
+  'UNRELEASED V40 30m cursor; migration requires owner review, no live permit';
 COMMIT;
