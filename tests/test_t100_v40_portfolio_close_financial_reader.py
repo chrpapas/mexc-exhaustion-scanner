@@ -24,8 +24,11 @@ def order_and_deals(id,side,price,ts):
         orderId=id,positionId="10",symbol="SIREN_USDT",
         side=side,dealVol=2,dealAvgPrice=price,
     )
+    # MEXC deal IDs are globally unique across entry and close orders,
+    # not merely unique within each order's detail endpoint.
     deal=deal_row(
-        1,2,price,orderId=id,side=side,timestamp=ts,fee=0.1,
+        1 if side==3 else 2,2,price,
+        orderId=id,side=side,timestamp=ts,fee=0.1,
     )
     return order,[deal]
 
@@ -157,7 +160,9 @@ async def test_signed_close_order_drift_halts_before_funding(monkeypatch):
     async def altered(order_id):
         items=await original(order_id)
         if order_id=="200":
-            return [{**items[0],"price":91}]
+            # Keep the signed close order's weighted fill price and volume
+            # valid; a changed fee must instead fail the independent bookend.
+            return [{**items[0],"fee":0.2}]
         return items
     port.probe.raw_order_deal_details=altered
     with pytest.raises(
