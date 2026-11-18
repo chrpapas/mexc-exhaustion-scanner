@@ -80,7 +80,7 @@ class Public:
             positionOpenType=3,futureType=1,settleCoin="USDT",
             stopOnlyFair=False,maxLeverage=20,
             countryConfigContractMaxLeverage=0,
-            volUnit="0.1",priceUnit="0.1",
+            volUnit="0.1",priceUnit="0.1",contractSize="1",
             minVol="0.1",maxVol="1000",
         )
     async def get(self,path,params):
@@ -377,3 +377,19 @@ async def test_ambiguous_ack_is_unknown_and_no_retry(monkeypatch):
     with pytest.raises(m.V40PortfolioPostHalted,match="ALREADY_POSTED_RECONCILE_NO_RETRY"):
         await tr.submit_short_with_stop(intent(),permit=permit())
     assert len(client.posts)==1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("change",[
+    {"contractSize":"0.01"},{"contractSize":"1.1"},
+    {"priceUnit":"0.6"},
+])
+async def test_actual_contract_size_and_stop_tick_at_POST_must_match_frozen_lot(
+    monkeypatch,change,
+):
+    client,public,g,tr,_=await setup(0)
+    public.contract.update(change)
+    monkeypatch.setattr(m,"require_certified_transport_permit",lambda p:p)
+    with pytest.raises(m.V40PortfolioPostHalted):
+        await tr.submit_short_with_stop(intent(),permit=permit())
+    assert client.posts==[]
