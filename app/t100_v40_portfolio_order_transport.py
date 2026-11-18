@@ -296,6 +296,19 @@ class V40FourSlotPostGuard:
             vol=_positive(intent.volume_contracts)
             step=_positive(contract.get("volUnit"))
             tick=_positive(contract.get("priceUnit"))
+            size=_positive(contract.get("contractSize"))
+            exact_notional=intent.reference_price*vol*size
+            exact_sl75=(
+                (intent.reference_price*D("1.75")/tick)
+                .to_integral_value(rounding="ROUND_CEILING")*tick
+            )
+            if (
+                exact_notional!=intent.notional_usdt
+                or intent.stop_price!=exact_sl75
+            ):
+                raise V40PortfolioPostHalted(
+                    "V40_FOUR_SLOT_CONTRACT_NOTIONAL_OR_SL75_DRIFT_NO_POST"
+                )
             if (
                 vol<_positive(contract.get("minVol"))
                 or vol>_positive(contract.get("maxVol"))
