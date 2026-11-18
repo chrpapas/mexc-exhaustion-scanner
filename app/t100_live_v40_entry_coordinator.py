@@ -624,6 +624,7 @@ class V40OneShotCoordinator:
                 contract_size=selected.terms.contract_size,
                 volume_step=selected.terms.volume_step,
                 price_tick=selected.terms.price_tick,
+                strict_entry_contract_archive=is_four_slot_portfolio,
             )
             if (
                 type(stage) is not DurableAttemptStage

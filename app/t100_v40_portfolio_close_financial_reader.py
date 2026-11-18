@@ -25,6 +25,9 @@ from decimal import Decimal as D,InvalidOperation
 from typing import Any
 
 from app.t100_live_durable_recovery import PositionCheckpoint
+from app.t100_v40_at_entry_contract_specs import (
+    PostgresV40AtEntryContractSpecReader,
+)
 from app.t100_live_fill_ledger import (
     VerifiedOrderFillSet,build_verified_order_fill_set,
 )
@@ -54,6 +57,7 @@ class V40NativeCloseFinancialEvidence:
     funding:VerifiedPositionFundingSet
     close_provenance:VerifiedStopCloseProvenance
     current_contract_size:D
+    archived_entry_contract_size:D|None=None
     at_entry_contract_size_independently_verified:bool=False
     historical_contract_multiplier_certified:bool=False
     native_stop_trigger_label_verified:bool=False
@@ -138,16 +142,22 @@ def positive_linked_native_close(
 
 
 class V40NativeCloseFinancialReadPort:
-    def __init__(self,*,probe:ReadOnlyMexcProbe,public_get:Any)->None:
+    def __init__(
+        self,*,probe:ReadOnlyMexcProbe,public_get:Any,
+        entry_contracts:PostgresV40AtEntryContractSpecReader|None=None,
+    )->None:
         if (
             type(probe) is not ReadOnlyMexcProbe
             or not callable(getattr(public_get,"get",None))
+            or (entry_contracts is not None and
+                type(entry_contracts) is not PostgresV40AtEntryContractSpecReader)
         ):
             raise V40CloseFinancialReadHalted(
                 "V40_CLOSE_FINANCIAL_GET_ONLY_PROBES_REQUIRED"
             )
         self.probe=probe
         self.public_get=public_get
+        self.entry_contracts=entry_contracts
 
     async def _current_contract_size(self,symbol:str)->D:
         try:
@@ -190,6 +200,14 @@ class V40NativeCloseFinancialReadPort:
             witness=witness,position=previous,
         )
         try:
+            # An archival DB read is not inferred from the current contract
+            # API. Without the restricted at-entry reader this procedure
+            # remains historical-multiplier UNCERTIFIED and must not write
+            # final accounting or free a portfolio slot.
+            archived=(
+                await self.entry_contracts.read(previous)
+                if self.entry_contracts is not None else None
+            )
             order=await self.probe.raw_order_by_id(previous.exchange_order_id)
             entry_deals=await self.probe.raw_order_deal_details(
                 previous.exchange_order_id
@@ -255,8 +273,24 @@ class V40NativeCloseFinancialReadPort:
             current_contract_size=await self._current_contract_size(
                 previous.symbol,
             )
+            if archived is not None:
+                first_exchange_entry_ms=min(x.timestamp_ms for x in entry.fills)
+                if (
+                    archived.read_twice_verified is not True
+                    or archived.live_authorization is not False
+                    or archived.external_oid!=previous.external_oid
+                    or archived.symbol!=previous.symbol
+                    or archived.volume_contracts!=previous.contracts
+                    or archived.contract_size!=current_contract_size
+                    or int(archived.captured_at.timestamp()*1000)>
+                       first_exchange_entry_ms
+                ):
+                    raise V40CloseFinancialReadHalted(
+                        "V40_CLOSE_FINANCIAL_ENTRY_MULTIPLIER_OR_TIME_DRIFT"
+                    )
             accounting=reconcile_verified_closed_position(
-                contract_size=current_contract_size,
+                contract_size=(archived.contract_size if archived is not None
+                               else current_contract_size),
                 entry_fills=entry,close_provenance=native,
                 close_fills=close,funding=funding,
             )
@@ -277,10 +311,21 @@ class V40NativeCloseFinancialReadPort:
                 "V40_CLOSE_FINANCIAL_SIGNED_FILLS_FUNDING_OR_SIZE_FAILED"
             ) from None
         return V40NativeCloseFinancialEvidence(
-            status="V40_NATIVE_CLOSE_ECONOMICS_RECONCILED_CURRENT_MULTIPLIER_UNCERTIFIED",
+            status=(
+                "V40_NATIVE_CLOSE_ECONOMICS_ARCHIVED_ENTRY_MULTIPLIER_MATCHED_"
+                "HISTORICAL_CONTINUITY_UNCERTIFIED"
+                if archived is not None else
+                "V40_NATIVE_CLOSE_ECONOMICS_RECONCILED_CURRENT_MULTIPLIER_UNCERTIFIED"
+            ),
             accounting=accounting,entry_fills=entry,close_fills=close,
             funding=funding,close_provenance=native,
             current_contract_size=current_contract_size,
+            archived_entry_contract_size=(
+                archived.contract_size if archived is not None else None
+            ),
+            at_entry_contract_size_independently_verified=(
+                archived is not None
+            ),
             native_stop_trigger_label_verified=(
                 native.trigger_side=="STOP_LOSS"
             ),

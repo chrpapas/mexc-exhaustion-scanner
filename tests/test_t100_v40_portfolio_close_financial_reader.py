@@ -4,6 +4,7 @@ Entirely offline fake HTTP transport. Upstream verified stop/close and strict
 order-deal/paginated-funding builders are exercised; nothing writes SQL.
 """
 from dataclasses import replace
+from datetime import datetime,timezone
 from decimal import Decimal as D
 from types import SimpleNamespace
 
@@ -241,3 +242,71 @@ def test_fixture_strict_order_fill_and_funding_are_independently_valid():
         close_provenance=provenance,close_fills=close,funding=funds,
     )
     assert accounting.reconciliation.status=="CLOSED_RECONCILED"
+
+
+def archived_entry(previous,*,contract_size="1",captured_ms=1000):
+    from app.t100_v40_at_entry_contract_specs import (
+        V40ArchivedEntryContractSpec,
+    )
+    return V40ArchivedEntryContractSpec(
+        signal_id=42,external_oid=previous.external_oid,
+        symbol=previous.symbol,contract_size=D(contract_size),
+        volume_step=D("1"),price_tick=D("1"),
+        reference_price=D("100"),notional_usdt=D("200"),
+        volume_contracts=previous.contracts,initial_stop_price=D("175"),
+        ledger_sha256="a"*64,inventory_sha256="b"*64,
+        captured_at=datetime.fromtimestamp(captured_ms/1000,timezone.utc),
+        read_twice_verified=True,
+    )
+
+
+@pytest.mark.asyncio
+async def test_real_readonly_archive_matches_live_multiplier_before_close_economics(monkeypatch):
+    from app.t100_v40_at_entry_contract_specs import (
+        PostgresV40AtEntryContractSpecReader,
+    )
+    previous,witness,port,reads,funding=environment(monkeypatch)
+    reader=object.__new__(PostgresV40AtEntryContractSpecReader)
+    async def read(checkpoint):
+        assert checkpoint is previous
+        return archived_entry(previous)
+    reader.read=read
+    checked=m.V40NativeCloseFinancialReadPort(
+        probe=port.probe,public_get=port.public_get,
+        entry_contracts=reader,
+    )
+    result=await checked.observe(previous=previous,witness=witness)
+    assert result.at_entry_contract_size_independently_verified is True
+    assert result.archived_entry_contract_size==D("1")
+    assert result.current_contract_size==D("1")
+    assert not result.historical_contract_multiplier_certified
+    assert "ARCHIVED_ENTRY_MULTIPLIER_MATCHED" in result.status
+    assert result.exchange_posts==result.database_writes==0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("contract_size,captured_ms",[
+    ("2",1000),("1",4000),
+])
+async def test_multiplier_or_time_drift_blocks_close_economics(
+    monkeypatch,contract_size,captured_ms,
+):
+    from app.t100_v40_at_entry_contract_specs import (
+        PostgresV40AtEntryContractSpecReader,
+    )
+    previous,witness,port,_,_=environment(monkeypatch)
+    reader=object.__new__(PostgresV40AtEntryContractSpecReader)
+    async def read(checkpoint):
+        return archived_entry(
+            previous,contract_size=contract_size,captured_ms=captured_ms,
+        )
+    reader.read=read
+    checked=m.V40NativeCloseFinancialReadPort(
+        probe=port.probe,public_get=port.public_get,
+        entry_contracts=reader,
+    )
+    with pytest.raises(
+        m.V40CloseFinancialReadHalted,
+        match="ENTRY_MULTIPLIER_OR_TIME_DRIFT",
+    ):
+        await checked.observe(previous=previous,witness=witness)

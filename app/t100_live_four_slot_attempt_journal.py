@@ -49,6 +49,15 @@ SELECT signal_id, symbol, external_oid, modeled_notional_usdt,
 FROM public.t100_live_v40_slot_reservations
 WHERE signal_id=$1 FOR UPDATE
 """
+ENTRY_SPEC_INSERT_SQL = """
+INSERT INTO public.t100_live_v40_entry_contract_specs
+(signal_id,external_oid,symbol,contract_size,volume_step,price_tick,
+ reference_price,notional_usdt,volume_contracts,stop_price,
+ ledger_sha256,inventory_sha256)
+VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+ON CONFLICT DO NOTHING
+RETURNING external_oid
+"""
 PREPARE_INTENT_SQL = """
 INSERT INTO public.t100_live_order_intents
 (signal_id,symbol,external_oid,reference_price,notional_usdt,
@@ -176,9 +185,12 @@ class PostgresFourSlotAttemptJournal:
         contract_size: Decimal,
         volume_step: Decimal,
         price_tick: Decimal,
+        strict_entry_contract_archive: bool = False,
         shared_pre_positions: list[dict[str, Any]] | None = None,
         shared_pre_stops: list[dict[str, Any]] | None = None,
     ) -> DurableAttemptStage:
+        if type(strict_entry_contract_archive) is not bool:
+            raise FourSlotAttemptHalted("FOUR_SLOT_ENTRY_SPEC_ARCHIVE_FLAG_INVALID")
         shared = (
             shared_pre_positions is not None or shared_pre_stops is not None
         )
@@ -311,6 +323,24 @@ class PostgresFourSlotAttemptJournal:
                         if await conn.fetchval(sql) != 0:
                             raise FourSlotAttemptHalted("OTHER_MUTATION_UNRESOLVED")
 
+                    # Exact at-entry contract terms are durably archived in
+                    # this SAME transaction as the irreversible SUBMITTING
+                    # claim. A missing/unmigrated table aborts the transaction
+                    # before any order can be sent. The legacy/canary caller
+                    # remains unchanged; portfolio mode always requires it.
+                    if strict_entry_contract_archive:
+                        archived = await conn.fetchval(
+                            ENTRY_SPEC_INSERT_SQL,
+                            intent.signal_id,intent.external_oid,intent.symbol,
+                            contract_size,volume_step,price_tick,
+                            intent.reference_price,intent.notional_usdt,
+                            intent.volume_contracts,intent.stop_price,
+                            witness.ledger_hash,witness.critical_inventory_hash,
+                        )
+                        if archived != intent.external_oid:
+                            raise FourSlotAttemptHalted(
+                                "FOUR_SLOT_ENTRY_SPEC_ARCHIVE_NOT_IMMUTABLY_STAGED"
+                            )
                     inserted = await conn.fetchval(
                         PREPARE_INTENT_SQL, intent.signal_id, intent.symbol,
                         intent.external_oid, intent.reference_price,
