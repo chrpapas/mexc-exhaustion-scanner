@@ -27,6 +27,8 @@ class DB:
             scope:dict(
                 total=n,observer_critical=n,other_critical=0,pending=0,
                 nov15_incident_in_window=(1 if scope==m.RECOVERY_SCOPE_004 else 0),
+                nov16_incident_in_window=(1 if scope==m.RECOVERY_SCOPE_004 else 0),
+                nov17_incident_in_window=(1 if scope==m.RECOVERY_SCOPE_004 else 0),
             )
             for scope,n in m._PREDECESSORS
         }
@@ -78,7 +80,7 @@ async def call(db,readings=None,options=None):
     return result,observed,waits
 
 
-def test_exact_five_predecessor_scopes_one_004_event_and_double_get():
+def test_exact_five_predecessor_scopes_three_004_events_and_double_get():
     db=DB()
     result,seen,waits=asyncio.run(call(db))
     assert result[0]==m.RECOVERY_SCOPE_005
@@ -106,10 +108,14 @@ def test_manual_optin_required_even_for_healthy_flat_account(options):
 @pytest.mark.parametrize("idx,field,value",[
     (0,"total",2),(1,"observer_critical",0),
     (2,"pending",1),(3,"other_critical",1),
-    (3,"total",4),(4,"total",2),
+    (3,"total",4),(4,"total",2),(4,"total",4),
     (4,"observer_critical",0),(4,"other_critical",1),
     (4,"pending",1),(4,"nov15_incident_in_window",0),
     (4,"nov15_incident_in_window",2),
+    (4,"nov16_incident_in_window",0),
+    (4,"nov16_incident_in_window",2),
+    (4,"nov17_incident_in_window",0),
+    (4,"nov17_incident_in_window",2),
 ])
 def test_unexpected_critical_or_unacknowledged_alert_blocks_new_scope(idx,field,value):
     db=DB()

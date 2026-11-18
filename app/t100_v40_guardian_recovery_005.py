@@ -5,8 +5,11 @@ automatic rollover. Operator must explicitly opt in at startup. A new,
 unique guardian generation may be initialized once, and ONLY when:
 * all 5 old scopes exist with the exact previously reviewed critical
   observer-only history, zero undelivered alerts, and sticky old latches;
-* the sole 004 critical was created inside the UTC window independently
-  located in 2026-11-15 Render logs (12:14:31Z, inventory before stops);
+* all THREE 004 criticals exactly match the independently retrieved
+  Render guardian timestamps:
+  2026-11-15 12:14:31Z inventory before stops,
+  2026-11-16 13:15:36Z inventory read/format failure,
+  2026-11-17 11:49:40Z recovery bookend read failure;
 * 004 has a fresh healthy double-GET FLAT observation and no new alert;
 * two more independent signed hedge/positions/stops/order/ledger bookends
   on the same isolated exchange account both prove FLAT;
@@ -40,7 +43,7 @@ RECOVERY_SCOPE_005=sha256(
 ACTIVE_REVIEWED_SCOPE=RECOVERY_SCOPE_005
 
 # In exact generation order. A fifth recovery cannot erase historic latches.
-_PREDECESSORS=(*_PRIOR_FOUR,(RECOVERY_SCOPE_004,1))
+_PREDECESSORS=(*_PRIOR_FOUR,(RECOVERY_SCOPE_004,3))
 
 class V40GuardianRecovery005Halted(RuntimeError):
     """A fixed, nonsecret reason; do not render SQL/network exceptions."""
@@ -122,7 +125,21 @@ async def select_fifth_reviewed_scope(
                            TIMESTAMPTZ '2026-11-15 12:14:20+00'
                          AND created_at <=
                            TIMESTAMPTZ '2026-11-15 12:14:45+00'
-                     )::int AS nov15_incident_in_window
+                     )::int AS nov15_incident_in_window,
+                     COUNT(*) FILTER (
+                       WHERE severity='critical'
+                         AND created_at >=
+                           TIMESTAMPTZ '2026-11-16 13:15:25+00'
+                         AND created_at <=
+                           TIMESTAMPTZ '2026-11-16 13:15:45+00'
+                     )::int AS nov16_incident_in_window,
+                     COUNT(*) FILTER (
+                       WHERE severity='critical'
+                         AND created_at >=
+                           TIMESTAMPTZ '2026-11-17 11:49:30+00'
+                         AND created_at <=
+                           TIMESTAMPTZ '2026-11-17 11:49:50+00'
+                     )::int AS nov17_incident_in_window
                    FROM public.t100_guardian_incident_outbox
                    WHERE scope_sha256=$1""",
                 scope,HISTORIC_CRITICAL,
@@ -137,11 +154,29 @@ async def select_fifth_reviewed_scope(
                 or counts["other_critical"]!=0
                 or type(counts["pending"]) is not int
                 or counts["pending"]!=0
-                or type(counts["nov15_incident_in_window"]) is not int
-                or (scope==RECOVERY_SCOPE_004 and
-                    counts["nov15_incident_in_window"]!=1)
-                or (scope!=RECOVERY_SCOPE_004 and
-                    counts["nov15_incident_in_window"]!=0)
+                or any(type(counts[key]) is not int for key in (
+                    "nov15_incident_in_window",
+                    "nov16_incident_in_window",
+                    "nov17_incident_in_window",
+                ))
+                or (
+                    scope==RECOVERY_SCOPE_004 and any(
+                        counts[key]!=1 for key in (
+                            "nov15_incident_in_window",
+                            "nov16_incident_in_window",
+                            "nov17_incident_in_window",
+                        )
+                    )
+                )
+                or (
+                    scope!=RECOVERY_SCOPE_004 and any(
+                        counts[key]!=0 for key in (
+                            "nov15_incident_in_window",
+                            "nov16_incident_in_window",
+                            "nov17_incident_in_window",
+                        )
+                    )
+                )
             ):
                 fail("V40_RECOVERY_005_INCIDENT_HISTORY_OR_DELIVERY_MISMATCH")
 
