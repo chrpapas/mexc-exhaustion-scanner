@@ -1,0 +1,33 @@
+name: V40 guarded schema-owner migration CLI (no production connection)
+
+on:
+  push:
+    branches:
+      - "feat/v40-guarded-owner-migration-cli-*"
+  pull_request:
+    paths:
+      - "app/t100_v40_schema_owner_migration_cli.py"
+      - "tests/test_t100_v40_schema_owner_migration_cli.py"
+      - ".github/workflows/v40-guarded-schema-owner-migration.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  offline-guard-tests:
+    runs-on: ubuntu-latest
+    env:
+      T100_EXECUTION_MODE: paper
+      T100_LIVE_ORDER_API_ENABLED: 'false'
+      T100_LIVE_KILL_SWITCH: 'true'
+      EXECUTION_ENABLED: 'false'
+      TRADING_MODE: paper
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install -e ".[dev]"
+      - run: |
+          python -m compileall -q app/t100_v40_schema_owner_migration_cli.py
+          python -m pytest -q tests/test_t100_v40_schema_owner_migration_cli.py
