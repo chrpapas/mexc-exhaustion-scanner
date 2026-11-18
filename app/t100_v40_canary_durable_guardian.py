@@ -115,6 +115,14 @@ _SAFE_STARTUP_REASONS=frozenset({
     "V40_RECOVERY_004_FRESH_ACCOUNT_GET_OR_LEDGER_UNVERIFIED",
     "V40_RECOVERY_004_NEW_SCOPE_NOT_CLEAN",
     "V40_RECOVERY_004_DATABASE_OR_OBSERVER_UNAVAILABLE",
+    "V40_RECOVERY_005_EXPLICIT_OPERATOR_REVIEW_REQUIRED",
+    "V40_RECOVERY_005_EXISTING_SCOPE_STATE_INVALID",
+    "V40_RECOVERY_005_PREDECESSOR_NOT_HEALTHY_OR_STICKY",
+    "V40_RECOVERY_005_INCIDENT_HISTORY_OR_DELIVERY_MISMATCH",
+    "V40_RECOVERY_005_FRESH_SIGNED_GET_UNAVAILABLE",
+    "V40_RECOVERY_005_FRESH_FLAT_HEDGE_LEDGER_UNVERIFIED",
+    "V40_RECOVERY_005_NEW_SCOPE_NOT_CLEAN",
+    "V40_RECOVERY_005_DB_OR_ACCOUNT_REVIEW_UNAVAILABLE",
 })
 
 
@@ -344,6 +352,9 @@ async def run(
         from app.t100_v40_guardian_recovery_004 import (
             select_fourth_reviewed_scope,V40GuardianRecovery004Halted,
         )
+        from app.t100_v40_guardian_recovery_005 import (
+            select_fifth_reviewed_scope,V40GuardianRecovery005Halted,
+        )
     if shared:
         from app.t100_v40_guardian_shared_db import (
             V40SharedGuardianDatabaseHalted,
@@ -397,15 +408,22 @@ async def run(
                     raise
                 await pause(3.0)
         if reviewed:
-            # Atomic incident history is immutable. Recovery means starting
-            # a final audited 004 scope only after verifying ALL four
-            # previous incident generations, delivery and two fresh
-            # independent signed GET/ledger bookends. Old latches persist.
-            # Neither the old sticky latch nor its alert rows are modified.
+            # Old scope 004 remains sticky. A NEW 005 is created only
+            # on an explicit one-time operator opt-in, exact full incident
+            # database audit and two independent fresh signed GET/ledger
+            # bookends. All five old state rows and alerts remain immutable.
+            # No opt-in -> unchanged 004 behavior and no release.
             stage="AUDITED_ROLLOVER_REVIEW"
-            reviewed_scope,reviewed_reason=await select_fourth_reviewed_scope(
-                conn,env=env,observe=observer,pause=pause,
-            )
+            if env.get(
+                "T100_V40_GUARDIAN_RECOVERY_005_OPERATOR_APPROVED"
+            )=="true":
+                reviewed_scope,reviewed_reason=await select_fifth_reviewed_scope(
+                    conn,env=env,observe=observer,pause=pause,
+                )
+            else:
+                reviewed_scope,reviewed_reason=await select_fourth_reviewed_scope(
+                    conn,env=env,observe=observer,pause=pause,
+                )
             outbox=GuardianIncidentOutbox(
                 conn,scope_sha256=reviewed_scope,
             )
@@ -526,6 +544,7 @@ async def run(
         # errors, API responses, SQL parameters or Discord URLs.
         if reviewed and isinstance(error,(
             V40GuardianReviewedGenerationHalted,V40GuardianRecovery004Halted,
+            V40GuardianRecovery005Halted,
         )):
             reason=str(error)
             if reason in _SAFE_STARTUP_REASONS:
