@@ -137,10 +137,21 @@ def test_restart_validates_armed_bar_improved_best_with_native_stop_intact():
     row.update(checkpoint_version=3,stop_price=D("85"),
                best_profit_pct=D("15.1"),armed=True)
     stops[0]["stopLossPrice"]=D("85")
+    verified_amendment={
+        "external_id":"v40-test-arm85",
+        "symbol":row["symbol"],
+        "position_id":row["position_id"],
+        "stop_order_id":str(base["stop_order_id"]),
+        "verified_stop_order_id":str(base["stop_order_id"]),
+        "previous_stop":D(str(base["stop_price"])),
+        "proposed_stop":D("85"),
+        "state":"VERIFIED",
+    }
     try:
         result=recover_nonflat(
             checkpoint_rows=ld.checkpoints,revision_rows=ld.revisions,
-            intent_rows=ld.intents,stop_amendment_rows=[],
+            intent_rows=ld.intents,
+            stop_amendment_rows=[verified_amendment],
             orders=orders,positions=positions,stops=stops,
             positions_complete=True,stops_complete=True,
         )
