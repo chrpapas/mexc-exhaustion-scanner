@@ -286,23 +286,32 @@ async def test_intrabar_native_exit_inventory_mismatch_requires_positive_readbac
     close.scope="a"*64
     d["close"]=close
     p=runtime.V40LivePortfolioPorts(**d)
+    from app.t100_v40_native_close_mismatch_recovery import (
+        V40NativeCloseMismatchEvidence,
+    )
+    from tests.test_t100_v40_native_close_mismatch_recovery import (
+        setup,positive_for,
+    )
+    from app.t100_live_durable_recovery import checkpoint_from_row
+    m=setup(2)
     calls=[]
     async def mismatch(self,snap):
         calls.append((self.ledger,self.venue,self.probe,self.scope,snap.status))
-        return SimpleNamespace(
+        return V40NativeCloseMismatchEvidence(
             status="V40_EXACT_ONE_NATIVE_EXIT_POSITIVE_ACCOUNTING_AND_RELEASE_PENDING",
-            positive_native_close_verified=True,
-            slot_release_permitted=False,live_authorization=False,
+            previous=m.cp,
+            survivors=(checkpoint_from_row(m.original.checkpoints[1]),),
+            witness=positive_for(m.cp,2),
         )
     async def inspect(self,**kwargs):
         return FourSlotSnapshotResult("UNOWNED_OR_MISSING_CHECKPOINTS")
     monkeypatch.setattr(FourSlotSnapshotCoordinator,"inspect",inspect)
     monkeypatch.setattr(V40NativeCloseMismatchRecovery,"observe",mismatch)
-    with pytest.raises(
-        runtime.V40RuntimeAssemblyHalted,
-        match="NATIVE_EXIT_POSITIVE_SETTLEMENT_REQUIRED",
-    ):
-        await p.observe()
+    observed=await p.observe()
+    assert type(observed) is V40NativeCloseMismatchEvidence
+    assert observed.status.endswith("ACCOUNTING_AND_RELEASE_PENDING")
+    assert not observed.slot_release_permitted
+    assert not observed.next_entry_allowed
     assert calls==[(
         d["ledger"],d["venue"],probe,"a"*64,
         "UNOWNED_OR_MISSING_CHECKPOINTS",

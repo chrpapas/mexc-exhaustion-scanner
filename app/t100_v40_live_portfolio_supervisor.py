@@ -26,6 +26,8 @@ from app.t100_v40_unreleased_nonflat_guardian_evidence import V40NonflatGuardian
 from app.t100_v40_unreleased_verified_exit_handoff import V40VerifiedExitProjection
 from app.t100_v40_unreleased_native_stop_cycle import V40UnreleasedStopCycleResult
 from app.t100_v40_unreleased_portfolio_native_close import V40PortfolioCloseWitness
+from app.t100_v40_native_close_mismatch_recovery import V40NativeCloseMismatchEvidence
+from app.t100_live_durable_recovery import PositionCheckpoint
 from app.t100_v40_native_close_release_handoff import (
     V40NativeCloseReleaseHandoffReport,
 )
@@ -72,7 +74,9 @@ class V40PortfolioSupervisorReport:
 
 
 class V40PortfolioPorts(Protocol):
-    async def observe(self) -> V40PortfolioCycleFrame: ...
+    async def observe(
+        self,
+    ) -> V40PortfolioCycleFrame | V40NativeCloseMismatchEvidence: ...
     async def persist_unchanged_stop_checkpoint(
         self, projection: V40VerifiedExitProjection, *,
         permit: LiveMutationPermit,
@@ -240,6 +244,53 @@ class V40PortfolioSupervisor:
             frame = await self.ports.observe()
         except Exception:
             return self._halt("V40_SUPERVISOR_SIGNED_GET_OR_SQL_HALT")
+        if type(frame) is V40NativeCloseMismatchEvidence:
+            # A real MEXC native stop can close BETWEEN Min30 bars. At
+            # that point the normal strict 0..4-slot recovery deliberately
+            # reports one fewer exchange position than SQL OPEN checkpoints.
+            # The separate reader proves one exact terminal close and the
+            # other native stops, WITHOUT pretending the slot is free.
+            # Entry and stop mutation are suspended until actual signed
+            # accounting, leader fencing and SQL RELEASE complete.
+            witness=frame.witness
+            previous=frame.previous
+            valid=(
+                frame.status==
+                "V40_EXACT_ONE_NATIVE_EXIT_POSITIVE_ACCOUNTING_AND_RELEASE_PENDING"
+                and frame.ledger_bookends_equal is True
+                and frame.venue_bookends_equal is True
+                and frame.positive_native_close_verified is True
+                and frame.funding_and_final_accounting_verified is False
+                and frame.slot_release_permitted is False
+                and frame.next_entry_allowed is False
+                and frame.live_authorization is False
+                and frame.database_writes==0 and frame.mexc_posts==0
+                and type(previous) is PositionCheckpoint
+                and previous.lifecycle_state=="OPEN"
+                and type(frame.survivors) is tuple
+                and 0<=len(frame.survivors)<=3
+                and previous.position_id not in {
+                    p.position_id for p in frame.survivors
+                }
+                and all(type(p) is PositionCheckpoint
+                        and p.lifecycle_state=="OPEN" for p in frame.survivors)
+                and type(witness) is V40PortfolioCloseWitness
+                and witness.closed_position_id==previous.position_id
+                and witness.surviving_protected_slots==len(frame.survivors)
+                and witness.exact_closed_position_history_verified is True
+                and witness.portfolio_unchanged_across_bookends is True
+                and witness.slot_released is False
+                and witness.live_authorization is False
+                and witness.mexc_posts==witness.database_writes==0
+                and witness.closing_fills is not None
+                and witness.native_terminal is not None
+            )
+            return self._halt(
+                "V40_SUPERVISOR_NATIVE_EXIT_POSITIVE_SETTLEMENT_REQUIRED"
+                if valid else "V40_SUPERVISOR_NATIVE_EXIT_MISMATCH_INVALID",
+                slots=len(frame.survivors)+1 if valid else 0,
+                reconcile=True,
+            )
         if not self._frame_valid(frame):
             return self._halt("V40_SUPERVISOR_GUARDIAN_ACCOUNT_OR_SOURCE_HALT")
         slots = frame.snapshot.occupied_slots
