@@ -42,8 +42,8 @@ def model():
         best_profit_pct=D("15"),trail_armed=True,
     )
     bar=V40CompletedBar(
-        open_ts=FIRST_COMPLETE_BAR,open=D("85.5"),
-        high=D("85.7"),low=D("84.9"),close=D("85.1"),
+        open_ts=FIRST_COMPLETE_BAR,open=D("84.95"),
+        high=D("84.99"),low=D("84.9"),close=D("84.95"),
     )
     # Raw stop at 85.4, rounds UP to 86 at tick 1. Existing native
     # stop 85 is tighter: best still increases from 15 to 15.1.
