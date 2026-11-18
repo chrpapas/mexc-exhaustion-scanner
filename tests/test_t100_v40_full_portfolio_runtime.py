@@ -168,7 +168,11 @@ def test_no_cross_subaccount_or_canary_or_sql_role_fallback(drift):
 async def test_flat_observer_is_live_source_not_paper_placeholder(monkeypatch):
     d=bundle()
     p=runtime.V40LivePortfolioPorts(**d)
-    async def inspect(self,**kwargs):return await clean_flat()
+    # Capture before patching the coordinator; otherwise clean_flat()
+    # recursively invokes the mock inspect() instead of a real synthetic
+    # ledger/venue coordinator.
+    flat_snapshot=await clean_flat()
+    async def inspect(self,**kwargs):return flat_snapshot
     async def guardian(self):return flat_guardian()
     async def latest(self,*,observed_at):return source(False)
     monkeypatch.setattr(FourSlotSnapshotCoordinator,"inspect",inspect)
