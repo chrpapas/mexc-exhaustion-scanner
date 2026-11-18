@@ -113,15 +113,31 @@ def _asset_usdt(rows:object)->tuple[D,D]:
         raise V40PortfolioPostHalted("V40_FOUR_SLOT_NONUSDT_EQUITY_NO_POST")
     u=usdt[0]
     equity=_positive(u.get("equity"))
-    available=_positive(u.get("availableOpen"),allow_zero=True)
     reported_available=_positive(u.get("availableBalance"),allow_zero=True)
+    cash=_positive(u.get("cashBalance"),allow_zero=True)
+    unrealized_raw=u.get("unrealized")
+    try:
+        unrealized=D(str(unrealized_raw))
+    except (InvalidOperation,ValueError,TypeError):
+        raise V40PortfolioPostHalted("V40_FOUR_SLOT_UNREALIZED_PNL_UNKNOWN_NO_POST") from None
     if (
-        available>reported_available
+        not unrealized.is_finite()
+        or cash<=0
+        or reported_available>cash
+        or abs((cash+unrealized)-equity)>D("0.0000001")
         or reported_available>equity+_positive(u.get("positionMargin"),allow_zero=True)
         or _positive(u.get("debtAmount"),allow_zero=True)!=0
         or _positive(u.get("bonus"),allow_zero=True)!=0
     ):
         raise V40PortfolioPostHalted("V40_FOUR_SLOT_COLLATERAL_SHAPE_NO_POST")
+    # Official MEXC account/assets returns availableBalance, NOT a
+    # certified availableOpen field. Because CROSS available margin can
+    # vary with unrealized PnL and auto-add settings, this is a *lower*
+    # conservative preliminary value only: never count unrealized gains,
+    # and deduct unrealized losses a second time if unsure. A separate
+    # signed cross-wallet/maintenance tier certificate is STILL mandatory
+    # before the portfolio permit can ever be released.
+    available=min(reported_available,max(D("0"),reported_available+min(unrealized,D("0"))))
     return equity,available
 
 
