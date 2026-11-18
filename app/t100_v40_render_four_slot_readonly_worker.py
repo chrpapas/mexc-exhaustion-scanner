@@ -13,7 +13,7 @@ Never interpret this worker as four-slot order execution or a latch reset.
 from __future__ import annotations
 
 import asyncio
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timezone
 from decimal import Decimal
 import json
@@ -45,6 +45,13 @@ class V40FourSlotWiringReport:
     database_writes: int = 0
     entry_allowed: bool = False
     live_authorization: bool = False
+    schema_catalog_observed: bool = False
+    final_accounting_table_present: bool | None = None
+    fill_sets_table_present: bool | None = None
+    funding_sets_table_present: bool | None = None
+    exit_cursor_table_present: bool | None = None
+    at_entry_contract_specs_table_present: bool | None = None
+    checkpoint_bar_observed_supported: bool | None = None
 
 
 def validate_readonly_config(env: Mapping[str, str]) -> bool:
@@ -268,6 +275,7 @@ async def run_once(env: Mapping[str, str]) -> V40FourSlotWiringReport:
     import asyncpg
     import httpx
     from app.t100_live_guardian_readonly_once import GetOnlyMexcTransport
+    from app.t100_v40_runtime_schema_probe import observe_runtime_catalog
     from app.t100_live_v40_stage2_source import PostgresV40Stage2Source
     from app.t100_live_four_slot_ledger_reader import PostgresFourSlotLedgerReader
     from app.t100_v40_guardian_post_gate import PostgresV40GuardianPostGate
@@ -290,6 +298,9 @@ async def run_once(env: Mapping[str, str]) -> V40FourSlotWiringReport:
             timeout=9, command_timeout=12,
             server_settings={"default_transaction_read_only": "on"},
         )
+        # Catalog-only SQL; missing tables or unreadable metadata must never
+        # be inferred from scanner/guardian success. No DDL or writes.
+        catalog = await observe_runtime_catalog(ledger_pool)
         async with httpx.AsyncClient(
             base_url=GetOnlyMexcTransport.BASE_URL,
             trust_env=False, follow_redirects=False,
@@ -300,7 +311,7 @@ async def run_once(env: Mapping[str, str]) -> V40FourSlotWiringReport:
                 api_key=env["MEXC_API_KEY"],
                 api_secret=env["MEXC_API_SECRET"],
             )
-            return await asyncio.wait_for(
+            report = await asyncio.wait_for(
                 examine_wired_readonly(
                     source=PostgresV40Stage2Source(
                         source_pool, restricted_source_reader=True,
@@ -319,6 +330,19 @@ async def run_once(env: Mapping[str, str]) -> V40FourSlotWiringReport:
                     observed_at=datetime.now(timezone.utc),
                 ),
                 timeout=55,
+            )
+            return replace(
+                report,
+                schema_catalog_observed=catalog.catalog_observed,
+                final_accounting_table_present=
+                    catalog.final_accounting_table_present,
+                fill_sets_table_present=catalog.fill_sets_table_present,
+                funding_sets_table_present=catalog.funding_sets_table_present,
+                exit_cursor_table_present=catalog.exit_cursor_table_present,
+                at_entry_contract_specs_table_present=
+                    catalog.at_entry_contract_specs_table_present,
+                checkpoint_bar_observed_supported=
+                    catalog.checkpoint_bar_observed_supported,
             )
     except Exception:
         # No exception text, DSN, URL, account data or token in Render logs.
