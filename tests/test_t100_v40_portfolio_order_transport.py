@@ -34,8 +34,9 @@ class Client:
         self.post_error=None
         self.assets=[{
             "currency":"USDT","equity":"100",
-            "availableOpen":"60","availableBalance":"60",
-            "positionMargin":"40","debtAmount":0,"bonus":0,
+            "availableBalance":"60","cashBalance":"100",
+            "unrealized":"0","positionMargin":"40",
+            "debtAmount":0,"bonus":0,
         }]
         self.leverages=[{
             "positionType":2,"openType":2,"leverage":3,
@@ -293,7 +294,6 @@ async def test_current_exchange_contract_and_margin_checks_reject_before_post(mo
     client,public,g,tr,times=await setup(0)
     monkeypatch.setattr(m,"require_certified_transport_permit",lambda p:p)
     if case=="unavailable":
-        client.assets[0]["availableOpen"]="39"
         client.assets[0]["availableBalance"]="39"
     if case=="risklimit":
         client.risk["SIREN_USDT"][0]["maxVol"]=1
@@ -393,3 +393,22 @@ async def test_actual_contract_size_and_stop_tick_at_POST_must_match_frozen_lot(
     with pytest.raises(m.V40PortfolioPostHalted):
         await tr.submit_short_with_stop(intent(),permit=permit())
     assert client.posts==[]
+
+
+def test_available_margin_uses_documented_balance_not_invented_availableOpen():
+    from app.t100_v40_portfolio_order_transport import _asset_usdt
+    row=dict(
+        currency="USDT",equity="90",cashBalance="100",
+        unrealized="-10",availableBalance="60",
+        positionMargin="40",debtAmount="0",bonus="0",
+    )
+    eq,avail=_asset_usdt([row])
+    assert eq==D("90")
+    assert avail==D("50")  # more conservative than nominal free balance
+    row["unrealized"]="10"
+    row["equity"]="110"
+    eq,avail=_asset_usdt([row])
+    assert eq==D("110") and avail==D("60")
+    row.pop("unrealized")
+    with pytest.raises(m.V40PortfolioPostHalted,match="UNREALIZED_PNL_UNKNOWN"):
+        _asset_usdt([row])
