@@ -55,16 +55,28 @@ def reconcile_verified_closed_position(
     if (
         entry_fills.side != "OPEN_SHORT"
         or close_fills.side != "CLOSE_SHORT"
-        or not entry_fills.strategy_fully_filled_order_complete
-        or not close_fills.strategy_fully_filled_order_complete
+        or entry_fills.final_order_fill_history_complete is not True
+        or close_fills.final_order_fill_history_complete is not True
+        or entry_fills.strategy_fully_filled_order_complete is not True
+        or close_fills.strategy_fully_filled_order_complete is not True
+        or entry_fills.fee_currency != "USDT"
+        or close_fills.fee_currency != "USDT"
+        or entry_fills.order_id == close_fills.order_id
         or close_fills.position_id != position_id
         or close_provenance.position_id != position_id
         or funding.position_id != position_id
         or close_fills.order_id != close_provenance.close_order_id
         or close_provenance.symbol != entry_fills.symbol
         or close_fills.symbol != entry_fills.symbol
-        or not funding.double_collection_finality_verified
-        or not funding.economics_verified
+        or not close_provenance.stop_order_id
+        or close_provenance.live_authorization is not False
+        or type(close_provenance.contracts) is not Decimal
+        or not close_provenance.contracts.is_finite()
+        or close_provenance.contracts <= 0
+        or close_provenance.contracts != entry_fills.deal_volume
+        or close_provenance.contracts != close_fills.deal_volume
+        or funding.double_collection_finality_verified is not True
+        or funding.economics_verified is not True
     ):
         raise PositionAccountingHalted(
             "POSITION_ACCOUNTING_PROVENANCE_MISMATCH"
