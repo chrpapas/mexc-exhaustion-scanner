@@ -133,7 +133,7 @@ class Ports:
             "V40_TRAIL_ONE_STOP_POST_ATTEMPT_RECONCILE_ONLY",
             stop_post_may_have_occurred=True,requires_independent_reconciliation=True,
         )
-    async def persist_unchanged_stop_checkpoint(self,projection):
+    async def persist_unchanged_stop_checkpoint(self,projection,*,permit):
         self.calls.append("cursor")
         return V40CursorAdvanceResult(
             "V40_UNCHANGED_NATIVE_STOP_BAR_CURSOR_COMMITTED",
@@ -206,22 +206,37 @@ async def test_genuine_signal_does_not_reuse_first_canary_permit_or_post():
 
 
 @pytest.mark.asyncio
-async def test_unchanged_stop_commits_only_durable_bar_then_reobserves():
+async def test_unchanged_stop_requires_portfolio_permit_before_any_write():
     p=Ports(active(3))
     out=await controller(p).run_one()
+    assert out.status=="V40_SUPERVISOR_CURSOR_PERMIT_UNAVAILABLE"
+    assert p.calls==["get"]
+    assert not out.live_authorization
+
+
+@pytest.mark.asyncio
+async def test_unchanged_stop_commits_only_with_verified_portfolio_permit(monkeypatch):
+    p=Ports(active(3))
+    approved=object()
+    monkeypatch.setattr(V40PortfolioSupervisor,"_permit_valid",
+                        staticmethod(lambda x:x is approved))
+    out=await controller(p).run_one(permit=approved)
     assert out.status=="V40_SUPERVISOR_BAR_COMMITTED_REOBSERVE"
     assert out.observed_slots==3
     assert p.calls==["get","cursor"]
 
 
 @pytest.mark.asyncio
-async def test_four_slots_at_capacity_do_not_start_new_order():
+async def test_four_slots_at_capacity_do_not_start_new_order(monkeypatch):
     p=Ports(active(4))
-    first=await controller(p).run_one()
+    approved=object()
+    monkeypatch.setattr(V40PortfolioSupervisor,"_permit_valid",
+                        staticmethod(lambda x:x is approved))
+    first=await controller(p).run_one(permit=approved)
     assert first.status=="V40_SUPERVISOR_BAR_COMMITTED_REOBSERVE"
     p.frame=replace(p.frame,completed_exit=None,
                     no_bar_due_ids=tuple(x.position_id for x in p.frame.snapshot.recovery.recovered))
-    second=await controller(p).run_one()
+    second=await controller(p).run_one(permit=approved)
     assert second.status=="V40_SUPERVISOR_FOUR_SLOTS_OCCUPIED"
     assert p.calls==["get","cursor","get"]
 
@@ -324,9 +339,12 @@ async def test_loop_monitors_no_signal_with_fresh_get_each_time():
 
 
 @pytest.mark.asyncio
-async def test_staggered_two_due_bars_commit_only_their_cursors():
+async def test_staggered_two_due_bars_commit_only_their_cursors(monkeypatch):
     p=Ports(active(4,due_indices=(0,2)))
-    out=await controller(p).run_one()
+    approved=object()
+    monkeypatch.setattr(V40PortfolioSupervisor,"_permit_valid",
+                        staticmethod(lambda x:x is approved))
+    out=await controller(p).run_one(permit=approved)
     assert out.status=="V40_SUPERVISOR_BAR_COMMITTED_REOBSERVE"
     assert out.observed_slots==4
     assert len(p.frame.completed_exit.batch.slots)==2
@@ -364,3 +382,33 @@ async def test_staggered_fake_no_bar_due_complement_halts():
     p=Ports(overlap)
     out=await controller(p).run_one()
     assert out.status=="V40_SUPERVISOR_GUARDIAN_ACCOUNT_OR_SOURCE_HALT"
+
+
+
+@pytest.mark.asyncio
+async def test_no_permit_close_witness_does_not_release_database_slot(monkeypatch):
+    # A positive native close is a READ-ONLY witness. Durable release must
+    # not write even if its fills/accounting are perfect, without a separate
+    # live portfolio permit; the synthetic close witness is not fabricated
+    # from candle touch.
+    p=Ports(active(1,high="180",low="80"))
+    from app.t100_v40_unreleased_portfolio_native_close import V40PortfolioCloseWitness
+    class PositiveClosePorts(Ports):
+        async def reconcile_native_close(self,projection):
+            self.calls.append("close")
+            return V40PortfolioCloseWitness("V40_NATIVE_STOP_CLOSE_UNVERIFIED")
+        async def release_verified_native_close(self,*args,**kwargs):
+            self.calls.append("release")
+            raise AssertionError("SHOULD_NEVER_RELEASE")
+    p2=PositiveClosePorts(p.frame)
+    out=await controller(p2).run_one()
+    assert "release" not in p2.calls
+    assert out.live_authorization is False
+
+
+@pytest.mark.asyncio
+async def test_readonly_frame_with_no_due_bars_unchanged_after_portfolio_permit_gate():
+    p=Ports(active(2,due_indices=(0,)))
+    out=await controller(p).run_one()
+    assert out.status=="V40_SUPERVISOR_CURSOR_PERMIT_UNAVAILABLE"
+    assert p.calls==["get"]

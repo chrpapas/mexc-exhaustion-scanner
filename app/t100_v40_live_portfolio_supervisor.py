@@ -74,14 +74,16 @@ class V40PortfolioSupervisorReport:
 class V40PortfolioPorts(Protocol):
     async def observe(self) -> V40PortfolioCycleFrame: ...
     async def persist_unchanged_stop_checkpoint(
-        self, projection: V40VerifiedExitProjection,
+        self, projection: V40VerifiedExitProjection, *,
+        permit: LiveMutationPermit,
     ) -> V40CursorAdvanceResult: ...
     async def reconcile_native_close(
         self, projection: V40VerifiedExitProjection,
     ) -> V40PortfolioCloseWitness: ...
     async def release_verified_native_close(
         self, projection: V40VerifiedExitProjection,
-        witness: V40PortfolioCloseWitness,
+        witness: V40PortfolioCloseWitness, *,
+        permit: LiveMutationPermit,
     ) -> V40NativeCloseReleaseHandoffReport: ...
     async def tighten_one_stop(
         self, projection: V40VerifiedExitProjection, *, permit: LiveMutationPermit,
@@ -295,12 +297,19 @@ class V40PortfolioSupervisor:
                         "V40_SUPERVISOR_NATIVE_EXIT_RECONCILE_DURABLE_RELEASE_REQUIRED",
                         slots=slots,
                     )
-                # This port MUST re-observe the signed MEXC close and query
-                # complete persisted funding/accounting before DB release.
-                # The coordinator never retries a possibly committed SQL TX.
+                # A verified exchange exit is READ-ONLY; the subsequent
+                # release is a real DB mutation. An entry signal permit
+                # cannot be inferred from a positive close witness.
+                if not self._permit_valid(permit):
+                    return self._halt(
+                        "V40_SUPERVISOR_CLOSE_RELEASE_PERMIT_UNAVAILABLE",
+                        slots=slots,reconcile=True,
+                    )
+                # The port independently verifies exact origin/position
+                # scope and positive funding/accounting before the SQL CAS.
                 try:
                     released=await self.ports.release_verified_native_close(
-                        projection,witness=closed,
+                        projection,witness=closed,permit=permit,
                     )
                 except BaseException:
                     return self._halt(
@@ -358,8 +367,16 @@ class V40PortfolioSupervisor:
                 )
             if batch.unchanged_verified_stop_count != len(batch.slots):
                 return self._halt("V40_SUPERVISOR_EXIT_POLICY_DRIFT", slots=slots)
+            # Advancing a durable 30-minute cursor changes future model
+            # decisions, even when no exchange POST is required.
+            if not self._permit_valid(permit):
+                return self._halt(
+                    "V40_SUPERVISOR_CURSOR_PERMIT_UNAVAILABLE", slots=slots,
+                )
             try:
-                advanced = await self.ports.persist_unchanged_stop_checkpoint(projection)
+                advanced = await self.ports.persist_unchanged_stop_checkpoint(
+                    projection,permit=permit,
+                )
             except BaseException:
                 return self._halt(
                     "V40_SUPERVISOR_CURSOR_COMMIT_UNKNOWN", slots=slots, entry=True,
