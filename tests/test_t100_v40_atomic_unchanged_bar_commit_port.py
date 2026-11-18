@@ -25,6 +25,11 @@ from tests.test_t100_v40_live_portfolio_supervisor import active
 from tests.test_t100_v40_unreleased_verified_exit_handoff import bundle
 
 
+# The inherited synthetic full-account fixtures create signed snapshots
+# via asyncio.run(); build them before pytest starts an async test event loop.
+_REAL_LEDGER_FIXTURES={n:bundle(n) for n in (1,2,3,4)}
+
+
 class FakeTX:
     def __init__(self,db):
         self.db=db
@@ -130,7 +135,7 @@ class FakeCursor:
 
 def environment(n,monkeypatch,*,failure=None,due_indices=None):
     frame=active(n,due_indices=due_indices)
-    b=bundle(n)
+    b=_REAL_LEDGER_FIXTURES[n]
     ledger=b["ledger"]
     venue=FourSlotMexcReadVenue.__new__(FourSlotMexcReadVenue)
     venue.last_positions=b["signed_account_positions"]
