@@ -262,3 +262,69 @@ def test_supervisor_assembly_rejects_tiny_canary_caps():
     )
     assert supervisor.ports is p
     assert supervisor.caps.leverage==3
+
+
+@pytest.mark.asyncio
+async def test_intrabar_native_exit_inventory_mismatch_requires_positive_readback(
+    monkeypatch,
+):
+    """A successful native stop removes the exchange slot before SQL CLOSED."""
+    from app.t100_live_four_slot_snapshot_coordinator import FourSlotSnapshotResult
+    from app.t100_live_readonly_probe import ReadOnlyMexcProbe
+    from app.t100_v40_portfolio_positive_native_close_reader import (
+        V40PositiveNativeCloseReadPort,
+    )
+    from app.t100_v40_native_close_mismatch_recovery import (
+        V40NativeCloseMismatchRecovery,
+    )
+    d=bundle()
+    probe=object.__new__(ReadOnlyMexcProbe)
+    d["venue"].probe=probe
+    close=object.__new__(V40PositiveNativeCloseReadPort)
+    close.probe=probe
+    close.ledger=d["ledger"]
+    close.scope="a"*64
+    d["close"]=close
+    p=runtime.V40LivePortfolioPorts(**d)
+    calls=[]
+    async def mismatch(self,snap):
+        calls.append((self.ledger,self.venue,self.probe,self.scope,snap.status))
+        return SimpleNamespace(
+            status="V40_EXACT_ONE_NATIVE_EXIT_POSITIVE_ACCOUNTING_AND_RELEASE_PENDING",
+            positive_native_close_verified=True,
+            slot_release_permitted=False,live_authorization=False,
+        )
+    async def inspect(self,**kwargs):
+        return FourSlotSnapshotResult("UNOWNED_OR_MISSING_CHECKPOINTS")
+    monkeypatch.setattr(FourSlotSnapshotCoordinator,"inspect",inspect)
+    monkeypatch.setattr(V40NativeCloseMismatchRecovery,"observe",mismatch)
+    with pytest.raises(
+        runtime.V40RuntimeAssemblyHalted,
+        match="NATIVE_EXIT_POSITIVE_SETTLEMENT_REQUIRED",
+    ):
+        await p.observe()
+    assert calls==[(
+        d["ledger"],d["venue"],probe,"a"*64,
+        "UNOWNED_OR_MISSING_CHECKPOINTS",
+    )]
+    assert not p.entry.transport.guard.client is None
+
+
+@pytest.mark.asyncio
+async def test_native_exit_mismatch_never_uses_generic_close_or_unbound_probe(
+    monkeypatch,
+):
+    from app.t100_live_four_slot_snapshot_coordinator import FourSlotSnapshotResult
+    d=bundle()
+    p=runtime.V40LivePortfolioPorts(**d)
+    async def inspect(self,**kwargs):
+        return FourSlotSnapshotResult("UNOWNED_OR_MISSING_CHECKPOINTS")
+    monkeypatch.setattr(FourSlotSnapshotCoordinator,"inspect",inspect)
+    with pytest.raises(
+        runtime.V40RuntimeAssemblyHalted,
+        match="NATIVE_CLOSE_SAME_ACCOUNT_PORT_MISSING",
+    ):
+        await p.observe()
+    assert p.close.calls==[]
+    assert p.release.calls==[]
+    assert p.cursor.calls==[]
