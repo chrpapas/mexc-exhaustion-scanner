@@ -17,6 +17,7 @@ import re
 
 from app.t100_live_durable_recovery import (
     PositionCheckpoint,checkpoint_from_row,
+    _validate_revision_history,_validate_intents,_validate_stop_amendments,
 )
 from app.t100_live_four_slot_ledger_reader import PostgresFourSlotLedgerReader
 from app.t100_live_four_slot_mexc_readonly import FourSlotMexcReadVenue
@@ -104,6 +105,14 @@ class V40NativeCloseMismatchRecovery:
                 raise V40NativeCloseMismatchHalted(
                     "V40_MISSING_CLOSE_IMMUTABLE_OPEN_LEDGER_UNVERIFIED"
                 )
+            # A missing MEXC position is never enough: validate the entire
+            # SQL provenance chain, original ACKed entry, and every durable
+            # native-stop amendment BEFORE querying terminal history.
+            _validate_revision_history(checkpoints,first.revisions)
+            _validate_intents(checkpoints,first.intents)
+            _validate_stop_amendments(
+                checkpoints,first.revisions,first.stop_amendments,
+            )
             positions=await self.venue.open_positions()
             stops=await self.venue.open_stop_orders()
             if (
