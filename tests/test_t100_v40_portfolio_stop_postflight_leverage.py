@@ -60,7 +60,7 @@ def test_exact_3x_exchange_cross_can_complete_native_SL_and_durable_CAS(monkeypa
 
 @pytest.mark.parametrize("badmap",[
     None,{},{"10":1},{"10":2},{"10":4},{"10":True},
-    {"11":3},{"10":3,"11":1},{"10":8},{"10":0},{"10":-1},
+    {"11":3},{"10":8},{"10":0},{"10":-1},
 ])
 def test_wrong_or_missing_selected_cross_leverage_rejected_before_exchange_get(
     monkeypatch,badmap,
@@ -115,7 +115,7 @@ def test_legacy_canary_1x_handoff_still_persists_without_portfolio_witness(monke
 
 
 @pytest.mark.parametrize("bad",[
-    {"10":3,"11":3},{"10":True},{"10":6},{"10":0},{"10":"3"},
+    {"10":True},{"10":6},{"10":0},{"10":"3"},
 ])
 def test_auditor_invalid_portfolio_witness_rejected(monkeypatch,bad):
     x=setup(3)
@@ -127,3 +127,22 @@ def test_auditor_invalid_portfolio_witness_rejected(monkeypatch,bad):
         asyncio.run(x[3].auditor.observe(
             a,expected_cross_leverage_by_position=bad,
         ))
+
+
+
+def test_extra_owned_leverage_key_fails_at_account_ownership_reconciliation(monkeypatch):
+    authorize_mock_only(monkeypatch)
+    x=setup(3)
+    out=invoke(x,portfolio_map={"10":3,"11":1})
+    assert out.status=="STOP_COMPLETION_WHOLE_ACCOUNT_RECOVERY_UNVERIFIED_FREEZE"
+    assert not out.journal_checkpoint_committed
+    assert not x[5].calls
+
+
+def test_auditor_extra_owned_leverage_key_fails_on_signed_ledger_ownership():
+    x=setup(3)
+    result=asyncio.run(x[3].auditor.observe(
+        x[0],expected_cross_leverage_by_position={"10":3,"11":1},
+    ))
+    assert result.status=="V40_STOP_RECOVERY_UNOWNED_OR_UNPROTECTED_SLOT_FREEZE"
+    assert x[5].calls==[]
