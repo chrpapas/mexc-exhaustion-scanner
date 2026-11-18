@@ -734,3 +734,84 @@ def test_first_pilot_source_drift_after_stage_never_creates_exchange_claim(
     assert "stage" in log and "depth" in log and "second_source" in log
     assert "dispatch" not in log
     assert "SECRET_POSTGRES_DSN" not in str(outcome)
+
+
+def _portfolio_permit_for(signal):
+    return SimpleNamespace(
+        scope="T100_V40_FOUR_SLOT_PRODUCTION_TRIAL",
+        signal_id=signal.signal_id,symbol=signal.symbol,
+        max_position_notional_usdt=D("10000"),
+        max_daily_loss_usdt=D("10000"),
+    )
+
+
+def test_pinned_first_same_bar_signal_can_complete_one_durable_cycle(monkeypatch):
+    log=[]
+    patch_release_gates_and_mutations(monkeypatch,log)
+    first=candidate()
+    second=replace(first,signal_id=43,symbol="SECOND_USDT")
+    result=asyncio.run(controller(log,events=[first,second]).run_one(
+        permit=_portfolio_permit_for(first),
+        caps=caps(),parity_report={},holder_id="frozen-same-bar-test",
+        monitored_signal_id=first.signal_id,
+        monitored_symbol=first.symbol,monitored_tier=first.tier,
+    ))
+    assert result.status=="V40_ONE_PROTECTED_ENTRY_RECOVERED_NOT_AUTONOMOUS"
+    assert result.signal_id==first.signal_id
+    assert result.post_attempted is True
+    assert log.count("source")==2
+    assert log.count("risk_1")==1
+    assert log.count("dispatch")==1
+
+
+def test_pinned_first_inadmissible_cannot_fall_through_to_second(monkeypatch):
+    log=[]
+    patch_release_gates_and_mutations(monkeypatch,log)
+    first=candidate()
+    second=replace(first,signal_id=43,symbol="SECOND_USDT")
+    seen=[]
+    def reject_first(*,signal,**kwargs):
+        seen.append(signal.signal_id)
+        return None
+    monkeypatch.setattr(m,"prepare_candidate",reject_first)
+    result=asyncio.run(controller(log,events=[first,second]).run_one(
+        permit=_portfolio_permit_for(first),
+        caps=caps(),parity_report={},holder_id="frozen-same-bar-test",
+        monitored_signal_id=first.signal_id,
+        monitored_symbol=first.symbol,monitored_tier=first.tier,
+    ))
+    assert result.status=="V40_NO_ADMISSIBLE_STAGE2_CANDIDATE"
+    assert seen==[first.signal_id]
+    assert "reserve" not in log and "dispatch" not in log
+    assert "lease_release" in log
+
+
+def test_final_same_bar_source_feature_drift_blocks_post_after_sql_stage(monkeypatch):
+    log=[]
+    patch_release_gates_and_mutations(monkeypatch,log)
+    first=candidate()
+    second=replace(first,signal_id=43,symbol="SECOND_USDT")
+    ctrl=controller(log,events=[first,second])
+    class ChangedSource:
+        def __init__(self):self.reads=0
+        async def latest_candidates(self,*,observed_at):
+            self.reads+=1
+            log.append("source")
+            changed=replace(first,stage1_atr7_pct=first.stage1_atr7_pct+0.01)
+            rows=(first,second) if self.reads==1 else (changed,second)
+            return V40SourceBatch(
+                "FROZEN_V40_STAGE2_SOURCE_VALIDATED_NONAUTHORIZING",
+                observed_at=observed_at,candidates=rows,
+            )
+    ctrl.source=ChangedSource()
+    result=asyncio.run(ctrl.run_one(
+        permit=_portfolio_permit_for(first),
+        caps=caps(),parity_report={},holder_id="frozen-same-bar-test",
+        monitored_signal_id=first.signal_id,
+        monitored_symbol=first.symbol,monitored_tier=first.tier,
+    ))
+    assert result.status=="V40_FINAL_STAGE2_CHANGED_OR_EXPIRED_NO_POST_RECONCILE"
+    assert result.reserved and result.staged
+    assert result.post_attempted is False
+    assert ctrl.source.reads==2
+    assert "stage" in log and "dispatch" not in log
