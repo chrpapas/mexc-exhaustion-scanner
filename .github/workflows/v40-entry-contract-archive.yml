@@ -1,0 +1,40 @@
+name: V40 immutable before-POST contract multiplier and native-close proof
+
+on:
+  push:
+    branches:
+      - "feat/v40-entry-contract-archive-*"
+  pull_request:
+    paths:
+      - "app/t100_live_four_slot_attempt_journal.py"
+      - "app/t100_live_v40_entry_coordinator.py"
+      - "app/t100_v40_at_entry_contract_specs.py"
+      - "app/t100_v40_portfolio_close_financial_reader.py"
+      - "tests/test_t100_live_four_slot_attempt_journal.py"
+      - "tests/test_t100_v40_at_entry_contract_specs.py"
+      - "tests/test_t100_v40_portfolio_close_financial_reader.py"
+      - "migrations/044_v40_immutable_entry_contract_specs_UNRELEASED.sql"
+      - ".github/workflows/v40-entry-contract-archive.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  atomic-archive-no-order:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install -e ".[dev]"
+      - name: Offline archive, rollback, signed-account and close financial evidence
+        run: |
+          python -m compileall -q app/t100_live_four_slot_attempt_journal.py app/t100_v40_at_entry_contract_specs.py app/t100_v40_portfolio_close_financial_reader.py
+          python -m pytest -q \
+            tests/test_t100_live_four_slot_attempt_journal.py \
+            tests/test_t100_v40_at_entry_contract_specs.py \
+            tests/test_t100_v40_portfolio_close_financial_reader.py \
+            tests/test_t100_live_v40_entry_coordinator.py \
+            tests/test_t100_v40_four_slot_coordinator_monitor_identity.py \
+            tests/test_t100_v40_full_portfolio_runtime.py
