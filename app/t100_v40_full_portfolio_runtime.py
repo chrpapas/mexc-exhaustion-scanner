@@ -223,7 +223,8 @@ class V40LivePortfolioPorts:
                     independently_verified_account_scope_sha256=self.close.scope,
                 ).observe(snap)
                 if (
-                    observed.status!=
+                    type(observed) is not V40NativeCloseMismatchEvidence
+                    or observed.status!=
                     "V40_EXACT_ONE_NATIVE_EXIT_POSITIVE_ACCOUNTING_AND_RELEASE_PENDING"
                     or observed.positive_native_close_verified is not True
                     or observed.slot_release_permitted is not False
