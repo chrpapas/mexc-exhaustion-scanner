@@ -239,3 +239,30 @@ def test_cross_account_probe_and_missing_scope_rejected():
             ledger=state.ledger,venue=state.venue,probe=state.port.probe,
             independently_verified_account_scope_sha256="INVALID",
         )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mutation",[
+    "no_initial_revision","missing_intent_ack","unresolved_stop_edit",
+])
+async def test_broken_sql_provenance_halts_before_any_signed_native_history(
+    monkeypatch,mutation,
+):
+    state=setup(2)
+    calls=[]
+    async def terminal(**kwargs):
+        calls.append(1)
+        return positive_for(state.cp,2)
+    monkeypatch.setattr(
+        recovery,"observe_one_native_exit_among_v40_survivors",terminal
+    )
+    if mutation=="no_initial_revision":
+        state.original.revisions.pop(0)
+    elif mutation=="missing_intent_ack":
+        state.original.intents[0]["state"]="UNKNOWN"
+    else:
+        state.original.stop_amendments.append({"state":"SUBMITTING"})
+    with pytest.raises(recovery.V40NativeCloseMismatchHalted):
+        await state.port.observe(state.snapshot)
+    assert calls==[]
+    assert state.venue_reads==[]
