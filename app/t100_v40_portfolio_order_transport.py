@@ -140,7 +140,7 @@ def _single_country_contract(payload:object,symbol:str)->dict[str,Any]:
         or r.get("positionOpenType") not in (2,3)
         or r.get("futureType")!=1
         or r.get("settleCoin")!="USDT"
-        or r.get("stopOnlyFair") is True
+        or r.get("stopOnlyFair") is not False
     ):
         raise V40PortfolioPostHalted("V40_FOUR_SLOT_CROSS_STOP_CONTRACT_UNAVAILABLE_NO_POST")
     return r
@@ -367,6 +367,9 @@ class V40FourSlotMexcOrderTransport:
         self.client=client
         self.guard=guard
         self.context=context
+        # Defense in depth. The persistent one-shot dispatch claim is the
+        # restart-safe dedupe; this prevents reuse of one adapter instance.
+        self._post_attempted=False
 
     async def submit_short_with_stop(
         self,intent:EntryIntent,*,permit:LiveMutationPermit,
@@ -440,6 +443,11 @@ class V40FourSlotMexcOrderTransport:
             and review.mexc_posts==review.database_writes==0
         ):
             raise V40PortfolioPostHalted("V40_FOUR_SLOT_POST_GUARD_UNVERIFIED_NO_POST")
+        if self._post_attempted:
+            raise V40PortfolioPostHalted(
+                "V40_FOUR_SLOT_ALREADY_POSTED_RECONCILE_NO_RETRY"
+            )
+        self._post_attempted=True
         # One irreversible market SHORT order with attached SL75.
         # The caller already durably committed SUBMITTING and must reconcile
         # lost HTTP/ACK by exact externalOid instead of re-sending.
