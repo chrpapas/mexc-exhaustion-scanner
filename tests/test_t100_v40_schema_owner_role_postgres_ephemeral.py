@@ -20,6 +20,8 @@ BASE=(
 @pytest.mark.asyncio
 async def test_owner_catalog_against_real_readonly_postgres():
     env=os.environ
+    if env.get("T100_V40_OWNER_AUDIT_CI_ONLY")!="yes":
+        pytest.skip("disposable-PG16 role audit workflow only")
     for key,value in (
         ("CI","true"),("T100_V40_OWNER_AUDIT_CI_ONLY","yes"),
         ("PGHOST","127.0.0.1"),("PGPORT","5432"),

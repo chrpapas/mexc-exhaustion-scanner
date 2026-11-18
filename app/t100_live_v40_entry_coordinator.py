@@ -333,6 +333,86 @@ def prepare_candidate(
     return V40PreparedEntry(signal,plan,intent,terms)
 
 
+def select_frozen_portfolio_pinned_candidate(
+    tape: V40SourceBatch, snapshot: FourSlotSnapshotResult, *,
+    signal_id: int, symbol: str, tier: str,
+) -> V40SourceCandidate:
+    """First NOT-HELD frozen-priority signal after a fresh fenced snapshot.
+
+    The supervisor may skip already-owned symbols. The coordinator MUST
+    independently reconstruct the exact same eligible queue after obtaining
+    its own full-account snapshot; it may never select a later unheld signal,
+    swap a pinned permit, or reuse a prior snapshot's ordering.
+    No network request, database write or exchange POST occurs here.
+    """
+    if (
+        type(tape) is not V40SourceBatch
+        or tape.status!="FROZEN_V40_STAGE2_SOURCE_VALIDATED_NONAUTHORIZING"
+        or tape.read_only_repeatable_read is not True
+        or tape.history_complete is not True
+        or tape.entry_allowed is not False
+        or tape.live_authorization is not False
+        or type(tape.candidates) is not tuple
+        or not tape.candidates
+        or any(type(c) is not V40SourceCandidate for c in tape.candidates)
+        or len({c.signal_id for c in tape.candidates})!=len(tape.candidates)
+        or len({c.symbol for c in tape.candidates})!=len(tape.candidates)
+        or tape.candidates!=tuple(sorted(
+            tape.candidates,key=lambda c:(c.admission_open_ts,c.signal_id),
+        ))
+        or type(snapshot) is not FourSlotSnapshotResult
+        or snapshot.status not in (
+            "FLAT_OBSERVED_NONAUTHORIZING",
+            "NONFLAT_PROVENANCE_MATCHED_NONAUTHORIZING",
+        )
+        or snapshot.entry_allowed is not False
+        or snapshot.live_authorization is not False
+        or type(snapshot.occupied_slots) is not int
+        or not 0<=snapshot.occupied_slots<4
+        or type(signal_id) is not int or signal_id<=0
+        or type(symbol) is not str or not symbol.endswith("_USDT")
+        or tier not in ("LOW_100","HIGH_225")
+    ):
+        raise V40CoordinatorHalted("V40_PORTFOLIO_FROZEN_QUEUE_UNVERIFIED")
+    if snapshot.status=="FLAT_OBSERVED_NONAUTHORIZING":
+        if snapshot.occupied_slots!=0 or snapshot.recovery is not None:
+            raise V40CoordinatorHalted("V40_PORTFOLIO_FLAT_SNAPSHOT_TOPOLOGY_INVALID")
+        held=set()
+    else:
+        if snapshot.recovery is None:
+            raise V40CoordinatorHalted("V40_PORTFOLIO_RECOVERED_SLOTS_MISSING")
+        try:
+            rows=tuple(snapshot.recovery.recovered)
+            held={p.symbol for p in rows}
+            ids={p.position_id for p in rows}
+            if (
+                len(rows)!=snapshot.occupied_slots
+                or len(held)!=len(rows)
+                or len(ids)!=len(rows)
+                or not all(type(p.symbol) is str and p.symbol.endswith("_USDT")
+                           and type(p.position_id) is str and p.position_id
+                           for p in rows)
+            ):
+                raise ValueError()
+        except Exception:
+            raise V40CoordinatorHalted(
+                "V40_PORTFOLIO_RECOVERED_SLOTS_UNVERIFIED"
+            ) from None
+    remaining=tuple(c for c in tape.candidates if c.symbol not in held)
+    if not remaining:
+        raise V40CoordinatorHalted("V40_PORTFOLIO_ALL_STAGE2_SYMBOLS_HELD")
+    chosen=remaining[0]
+    if (
+        chosen.signal_id!=signal_id
+        or chosen.symbol!=symbol
+        or chosen.tier!=tier
+    ):
+        raise V40CoordinatorHalted(
+            "V40_PORTFOLIO_PINNED_SIGNAL_NOT_FIRST_UNHELD"
+        )
+    return chosen
+
+
 class V40OneShotCoordinator:
     """Single attempt; assumes no previously unclaimed or unknown POST.
 
@@ -475,9 +555,17 @@ class V40OneShotCoordinator:
                                 key=lambda x:(x.admission_open_ts,x.signal_id)))
                    != tape.candidates
                 or (not is_four_slot_portfolio and len(tape.candidates) != 1)
-                or tape.candidates[0].signal_id != monitored_signal_id
-                or tape.candidates[0].symbol != monitored_symbol
-                or tape.candidates[0].tier != monitored_tier
+                or (not is_four_slot_portfolio and (
+                    tape.candidates[0].signal_id != monitored_signal_id
+                    or tape.candidates[0].symbol != monitored_symbol
+                    or tape.candidates[0].tier != monitored_tier
+                ))
+                or (is_four_slot_portfolio and not any(
+                    x.signal_id==monitored_signal_id
+                    and x.symbol==monitored_symbol
+                    and x.tier==monitored_tier
+                    for x in tape.candidates
+                ))
             ):
                 raise V40CoordinatorHalted("V40_MONITORED_SIGNAL_CHANGED_OR_NOT_UNIQUE")
         if not tape.candidates:
@@ -513,6 +601,12 @@ class V40OneShotCoordinator:
             # signal when the first fails admission or depth/risk evidence.
             # Other same-bar signals need their own fresh fenced cycles.
             eligible_for_this_attempt=(
+                (select_frozen_portfolio_pinned_candidate(
+                    tape,pre,
+                    signal_id=monitored_signal_id,
+                    symbol=monitored_symbol,tier=monitored_tier,
+                ),)
+                if is_four_slot_portfolio else
                 tape.candidates[:1] if monitored else tape.candidates
             )
             for signal in eligible_for_this_attempt:
@@ -738,6 +832,18 @@ class V40OneShotCoordinator:
                         selected.signal.admission_open_ts,
                         selected.signal.entry_reference_price,
                     )
+                    final_candidate=(
+                        select_frozen_portfolio_pinned_candidate(
+                            final_tape,pre,
+                            signal_id=selected.signal.signal_id,
+                            symbol=selected.signal.symbol,
+                            tier=selected.signal.tier,
+                        )
+                        if is_four_slot_portfolio else
+                        final_tape.candidates[0]
+                        if type(final_tape) is V40SourceBatch
+                           and final_tape.candidates else None
+                    )
                     final_valid=(
                         type(final_tape) is V40SourceBatch
                         and final_tape.status==
@@ -759,21 +865,22 @@ class V40OneShotCoordinator:
                                          key=lambda x:(x.admission_open_ts,
                                                        x.signal_id)))
                             == final_tape.candidates
+                        and final_candidate is not None
                         and (
-                            final_tape.candidates[0].signal_id,
-                            final_tape.candidates[0].symbol,
-                            final_tape.candidates[0].tier,
-                            final_tape.candidates[0].admission_open_ts,
-                            final_tape.candidates[0].entry_reference_price,
+                            final_candidate.signal_id,
+                            final_candidate.symbol,
+                            final_candidate.tier,
+                            final_candidate.admission_open_ts,
+                            final_candidate.entry_reference_price,
                         )==identity
                         # The source timestamp/age may advance, but the
                         # entire chosen candidate (including all 49 prior
                         # candles and VOL30 features) must remain unchanged.
                         and dataclass_replace(
-                            final_tape.candidates[0],
+                            final_candidate,
                             observed_age_seconds=selected.signal.observed_age_seconds,
                         ) == selected.signal
-                        and 0<=final_tape.candidates[0].observed_age_seconds<=900
+                        and 0<=final_candidate.observed_age_seconds<=900
                     )
                 except Exception:
                     final_valid=False

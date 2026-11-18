@@ -27,6 +27,10 @@ TEST_PASSWORD="t100-ci-only-local-postgres"
 
 
 def require_isolated_ci():
+    # The general offline suite has no disposable PostgreSQL service.
+    # Only the dedicated workflow opts in to this deliberately destructive test.
+    if os.getenv("T100_V40_PG_SCHEMA_CI_ONLY")!="yes":
+        pytest.skip("disposable-PG16 schema workflow only")
     if not all((
         os.getenv("CI")=="true",
         os.getenv("T100_V40_PG_SCHEMA_CI_ONLY")=="yes",
