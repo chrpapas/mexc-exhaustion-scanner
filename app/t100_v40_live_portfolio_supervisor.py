@@ -410,16 +410,19 @@ class V40PortfolioSupervisor:
         candidates = [x for x in frame.source.candidates if x.symbol not in held]
         if not candidates:
             return self._halt("V40_SUPERVISOR_DUPLICATE_SYMBOL_SKIP", slots=slots)
-        # Production source ordering is by signal time/ID. That is NOT
-        # independent proof of the frozen chronological simulator's priority
-        # among simultaneous Stage2 candidates. Selecting candidates[0]
-        # would silently change the historical entry strategy. Refuse an
-        # ambiguous same-bar competition before even checking a permit.
-        if len({x.admission_open_ts for x in candidates}) != len(candidates):
+        # The frozen multi-slot reference orders same-bar candidates by
+        # (admission_open_ts, signal_id), exactly as the restricted source
+        # query (ORDER BY p2_at,id). Never choose a provider/SQL iteration
+        # order or arbitrarily skip a first candidate. One fresh fenced
+        # cycle is required for every subsequent candidate.
+        frozen_order=sorted(
+            candidates,key=lambda x:(x.admission_open_ts,x.signal_id),
+        )
+        if candidates!=frozen_order:
             return self._halt(
                 "V40_SUPERVISOR_SAME_BAR_PRIORITY_UNVERIFIED", slots=slots,
             )
-        signal = candidates[0]
+        signal = frozen_order[0]
         if not self._permit_valid(permit):
             return self._halt(
                 "V40_SUPERVISOR_ENTRY_PERMIT_UNAVAILABLE", slots=slots,
