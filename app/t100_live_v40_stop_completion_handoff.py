@@ -25,7 +25,8 @@ from decimal import Decimal as D
 from typing import Any, Callable
 
 from app.t100_live_authorization import (
-    LiveMutationPermit,require_certified_transport_permit,
+    LiveMutationPermit,V40_PORTFOLIO_SCOPE,
+    require_certified_transport_permit,
 )
 from app.t100_live_durable_recovery import PositionCheckpoint
 from app.t100_live_native_stop_execution_audit import (
@@ -122,11 +123,37 @@ class V40NativeStopCompletionHandoff:
         previous:PositionCheckpoint,
         trailing:V40TrailingRestartView,
         permit:LiveMutationPermit,
+        portfolio_leverage_by_position:dict[str,int]|None=None,
     ) -> V40StopCompletionResult:
         # The live adapter is NOT_IMPLEMENTED at this release. Even a
         # perfect GET result cannot activate durable writes from shadow
         # mode. The typed permit must be independently issued first.
         require_certified_transport_permit(permit)
+        portfolio=(getattr(permit,"scope",None)==V40_PORTFOLIO_SCOPE)
+        if portfolio:
+            # CROSS exchange leverage is not V40 strategy position size.
+            # For multiple positions it can differ per entry. Require
+            # independent signed-entry provenance for EVERY occupied slot;
+            # never silently replace its value with this target's permit.
+            known=portfolio_leverage_by_position
+            if (
+                type(known) is not dict
+                or not 1<=len(known)<=4
+                or any(
+                    type(pid) is not str or not pid.isascii()
+                    or not pid.isdecimal() or pid.startswith("0")
+                    or type(lv) is not int or not 1<=lv<=5
+                    for pid,lv in known.items()
+                )
+                or known.get(previous.position_id)!=permit.leverage
+            ):
+                raise V40StopCompletionHalted(
+                    "STOP_COMPLETION_PORTFOLIO_ENTRY_LEVERAGE_PROVENANCE_REQUIRED"
+                )
+        elif portfolio_leverage_by_position is not None:
+            raise V40StopCompletionHalted(
+                "STOP_COMPLETION_CANARY_CANNOT_USE_PORTFOLIO_LEVERAGE"
+            )
 
         if not (
             type(amendment) is StopAmendment
@@ -158,7 +185,12 @@ class V40NativeStopCompletionHandoff:
                 "STOP_COMPLETION_UNEXPECTED_TRAILING_AUTHORITY"
             )
 
-        audit=await self.auditor.observe(amendment)
+        audit=await self.auditor.observe(
+            amendment,
+            expected_cross_leverage_by_position=(
+                portfolio_leverage_by_position if portfolio else None
+            ),
+        )
         if not (
             type(audit) is V40StopRecoveryObservation
             and audit.status==(
@@ -232,13 +264,20 @@ class V40NativeStopCompletionHandoff:
                     return V40StopCompletionResult(
                         "STOP_COMPLETION_SIGNED_UNPROTECTED_POSITION_FREEZE"
                     )
+                if portfolio and set(pos_by_id)!=set(portfolio_leverage_by_position):
+                    return V40StopCompletionResult(
+                        "STOP_COMPLETION_PORTFOLIO_LEVERAGE_OWNER_SET_DRIFT_FREEZE"
+                    )
                 for pid,pos in pos_by_id.items():
                     sl=stop_by_id[pid]
                     if (
                         pos.get("symbol")!=sl.get("symbol")
                         or pos.get("positionType")!=2
                         or pos.get("openType")!=2
-                        or pos.get("leverage")!=1
+                        or pos.get("leverage")!=(
+                            portfolio_leverage_by_position[pid]
+                            if portfolio else 1
+                        )
                         or pos.get("state")!=1
                     ):
                         return V40StopCompletionResult(
@@ -289,7 +328,10 @@ class V40NativeStopCompletionHandoff:
                     D(str(qty))!=previous.contracts
                     or own[0].get("positionType")!=2
                     or own[0].get("openType")!=2
-                    or own[0].get("leverage")!=1
+                    or own[0].get("leverage")!=(
+                        portfolio_leverage_by_position[previous.position_id]
+                        if portfolio else 1
+                    )
                     or own[0].get("state")!=1
                     or assess_native_short_market_stop_row(
                         stop=row,symbol=previous.symbol,

@@ -136,7 +136,10 @@ class V40NativeStopRecoveryAuditor:
         self.journal=journal
         self.finished_stops=finished_stops
 
-    async def observe(self, amendment: StopAmendment) -> V40StopRecoveryObservation:
+    async def observe(
+        self, amendment: StopAmendment, *,
+        expected_cross_leverage_by_position:dict[str,int]|None=None,
+    ) -> V40StopRecoveryObservation:
         if (
             type(amendment) is not StopAmendment
             or not re.fullmatch(r"[A-Z0-9]+_USDT",amendment.symbol)
@@ -151,6 +154,19 @@ class V40NativeStopRecoveryAuditor:
             state=await self.journal.state(amendment.external_id)
         except Exception:
             raise V40StopRecoveryHalted("V40_STOP_RECOVERY_JOURNAL_READ_FAILED") from None
+        if expected_cross_leverage_by_position is not None and (
+            type(expected_cross_leverage_by_position) is not dict
+            or not 1<=len(expected_cross_leverage_by_position)<=4
+            or any(
+                type(pid) is not str or not pid.isascii()
+                or not pid.isdecimal() or pid.startswith("0")
+                or type(lv) is not int or not 1<=lv<=5
+                for pid,lv in expected_cross_leverage_by_position.items()
+            )
+        ):
+            raise V40StopRecoveryHalted(
+                "V40_STOP_RECOVERY_CROSS_LEVERAGE_PROOF_INVALID"
+            )
         if state=="PREPARED":
             return V40StopRecoveryObservation(
                 "V40_PREPARED_WITHOUT_OWNED_MUTATION_RECONCILE_ONLY",
@@ -257,6 +273,8 @@ class V40NativeStopRecoveryAuditor:
             or len({cp.symbol for cp in checkpoints})!=len(checkpoints)
             or set(by_positions)!=owner_ids
             or set(by_stops)!=owner_ids
+            or (expected_cross_leverage_by_position is not None
+                and set(expected_cross_leverage_by_position)!=owner_ids)
         ):
             return observed("V40_STOP_RECOVERY_UNOWNED_OR_UNPROTECTED_SLOT_FREEZE")
 
@@ -311,7 +329,11 @@ class V40NativeStopRecoveryAuditor:
                     and type(pos.get("openType")) is int
                     and pos["openType"]==2
                     and type(pos.get("leverage")) is int
-                    and pos["leverage"]==1
+                    and pos["leverage"]==(
+                        expected_cross_leverage_by_position[cp.position_id]
+                        if expected_cross_leverage_by_position is not None
+                        else 1
+                    )
                 ):
                     return observed("V40_STOP_RECOVERY_POSITION_MODE_OR_QUANTITY_DRIFT_FREEZE")
                 report=assess_native_short_market_stop_row(
