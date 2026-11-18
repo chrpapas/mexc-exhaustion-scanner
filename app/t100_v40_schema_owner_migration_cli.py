@@ -17,6 +17,7 @@ import argparse
 import asyncio
 from pathlib import Path
 import os
+import subprocess
 from typing import Any, Mapping
 
 from app.t100_live_db_inspect import EXPECTED_DATABASE
@@ -154,6 +155,20 @@ async def run_once(*,apply:bool,backup_file:Path|None,env:Mapping[str,str])->str
         or backup_file.stat().st_size<1024
     ):
         raise V40OwnerMigrationHalted("V40_MIGRATION_BACKUP_FILE_REQUIRED")
+    if apply:
+        # A nonempty file is not proof of an actually restorable backup.
+        # Require a valid PostgreSQL custom-format archive of the exact DB.
+        try:
+            verified=subprocess.run(
+                ["pg_restore","--list",str(backup_file)],
+                capture_output=True,text=True,timeout=20,check=True,
+            )
+            if "dbname: "+EXPECTED_DATABASE not in verified.stdout:
+                raise ValueError("WRONG_BACKUP_DATABASE")
+        except Exception:
+            raise V40OwnerMigrationHalted(
+                "V40_MIGRATION_RESTORABLE_DB_BACKUP_NOT_VERIFIED"
+            ) from None
     # Import only after all offline guards, never pass DSN to logger.
     import asyncpg
     conn=None
