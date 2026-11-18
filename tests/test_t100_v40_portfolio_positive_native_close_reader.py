@@ -16,9 +16,19 @@ from tests.test_t100_v40_live_portfolio_supervisor import active
 from tests.test_t100_v40_unreleased_verified_exit_handoff import bundle
 
 
+# The reused audit fixtures call asyncio.run() to build complete simulated
+# ledgers. Materialize them once at import time, never inside pytest's
+# asyncio event loop.
+_EXITS={
+    n:active(n,due_indices=(0,),high="180",low="80").completed_exit
+    for n in (1,2,3,4)
+}
+_LEDGERS={n:bundle(n)["ledger"] for n in (1,2,3,4)}
+
+
 def fixture(n=3):
-    p=active(n,due_indices=(0,),high="180",low="80").completed_exit
-    ledger=bundle(n)["ledger"]
+    p=_EXITS[n]
+    ledger=_LEDGERS[n]
     reader=object.__new__(PostgresFourSlotLedgerReader)
     probe=object.__new__(ReadOnlyMexcProbe)
     observed=[]
