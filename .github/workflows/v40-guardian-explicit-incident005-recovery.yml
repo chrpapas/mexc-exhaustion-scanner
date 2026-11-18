@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - "fix/v40-guardian-reviewed-incident-005-*"
+      - "fix/v40-guardian-005-audit-three-observer-events-*"
   pull_request:
     paths:
       - "app/t100_v40_guardian_recovery_005.py"
