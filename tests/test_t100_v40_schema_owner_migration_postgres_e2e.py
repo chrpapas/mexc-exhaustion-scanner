@@ -22,6 +22,8 @@ BASE=(
 
 def require_ci():
     env=os.environ
+    if env.get("T100_V40_SCHEMA_MIGRATION_CI_ONLY")!="yes":
+        pytest.skip("disposable-PG16 owner migration workflow only")
     assert env.get("CI")=="true"
     assert env.get("T100_V40_SCHEMA_MIGRATION_CI_ONLY")=="yes"
     assert env.get("PGHOST")=="127.0.0.1"
