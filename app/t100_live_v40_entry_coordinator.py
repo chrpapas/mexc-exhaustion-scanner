@@ -396,7 +396,22 @@ class V40OneShotCoordinator:
         # The supervised-first-signal permit is NOT an autonomous feed
         # selector. It may only handle exactly its own operator-approved
         # genuine Stage2 identity and first-position flat-only mode.
-        from app.t100_live_authorization import V40_CANARY_SCOPE
+        from app.t100_live_authorization import (
+            V40_CANARY_SCOPE,V40_PORTFOLIO_SCOPE,
+        )
+        is_four_slot_portfolio=getattr(permit,"scope",None)==V40_PORTFOLIO_SCOPE
+        if is_four_slot_portfolio and (
+            self.initial_pilot_only is not False
+            or type(monitored_signal_id) is not int
+            or monitored_signal_id<=0
+            or monitored_signal_id!=permit.signal_id
+            or type(monitored_symbol) is not str
+            or monitored_symbol!=permit.symbol
+            or monitored_tier not in ("LOW_100","HIGH_225")
+        ):
+            raise V40CoordinatorHalted(
+                "V40_PORTFOLIO_EXACT_MONITORED_STAGE2_REQUIRED"
+            )
         if getattr(permit,'scope',None)==V40_CANARY_SCOPE and (
             self.initial_pilot_only is not True
             or monitored_signal_id!=permit.signal_id
@@ -452,7 +467,10 @@ class V40OneShotCoordinator:
             ):
                 raise V40CoordinatorHalted("V40_MONITORED_SIGNAL_IDENTITY_INVALID")
             if (
-                len(tape.candidates) != 1
+                (is_four_slot_portfolio and len(tape.candidates)!=1)
+                or (getattr(permit,"scope",None)==V40_CANARY_SCOPE
+                    and len(tape.candidates)!=1)
+                or not tape.candidates
                 or tape.candidates[0].signal_id != monitored_signal_id
                 or tape.candidates[0].symbol != monitored_symbol
                 or tape.candidates[0].tier != monitored_tier
@@ -696,7 +714,7 @@ class V40OneShotCoordinator:
             # Never substitute a new candidate or send a late POST. This
             # second read is restricted READ ONLY; a decline leaves the
             # staged identity for explicit reconciliation, not retry.
-            if self.initial_pilot_only:
+            if self.initial_pilot_only or is_four_slot_portfolio:
                 try:
                     final_tape=await self.source.latest_candidates(
                         observed_at=datetime.now(timezone.utc),
