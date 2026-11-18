@@ -185,7 +185,12 @@ class V40NativeStopCompletionHandoff:
                 "STOP_COMPLETION_UNEXPECTED_TRAILING_AUTHORITY"
             )
 
-        audit=await self.auditor.observe(amendment)
+        audit=await self.auditor.observe(
+            amendment,
+            expected_cross_leverage_by_position=(
+                portfolio_leverage_by_position if portfolio else None
+            ),
+        )
         if not (
             type(audit) is V40StopRecoveryObservation
             and audit.status==(
