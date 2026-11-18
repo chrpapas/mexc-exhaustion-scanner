@@ -9,6 +9,7 @@ on:
       - "app/t100_live_v40_entry_coordinator.py"
       - "app/t100_v40_portfolio_order_transport.py"
       - "tests/test_t100_v40_four_slot_coordinator_monitor_identity.py"
+      - "tests/test_t100_v40_portfolio_second_slot_priority.py"
       - "tests/test_t100_v40_portfolio_order_transport.py"
       - ".github/workflows/v40-four-slot-coordinator-identity-and-collateral.yml"
 
@@ -35,6 +36,7 @@ jobs:
             tests/test_t100_v40_four_slot_coordinator_monitor_identity.py \
             tests/test_t100_v40_portfolio_order_transport.py \
             tests/test_t100_live_v40_entry_coordinator.py \
+            tests/test_t100_v40_portfolio_second_slot_priority.py \
             tests/test_t100_live_v40_dispatch_executor.py \
             tests/test_t100_v40_four_slot_release_policy.py \
             tests/test_t100_v40_exchange_leverage_plan.py \
