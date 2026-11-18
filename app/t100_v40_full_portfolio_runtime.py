@@ -194,6 +194,46 @@ class V40LivePortfolioPorts:
                     snap=snap,venue=self.venue,ledger=self.ledger,
                     source=self.source,observed_at=now,
                 )
+            if snap.status=="UNOWNED_OR_MISSING_CHECKPOINTS":
+                # Normal 0..4-slot inspection must NOT reinterpret an
+                # exchange-closed short as an orphan or free slot. But a real
+                # SL75 can trigger intrabar, BEFORE a new Min30 bar or a
+                # CLOSED checkpoint exists. Independently prove exact native
+                # terminal, CLOSE_SHORT fills and unchanged protected
+                # survivors. This is GET-only: a separate funded, fenced
+                # settlement+SQL CAS is still required for slot recycling.
+                from app.t100_v40_portfolio_positive_native_close_reader import (
+                    V40PositiveNativeCloseReadPort,
+                )
+                from app.t100_v40_native_close_mismatch_recovery import (
+                    V40NativeCloseMismatchRecovery,
+                )
+                if (
+                    type(self.close) is not V40PositiveNativeCloseReadPort
+                    or self.close.ledger is not self.ledger
+                    or self.close.probe is not self.venue.probe
+                ):
+                    raise V40RuntimeAssemblyHalted(
+                        "V40_FULL_RUNTIME_NATIVE_CLOSE_SAME_ACCOUNT_PORT_MISSING"
+                    )
+                observed=await V40NativeCloseMismatchRecovery(
+                    ledger=self.ledger,venue=self.venue,
+                    probe=self.close.probe,
+                    independently_verified_account_scope_sha256=self.close.scope,
+                ).observe(snap)
+                if (
+                    observed.status!=
+                    "V40_EXACT_ONE_NATIVE_EXIT_POSITIVE_ACCOUNTING_AND_RELEASE_PENDING"
+                    or observed.positive_native_close_verified is not True
+                    or observed.slot_release_permitted is not False
+                    or observed.live_authorization is not False
+                ):
+                    raise V40RuntimeAssemblyHalted(
+                        "V40_FULL_RUNTIME_NATIVE_CLOSE_MISMATCH_UNVERIFIED"
+                    )
+                raise V40RuntimeAssemblyHalted(
+                    "V40_FULL_RUNTIME_NATIVE_EXIT_POSITIVE_SETTLEMENT_REQUIRED"
+                )
             raise V40RuntimeAssemblyHalted(
                 "V40_FULL_RUNTIME_UNVERIFIED_ACCOUNT_INVENTORY"
             )
