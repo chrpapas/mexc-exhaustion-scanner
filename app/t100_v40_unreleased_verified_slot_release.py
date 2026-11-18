@@ -29,7 +29,9 @@ from app.t100_live_checkpoint_journal import (
 )
 from app.t100_live_four_slot_reservations import ACCOUNT_LOCK_SQL,LEASE_SQL
 from app.t100_v40_unreleased_portfolio_native_close import V40PortfolioCloseWitness
-from app.t100_live_position_accounting import VerifiedClosedPositionAccounting
+from app.t100_live_position_accounting import (
+    VerifiedClosedPositionAccounting, PostgresFinalAccountingLedger,
+)
 
 
 class V40SlotReleaseHalted(RuntimeError):
@@ -256,23 +258,28 @@ class PostgresV40VerifiedSlotRelease:
                     ):
                         raise V40SlotReleaseHalted("V40_CLOSE_RESERVED_ORIGIN_UNVERIFIED")
 
+                    # The final ledger writer verifies all economics when
+                    # inserting. Recheck the SAME complete immutable row
+                    # under the release transaction's account-wide lock.
+                    # Matching only net PnL/volume permits changed fees,
+                    # funding or notionals to masquerade as final settlement.
                     financial=await conn.fetchrow(
-                        """SELECT entry_order_id,close_order_id,stop_order_id,
-                                  opened_contracts,closed_contracts,realized_net_usdt
+                        """SELECT position_id,entry_order_id,close_order_id,
+                                  stop_order_id,opened_contracts,closed_contracts,
+                                  open_notional_usdt,close_notional_usdt,
+                                  realized_gross_usdt,fees_usdt,
+                                  funding_cashflow_usdt,realized_net_usdt
                            FROM public.t100_live_final_position_accounting
-                           WHERE position_id=$1 FOR SHARE""",previous.position_id,
+                           WHERE position_id=$1 FOR SHARE""",
+                        previous.position_id,
                     )
-                    rec=accounting.reconciliation
-                    if (
-                        financial is None
-                        or financial["entry_order_id"]!=accounting.entry_order_id
-                        or financial["close_order_id"]!=accounting.close_order_id
-                        or financial["stop_order_id"]!=accounting.stop_order_id
-                        or financial["opened_contracts"]!=rec.opened_contracts
-                        or financial["closed_contracts"]!=rec.closed_contracts
-                        or financial["realized_net_usdt"]!=rec.realized_net_usdt
+                    expected=PostgresFinalAccountingLedger._expected(accounting)
+                    if not PostgresFinalAccountingLedger._same_complete_row(
+                        financial, expected,
                     ):
-                        raise V40SlotReleaseHalted("V40_CLOSE_FINAL_ACCOUNTING_NOT_PERSISTED")
+                        raise V40SlotReleaseHalted(
+                            "V40_CLOSE_FINAL_ACCOUNTING_NOT_PERSISTED"
+                        )
 
                     await _advance_checkpoint_in_transaction(
                         conn,previous,closing,reason=CLOSING_LATCHED,
