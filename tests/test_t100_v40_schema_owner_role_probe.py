@@ -47,7 +47,7 @@ async def test_actual_owner_candidate_directly_owns_both_tables_and_create():
     assert report.catalog_observed is True
     assert report.database_identity_verified is True
     assert report.owner_role_permissions_sufficient_on_catalog is True
-    assert report.owner_authenticated is False
+    assert report.authenticated_as_owner is False
     assert report.production_ddl_applied is False
     assert report.live_authorization is False
     assert report.execution_ready_certified is False
@@ -74,7 +74,7 @@ async def test_any_owner_mismatch_means_not_sufficient(change):
     report=await observe_owner_role_catalog(FakePool(record(**change)))
     assert report.catalog_observed
     assert not report.owner_role_permissions_sufficient_on_catalog
-    assert not report.owner_authenticated
+    assert not report.authenticated_as_owner
 
 
 @pytest.mark.asyncio
