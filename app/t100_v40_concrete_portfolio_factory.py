@@ -59,6 +59,7 @@ from app.t100_v40_portfolio_order_transport import (
 from app.t100_v40_portfolio_stop_supervisor_port import (
     V40FourSlotStopLifecyclePort,
 )
+from app.t100_v40_real_current_stop_preflight import V40RealCurrentStopPreflight
 from app.t100_v40_unchanged_bar_commit_port import PostgresV40UnchangedBarCommit
 from app.t100_v40_portfolio_positive_native_close_reader import (
     V40PositiveNativeCloseReadPort,
@@ -236,7 +237,8 @@ def assemble_concrete_v40_signal_graph(
         or not callable(now_ms)
         or not callable(getattr(entry_risk_witness,"inspect",None))
         or not callable(getattr(depth_witness,"quote_exact_intent",None))
-        or not callable(getattr(current_stop_preflight,"observe",None))
+        or (current_stop_preflight is not None
+            and type(current_stop_preflight) is not V40RealCurrentStopPreflight)
         or context.leverage_plan.signal_id!=signal.signal_id
         or context.leverage_plan.symbol!=signal.symbol
         or context.frozen_order_notional_usdt!=
@@ -284,6 +286,12 @@ def assemble_concrete_v40_signal_graph(
         completeness=completeness,commit_writer=claimed_commit,
         clock_ms=now_ms,initial_pilot_only=False,
     )
+    if current_stop_preflight is None:
+        current_stop_preflight=V40RealCurrentStopPreflight(
+            ledger=ledger,snapshots=snapshots,venue=venue,
+            completeness=completeness,owned_bars=bars,
+            public_get=public_get,now_ms=now_ms,
+        )
     stop=V40FourSlotStopLifecyclePort(
         client=client,ledger=ledger,
         guardian_reader=nonflat_guard,
