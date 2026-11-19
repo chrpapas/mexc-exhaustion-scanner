@@ -45,14 +45,14 @@ class Public:
                 return {
                     "success":True,"code":0,
                     "data":{"symbol":SYM,"lastPrice":"86.1",
-                            "timestamp":NOW_MS-500},
+                            "timestamp":NOW_MS-1200},
                 }
         if self.bad:
             class Bad(Resp):
                 def json(other):
                     return {"success":True,"code":0,
                             "data":{"symbol":SYM,"lastPrice":"9999",
-                                    "timestamp":NOW_MS-500}}
+                                    "timestamp":NOW_MS-1200}}
             return Bad()
         return Resp()
 
@@ -106,7 +106,7 @@ def make():
     snapshots=SimpleNamespace()
     async def inspect():return snapshot
     snapshots.inspect=inspect
-    clock=[NOW_MS-1600,NOW_MS-1400,NOW_MS-1000,NOW_MS]
+    clock=[NOW_MS-1900,NOW_MS-1500,NOW_MS-1000,NOW_MS-400,NOW_MS]
     def now():
         return clock.pop(0) if clock else NOW_MS
     p=object.__new__(m.V40RealCurrentStopPreflight)
