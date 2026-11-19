@@ -124,23 +124,40 @@ async def select_sixth_reviewed_scope(
                    FROM public.t100_guardian_incident_outbox
                    WHERE scope_sha256=$1""",scope,HISTORIC_CRITICAL,
             )
+            # Emit a finite *category*, never IDs, SQL, timestamps or
+            # counts. Distinguish real 005 incident-history mismatch from
+            # a stale legacy epoch without weakening any predicate.
+            if counts is None or any(type(counts[k]) is not int for k in (
+                "total","observer_critical","other_critical","pending",
+                "nov19_incident_in_window","nov15_window",
+                "nov16_window","nov17_window",
+            )):
+                fail("V40_RECOVERY_006_OUTBOX_SHAPE_INVALID")
             if (
-                counts is None or
-                any(type(counts[k]) is not int for k in (
-                    "total","observer_critical","other_critical","pending",
-                    "nov19_incident_in_window","nov15_window",
-                    "nov16_window","nov17_window",
-                ))
-                or counts["total"]!=expected
+                counts["total"]!=expected
                 or counts["observer_critical"]!=expected
                 or counts["other_critical"]!=0
-                or counts["pending"]!=0
-                or counts["nov19_incident_in_window"]!=(
-                    1 if scope==RECOVERY_SCOPE_005 else 0)
-                or any(counts[k]!=(1 if scope==RECOVERY_SCOPE_004 else 0)
-                       for k in ("nov15_window","nov16_window","nov17_window"))
             ):
-                fail("V40_RECOVERY_006_CRITICAL_HISTORY_OR_DISCORD_NOT_EXACT")
+                fail(
+                    "V40_RECOVERY_006_005_CRITICAL_CLASS_OR_COUNT_MISMATCH"
+                    if scope==RECOVERY_SCOPE_005 else
+                    "V40_RECOVERY_006_OLDER_CRITICAL_CLASS_OR_COUNT_MISMATCH"
+                )
+            if counts["pending"]!=0:
+                fail("V40_RECOVERY_006_DISCORD_PENDING_INCIDENT")
+            if counts["nov19_incident_in_window"]!=(
+                1 if scope==RECOVERY_SCOPE_005 else 0
+            ):
+                fail(
+                    "V40_RECOVERY_006_005_HTTP_5XX_TIME_WINDOW_MISMATCH"
+                    if scope==RECOVERY_SCOPE_005 else
+                    "V40_RECOVERY_006_OTHER_EPOCH_NOV19_CRITICAL_PRESENT"
+                )
+            if any(
+                counts[k]!=(1 if scope==RECOVERY_SCOPE_004 else 0)
+                for k in ("nov15_window","nov16_window","nov17_window")
+            ):
+                fail("V40_RECOVERY_006_OLD_INCIDENT_TIME_WINDOWS_MISMATCH")
 
         # New 006 is allowed only after independent signed full exchange
         # and durable ledger bookends twice, not after an old heartbeat.
