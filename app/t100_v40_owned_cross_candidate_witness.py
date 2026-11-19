@@ -150,6 +150,34 @@ class V40OwnedCrossCandidateWitness:
             raise V40OwnedCrossCandidateHalted(
                 "V40_OWNED_CROSS_GENUINE_SIGNAL_REQUIRED"
             )
+        key=await self.read_key_permissions()
+        daily=await self.read_daily_loss()
+        if (
+            type(key) is not V40KeyPermissionObservation
+            or key.status!="V40_KEY_INFO_FUTURES_WRITE_SCOPE_OBSERVED_NONAUTHORIZING"
+            or key.api_key_identity_verified is not True
+            or key.api_key_active_verified is not True
+            or key.futures_account_read_scope_verified is not True
+            or key.futures_order_read_scope_verified is not True
+            or key.futures_order_write_scope_verified is not True
+            or key.entry_allowed is not False
+            or key.mexc_posts!=0
+            or type(daily) is not V40DailyLossEvidence
+            or daily.status!="V40_DAILY_LOSS_TWO_COMPLETE_SIGNED_GET_PASSES_NONAUTHORIZING"
+            or daily.complete_two_passes is not True
+            or daily.complete_history_verified is not True
+            or daily.realized_today_loss_usdt is None
+            or daily.mexc_posts!=0 or daily.database_writes!=0
+        ):
+            raise V40OwnedCrossCandidateHalted(
+                "V40_OWNED_CROSS_API_KEY_OR_DAILY_PNL_NOT_VERIFIED"
+            )
+        try:
+            daily_loss=_decimal(daily.realized_today_loss_usdt,positive=False)
+        except Exception:
+            raise V40OwnedCrossCandidateHalted(
+                "V40_OWNED_CROSS_DAILY_LOSS_NUMERIC_INVALID"
+            ) from None
         start=self.clock_ms()
         first=await self.snapshots.inspect()
         if (
@@ -268,34 +296,6 @@ class V40OwnedCrossCandidateWitness:
         except BaseException:
             raise V40OwnedCrossCandidateHalted(
                 "V40_OWNED_CROSS_CANDIDATE_CONFIG_OR_ACCOUNT_DRIFT"
-            ) from None
-        key=await self.read_key_permissions()
-        daily=await self.read_daily_loss()
-        if (
-            type(key) is not V40KeyPermissionObservation
-            or key.status!="V40_KEY_INFO_FUTURES_WRITE_SCOPE_OBSERVED_NONAUTHORIZING"
-            or key.api_key_identity_verified is not True
-            or key.api_key_active_verified is not True
-            or key.futures_account_read_scope_verified is not True
-            or key.futures_order_read_scope_verified is not True
-            or key.futures_order_write_scope_verified is not True
-            or key.entry_allowed is not False
-            or key.mexc_posts!=0
-            or type(daily) is not V40DailyLossEvidence
-            or daily.status!="V40_DAILY_LOSS_TWO_COMPLETE_SIGNED_GET_PASSES_NONAUTHORIZING"
-            or daily.complete_two_passes is not True
-            or daily.complete_history_verified is not True
-            or daily.realized_today_loss_usdt is None
-            or daily.mexc_posts!=0 or daily.database_writes!=0
-        ):
-            raise V40OwnedCrossCandidateHalted(
-                "V40_OWNED_CROSS_API_KEY_OR_DAILY_PNL_NOT_VERIFIED"
-            )
-        try:
-            daily_loss=_decimal(daily.realized_today_loss_usdt,positive=False)
-        except Exception:
-            raise V40OwnedCrossCandidateHalted(
-                "V40_OWNED_CROSS_DAILY_LOSS_NUMERIC_INVALID"
             ) from None
         # These are the current *observed* MEXC economic facts; this
         # doesn't certify stressed 75% liquidation or guarantee SL fills.
