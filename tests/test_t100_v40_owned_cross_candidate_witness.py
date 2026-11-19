@@ -60,7 +60,7 @@ def setup(n=2):
         return V40PortfolioCurrentRisk(
             status=("V40_CURRENT_EXACT_FOUR_SLOT_FAIR_AND_TIER_RESEARCH_NONAUTHORIZING"
                     if state.risk_good else "V40_RISK_BAD"),
-            slots=n,observed_account_equity_usdt=D(state.equity),
+            slots=n,observed_account_equity_usdt=D("50"),
             current_gross_fair_notional_usdt=D("30"),
             all_owned_positions_and_native_stops_verified=True,
             same_venue_inventory_in_both_readers=True,
