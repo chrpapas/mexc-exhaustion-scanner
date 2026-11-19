@@ -45,6 +45,11 @@ class V40ConnectedPortfolioReport:
     guardian_status:str="NOT_OBSERVED"
     supervisor_status:str="NOT_RUN"
     real_signal_entry_context_bound:bool=False
+    source_signal_identity_bound:bool=False
+    source_bound_signal_id:int|None=None
+    source_bound_symbol:str|None=None
+    source_bound_tier:str|None=None
+    source_bound_vol30_passed:bool|None=None
     exchange_posts:int=0
     database_writes:int=0
     live_authorization:bool=False
@@ -117,6 +122,9 @@ async def observe_connected_portfolio_once(
     from app.t100_v40_live_portfolio_supervisor import (
         V40PortfolioCycleFrame,
     )
+    from app.t100_v40_portfolio_signal_binding import (
+        bind_first_unheld_stage2_identity,
+    )
     from app.t100_v40_native_close_mismatch_recovery import (
         V40NativeCloseMismatchEvidence,
     )
@@ -184,6 +192,13 @@ async def observe_connected_portfolio_once(
             # signal and completed-bar projection. No fake frame or source.
             frame=await asyncio.wait_for(graph.ports.observe(),timeout=65)
             if type(frame) is V40PortfolioCycleFrame:
+                # Exactly the immutable Stage2 identity that the full
+                # four-slot coordinator would independently recheck.
+                # This does NOT construct a CROSS lot/margin/POST context
+                # and cannot grant the separate production release permit.
+                identity=bind_first_unheld_stage2_identity(
+                    frame.source,frame.snapshot,
+                )
                 observation=await graph.supervisor.run_one(permit=None)
                 if (
                     observation.entries_allowed is not False
@@ -203,6 +218,19 @@ async def observe_connected_portfolio_once(
                     observed_slots=frame.snapshot.occupied_slots,
                     guardian_status=frame.guardian.status,
                     supervisor_status=observation.status,
+                    source_signal_identity_bound=identity is not None,
+                    source_bound_signal_id=(
+                        identity.signal_id if identity is not None else None
+                    ),
+                    source_bound_symbol=(
+                        identity.symbol if identity is not None else None
+                    ),
+                    source_bound_tier=(
+                        identity.tier if identity is not None else None
+                    ),
+                    source_bound_vol30_passed=(
+                        identity.vol30_passed if identity is not None else None
+                    ),
                 )
             if type(frame) is V40NativeCloseMismatchEvidence:
                 # A native stop may have already closed while SQL remains
