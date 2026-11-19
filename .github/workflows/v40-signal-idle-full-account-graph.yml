@@ -9,6 +9,9 @@ on:
       - "app/t100_v40_full_portfolio_runtime.py"
       - "app/t100_v40_concrete_idle_portfolio_factory.py"
       - "tests/test_t100_v40_concrete_idle_portfolio_factory.py"
+      - "app/t100_v40_render_connected_portfolio_worker.py"
+      - "app/t100_v40_render_executor_disabled_worker.py"
+      - "tests/test_t100_v40_render_connected_portfolio_worker.py"
       - ".github/workflows/v40-signal-idle-full-account-graph.yml"
 
 permissions:
@@ -26,9 +29,10 @@ jobs:
       - run: python -m pip install -e ".[dev]"
       - name: All real lifecycle ports, no fabricated signal, no MEXC POST
         run: |
-          python -m compileall -q app/t100_v40_full_portfolio_runtime.py app/t100_v40_concrete_idle_portfolio_factory.py
+          python -m compileall -q app/t100_v40_full_portfolio_runtime.py app/t100_v40_concrete_idle_portfolio_factory.py app/t100_v40_render_connected_portfolio_worker.py app/t100_v40_render_executor_disabled_worker.py
           python -m pytest -q \
             tests/test_t100_v40_concrete_idle_portfolio_factory.py \
+            tests/test_t100_v40_render_connected_portfolio_worker.py \
             tests/test_t100_v40_concrete_portfolio_factory.py \
             tests/test_t100_v40_full_portfolio_runtime.py \
             tests/test_t100_v40_live_portfolio_supervisor.py \
