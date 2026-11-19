@@ -85,7 +85,8 @@ class V40ForwardCloseFinalizer:
             type(staging) is not V40CloseOnlyFinancialArtifactStaging
             or type(final_accounting) is not PostgresFinalAccountingLedger
             or type(handoff) is not V40NativeCloseReleaseHandoff
-            or staging.ledger.pool is not final_accounting.pool
+            or staging.writer_pool is not final_accounting.pool
+            or staging.writer_pool is staging.ledger.pool
             or handoff.writer.pool is not final_accounting.pool
             or handoff.probe is not staging.native.probe
             or staging.finance.probe is not handoff.probe
