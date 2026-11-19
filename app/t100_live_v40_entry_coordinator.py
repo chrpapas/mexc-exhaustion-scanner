@@ -177,10 +177,11 @@ def verify_fresh_exact_depth(
         quote.status=="V40_GET_ONLY_FLAT_ACCOUNT_AND_MARKET_QUOTED_NONAUTHORIZING"
         and quote.bookended_flat_account is True
         and quote.owned_protected_positions_bookended==0
+        and quote.exact_cross_leverage_plan is None
         and risk.current_owned_positions==0
         and intent.notional_usdt*D("1.02")<=quote.account_available_usdt
     )
-    plan=risk.cross_leverage_plan
+    plan=quote.exact_cross_leverage_plan
     owned=(
         quote.status=="V40_GET_ONLY_OWNED_ACCOUNT_AND_MARKET_QUOTED_NONAUTHORIZING"
         and quote.bookended_flat_account is False
@@ -196,6 +197,14 @@ def verify_fresh_exact_depth(
         and plan.symbol==signal.symbol
         and plan.exact_order_notional_usdt==intent.notional_usdt
         and plan.observed_equity_usdt==quote.account_equity_usdt
+        and plan.observed_equity_usdt==risk.current_account_equity_usdt
+        and plan.portfolio_gross_after_entry_usdt==
+              risk.portfolio_notional_usdt+intent.notional_usdt
+        and quote.owned_gross_marked_notional_usdt==risk.portfolio_notional_usdt
+        and quote.account_available_usdt==risk.available_margin_usdt
+        and plan.selected_exchange_cross_leverage==caps.leverage
+        and (risk.cross_leverage_plan is None
+             or risk.cross_leverage_plan==plan)
         and plan.nominal_initial_margin_fits is True
         and plan.frozen_strategy_notional_unchanged is True
         and plan.account_observations_verified is True
@@ -204,7 +213,9 @@ def verify_fresh_exact_depth(
         and plan.mexc_posts==plan.database_writes==0
         and plan.required_initial_margin_usdt>=0
         and plan.required_initial_margin_usdt
-              +intent.notional_usdt*D("0.02")<=quote.account_available_usdt
+              +intent.notional_usdt*D("0.02")
+              +risk.current_account_equity_usdt*D("0.05")
+              <=quote.account_available_usdt
     )
     qt=quote.candidate_contract
     grid=("contract_size","volume_step","min_volume","max_volume","price_tick")
@@ -263,6 +274,7 @@ def verify_fresh_exact_depth(
     # any of the original independent risk certification booleans.
     return dataclass_replace(
         risk,observed_sell_vwap=depth.sell_vwap,
+        cross_leverage_plan=(plan if owned else risk.cross_leverage_plan),
         book_age_ms=max(
             quote.book_age_ms,depth.age_ms,
             now_ms-quote.observed_at_ms,
