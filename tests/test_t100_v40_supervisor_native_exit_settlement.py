@@ -87,3 +87,88 @@ async def test_wrong_exact_closed_position_identity_never_releases():
     report=await controller(ports).run_one(permit=object())
     assert report.status=="V40_SUPERVISOR_NATIVE_EXIT_MISMATCH_INVALID"
     assert ports.calls==["GET_ONLY_MISMATCH"]
+
+
+
+class ForwardSettlingPorts(Ports):
+    def __init__(self,evidence,*,bad_ack=False,raise_unknown=False):
+        super().__init__(evidence)
+        self.bad_ack=bad_ack
+        self.raise_unknown=raise_unknown
+
+    async def finalize_verified_forward_native_close(self,*,lease):
+        from app.t100_v40_forward_close_finalizer import V40ForwardCloseResult
+        self.calls.append("FENCED_FINANCE_AND_SINGLE_SLOT_RELEASE")
+        if self.raise_unknown:
+            raise TimeoutError("sql may have committed")
+        return V40ForwardCloseResult(
+            status=(
+                "UNKNOWN"
+                if self.bad_ack else
+                "V40_FORWARD_NATIVE_CLOSE_DURABLY_ACCOUNTED_AND_SLOT_RELEASED_REOBSERVE"
+            ),
+            position_id=self.evidence.previous.position_id,
+            entry_and_close_fills_persisted=True,
+            funding_persisted=True,
+            final_accounting_persisted=True,
+            slot_release_committed=not self.bad_ack,
+            database_commit_may_have_occurred=True,
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("n",[1,2,3,4])
+async def test_supervisor_positive_intrabar_native_exit_fenced_finance_release(n):
+    from app.t100_live_leader_fencing import LeaderLease
+    p=ForwardSettlingPorts(pending(n))
+    leader=LeaderLease("t100-live-executor","fenced-forward",8,45)
+    report=await controller(p).run_one(close_lease=leader)
+    assert report.status=="V40_SUPERVISOR_NATIVE_EXIT_ACCOUNTED_SLOT_RELEASED_REOBSERVE"
+    assert report.must_reconcile_before_next_cycle is True
+    assert not report.entries_allowed and not report.live_authorization
+    assert p.calls==["GET_ONLY_MISMATCH","FENCED_FINANCE_AND_SINGLE_SLOT_RELEASE"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fault",["stale_lease","bad_ack","unknown_commit"])
+async def test_close_settlement_unknown_never_opens_or_retries(fault):
+    from app.t100_live_leader_fencing import LeaderLease
+    p=ForwardSettlingPorts(
+        pending(3),bad_ack=fault=="bad_ack",
+        raise_unknown=fault=="unknown_commit",
+    )
+    leader=LeaderLease(
+        "t100-live-executor","fenced-forward",
+        0 if fault=="stale_lease" else 8,45,
+    )
+    report=await controller(p).run_one(close_lease=leader)
+    assert report.status in (
+        "V40_SUPERVISOR_NATIVE_EXIT_FENCED_SETTLEMENT_UNAVAILABLE",
+        "V40_SUPERVISOR_NATIVE_EXIT_SETTLEMENT_ACK_UNVERIFIED",
+        "V40_SUPERVISOR_NATIVE_EXIT_DB_OUTCOME_UNKNOWN_RECONCILE",
+    )
+    assert report.must_reconcile_before_next_cycle
+    assert not report.entries_allowed
+    assert p.calls.count("FENCED_FINANCE_AND_SINGLE_SLOT_RELEASE")<=1
+
+
+@pytest.mark.asyncio
+async def test_close_leader_does_not_enable_open_for_flat_account():
+    from app.t100_live_leader_fencing import LeaderLease
+    from tests.test_t100_v40_live_portfolio_supervisor import (
+        clean_flat,flat_guardian,source,
+    )
+    # Even with a valid close-only lease no opening permit is minted.
+    class Flat:
+        async def observe(self):
+            from app.t100_v40_live_portfolio_supervisor import V40PortfolioCycleFrame
+            return V40PortfolioCycleFrame(
+                snapshot=await clean_flat(),guardian=flat_guardian(),
+                source=source(True),completed_exit=None,
+            )
+        async def enter_one(self,**kwargs):
+            raise AssertionError("close-only lease is not an entry permit")
+    lease=LeaderLease("t100-live-executor","fenced-forward",8,45)
+    report=await controller(Flat()).run_one(close_lease=lease)
+    assert report.status=="V40_SUPERVISOR_ENTRY_PERMIT_UNAVAILABLE"
+    assert not report.live_authorization

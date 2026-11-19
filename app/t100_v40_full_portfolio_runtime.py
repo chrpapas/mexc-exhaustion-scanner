@@ -343,7 +343,8 @@ class V40LivePortfolioPorts:
             )
 
     async def finalize_verified_forward_native_close(
-        self, *,snapshot:FourSlotSnapshotResult,lease:LeaderLease,
+        self, *,lease:LeaderLease,
+        snapshot:FourSlotSnapshotResult|None=None,
     )->V40ForwardCloseResult:
         """Actual immutable financial close and one-slot fenced release.
 
@@ -353,12 +354,24 @@ class V40LivePortfolioPorts:
         """
         if (
             type(self.forward_close) is not V40ForwardCloseFinalizer
-            or type(snapshot) is not FourSlotSnapshotResult
-            or snapshot.status!="UNOWNED_OR_MISSING_CHECKPOINTS"
             or type(lease) is not LeaderLease
         ):
             raise V40RuntimeAssemblyHalted(
                 "V40_FULL_RUNTIME_FORWARD_CLOSE_NOT_WIRED"
+            )
+        # A signed close witness from the supervisor is not permission to
+        # reuse its earlier account snapshot. Take another full exchange
+        # and immutable SQL bookend if the caller does not supply one.
+        if snapshot is None:
+            snapshot=await self.snapshots.inspect()
+        if (
+            type(snapshot) is not FourSlotSnapshotResult
+            or snapshot.status!="UNOWNED_OR_MISSING_CHECKPOINTS"
+            or snapshot.entry_allowed is not False
+            or snapshot.live_authorization is not False
+        ):
+            raise V40RuntimeAssemblyHalted(
+                "V40_FULL_RUNTIME_POST_EXIT_ACCOUNT_DRIFT_HALT"
             )
         if self._action.locked():
             raise V40RuntimeAssemblyHalted("V40_FULL_RUNTIME_CONCURRENT_MUTATION")

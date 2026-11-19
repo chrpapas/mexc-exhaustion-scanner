@@ -28,6 +28,8 @@ from app.t100_v40_unreleased_native_stop_cycle import V40UnreleasedStopCycleResu
 from app.t100_v40_unreleased_portfolio_native_close import V40PortfolioCloseWitness
 from app.t100_v40_native_close_mismatch_recovery import V40NativeCloseMismatchEvidence
 from app.t100_live_durable_recovery import PositionCheckpoint
+from app.t100_live_leader_fencing import LeaderLease
+from app.t100_v40_forward_close_finalizer import V40ForwardCloseResult
 from app.t100_v40_native_close_release_handoff import (
     V40NativeCloseReleaseHandoffReport,
 )
@@ -239,6 +241,7 @@ class V40PortfolioSupervisor:
 
     async def run_one(
         self, *, permit: LiveMutationPermit | None = None,
+        close_lease: LeaderLease | None = None,
     ) -> V40PortfolioSupervisorReport:
         try:
             frame = await self.ports.observe()
@@ -285,11 +288,64 @@ class V40PortfolioSupervisor:
                 and witness.closing_fills is not None
                 and witness.native_terminal is not None
             )
+            if not valid:
+                return self._halt(
+                    "V40_SUPERVISOR_NATIVE_EXIT_MISMATCH_INVALID",
+                    reconcile=True,
+                )
+            if close_lease is None:
+                return self._halt(
+                    "V40_SUPERVISOR_NATIVE_EXIT_POSITIVE_SETTLEMENT_REQUIRED",
+                    slots=len(frame.survivors)+1,reconcile=True,
+                )
+            if (
+                type(close_lease) is not LeaderLease
+                or close_lease.lease_name!="t100-live-executor"
+                or type(close_lease.fencing_token) is not int
+                or close_lease.fencing_token<=0
+                or close_lease.live_authorization is not False
+                or not callable(getattr(
+                    self.ports,"finalize_verified_forward_native_close",None
+                ))
+            ):
+                return self._halt(
+                    "V40_SUPERVISOR_NATIVE_EXIT_FENCED_SETTLEMENT_UNAVAILABLE",
+                    slots=len(frame.survivors)+1,reconcile=True,
+                )
+            try:
+                settled=await self.ports.finalize_verified_forward_native_close(
+                    lease=close_lease,
+                )
+            except BaseException:
+                # This may follow a DB COMMIT and must never be retried
+                # automatically. Only a fresh full inventory and immutable
+                # ledger reconciliation can decide the actual outcome.
+                return self._halt(
+                    "V40_SUPERVISOR_NATIVE_EXIT_DB_OUTCOME_UNKNOWN_RECONCILE",
+                    slots=len(frame.survivors)+1,reconcile=True,
+                )
+            if not (
+                type(settled) is V40ForwardCloseResult
+                and settled.status==
+                   "V40_FORWARD_NATIVE_CLOSE_DURABLY_ACCOUNTED_AND_SLOT_RELEASED_REOBSERVE"
+                and settled.position_id==previous.position_id
+                and settled.entry_and_close_fills_persisted is True
+                and settled.funding_persisted is True
+                and settled.final_accounting_persisted is True
+                and settled.slot_release_committed is True
+                and settled.post_release_new_account_get_required is True
+                and settled.entry_allowed is False
+                and settled.live_authorization is False
+                and settled.mexc_posts==0
+                and settled.database_commit_may_have_occurred is True
+            ):
+                return self._halt(
+                    "V40_SUPERVISOR_NATIVE_EXIT_SETTLEMENT_ACK_UNVERIFIED",
+                    slots=len(frame.survivors)+1,reconcile=True,
+                )
             return self._halt(
-                "V40_SUPERVISOR_NATIVE_EXIT_POSITIVE_SETTLEMENT_REQUIRED"
-                if valid else "V40_SUPERVISOR_NATIVE_EXIT_MISMATCH_INVALID",
-                slots=len(frame.survivors)+1 if valid else 0,
-                reconcile=True,
+                "V40_SUPERVISOR_NATIVE_EXIT_ACCOUNTED_SLOT_RELEASED_REOBSERVE",
+                slots=len(frame.survivors)+1,reconcile=True,
             )
         if not self._frame_valid(frame):
             return self._halt("V40_SUPERVISOR_GUARDIAN_ACCOUNT_OR_SOURCE_HALT")
