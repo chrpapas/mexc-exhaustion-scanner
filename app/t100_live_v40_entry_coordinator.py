@@ -149,7 +149,8 @@ def verify_fresh_exact_depth(
 
     A top-of-book price is insufficient. Validate both independent sources
     agree on economics and immutable lot grid before any dispatch claim.
-    Strictly isolated FLAT canary only until non-flat depth is supported.
+    Flat canary and separately proven 1..3-owned CROSS quote have distinct
+    strict freshness/lot and collateral checks. No permit is created here.
     """
     # Local import breaks the module dependency cycle: the standalone
     # GET-only market witness reuses this coordinator's V40ContractTerms.
@@ -169,14 +170,49 @@ def verify_fresh_exact_depth(
     ):
         raise V40CoordinatorHalted("V40_EXACT_DEPTH_SOURCE_INVALID")
 
+    from app.t100_v40_exchange_leverage_plan import (
+        V40CrossLeveragePlan,STATUS_FEASIBLE,
+    )
+    flat=(
+        quote.status=="V40_GET_ONLY_FLAT_ACCOUNT_AND_MARKET_QUOTED_NONAUTHORIZING"
+        and quote.bookended_flat_account is True
+        and quote.owned_protected_positions_bookended==0
+        and risk.current_owned_positions==0
+        and intent.notional_usdt*D("1.02")<=quote.account_available_usdt
+    )
+    plan=risk.cross_leverage_plan
+    owned=(
+        quote.status=="V40_GET_ONLY_OWNED_ACCOUNT_AND_MARKET_QUOTED_NONAUTHORIZING"
+        and quote.bookended_flat_account is False
+        and type(quote.owned_protected_positions_bookended) is int
+        and 1<=quote.owned_protected_positions_bookended<=3
+        and quote.owned_protected_positions_bookended==risk.current_owned_positions
+        and quote.private_key_order_permission_verified is True
+        and quote.complete_realized_daily_loss_verified is True
+        and quote.candidate_contract.private_order_permission_verified is True
+        and type(plan) is V40CrossLeveragePlan
+        and plan.status==STATUS_FEASIBLE
+        and plan.signal_id==signal.signal_id
+        and plan.symbol==signal.symbol
+        and plan.exact_order_notional_usdt==intent.notional_usdt
+        and plan.observed_equity_usdt==quote.account_equity_usdt
+        and plan.nominal_initial_margin_fits is True
+        and plan.frozen_strategy_notional_unchanged is True
+        and plan.account_observations_verified is True
+        and plan.liquidation_or_stop_survival_certified is False
+        and plan.live_authorization is False
+        and plan.mexc_posts==plan.database_writes==0
+        and plan.required_initial_margin_usdt>=0
+        and plan.required_initial_margin_usdt
+              +intent.notional_usdt*D("0.02")<=quote.account_available_usdt
+    )
     qt=quote.candidate_contract
     grid=("contract_size","volume_step","min_volume","max_volume","price_tick")
     if not (
-        quote.status=="V40_GET_ONLY_FLAT_ACCOUNT_AND_MARKET_QUOTED_NONAUTHORIZING"
+        (flat or owned)
         and depth.status=="V40_EXECUTABLE_LOT_DISPLAYED_DEPTH_NONAUTHORIZING"
         and quote.symbol==depth.symbol==signal.symbol==intent.symbol
         and depth.signal_id==intent.signal_id==signal.signal_id
-        and quote.bookended_flat_account is True
         and quote.hedge_mode_observed is True
         and quote.private_risk_row_observed is True
         and depth.order_fits_depth is True
@@ -187,7 +223,6 @@ def verify_fresh_exact_depth(
         and type(qt) is V40ContractTerms
         and all(getattr(qt,field)==getattr(terms,field) for field in grid)
         and qt.market_state_and_country_verified is True
-        and risk.current_owned_positions==0
         and all(type(value) is D and value.is_finite() and value>0 for value in (
             intent.volume_contracts,intent.notional_usdt,
             risk.current_account_equity_usdt,quote.account_equity_usdt,
@@ -206,7 +241,6 @@ def verify_fresh_exact_depth(
         and intent.volume_contracts<=terms.max_volume
         and intent.volume_contracts>=terms.min_volume
         and intent.volume_contracts%terms.volume_step==0
-        and intent.notional_usdt*D("1.02")<=quote.account_available_usdt
         and type(depth.adverse_slippage_bps) is D
         and depth.adverse_slippage_bps.is_finite()
         and depth.adverse_slippage_bps<=caps.max_slippage_bps
