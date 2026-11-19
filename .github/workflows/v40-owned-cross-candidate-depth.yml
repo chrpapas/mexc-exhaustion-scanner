@@ -33,5 +33,5 @@ jobs:
             tests/test_t100_live_v40_candidate_market_witness.py \
             tests/test_t100_live_v40_entry_coordinator.py \
             tests/test_t100_v40_concrete_portfolio_factory.py \
-            tests/test_t100_v40_nonflat_exit_frame_reader.py \
+            tests/test_t100_v40_unreleased_nonflat_guardian_evidence.py \
             tests/test_t100_v40_portfolio_order_transport.py
