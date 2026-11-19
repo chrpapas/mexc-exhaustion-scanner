@@ -87,10 +87,16 @@ async def select_sixth_reviewed_scope(
                 or state["last_alert"] is not False
                 or state["critical_latched"] is not True
                 or type(state["revision"]) is not int or state["revision"]<3
-                or (scope==RECOVERY_SCOPE_005
-                    and state["recently_healthy"] is not True)
             ):
                 fail("V40_RECOVERY_006_OLD_STATE_OR_STICKY_LATCH_CHANGED")
+            # A new Render deployment retires the 005 observer BEFORE 006
+            # can acquire the exclusive PG singleton. Requiring the retired
+            # observer's LAST heartbeat <120s is therefore a deadlock under
+            # healthy deployment or a prolonged singleton handoff. The
+            # 005 state MUST still be last healthy FLAT, its old critical
+            # MUST stay sticky and exact, and the new 006 scope is initialized
+            # only AFTER TWO independent live signed-GET/immutable-ledger
+            # bookends below. No stale sample substitutes those fresh GETs.
 
             counts=await conn.fetchrow(
                 """SELECT

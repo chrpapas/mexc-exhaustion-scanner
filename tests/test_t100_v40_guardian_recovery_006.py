@@ -133,7 +133,7 @@ async def test_unreviewed_history_or_signed_get_refuses_new_006(fault):
     elif fault=="pending_discord":
         db.outboxes[m.RECOVERY_SCOPE_005]["pending"]=1
     elif fault=="stale_005":
-        db.states[m.RECOVERY_SCOPE_005]["recently_healthy"]=False
+        db.states[m.RECOVERY_SCOPE_005]["last_status"]=m.HISTORIC_CRITICAL
     elif fault=="unlatched_005":
         db.states[m.RECOVERY_SCOPE_005]["critical_latched"]=False
     elif fault=="wrong_old_archive":
@@ -175,4 +175,25 @@ async def test_new_scope_db_write_unknown_never_silently_retries():
     ) as exc:
         await run(db)
     assert "credentials" not in str(exc.value)
+    assert db.inserted==[]
+
+
+@pytest.mark.asyncio
+async def test_retired_005_stale_heartbeat_only_passes_if_both_fresh_signed_gets_reverified():
+    db=DB()
+    db.states[m.RECOVERY_SCOPE_005]["recently_healthy"]=False
+    result,reads,pauses=await run(db)
+    assert result[0]==m.RECOVERY_SCOPE_006
+    assert len(reads)==2
+    assert pauses==[3.0]
+    assert db.inserted
+
+@pytest.mark.asyncio
+async def test_retired_005_stale_with_missing_fresh_signed_get_never_creates_006():
+    db=DB()
+    db.states[m.RECOVERY_SCOPE_005]["recently_healthy"]=False
+    first=replace(flat(),ledger_provenance_verified=True)
+    second=replace(first,inventory_two_signed_get_bookends=False)
+    with pytest.raises(m.V40GuardianRecovery006Halted):
+        await run(db,readings=[first,second])
     assert db.inserted==[]
