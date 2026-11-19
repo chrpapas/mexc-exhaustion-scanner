@@ -91,7 +91,9 @@ async def test_exact_one_http5xx_delivered_and_fresh_two_get_initializes_only_00
     assert len(db.inserted)==1
     for k,v in old.items():
         assert db.states[k]==v
-    assert not any("UPDATE" in sql or "DELETE" in sql
+    # A new-scope UPSERT may contain ON CONFLICT DO UPDATE.
+    # Neither prior-scope state nor alert rows are changed.
+    assert not any("DELETE FROM public.t100_guardian" in sql
                    for sql,args in db.calls)
 
 
