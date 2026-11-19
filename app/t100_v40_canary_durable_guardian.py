@@ -123,6 +123,14 @@ _SAFE_STARTUP_REASONS=frozenset({
     "V40_RECOVERY_005_FRESH_FLAT_HEDGE_LEDGER_UNVERIFIED",
     "V40_RECOVERY_005_NEW_SCOPE_NOT_CLEAN",
     "V40_RECOVERY_005_DB_OR_ACCOUNT_REVIEW_UNAVAILABLE",
+    "V40_RECOVERY_006_EXPLICIT_OPERATOR_APPROVAL_MISSING",
+    "V40_RECOVERY_006_EXISTING_SCOPE_UNKNOWN",
+    "V40_RECOVERY_006_OLD_STATE_OR_STICKY_LATCH_CHANGED",
+    "V40_RECOVERY_006_CRITICAL_HISTORY_OR_DISCORD_NOT_EXACT",
+    "V40_RECOVERY_006_SIGNED_GET_FAILED",
+    "V40_RECOVERY_006_CURRENT_FLAT_LEDGER_NOT_VERIFIED",
+    "V40_RECOVERY_006_NEW_SCOPE_NOT_CLEAN",
+    "V40_RECOVERY_006_DB_OR_LIVE_ACCOUNT_REVIEW_UNAVAILABLE",
 })
 
 
@@ -355,6 +363,9 @@ async def run(
         from app.t100_v40_guardian_recovery_005 import (
             select_fifth_reviewed_scope,V40GuardianRecovery005Halted,
         )
+        from app.t100_v40_guardian_recovery_006 import (
+            select_sixth_reviewed_scope,V40GuardianRecovery006Halted,
+        )
     if shared:
         from app.t100_v40_guardian_shared_db import (
             V40SharedGuardianDatabaseHalted,
@@ -415,6 +426,12 @@ async def run(
             # No opt-in -> unchanged 004 behavior and no release.
             stage="AUDITED_ROLLOVER_REVIEW"
             if env.get(
+                "T100_V40_GUARDIAN_RECOVERY_006_OPERATOR_APPROVED"
+            )=="true":
+                reviewed_scope,reviewed_reason=await select_sixth_reviewed_scope(
+                    conn,env=env,observe=observer,pause=pause,
+                )
+            elif env.get(
                 "T100_V40_GUARDIAN_RECOVERY_005_OPERATOR_APPROVED"
             )=="true":
                 reviewed_scope,reviewed_reason=await select_fifth_reviewed_scope(
@@ -544,7 +561,7 @@ async def run(
         # errors, API responses, SQL parameters or Discord URLs.
         if reviewed and isinstance(error,(
             V40GuardianReviewedGenerationHalted,V40GuardianRecovery004Halted,
-            V40GuardianRecovery005Halted,
+            V40GuardianRecovery005Halted,V40GuardianRecovery006Halted,
         )):
             reason=str(error)
             if reason in _SAFE_STARTUP_REASONS:
