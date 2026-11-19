@@ -242,6 +242,7 @@ def test_same_account_source_and_archive_are_mandatory(monkeypatch):
     with pytest.raises(stage.V40CloseArtifactHalted,match="SAME_ACCOUNT"):
         stage.V40CloseOnlyFinancialArtifactStaging(
             native=x.native,finance=x.finance,ledger=x.ledger,
+            writer_pool=x.db,
         )
 
 
