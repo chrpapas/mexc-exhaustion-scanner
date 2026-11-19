@@ -118,13 +118,14 @@ class V40LivePortfolioPorts:
         flat_guard:PostgresV40GuardianPostGate,
         nonflat_guard:PostgresV40NonflatGuardianEvidence,
         owned_bars:PostgresV40OwnedBarReader,
-        entry:V40OneShotCoordinator,
+        entry:V40OneShotCoordinator|None,
         stop:V40FourSlotStopLifecyclePort,
         cursor:V40UnchangedBarCommitPort|None,
         close:V40NativeCloseWitnessPort|None,
         release:V40NativeCloseReleasePort|None,
         financial_staging:V40CloseOnlyFinancialArtifactStaging|None=None,
         forward_close:V40ForwardCloseFinalizer|None=None,
+        signal_idle_entry_unbound:bool=False,
     )->None:
         # Do not accept an incomplete production lifecycle. A missing SQL
         # cursor commit is as consequential as a missing exchange stop POST;
@@ -138,12 +139,22 @@ class V40LivePortfolioPorts:
             or type(flat_guard) is not PostgresV40GuardianPostGate
             or type(nonflat_guard) is not PostgresV40NonflatGuardianEvidence
             or type(owned_bars) is not PostgresV40OwnedBarReader
-            or type(entry) is not V40OneShotCoordinator
             or type(stop) is not V40FourSlotStopLifecyclePort
-            or entry.initial_pilot_only is not False
-            or entry.source is not source or entry.snapshots is not snapshots
-            or entry.get_venue is not venue
-            or entry.completeness is not completeness
+            or type(signal_idle_entry_unbound) is not bool
+            or (
+                entry is None and signal_idle_entry_unbound is not True
+            )
+            or (
+                entry is not None and (
+                    type(entry) is not V40OneShotCoordinator
+                    or signal_idle_entry_unbound is not False
+                    or entry.initial_pilot_only is not False
+                    or entry.source is not source
+                    or entry.snapshots is not snapshots
+                    or entry.get_venue is not venue
+                    or entry.completeness is not completeness
+                )
+            )
             or snapshots.ledger is not ledger
             or snapshots.venue is not venue
             or snapshots.completeness is not completeness
@@ -179,7 +190,7 @@ class V40LivePortfolioPorts:
         # Reject disabled/canary or no-POST transport as the supposed live
         # four-slot executable.
         from app.t100_v40_portfolio_order_transport import V40FourSlotMexcOrderTransport
-        if (
+        if entry is not None and (
             type(entry.transport) is not V40FourSlotMexcOrderTransport
             or entry.transport.client is not stop.client
             or entry.transport.guard.client is not stop.client
@@ -196,6 +207,7 @@ class V40LivePortfolioPorts:
         self.owned_bars=owned_bars
         self.nonflat_guard=nonflat_guard
         self.entry=entry
+        self.signal_idle_entry_unbound=signal_idle_entry_unbound
         self.stop=stop
         self.cursor=cursor
         self.close=close
@@ -284,6 +296,13 @@ class V40LivePortfolioPorts:
             ) from None
 
     async def enter_one(self, *, permit:LiveMutationPermit, **args:Any)->Any:
+        # A position-management worker must boot before its first signal;
+        # it cannot manufacture a frozen signal, lot or CROSS plan merely
+        # to satisfy a constructor. An idle graph is never an order route.
+        if self.entry is None:
+            raise V40RuntimeAssemblyHalted(
+                "V40_FULL_RUNTIME_SIGNAL_SPECIFIC_ENTRY_NOT_BOUND"
+            )
         self._check(permit)
         if self._action.locked():
             raise V40RuntimeAssemblyHalted("V40_FULL_RUNTIME_CONCURRENT_MUTATION")
