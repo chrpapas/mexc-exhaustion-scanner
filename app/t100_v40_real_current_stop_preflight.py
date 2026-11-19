@@ -214,7 +214,7 @@ class V40RealCurrentStopPreflight:
                 or window.scanner_role_verified is not True
                 or window.exchange_public_specs_observed is not True
                 or window.live_authorization is not False
-                or window.mexc_posts!=window.database_writes
+                or window.mexc_posts!=0 or window.database_writes!=0
                 or position_id in window.no_due_position_ids
                 or cp.symbol not in window.bars or cp.symbol not in window.ticks
                 or type(window.bars[cp.symbol]) is not V40CompletedBar
