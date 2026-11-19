@@ -35,10 +35,11 @@ def build():
     staging.ledger=args["ledger"]
     staging.native=native
     staging.finance=financial
+    staging.writer_pool=object()
     account=object.__new__(PostgresFinalAccountingLedger)
-    account.pool=args["ledger"].pool
+    account.pool=staging.writer_pool
     writer=object.__new__(PostgresV40VerifiedSlotRelease)
-    writer.pool=args["ledger"].pool
+    writer.pool=staging.writer_pool
     handoff=object.__new__(V40NativeCloseReleaseHandoff)
     handoff.writer=writer
     handoff.probe=probe
