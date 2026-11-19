@@ -163,12 +163,13 @@ class V40LivePortfolioPorts:
                 or financial_staging.native.venue is not venue
                 or financial_staging.finance.probe is not venue.probe
                 or financial_staging.finance.entry_contracts.pool is not ledger.pool
+                or financial_staging.writer_pool is ledger.pool
             ))
             or (forward_close is not None and (
                 type(forward_close) is not V40ForwardCloseFinalizer
                 or forward_close.staging is not financial_staging
-                or forward_close.final_accounting.pool is not ledger.pool
-                or forward_close.handoff.writer.pool is not ledger.pool
+                or forward_close.final_accounting.pool is not financial_staging.writer_pool
+                or forward_close.handoff.writer.pool is not financial_staging.writer_pool
                 or forward_close.handoff.probe is not venue.probe
             ))
         ):
