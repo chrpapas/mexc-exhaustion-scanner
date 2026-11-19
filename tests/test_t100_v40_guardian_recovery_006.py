@@ -26,7 +26,8 @@ class DB:
         self.outboxes={
             scope:dict(
                 total=n,observer_critical=n,other_critical=0,pending=0,
-                nov19_incident_in_window=1 if scope==m.RECOVERY_SCOPE_005 else 0,
+                nov19_open_orders_http_5xx=1 if scope==m.RECOVERY_SCOPE_005 else 0,
+                nov19_after_positions_http_5xx=1 if scope==m.RECOVERY_SCOPE_005 else 0,
                 nov15_window=1 if scope==m.RECOVERY_SCOPE_004 else 0,
                 nov16_window=1 if scope==m.RECOVERY_SCOPE_004 else 0,
                 nov17_window=1 if scope==m.RECOVERY_SCOPE_004 else 0,
@@ -80,7 +81,7 @@ async def run(db,*,readings=None,e=None):
 
 
 @pytest.mark.asyncio
-async def test_exact_one_http5xx_delivered_and_fresh_two_get_initializes_only_006():
+async def test_exact_two_http5xx_delivered_and_fresh_two_get_initializes_only_006():
     db=DB()
     old={k:v.copy() for k,v in db.states.items() if v is not None}
     result,reads,pauses=await run(db)
@@ -111,7 +112,7 @@ async def test_sticky_existing_006_never_reinitializes_even_after_critical():
 @pytest.mark.asyncio
 @pytest.mark.parametrize("fault",[
     "other_critical","extra_http_5xx","wrong_critical_class",
-    "wrong_timestamp","pending_discord","stale_005",
+    "wrong_timestamp","wrong_second_timestamp","pending_discord","stale_005",
     "unlatched_005","wrong_old_archive","old_timestamps_drift",
     "old_incident","old_pending","missing_005","without_permission",
     "without_prior_005_permission","nonflat","signed_get_exception",
@@ -125,11 +126,13 @@ async def test_unreviewed_history_or_signed_get_refuses_new_006(fault):
     if fault=="other_critical":
         db.outboxes[m.RECOVERY_SCOPE_005]["other_critical"]=1
     elif fault=="extra_http_5xx":
-        db.outboxes[m.RECOVERY_SCOPE_005]["total"]=2
+        db.outboxes[m.RECOVERY_SCOPE_005]["total"]=3
     elif fault=="wrong_critical_class":
         db.outboxes[m.RECOVERY_SCOPE_005]["observer_critical"]=0
     elif fault=="wrong_timestamp":
-        db.outboxes[m.RECOVERY_SCOPE_005]["nov19_incident_in_window"]=0
+        db.outboxes[m.RECOVERY_SCOPE_005]["nov19_open_orders_http_5xx"]=0
+    elif fault=="wrong_second_timestamp":
+        db.outboxes[m.RECOVERY_SCOPE_005]["nov19_after_positions_http_5xx"]=0
     elif fault=="pending_discord":
         db.outboxes[m.RECOVERY_SCOPE_005]["pending"]=1
     elif fault=="stale_005":

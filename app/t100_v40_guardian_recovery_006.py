@@ -1,13 +1,14 @@
 """One-time, incident-preserving V40 guardian 006 recovery.
 
-The new critical on 005 is NOT an unowned position, missing native SL or
-phantom liquidation: original timestamped Render guardian evidence is
-2026-11-19 08:15:28.933Z, OBSERVER_V40_CANARY_SIGNED_GET_OR_ACCOUNT_INVALID,
-with observer detail OPEN_ORDER_COUNTS_HTTP_5XX_HALT. Notification was sent
-and 005 later returned healthy FLAT; previous 005 critical latch MUST remain.
+005 was healthy until TWO distinct MEXC transient HTTP 5xx incidents:
+2026-11-19 08:15:28.933Z OPEN_ORDER_COUNTS_HTTP_5XX_HALT and
+2026-11-19 08:16:09.714Z AFTER_POSITIONS_HTTP_5XX_HALT.
+Both were persisted and Discord-delivered; subsequent signed checks were
+FLAT. Neither incident proves an unowned position, missing SL or liquidation.
+The old 005 critical latch MUST remain.
 
 The DB critical class alone is insufficient to prove a 5xx. A *specific*
-one-event timestamp window, prior audited generation histories, successful
+two separately bounded timestamp windows, prior audited generation histories, successful
 delivery, fresh two independent signed inventory/hedge/ledger observations
 and exact one-time explicit operator approval are required. This does NOT
 enable POSTs, reset kill switch, delete incidents, or mark old latch clear.
@@ -32,7 +33,7 @@ RECOVERY_SCOPE_006=sha256(
     b"T100_V40_DEDICATED_GUARDIAN_REVIEWED_HTTP_5XX_2026_11_19_006"
 ).hexdigest()
 ACTIVE_REVIEWED_SCOPE=RECOVERY_SCOPE_006
-_OLD_SCOPES=(*_PRIOR_FIVE,(RECOVERY_SCOPE_005,1))
+_OLD_SCOPES=(*_PRIOR_FIVE,(RECOVERY_SCOPE_005,2))
 
 class V40GuardianRecovery006Halted(RuntimeError):
     """Fixed safe code; never include raw SQL, MEXC or account data."""
@@ -111,7 +112,12 @@ async def select_sixth_reviewed_scope(
                         WHERE severity='critical'
                         AND created_at>=TIMESTAMPTZ '2026-11-19 08:15:25+00'
                         AND created_at<=TIMESTAMPTZ '2026-11-19 08:15:32+00'
-                     )::int AS nov19_incident_in_window,
+                     )::int AS nov19_open_orders_http_5xx,
+                     COUNT(*) FILTER (
+                        WHERE severity='critical'
+                        AND created_at>=TIMESTAMPTZ '2026-11-19 08:16:05+00'
+                        AND created_at<=TIMESTAMPTZ '2026-11-19 08:16:15+00'
+                     )::int AS nov19_after_positions_http_5xx,
                      COUNT(*) FILTER (
                         WHERE severity='critical'
                         AND created_at>=TIMESTAMPTZ '2026-11-15 12:14:20+00'
@@ -135,7 +141,8 @@ async def select_sixth_reviewed_scope(
             # a stale legacy epoch without weakening any predicate.
             if counts is None or any(type(counts[k]) is not int for k in (
                 "total","observer_critical","other_critical","pending",
-                "nov19_incident_in_window","nov15_window",
+                "nov19_open_orders_http_5xx","nov19_after_positions_http_5xx",
+                "nov15_window",
                 "nov16_window","nov17_window",
             )):
                 fail("V40_RECOVERY_006_OUTBOX_SHAPE_INVALID")
@@ -151,8 +158,12 @@ async def select_sixth_reviewed_scope(
                 )
             if counts["pending"]!=0:
                 fail("V40_RECOVERY_006_DISCORD_PENDING_INCIDENT")
-            if counts["nov19_incident_in_window"]!=(
-                1 if scope==RECOVERY_SCOPE_005 else 0
+            if any(
+                counts[k]!=(1 if scope==RECOVERY_SCOPE_005 else 0)
+                for k in (
+                    "nov19_open_orders_http_5xx",
+                    "nov19_after_positions_http_5xx",
+                )
             ):
                 fail(
                     "V40_RECOVERY_006_005_HTTP_5XX_TIME_WINDOW_MISMATCH"
@@ -192,7 +203,7 @@ async def select_sixth_reviewed_scope(
             fail("V40_RECOVERY_006_NEW_SCOPE_NOT_CLEAN")
         return (
             RECOVERY_SCOPE_006,
-            "NEW_RECOVERY_006_AFTER_ONE_VERIFIED_005_HTTP_5XX_AND_FRESH_FLAT",
+            "NEW_RECOVERY_006_AFTER_TWO_EXACT_005_HTTP_5XX_AND_FRESH_FLAT",
         )
     except V40GuardianRecovery006Halted:
         raise
