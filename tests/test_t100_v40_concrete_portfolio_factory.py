@@ -93,7 +93,7 @@ def fixture(*,occupied=0):
         account_scope_sha256="a"*64,
         signal=signal,context=ctx,
         entry_risk_witness=Risk(),depth_witness=Depth(),
-        current_stop_preflight=StopPreflight(),
+        current_stop_preflight=None,
         caps=LiveCaps(
             max_order_usdt=D("500"),max_portfolio_usdt=D("1000"),
             max_daily_loss_usdt=D("100"),
@@ -124,7 +124,11 @@ def test_concrete_all_ports_same_signer_all_four_occupancy_states(occupied):
     assert p.entry.transport.context.expected_occupied_slots==occupied
     assert p.entry.witness is args["entry_risk_witness"]
     assert p.entry.depth is args["depth_witness"]
-    assert p.stop.preflight is args["current_stop_preflight"]
+    from app.t100_v40_real_current_stop_preflight import V40RealCurrentStopPreflight
+    assert type(p.stop.preflight) is V40RealCurrentStopPreflight
+    assert p.stop.preflight.snapshots is assembled.snapshots
+    assert p.stop.preflight.venue is assembled.venue
+    assert p.stop.preflight.ledger is assembled.ledger
     assert p.entry.leaders is assembled.leaders
     assert p.entry.reservations.pool is args["writer_pool"]
     assert p.entry.journal.pool is args["writer_pool"]

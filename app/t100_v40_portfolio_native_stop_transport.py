@@ -188,7 +188,16 @@ class V40FourSlotNativeStopAmendTransport(
             or proposed.armed is not True
             or proposed.best_profit_pct< D("14")
             or proposed.best_profit_pct<cp.best_profit_pct
-            or cp.armed is not True
+            # The frozen policy first arms at 14% on a completed bar.
+            # Requiring the OLD checkpoint to be armed would make the
+            # first legitimate 14% activation unreachable. Only a
+            # monotonic inactive->active transition, supported by the
+            # independently verified exact new best-profit, is permitted.
+            or not (
+                (cp.armed is True and cp.best_profit_pct>=D("14"))
+                or (cp.armed is False and cp.best_profit_pct<D("14")
+                    and proposed.best_profit_pct>=D("14"))
+            )
         ):
             raise V40PortfolioStopPostHalted(
                 "V40_PORTFOLIO_STOP_FROZEN_TRAILING_OR_IDENTITY_DRIFT_NO_POST"

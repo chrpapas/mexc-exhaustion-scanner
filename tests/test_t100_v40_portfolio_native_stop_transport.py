@@ -307,3 +307,51 @@ def test_constructor_rejects_duplicate_portfolio_or_wrong_ledger():
         V40FourSlotNativeStopAmendTransport(
             checkpoints=(cp,),**{**kwargs,"ledger":object()},
         )
+
+
+
+@pytest.mark.asyncio
+async def test_frozen_first_14_percent_arm_is_reachable_with_signed_full_account(
+    monkeypatch,
+):
+    """Prior checkpoint is UNARMED; the new completed bar crosses 14%."""
+    old=checkpoint()
+    from dataclasses import replace
+    first=replace(old,best_profit_pct=D("0"),armed=False,checkpoint_version=1)
+    c=client_for((first,))
+    ledger=PostgresFourSlotLedgerReader.__new__(PostgresFourSlotLedgerReader)
+    g=GuardianReader(healthy_guardian())
+    t=m.V40FourSlotNativeStopAmendTransport(
+        client=c,checkpoints=(first,),target_position_id=first.position_id,
+        target_signal_id=497,preflight=preflight(),
+        guardian_reader=g,ledger=ledger,
+    )
+    snap=snapshot((first,),c)
+    async def current(self):return snap
+    monkeypatch.setattr(m.V40FourSlotNativeStopAmendTransport,
+                        "_snapshot",current)
+    monkeypatch.setattr(base,"run_current_inventory_completeness_probe",cert)
+    monkeypatch.setattr(m,"require_certified_transport_permit",lambda p:p)
+    with patch("app.t100_live_guards.LIVE_NATIVE_STOP_AMENDMENT_STATUS","CERTIFIED"):
+        await perform(t)
+    assert len(c.posts)==1
+    assert c.posts[0][1]["stopPlanOrderId"]==92
+    assert c.posts[0][1]["stopLossPrice"]=="99"
+    assert t._post_attempted is True
+
+
+@pytest.mark.asyncio
+async def test_incoherent_initial_armed_state_cannot_be_auto_corrected(monkeypatch):
+    first=replace(checkpoint(),armed=False,best_profit_pct=D("14"))
+    c=client_for((first,))
+    ledger=PostgresFourSlotLedgerReader.__new__(PostgresFourSlotLedgerReader)
+    t=m.V40FourSlotNativeStopAmendTransport(
+        client=c,checkpoints=(first,),target_position_id=first.position_id,
+        target_signal_id=497,preflight=preflight(),
+        guardian_reader=GuardianReader(healthy_guardian()),ledger=ledger,
+    )
+    monkeypatch.setattr(m,"require_certified_transport_permit",lambda p:p)
+    with patch("app.t100_live_guards.LIVE_NATIVE_STOP_AMENDMENT_STATUS","CERTIFIED"):
+        with pytest.raises(m.V40PortfolioStopPostHalted,match="FROZEN_TRAILING_OR_IDENTITY"):
+            await perform(t)
+    assert c.gets==0 and c.posts==[]
