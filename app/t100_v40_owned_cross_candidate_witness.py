@@ -35,6 +35,10 @@ from app.t100_v40_canary_daily_loss import V40DailyLossEvidence
 from app.t100_v40_canary_key_permissions import V40KeyPermissionObservation
 from app.t100_v40_unreleased_same_signer_risk_reader import V40SameSignerCurrentRiskReader
 from app.t100_v40_unreleased_current_portfolio_risk import V40PortfolioCurrentRisk
+from app.t100_v40_exchange_leverage_plan import (
+    V40CrossLeverageInputs,assess_exact_v40_cross_leverage,
+    V40CrossLeveragePlan,STATUS_FEASIBLE,
+)
 
 
 class V40OwnedCrossCandidateHalted(RuntimeError):
@@ -54,6 +58,7 @@ class V40OwnedCrossCandidateWitness:
         read_daily_loss:Callable[[],Awaitable[V40DailyLossEvidence]],
         clock_ms:Callable[[],int],
         max_book_age_ms:int=1500,
+        operator_max_cross_leverage:int=5,
     )->None:
         if (
             type(ledger) is not PostgresFourSlotLedgerReader
@@ -73,6 +78,8 @@ class V40OwnedCrossCandidateWitness:
             or not callable(clock_ms)
             or type(max_book_age_ms) is not int
             or not 0<max_book_age_ms<=2000
+            or type(operator_max_cross_leverage) is not int
+            or not 1<=operator_max_cross_leverage<=5
         ):
             raise V40OwnedCrossCandidateHalted(
                 "V40_OWNED_CROSS_SAME_ACCOUNT_READERS_AND_WRITER_SCOPE_REQUIRED"
@@ -87,6 +94,7 @@ class V40OwnedCrossCandidateWitness:
         self.read_daily_loss=read_daily_loss
         self.clock_ms=clock_ms
         self.max_book_age_ms=max_book_age_ms
+        self.operator_max_cross_leverage=operator_max_cross_leverage
 
     async def _public(self,path:str,params:dict[str,str]|None)->dict[str,Any]:
         try:
@@ -264,6 +272,23 @@ class V40OwnedCrossCandidateWitness:
             ):
                 raise ValueError()
             private_max=_decimal(risk.get("maxVol"))
+            # Require actual limits, not optimistic defaults. These are
+            # *current* venue maxima only; future stressed tiers are unknown.
+            contract_max=contract.get("maxLeverage")
+            country_max=contract.get("countryConfigContractMaxLeverage")
+            private_max_lev=risk.get("maxLeverage")
+            configured_max_lev=config.get("maxLeverageView")
+            if (
+                any(type(v) is not int or v<1 for v in (
+                    contract_max,private_max_lev,configured_max_lev
+                ))
+                or type(country_max) is not int or country_max<0
+            ):
+                raise ValueError()
+            contract_ceiling=min(
+                contract_max,country_max if country_max>0 else contract_max,
+            )
+            private_ceiling=min(private_max_lev,configured_max_lev)
             if (
                 contract.get("symbol")!=signal.symbol
                 or contract.get("apiAllowed") is not True
@@ -317,6 +342,9 @@ class V40OwnedCrossCandidateWitness:
             private_risk_row_observed=True,
             # Newly-added strict owned-mode check in sized-depth gate.
             owned_protected_positions_bookended=first.occupied_slots,
+            owned_gross_marked_notional_usdt=owned.current_gross_fair_notional_usdt,
+            observed_contract_max_cross_leverage=contract_ceiling,
+            observed_account_max_cross_leverage=private_ceiling,
             full_cross_collateral_verified=False,
             complete_realized_daily_loss_verified=True,
             private_key_order_permission_verified=True,
@@ -362,7 +390,7 @@ class V40OwnedCrossCandidateWitness:
             raise V40OwnedCrossCandidateHalted(
                 "V40_OWNED_CROSS_SIZED_QUOTE_INPUT_INVALID"
             )
-        quote,book,_=await self._capture(signal)
+        quote,book,risks=await self._capture(signal)
         bids=_level_rows(book.get("bids"),side="sell")
         try:
             vwap,filled=displayed_vwap(
@@ -389,6 +417,49 @@ class V40OwnedCrossCandidateWitness:
             raise V40OwnedCrossCandidateHalted(
                 "V40_OWNED_CROSS_UNEXECUTABLE_LOT_OR_SLIPPAGE"
             )
+        # The exact executable frozen quantity is known only HERE, not at
+        # initial account inspection. Choose minimum nominal CROSS
+        # leverage without changing strategy notional, accounting for
+        # an explicit 2% fee/price buffer and 5% equity headroom.
+        # This does NOT certify liquidation survival before the SL75.
+        try:
+            plan=assess_exact_v40_cross_leverage(
+                V40CrossLeverageInputs(
+                    signal_id=signal.signal_id,symbol=signal.symbol,
+                    frozen_lot_notional_usdt=intent.notional_usdt,
+                    executable_intent_notional_usdt=intent.notional_usdt,
+                    current_gross_notional_usdt=risks.portfolio_notional_usdt,
+                    account_equity_usdt=risks.current_account_equity_usdt,
+                    signed_available_initial_margin_usdt=risks.available_margin_usdt,
+                    independent_fee_reserve_usdt=intent.notional_usdt*D("0.02"),
+                    required_remaining_margin_headroom_usdt=(
+                        risks.current_account_equity_usdt*D("0.05")
+                    ),
+                    observed_contract_max_cross_leverage=(
+                        quote.observed_contract_max_cross_leverage
+                    ),
+                    observed_account_max_cross_leverage=(
+                        quote.observed_account_max_cross_leverage
+                    ),
+                    operator_max_cross_leverage=self.operator_max_cross_leverage,
+                    account_cross_mode_verified=True,
+                    account_identity_bookended_verified=True,
+                    available_margin_private_signed_get_verified=True,
+                    per_contract_and_private_leverage_tiers_verified=True,
+                    frozen_strategy_lot_and_signal_verified=True,
+                )
+            )
+            if (
+                type(plan) is not V40CrossLeveragePlan
+                or plan.status!=STATUS_FEASIBLE
+                or plan.selected_exchange_cross_leverage is None
+            ):
+                raise ValueError()
+        except Exception:
+            raise V40OwnedCrossCandidateHalted(
+                "V40_OWNED_CROSS_EXACT_FROZEN_LOT_NO_NOMINAL_MARGIN_PLAN"
+            ) from None
+        quote=replace(quote,exact_cross_leverage_plan=plan)
         return quote,V40ExactDepth(
             status="V40_EXECUTABLE_LOT_DISPLAYED_DEPTH_NONAUTHORIZING",
             symbol=signal.symbol,signal_id=signal.signal_id,

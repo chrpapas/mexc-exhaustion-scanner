@@ -745,23 +745,28 @@ def _portfolio_permit_for(signal):
     )
 
 
-def test_pinned_first_same_bar_signal_can_complete_one_durable_cycle(monkeypatch):
+def test_pinned_same_bar_signal_requires_real_per_signal_transport_context(monkeypatch):
     log=[]
     patch_release_gates_and_mutations(monkeypatch,log)
     first=candidate()
     second=replace(first,signal_id=43,symbol="SECOND_USDT")
+    # The legacy in-memory fixture has no real MEXC portfolio order context.
+    # A pinned signal and even a mocked permit cannot bypass the now
+    # mandatory account/lot/CROSS leverage last-preclaim binding.
     result=asyncio.run(controller(log,events=[first,second]).run_one(
         permit=_portfolio_permit_for(first),
         caps=caps(),parity_report={},holder_id="frozen-same-bar-test",
         monitored_signal_id=first.signal_id,
         monitored_symbol=first.symbol,monitored_tier=first.tier,
     ))
-    assert result.status=="V40_ONE_PROTECTED_ENTRY_RECOVERED_NOT_AUTONOMOUS"
+    assert result.status=="V40_PORTFOLIO_FROZEN_CONTEXT_OR_MARGIN_MISMATCH_NO_POST"
     assert result.signal_id==first.signal_id
-    assert result.post_attempted is True
+    assert result.reserved and result.staged
+    assert result.post_attempted is False
+    assert result.live_authorization is False
     assert log.count("source")==2
     assert log.count("risk_1")==1
-    assert log.count("dispatch")==1
+    assert log.count("dispatch")==0
 
 
 def test_pinned_first_inadmissible_cannot_fall_through_to_second(monkeypatch):

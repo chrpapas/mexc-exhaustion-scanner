@@ -44,7 +44,7 @@ def setup(n=2):
     )
     state=SimpleNamespace(
         snapshot=snapshot,
-        equity="50",available="20",mode=1,
+        equity="50",available="8",mode=1,
         write_key=True,complete_history=True,
         leverage=2,market_state=0,
         depth_ts=now-100,
@@ -78,12 +78,14 @@ def setup(n=2):
         }]
     async def leverage(symbol):
         assert symbol==signal.symbol
-        return [{"positionType":2,"openType":2,"leverage":state.leverage}]
+        return [{"positionType":2,"openType":2,"leverage":state.leverage,
+                 "maxLeverageView":5}]
     async def risk_tier(symbol):
         assert symbol==signal.symbol
         return {symbol:[{
             "positionType":2,"symbol":symbol,"level":1,
             "maxVol":"1000","openType":2,"leverage":state.leverage,
+            "maxLeverage":5,
         }]}
     class Public:
         async def get(self,path,*,params):
@@ -100,6 +102,7 @@ def setup(n=2):
                     "state":state.market_state,"quoteCoin":"USDT",
                     "settleCoin":"USDT","futureType":1,"positionOpenType":2,
                     "priceUnit":"0.01","volUnit":"1",
+                    "maxLeverage":5,"countryConfigContractMaxLeverage":5,
                     "minVol":"1","maxVol":"1000",
                     "contractSize":"0.01",
                 })
@@ -141,6 +144,7 @@ def setup(n=2):
     w.read_daily_loss=daily
     w.clock_ms=lambda:now
     w.max_book_age_ms=1500
+    w.operator_max_cross_leverage=5
     plan=V40CrossLeveragePlan(
         STATUS_FEASIBLE,signal_id=signal.signal_id,
         symbol=signal.symbol,
@@ -198,7 +202,11 @@ async def test_signed_one_to_three_owned_stops_and_exact_sized_depth(n):
     assert quote.complete_realized_daily_loss_verified is True
     assert depth.contracts==D("10")
     assert depth.sell_vwap==D("99.99")
-    risk=replace(risk,cross_leverage_plan=f.plan)
+    assert quote.exact_cross_leverage_plan.selected_exchange_cross_leverage==2
+    assert quote.exact_cross_leverage_plan.exact_order_notional_usdt==D("10")
+    assert quote.exact_cross_leverage_plan.portfolio_gross_after_entry_usdt==D("40")
+    assert quote.exact_cross_leverage_plan.required_initial_margin_usdt==D("5")
+    risk=replace(risk,cross_leverage_plan=quote.exact_cross_leverage_plan)
     sized=verify_fresh_exact_depth(
         signal=f.signal,intent=f.intent,
         risk=risk,terms=terms,caps=f.caps,
@@ -206,7 +214,7 @@ async def test_signed_one_to_three_owned_stops_and_exact_sized_depth(n):
     )
     assert sized.observed_sell_vwap==D("99.99")
     assert sized.current_owned_positions==n
-    assert sized.cross_leverage_plan is f.plan
+    assert sized.cross_leverage_plan is quote.exact_cross_leverage_plan
     assert sized.no_unowned_positions_or_orders
     assert sized.book_age_ms==100
 
@@ -258,7 +266,7 @@ async def test_ambiguous_candidate_economics_blocks_before_any_dispatch(fault):
             nonlocal calls
             calls+=1
             rows=[{"currency":"USDT","equity":"50",
-                   "availableBalance":"20" if calls==1 else "19",
+                   "availableBalance":"8" if calls==1 else "7",
                    "cashBalance":"50","frozenBalance":"0",
                    "positionMargin":"30","unrealized":"0",
                    "debtAmount":"0","contributeMarginAmount":"0","bonus":"0"}]

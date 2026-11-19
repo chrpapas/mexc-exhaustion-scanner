@@ -177,10 +177,11 @@ def verify_fresh_exact_depth(
         quote.status=="V40_GET_ONLY_FLAT_ACCOUNT_AND_MARKET_QUOTED_NONAUTHORIZING"
         and quote.bookended_flat_account is True
         and quote.owned_protected_positions_bookended==0
+        and quote.exact_cross_leverage_plan is None
         and risk.current_owned_positions==0
         and intent.notional_usdt*D("1.02")<=quote.account_available_usdt
     )
-    plan=risk.cross_leverage_plan
+    plan=quote.exact_cross_leverage_plan
     owned=(
         quote.status=="V40_GET_ONLY_OWNED_ACCOUNT_AND_MARKET_QUOTED_NONAUTHORIZING"
         and quote.bookended_flat_account is False
@@ -196,6 +197,14 @@ def verify_fresh_exact_depth(
         and plan.symbol==signal.symbol
         and plan.exact_order_notional_usdt==intent.notional_usdt
         and plan.observed_equity_usdt==quote.account_equity_usdt
+        and plan.observed_equity_usdt==risk.current_account_equity_usdt
+        and plan.portfolio_gross_after_entry_usdt==
+              risk.portfolio_notional_usdt+intent.notional_usdt
+        and quote.owned_gross_marked_notional_usdt==risk.portfolio_notional_usdt
+        and quote.account_available_usdt==risk.available_margin_usdt
+        and plan.selected_exchange_cross_leverage==caps.leverage
+        and (risk.cross_leverage_plan is None
+             or risk.cross_leverage_plan==plan)
         and plan.nominal_initial_margin_fits is True
         and plan.frozen_strategy_notional_unchanged is True
         and plan.account_observations_verified is True
@@ -204,7 +213,9 @@ def verify_fresh_exact_depth(
         and plan.mexc_posts==plan.database_writes==0
         and plan.required_initial_margin_usdt>=0
         and plan.required_initial_margin_usdt
-              +intent.notional_usdt*D("0.02")<=quote.account_available_usdt
+              +intent.notional_usdt*D("0.02")
+              +risk.current_account_equity_usdt*D("0.05")
+              <=quote.account_available_usdt
     )
     qt=quote.candidate_contract
     grid=("contract_size","volume_step","min_volume","max_volume","price_tick")
@@ -263,6 +274,7 @@ def verify_fresh_exact_depth(
     # any of the original independent risk certification booleans.
     return dataclass_replace(
         risk,observed_sell_vwap=depth.sell_vwap,
+        cross_leverage_plan=(plan if owned else risk.cross_leverage_plan),
         book_age_ms=max(
             quote.book_age_ms,depth.age_ms,
             now_ms-quote.observed_at_ms,
@@ -445,6 +457,84 @@ def select_frozen_portfolio_pinned_candidate(
             "V40_PORTFOLIO_PINNED_SIGNAL_NOT_FIRST_UNHELD"
         )
     return chosen
+
+
+def verified_exact_portfolio_post_context(
+    *,snapshot:FourSlotSnapshotResult,
+    selected:V40PreparedEntry,
+    sized_risk:V40CurrentRiskEvidence,
+    caps:LiveCaps,
+    context:Any,
+) -> bool:
+    """Independently assessed depth/leverage MUST match the frozen POST adapter.
+
+    A preconstructed order context is not a current risk witness. Confirm
+    exact signal, immutable lot, current-owned set and margin AFTER the last
+    signed-GET sized depth and BEFORE creating the irreversible SQL claim.
+    No network, SQL mutation or permit creation.
+    """
+    from app.t100_v40_portfolio_order_transport import V40PortfolioPostContext
+    from app.t100_v40_exchange_leverage_plan import (
+        V40CrossLeveragePlan,STATUS_FEASIBLE,
+    )
+    if not (
+        type(snapshot) is FourSlotSnapshotResult
+        and type(selected) is V40PreparedEntry
+        and type(sized_risk) is V40CurrentRiskEvidence
+        and type(caps) is LiveCaps
+        and type(context) is V40PortfolioPostContext
+        and type(sized_risk.cross_leverage_plan) is V40CrossLeveragePlan
+        and type(context.leverage_plan) is V40CrossLeveragePlan
+    ):
+        return False
+    plan=sized_risk.cross_leverage_plan
+    intent=selected.intent
+    owned=(
+        tuple(p.position_id for p in snapshot.recovery.recovered)
+        if snapshot.recovery is not None else ()
+    )
+    return (
+        plan.status==STATUS_FEASIBLE
+        and context.leverage_plan==plan
+        and plan.signal_id==selected.signal.signal_id==intent.signal_id
+        and plan.symbol==selected.signal.symbol==intent.symbol
+        and plan.exact_order_notional_usdt==intent.notional_usdt
+        and plan.portfolio_gross_after_entry_usdt==
+            sized_risk.portfolio_notional_usdt+intent.notional_usdt
+        and plan.observed_equity_usdt==sized_risk.current_account_equity_usdt
+        and plan.selected_exchange_cross_leverage==caps.leverage
+        and plan.nominal_initial_margin_fits is True
+        and plan.frozen_strategy_notional_unchanged is True
+        and plan.account_observations_verified is True
+        and plan.live_authorization is False
+        and plan.liquidation_or_stop_survival_certified is False
+        and snapshot.status in (
+            "FLAT_OBSERVED_NONAUTHORIZING",
+            "NONFLAT_PROVENANCE_MATCHED_NONAUTHORIZING",
+        )
+        and snapshot.occupied_slots==sized_risk.current_owned_positions
+        and snapshot.occupied_slots==context.expected_occupied_slots
+        and len(owned)==snapshot.occupied_slots
+        and len(set(owned))==len(owned)
+        and len(context.expected_owned_position_ids)==len(owned)
+        and set(context.expected_owned_position_ids)==set(owned)
+        and context.frozen_order_notional_usdt==intent.notional_usdt
+        and context.frozen_portfolio_gross_after_entry_usdt==
+            plan.portfolio_gross_after_entry_usdt
+        and context.frozen_equity_at_plan_usdt==plan.observed_equity_usdt
+        and type(context.fee_reserve_usdt) is D
+        and type(context.protected_remaining_margin_headroom_usdt) is D
+        and context.fee_reserve_usdt.is_finite()
+        and context.protected_remaining_margin_headroom_usdt.is_finite()
+        and context.fee_reserve_usdt>=intent.notional_usdt*D("0.02")
+        and context.protected_remaining_margin_headroom_usdt>=0
+        and context.protected_remaining_margin_headroom_usdt
+            <=plan.remaining_margin_after_order_and_fees_usdt
+        and plan.required_initial_margin_usdt+
+            context.fee_reserve_usdt+
+            context.protected_remaining_margin_headroom_usdt
+            <=sized_risk.available_margin_usdt
+    )
 
 
 class V40OneShotCoordinator:
@@ -925,6 +1015,19 @@ class V40OneShotCoordinator:
                         reserved=True,staged=True,
                         claim_may_exist=False,
                     )
+            if is_four_slot_portfolio and not verified_exact_portfolio_post_context(
+                snapshot=pre,selected=selected,sized_risk=sized_risk,
+                caps=caps,context=getattr(self.transport,"context",None),
+            ):
+                # The irrevocable SQL staging already exists. It needs
+                # explicit operator reconciliation; NEVER silently reuse
+                # the adapter with a stale/currently unverified leverage.
+                return V40OneShotReport(
+                    "V40_PORTFOLIO_FROZEN_CONTEXT_OR_MARGIN_MISMATCH_NO_POST",
+                    signal_id=selected.signal.signal_id,
+                    reserved=True,staged=True,
+                    claim_may_exist=False,
+                )
             dispatch=await dispatch_one_staged_v40(
                 plan=selected.plan,intent=selected.intent,stage=stage,
                 lease=lease,risk=sized_risk,caps=caps,permit=permit,

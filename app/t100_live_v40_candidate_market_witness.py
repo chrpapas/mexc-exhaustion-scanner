@@ -190,6 +190,12 @@ class V40CandidateQuote:
     # slot count and unchanged ledger/native full-account bookends.
     # The original flat-first-canary always leaves this at zero.
     owned_protected_positions_bookended:int=0
+    # Each non-flat lot must independently plan its exact nominal CROSS
+    # leverage after it is quantized; a quote alone never issues a permit.
+    owned_gross_marked_notional_usdt:D|None=None
+    observed_contract_max_cross_leverage:int|None=None
+    observed_account_max_cross_leverage:int|None=None
+    exact_cross_leverage_plan:object|None=None
     # These are NOT obtained from current asset/risk endpoints.
     full_cross_collateral_verified: bool=False
     complete_realized_daily_loss_verified: bool=False
