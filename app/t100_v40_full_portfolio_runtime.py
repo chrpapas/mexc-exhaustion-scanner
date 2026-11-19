@@ -53,6 +53,9 @@ from app.t100_live_leader_fencing import LeaderLease
 from app.t100_v40_close_financial_artifact_staging import (
     V40CloseOnlyFinancialArtifactStaging,V40CloseArtifactReceipt,
 )
+from app.t100_v40_forward_close_finalizer import (
+    V40ForwardCloseFinalizer,V40ForwardCloseResult,
+)
 from app.t100_v40_native_close_release_handoff import (
     V40NativeCloseReleaseHandoffReport,
 )
@@ -121,6 +124,7 @@ class V40LivePortfolioPorts:
         close:V40NativeCloseWitnessPort|None,
         release:V40NativeCloseReleasePort|None,
         financial_staging:V40CloseOnlyFinancialArtifactStaging|None=None,
+        forward_close:V40ForwardCloseFinalizer|None=None,
     )->None:
         # Do not accept an incomplete production lifecycle. A missing SQL
         # cursor commit is as consequential as a missing exchange stop POST;
@@ -160,6 +164,13 @@ class V40LivePortfolioPorts:
                 or financial_staging.finance.probe is not venue.probe
                 or financial_staging.finance.entry_contracts.pool is not ledger.pool
             ))
+            or (forward_close is not None and (
+                type(forward_close) is not V40ForwardCloseFinalizer
+                or forward_close.staging is not financial_staging
+                or forward_close.final_accounting.pool is not ledger.pool
+                or forward_close.handoff.writer.pool is not ledger.pool
+                or forward_close.handoff.probe is not venue.probe
+            ))
         ):
             raise V40RuntimeAssemblyHalted(
                 "V40_FULL_FOUR_SLOT_RUNTIME_PORTS_MISSING_OR_DIFFERENT_ACCOUNT"
@@ -189,6 +200,7 @@ class V40LivePortfolioPorts:
         self.close=close
         self.release=release
         self.financial_staging=financial_staging
+        self.forward_close=forward_close
         self._action=asyncio.Lock()
 
     async def observe(self)->V40PortfolioCycleFrame|V40NativeCloseMismatchEvidence:
@@ -326,6 +338,31 @@ class V40LivePortfolioPorts:
             raise V40RuntimeAssemblyHalted("V40_FULL_RUNTIME_CONCURRENT_MUTATION")
         async with self._action:
             return await self.financial_staging.stage_once(
+                snapshot=snapshot,lease=lease,
+            )
+
+    async def finalize_verified_forward_native_close(
+        self, *,snapshot:FourSlotSnapshotResult,lease:LeaderLease,
+    )->V40ForwardCloseResult:
+        """Actual immutable financial close and one-slot fenced release.
+
+        Only called for a signed exact native-close mismatch, never by
+        normal entry/stop POST flow. A success STILL forbids any new entry
+        until a completely new account GET, ledger and guardian cycle.
+        """
+        if (
+            type(self.forward_close) is not V40ForwardCloseFinalizer
+            or type(snapshot) is not FourSlotSnapshotResult
+            or snapshot.status!="UNOWNED_OR_MISSING_CHECKPOINTS"
+            or type(lease) is not LeaderLease
+        ):
+            raise V40RuntimeAssemblyHalted(
+                "V40_FULL_RUNTIME_FORWARD_CLOSE_NOT_WIRED"
+            )
+        if self._action.locked():
+            raise V40RuntimeAssemblyHalted("V40_FULL_RUNTIME_CONCURRENT_MUTATION")
+        async with self._action:
+            return await self.forward_close.run_once(
                 snapshot=snapshot,lease=lease,
             )
 
