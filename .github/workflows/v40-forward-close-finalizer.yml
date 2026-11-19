@@ -8,6 +8,8 @@ on:
     paths:
       - "app/t100_v40_forward_close_finalizer.py"
       - "tests/test_t100_v40_forward_close_finalizer.py"
+      - "app/t100_v40_full_portfolio_runtime.py"
+      - "tests/test_t100_v40_forward_close_port_binding.py"
       - ".github/workflows/v40-forward-close-finalizer.yml"
 
 permissions:
@@ -28,6 +30,7 @@ jobs:
           python -m compileall -q app/t100_v40_forward_close_finalizer.py
           python -m pytest -q \
             tests/test_t100_v40_forward_close_finalizer.py \
+            tests/test_t100_v40_forward_close_port_binding.py \
             tests/test_t100_v40_close_financial_artifact_staging.py \
             tests/test_t100_v40_portfolio_close_financial_reader.py \
             tests/test_t100_v40_native_close_mismatch_recovery.py \
