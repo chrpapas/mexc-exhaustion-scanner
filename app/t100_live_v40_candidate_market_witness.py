@@ -186,6 +186,10 @@ class V40CandidateQuote:
     private_short_cross_1x_settings_bookended: bool=False
     private_risk_limit_settings_fields_missing: bool=False
     private_risk_row_order_normalized: bool=False
+    # A separate 1..3-owned witness must prove the exact protected
+    # slot count and unchanged ledger/native full-account bookends.
+    # The original flat-first-canary always leaves this at zero.
+    owned_protected_positions_bookended:int=0
     # These are NOT obtained from current asset/risk endpoints.
     full_cross_collateral_verified: bool=False
     complete_realized_daily_loss_verified: bool=False
