@@ -39,6 +39,24 @@ def main() -> int:
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument("--run",action="store_true",required=True)
     p.parse_args()
+    # The concrete full-lifecycle monitor is a distinct GET/SELECT-only
+    # startup mode. It cannot overlap an order worker, a close-only worker
+    # or the original partial-observer startup: only one process may own
+    # the account at a time, even when no mutation is possible.
+    if (
+        os.environ.get("T100_V40_FULL_PORTFOLIO_WIRING_ENABLED")=="true"
+        and any(os.environ.get(k)=="true" for k in (
+            "T100_V40_FOUR_SLOT_READONLY_WIRING_ENABLED",
+            "T100_V40_FIRST_CANARY_ORDER_WORKER_ENABLED",
+            "T100_V40_EMERGENCY_EXIT_ENABLED",
+        ))
+    ):
+        print(json.dumps({
+            "status":"V40_FULL_PORTFOLIO_MUTATION_OR_OBSERVER_MODE_COLLISION_HALT",
+            "entry_allowed":False,"live_authorization":False,
+            "mexc_posts":0,"database_writes":0,
+        },sort_keys=True),flush=True)
+        return 2
     # No interaction between GET-only four-slot wiring and any real POST path.
     if (
         os.environ.get("T100_V40_FOUR_SLOT_READONLY_WIRING_ENABLED") == "true"
@@ -73,6 +91,16 @@ def main() -> int:
             "mexc_posts":0,"database_writes":0,
         },sort_keys=True))
         return 2
+    # Concrete position management graph, including actual stop/journal,
+    # funding/close and SQL-release providers, all physically disabled for
+    # mutation by independent signer/pool wrappers. This mode does NOT
+    # issue a portfolio permit or enable any real order.
+    if os.environ.get("T100_V40_FULL_PORTFOLIO_WIRING_ENABLED")=="true":
+        from app.t100_v40_render_connected_portfolio_worker import (
+            run_connected_monitor,
+        )
+        import asyncio
+        return asyncio.run(run_connected_monitor(dict(os.environ)))
     # Optional real-data four-slot observation, with every mutation port
     # deliberately absent. The paper kill switch remains mandatory.
     if os.environ.get("T100_V40_FOUR_SLOT_READONLY_WIRING_ENABLED") == "true":
