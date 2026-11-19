@@ -368,6 +368,7 @@ async def test_closing_funded_artifacts_is_separate_from_trade_permit(monkeypatc
     staging.ledger=d["ledger"]
     staging.native=native
     staging.finance=finance
+    staging.writer_pool=object()
     d["financial_staging"]=staging
     p=runtime.V40LivePortfolioPorts(**d)
     result=V40CloseArtifactReceipt(

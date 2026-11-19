@@ -260,6 +260,7 @@ class V40CloseOnlyFinancialArtifactStaging:
         native:V40NativeCloseMismatchRecovery,
         finance:V40NativeCloseFinancialReadPort,
         ledger:PostgresFourSlotLedgerReader,
+        writer_pool:Any,
     )->None:
         if (
             type(native) is not V40NativeCloseMismatchRecovery
@@ -270,12 +271,18 @@ class V40CloseOnlyFinancialArtifactStaging:
             or native.venue.probe is not finance.probe
             or finance.entry_contracts is None
             or finance.entry_contracts.pool is not ledger.pool
-            or not callable(getattr(ledger.pool,"acquire",None))
+            or writer_pool is None
+            or writer_pool is ledger.pool
+            or not callable(getattr(writer_pool,"acquire",None))
         ):
             raise V40CloseArtifactHalted("V40_CLOSE_ARTIFACT_SAME_ACCOUNT_PROBE_AND_SQL_REQUIRED")
         self.native=native
         self.finance=finance
         self.ledger=ledger
+        # The owner/reader pool is SELECT-only. Never reuse it for INSERT.
+        # The independent executor pool must have the write-capable runtime
+        # role and explicit read-write transaction semantics.
+        self.writer_pool=writer_pool
 
     async def stage_once(
         self, *, snapshot:FourSlotSnapshotResult,
@@ -310,7 +317,7 @@ class V40CloseOnlyFinancialArtifactStaging:
                     "V40_CLOSE_ARTIFACT_OPEN_LEDGER_CHANGED_AFTER_GET"
                 )
             ledger_hash=_ledger_digest(observed)
-            async with self.ledger.pool.acquire() as conn:
+            async with self.writer_pool.acquire() as conn:
                 async with conn.transaction(isolation="serializable"):
                     await conn.execute(ACCOUNT_LOCK_SQL)
                     if (

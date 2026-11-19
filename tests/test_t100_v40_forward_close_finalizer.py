@@ -54,7 +54,8 @@ def setup(monkeypatch):
     stage=object.__new__(V40CloseOnlyFinancialArtifactStaging)
     stage.native=native
     stage.finance=finance
-    stage.ledger=SimpleNamespace(pool=pool)
+    stage.ledger=SimpleNamespace(pool=object())
+    stage.writer_pool=pool
     async def stage_once(*,snapshot,lease):
         calls.append("FENCED_ATOMIC_FILL_AND_FUNDING_STAGING")
         return V40CloseArtifactReceipt(

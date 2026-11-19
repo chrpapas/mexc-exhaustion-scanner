@@ -124,13 +124,13 @@ def configure(monkeypatch):
     previous,witness,finance,reads,funding_calls=environment(monkeypatch)
     pool=FakeConn(previous)
     ledger=object.__new__(PostgresFourSlotLedgerReader)
-    ledger.pool=pool
+    ledger.pool=object()
     checkpoint=asdict(previous)
     async def snapshot():
         return LedgerSnapshot([deepcopy(checkpoint)],[],[],[],True)
     ledger.read_snapshot=snapshot
     archive=object.__new__(PostgresV40AtEntryContractSpecReader)
-    archive.pool=pool
+    archive.pool=ledger.pool
     async def archived(previous):
         return archived_entry(previous)
     archive.read=archived
@@ -150,7 +150,7 @@ def configure(monkeypatch):
         )
     native.observe=observed
     port=stage.V40CloseOnlyFinancialArtifactStaging(
-        native=native,finance=finance,ledger=ledger,
+        native=native,finance=finance,ledger=ledger,writer_pool=pool,
     )
     lease=LeaderLease("t100-live-executor",pool.holder,pool.token,45)
     snapshot=FourSlotSnapshotResult("UNOWNED_OR_MISSING_CHECKPOINTS")
@@ -242,6 +242,7 @@ def test_same_account_source_and_archive_are_mandatory(monkeypatch):
     with pytest.raises(stage.V40CloseArtifactHalted,match="SAME_ACCOUNT"):
         stage.V40CloseOnlyFinancialArtifactStaging(
             native=x.native,finance=x.finance,ledger=x.ledger,
+            writer_pool=x.db,
         )
 
 
