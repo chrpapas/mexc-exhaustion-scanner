@@ -34,7 +34,7 @@ from app.t100_live_v40_stage2_source import (
     inspect_stage2_candidate,
 )
 from app.t100_v40_admission import VOL_SKIP_THRESHOLD
-from app.t100_v40_discord_events import stage2_notice,send_v40_notice
+from app.t100_v40_discord_events import stage2_notice,send_v40_notice,webhook_from_env
 
 LOGGER = logging.getLogger(__name__)
 
@@ -270,6 +270,8 @@ class V40Stage2RenderScanner(T100Scanner):
 async def main() -> None:
     require_v40_shadow_render_guards(os.environ)
     configure_logging(os.getenv("LOG_LEVEL","INFO"))
+    LOGGER.info("V40_DISCORD_CONFIG role=scanner configured=%s",
+                bool(webhook_from_env(os.environ)))
     worker=V40Stage2RenderScanner()
     loop=asyncio.get_running_loop()
     for sig in (signal.SIGTERM,signal.SIGINT):
