@@ -297,3 +297,38 @@ def test_duplicate_real_stage2_batch_halts_before_risk_or_account(monkeypatch):
     result=asyncio.run(m.attempt_one_real_v40_first_signal(**kwargs))
     assert result.status=="V40_FIRST_CANARY_SOURCE_FAILED_NO_POST"
     assert events==["REAL_SOURCE"] and calls==[]
+
+
+def test_precheck_exposes_only_whitelisted_stable_codes():
+    risk_error=m.V40CanaryRiskHalted(
+        "V40_CANARY_RISK_UNENCUMBERED_CROSS_WALLET_UNVERIFIED"
+    )
+    assert m._safe_precheck_failure_code("RISK_WITNESS",risk_error)==str(risk_error)
+    assert m._safe_precheck_failure_code(
+        "RISK_WITNESS",RuntimeError("postgresql://secret-key@host")
+    )=="V40_PRECHECK_RISK_WITNESS_UNEXPECTED_EXCEPTION"
+
+
+def test_failed_risk_witness_is_redacted_before_dispatch(monkeypatch):
+    kwargs,events,calls=setup(monkeypatch)
+    async def failing_witness(_):
+        raise m.V40CanaryRiskHalted(
+            "V40_CANARY_RISK_DURABLE_MUTATIONS_NOT_CLEAR"
+        )
+    kwargs["key_and_risk"].inspect=failing_witness
+    result=asyncio.run(m.attempt_one_real_v40_first_signal(**kwargs))
+    assert result.status=="V40_FIRST_CANARY_CURRENT_RISK_DEPTH_OR_ACCOUNT_HALT"
+    assert result.precheck_failure_code=="V40_CANARY_RISK_DURABLE_MUTATIONS_NOT_CLEAR"
+    assert result.signal_id==727 and result.symbol=="TEST_USDT"
+    assert not result.exchange_post_may_have_occurred
+    assert "LIVE_ASSEMBLY" not in events
+    assert calls==[]
+
+
+def test_quarantined_signal_never_reaches_guardian_risk_or_dispatch(monkeypatch):
+    kwargs,events,calls=setup(monkeypatch)
+    kwargs["rejected_signal_ids"]=frozenset({727})
+    result=asyncio.run(m.attempt_one_real_v40_first_signal(**kwargs))
+    assert result.status=="V40_FIRST_CANARY_REJECTED_SIGNAL_NO_RETRY"
+    assert events==["REAL_SOURCE"] and calls==[]
+    assert not result.exchange_post_may_have_occurred
