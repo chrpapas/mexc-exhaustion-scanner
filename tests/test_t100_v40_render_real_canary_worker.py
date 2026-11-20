@@ -270,3 +270,59 @@ def test_even_forged_waiver_does_not_allow_live_without_user_env_acceptance():
                    durable_incident_alert_delivery_verified=False)
     result=m.validate_live_worker_config(env,review)
     assert not result.release_review_complete
+
+
+def test_risk_rejection_quarantined_without_restart_or_repeat_post(monkeypatch,capsys):
+    seen=[]
+    pauses=[]
+    async def cycle(env,*,rejected_signal_ids=frozenset()):
+        seen.append(rejected_signal_ids)
+        if len(seen)==1:
+            return m.V40CanaryWorkerStatus(
+                "V40_FIRST_CANARY_CURRENT_RISK_DEPTH_OR_ACCOUNT_HALT",
+                signal_id=606,
+                genuine_signal_observed=True,
+                precheck_failure_code="V40_CANARY_RISK_DURABLE_MUTATIONS_NOT_CLEAR",
+                release_review_complete=True,
+                order_post_may_have_occurred=False,
+            )
+        if len(seen)==2:
+            assert rejected_signal_ids==frozenset({606})
+            return m.V40CanaryWorkerStatus(
+                "V40_FIRST_CANARY_REJECTED_SIGNAL_NO_RETRY",signal_id=606,
+                order_post_may_have_occurred=False,
+            )
+        return m.V40CanaryWorkerStatus("V40_FIRST_CANARY_WAIT_FOR_GENUINE_STAGE2")
+    async def pause(seconds):
+        pauses.append(seconds)
+    monkeypatch.setattr(
+        m,"validate_live_worker_config",
+        lambda env,review=None:m.V40CanaryWorkerStatus(
+            "V40_REAL_WORKER_RELEASE_CONFIG_VERIFIED_NEEDS_CURRENT_SIGNED_EVIDENCE",
+            release_review_complete=True,
+        ),
+    )
+    assert asyncio.run(m.run_live_worker(
+        valid_env(),max_cycles=3,cycle=cycle,pause=pause,
+    ))==0
+    assert seen==[frozenset(),frozenset({606}),frozenset({606})]
+    assert pauses==[m.INTERVAL_SECONDS,m.INTERVAL_SECONDS]
+    assert "V40_CANARY_RISK_DURABLE_MUTATIONS_NOT_CLEAR" in capsys.readouterr().out
+
+
+def test_uncertain_order_outcome_never_enters_quarantine(monkeypatch):
+    async def cycle(env,**kwargs):
+        return m.V40CanaryWorkerStatus(
+            "V40_FIRST_CANARY_UNKNOWN_AFTER_ENTRY_BOUNDARY_RECONCILE_ONLY",
+            signal_id=606,order_post_may_have_occurred=True,
+        )
+    monkeypatch.setattr(
+        m,"validate_live_worker_config",
+        lambda env,review=None:m.V40CanaryWorkerStatus(
+            "V40_REAL_WORKER_RELEASE_CONFIG_VERIFIED_NEEDS_CURRENT_SIGNED_EVIDENCE",
+            release_review_complete=True,
+        ),
+    )
+    assert asyncio.run(m.run_live_worker(
+        valid_env(),max_cycles=3,cycle=cycle,
+    ))==2

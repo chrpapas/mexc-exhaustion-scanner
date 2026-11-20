@@ -77,6 +77,8 @@ class V40CanaryWorkerStatus:
     further_order_allowed:bool=False
     entry_allowed:bool=False
     live_authorization:bool=False
+    signal_id:int|None=None
+    precheck_failure_code:str|None=None
 
 
 def _redact(status:str,**kwargs:Any)->V40CanaryWorkerStatus:
@@ -173,6 +175,7 @@ async def run_real_first_canary_cycle(
     review:V40FirstCanaryReleaseReview|None=None,
     act:Callable[...,Awaitable[V40FirstCanaryExecutionOutcome]]=
         attempt_one_real_v40_first_signal,
+    rejected_signal_ids:frozenset[int]=frozenset(),
 )->V40CanaryWorkerStatus:
     """One bounded, independently fenced pass; never loops after a mutation."""
     current_review=review if review is not None else operator_requested_production_trial(env)
@@ -280,6 +283,7 @@ async def run_real_first_canary_cycle(
                         controls=T100ExecutionControls.from_env(env),
                         parity_report=parity,external_review=current_review,
                         holder_id="v40-first-canary-render-once",
+                        rejected_signal_ids=rejected_signal_ids,
                     ),
                     timeout=180,
                 )
@@ -303,6 +307,8 @@ async def run_real_first_canary_cycle(
                 release_review_complete=True,
                 genuine_signal_observed=outcome.signal_id is not None,
                 order_post_may_have_occurred=outcome.exchange_post_may_have_occurred,
+                signal_id=outcome.signal_id,
+                precheck_failure_code=outcome.precheck_failure_code,
             )
     except BaseException:
         # Never leak credentials/URL or retry after an ambiguous response.
@@ -335,15 +341,30 @@ async def run_live_worker(
         print(json.dumps(asdict(start),sort_keys=True),flush=True)
         return 2
     count=0
+    rejected_signal_ids:set[int]=set()
+    quarantinable_pre_post_statuses=frozenset((
+        "V40_FIRST_CANARY_CURRENT_RISK_DEPTH_OR_ACCOUNT_HALT",
+        "V40_FIRST_CANARY_GENUINE_VOL30_SKIP",
+        "V40_FIRST_CANARY_GUARDIAN_NOT_READY",
+        "V40_FIRST_CANARY_PRE_ENTRY_ACCOUNT_NOT_FLAT",
+        "V40_FIRST_CANARY_FROZEN_ADMISSION_REJECTED",
+        "V40_FIRST_CANARY_FINAL_GUARDIAN_PRECHECK_HALT",
+    ))
     while max_cycles is None or count<max_cycles:
         # Only empty source is retried. Account/error/unknown outcomes exit.
         try:
-            report=await cycle(env)
+            if rejected_signal_ids:
+                report=await cycle(
+                    env,rejected_signal_ids=frozenset(rejected_signal_ids),
+                )
+            else:
+                report=await cycle(env)
         except BaseException:
             report=_redact("V40_REAL_WORKER_UNEXPECTED_HALT")
         if type(report) is not V40CanaryWorkerStatus:
             report=_redact("V40_REAL_WORKER_UNTRUSTED_CYCLE_RESULT_HALT")
         print(json.dumps(asdict(report),sort_keys=True),flush=True)
+        count+=1
         if report.status=="V40_ONE_PROTECTED_ENTRY_RECOVERED_NOT_AUTONOMOUS":
             # A successfully protected entry must not leave an unmanaged
             # open position. This watch can CLOSE once, never OPEN again.
@@ -357,10 +378,24 @@ async def run_live_worker(
             except BaseException:
                 return 2
             return 0 if finished==0 else 2
-        if report.status!="V40_FIRST_CANARY_WAIT_FOR_GENUINE_STAGE2":
-            # UNKNOWN and failed admission may never be retried as entries.
+        if (
+            report.status in quarantinable_pre_post_statuses
+            and report.order_post_may_have_occurred is False
+            and type(report.signal_id) is int
+            and report.signal_id>0
+        ):
+            # Keep Render online; this candidate may never be reattempted
+            # by this process, but later genuine Stage2 signals remain eligible.
+            rejected_signal_ids.add(report.signal_id)
+        elif report.status=="V40_FIRST_CANARY_REJECTED_SIGNAL_NO_RETRY":
+            if (
+                report.order_post_may_have_occurred is not False
+                or report.signal_id not in rejected_signal_ids
+            ):
+                return 2
+        elif report.status!="V40_FIRST_CANARY_WAIT_FOR_GENUINE_STAGE2":
+            # Unknown order/claim outcomes remain terminal, never retried.
             return 2
-        count+=1
         if max_cycles is None or count<max_cycles:
             await pause(INTERVAL_SECONDS)
     return 0
