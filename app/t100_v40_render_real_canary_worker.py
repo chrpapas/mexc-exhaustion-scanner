@@ -24,7 +24,7 @@ import time
 from typing import Any,Awaitable,Callable,Mapping
 
 from app.t100_live_guards import T100ExecutionControls
-from app.t100_v40_discord_events import trader_notice,send_v40_notice
+from app.t100_v40_discord_events import trader_notice,send_v40_notice,webhook_from_env
 from app.t100_v40_first_signal_execution import (
     V40FirstCanaryReleaseReview,V40FirstCanaryExecutionOutcome,
     attempt_one_real_v40_first_signal,
@@ -345,6 +345,11 @@ async def run_live_worker(
     if not start.release_review_complete:
         print(json.dumps(asdict(start),sort_keys=True),flush=True)
         return 2
+    print(json.dumps({
+        "status":"V40_DISCORD_CONFIG",
+        "role":"trader",
+        "configured":bool(webhook_from_env(env)),
+    },sort_keys=True),flush=True)
     count=0
     rejected_signal_ids:set[int]=set()
     quarantinable_pre_post_statuses=frozenset((
