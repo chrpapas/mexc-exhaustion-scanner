@@ -34,6 +34,7 @@ from app.t100_live_v40_stage2_source import (
     inspect_stage2_candidate,
 )
 from app.t100_v40_admission import VOL_SKIP_THRESHOLD
+from app.t100_v40_discord_events import stage2_notice,send_v40_notice
 
 LOGGER = logging.getLogger(__name__)
 
@@ -259,6 +260,11 @@ class V40Stage2RenderScanner(T100Scanner):
                 receipt.signal_id,receipt.symbol,receipt.tier,
                 receipt.p2_at.isoformat(),receipt.pre24_vol_pct,
             )
+            # Yellow signal notice ONLY after signed source identity, causal
+            # history and VOL30 were verified. No order implication.
+            notice=stage2_notice(receipt)
+            if notice is not None:
+                await send_v40_notice(dict(os.environ),notice)
 
 
 async def main() -> None:
