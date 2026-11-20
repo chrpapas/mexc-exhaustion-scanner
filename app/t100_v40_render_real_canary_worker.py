@@ -24,6 +24,7 @@ import time
 from typing import Any,Awaitable,Callable,Mapping
 
 from app.t100_live_guards import T100ExecutionControls
+from app.t100_v40_discord_events import trader_notice,send_v40_notice,webhook_from_env
 from app.t100_v40_first_signal_execution import (
     V40FirstCanaryReleaseReview,V40FirstCanaryExecutionOutcome,
     attempt_one_real_v40_first_signal,
@@ -79,6 +80,8 @@ class V40CanaryWorkerStatus:
     live_authorization:bool=False
     signal_id:int|None=None
     precheck_failure_code:str|None=None
+    symbol:str|None=None
+    verified_entry:bool=False
 
 
 def _redact(status:str,**kwargs:Any)->V40CanaryWorkerStatus:
@@ -309,6 +312,8 @@ async def run_real_first_canary_cycle(
                 order_post_may_have_occurred=outcome.exchange_post_may_have_occurred,
                 signal_id=outcome.signal_id,
                 precheck_failure_code=outcome.precheck_failure_code,
+                symbol=outcome.symbol,
+                verified_entry=outcome.live_order_outcome_certified,
             )
     except BaseException:
         # Never leak credentials/URL or retry after an ambiguous response.
@@ -340,6 +345,11 @@ async def run_live_worker(
     if not start.release_review_complete:
         print(json.dumps(asdict(start),sort_keys=True),flush=True)
         return 2
+    print(json.dumps({
+        "status":"V40_DISCORD_CONFIG",
+        "role":"trader",
+        "configured":bool(webhook_from_env(env)),
+    },sort_keys=True),flush=True)
     count=0
     rejected_signal_ids:set[int]=set()
     quarantinable_pre_post_statuses=frozenset((
@@ -364,6 +374,11 @@ async def run_live_worker(
         if type(report) is not V40CanaryWorkerStatus:
             report=_redact("V40_REAL_WORKER_UNTRUSTED_CYCLE_RESULT_HALT")
         print(json.dumps(asdict(report),sort_keys=True),flush=True)
+        # Notification failures are operationally visible, but cannot
+        # authorize/retry orders or interfere with stop reconciliation.
+        notice=trader_notice(report)
+        if notice is not None:
+            await send_v40_notice(env,notice)
         count+=1
         if report.status=="V40_ONE_PROTECTED_ENTRY_RECOVERED_NOT_AUTONOMOUS":
             # A successfully protected entry must not leave an unmanaged

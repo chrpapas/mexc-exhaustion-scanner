@@ -28,6 +28,7 @@ from app.t100_v40_emergency_observer import (
 )
 from app.t100_v40_emergency_postflight import assess_emergency_close_postflight
 from app.t100_v40_emergency_completion import PostgresV40EmergencyCompletion
+from app.t100_v40_discord_events import verified_emergency_close_notice,send_v40_notice
 from app.t100_live_readonly_probe import ReadOnlyMexcProbe
 
 FLAG="T100_V40_EMERGENCY_EXIT_ENABLED"
@@ -321,6 +322,9 @@ async def run_emergency_watch(
             )
         emit(json.dumps(asdict(close),sort_keys=True))
         if close.durable_checkpoint_and_slot_closed is True:
+            notice=verified_emergency_close_notice(close)
+            if notice is not None:
+                await send_v40_notice(env,notice)
             return 0 if close.signed_close_and_flat_verified is True else 2
         if close.status!="V40_EMERGENCY_EXIT_NO_CERTIFIED_MISSING_STOP_NO_POST":
             # After a submitted/unknown claim, restart only reads that same
