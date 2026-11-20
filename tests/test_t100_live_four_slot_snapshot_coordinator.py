@@ -262,8 +262,14 @@ class FourSlotSnapshotTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_missing_completeness_blocks(self):
         self.completeness.result["account_wide_completeness_verified"] = False
+        self.completeness.result["status"]="POSITION_MARGIN_WITNESS_MISSING"
         r = await self.coordinator.inspect()
         self.assertEqual(r.status, "INVENTORY_COMPLETENESS_UNVERIFIED")
+        self.assertEqual(
+            r.inventory["status"],"POSITION_MARGIN_WITNESS_MISSING",
+        )
+        self.assertFalse(r.entry_allowed)
+        self.assertFalse(r.live_authorization)
 
     async def test_probe_count_mismatch_blocks(self):
         self.completeness.result["after_positions"] = 2

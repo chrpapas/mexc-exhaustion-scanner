@@ -485,5 +485,49 @@ class FourSlotOperatorCliTests(unittest.IsolatedAsyncioTestCase):
             self.assertNotIn(forbidden, source)
 
 
+
+    async def test_v40_post_commit_mode_get_allowlist_accepts_hedge_mode_only(self):
+        class Recorder:
+            def __init__(self):self.calls=[]
+            async def _private_get(self,path,params=None):
+                self.calls.append((path,params))
+                return {"positionMode":1}
+            async def _private_post(self,*args,**kwargs):
+                raise AssertionError("POST_MUST_NOT_BE_REACHABLE")
+        recorder=Recorder()
+        client=_PrivateGetOnly(recorder)
+        assert not hasattr(client,"_private_post")
+        data=await client._private_get("/api/v1/private/position/position_mode")
+        assert data=={"positionMode":1}
+        for params in ({},{"positionId":10},{"symbol":"SIREN_USDT"}):
+            with self.assertRaises(RuntimeError):
+                await client._private_get(
+                    "/api/v1/private/position/position_mode",params,
+                )
+        self.assertEqual(recorder.calls,[
+            ("/api/v1/private/position/position_mode",None),
+        ])
+
+    async def test_v40_post_commit_cli_invalid_or_conflicting_modes_refuse_early(self):
+        for opts in (
+            {"v40_post_commit_position_id":"BAD\nSYMBOL"},
+            {"v40_post_commit_position_id":"0"},
+            {"v40_post_commit_position_id":"12",
+             "shared_manual_observation":True},
+            {"v40_post_commit_position_id":"12",
+             "restart_preflight":True},
+            {"v40_post_commit_position_id":"12",
+             "pending_origin_audit":True},
+        ):
+            result=await _main(PAPER_KILLED,**opts)
+            assert result["status"] in (
+                "FOUR_SLOT_READONLY_MODE_CONFLICT",
+                "POST_COMMIT_EXPECTED_POSITION_ID_INVALID_HALT",
+            )
+            assert result["live_authorization"] is False
+            assert result["mexc_orders_sent"] is False
+            assert result["database_writes_sent"] is False
+
+
 if __name__ == "__main__":
     unittest.main()

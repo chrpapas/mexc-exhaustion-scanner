@@ -1,0 +1,22 @@
+name: V40 per-symbol turnover four-slot sizing
+
+on:
+  pull_request:
+    paths:
+      - "app/t100_v40_unreleased_full_portfolio.py"
+      - "tests/test_t100_v40_unreleased_full_portfolio.py"
+      - ".github/workflows/v40-per-symbol-turnover-projection.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  offline-sizer:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install -e ".[dev]"
+      - run: python -m pytest -q tests/test_t100_v40_unreleased_full_portfolio.py tests/test_t100_v40_unreleased_sequential_lot_margin.py

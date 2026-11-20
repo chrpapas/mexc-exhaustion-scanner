@@ -185,5 +185,55 @@ class NativeMarketStopContractTests(unittest.TestCase):
                 self.assertEqual(r.status,"NATIVE_SL_AUDIT_INPUT_INVALID")
 
 
+    def test_exact_filled_entry_attached_stop_requires_explicit_trusted_origin(self):
+        # The 4-slot durable recovery checks the filled entry separately.
+        # The native row validator may then accept its exact attached SL,
+        # but no ordinary call can infer that provenance by itself.
+        attached=row(orderId="123456")
+        without=audit(attached)
+        self.assertEqual(
+            without.status,"NATIVE_SL_POSITION_ORDER_ORIGIN_UNVERIFIED",
+        )
+        matched=assess_native_short_market_stop_row(
+            stop=attached,symbol="FOURTH_USDT",position_id="900",
+            position_quantity=D("250"),
+            maximum_short_stop_price=D("3.5"),
+            verified_filled_entry_order_id="123456",
+        )
+        self.assertTrue(matched.active_native_full_volume_market_sl_observed)
+        self.assertFalse(matched.stop_execution_certified)
+        self.assertFalse(matched.live_authorization)
+        self.assertFalse(matched.mexc_orders_sent)
+
+        for trusted in (None,"12345","",0,"abc","１２３４５６"):
+            with self.subTest(trusted=trusted):
+                result=assess_native_short_market_stop_row(
+                    stop=attached,symbol="FOURTH_USDT",position_id="900",
+                    position_quantity=D("250"),
+                    maximum_short_stop_price=D("3.5"),
+                    verified_filled_entry_order_id=trusted,
+                )
+                self.assertEqual(
+                    result.status,"NATIVE_SL_POSITION_ORDER_ORIGIN_UNVERIFIED",
+                )
+
+    def test_verified_origin_never_overrides_market_or_full_volume_checks(self):
+        for change in (
+            {"stopLossType":1}, {"stopLossType":None},
+            {"vol":"249"}, {"stopLossReverse":1},
+            {"triggerSide":2}, {"state":2}, {"errorCode":13},
+        ):
+            with self.subTest(change=change):
+                result=assess_native_short_market_stop_row(
+                    stop=row(orderId=123456,**change),
+                    symbol="FOURTH_USDT",position_id="900",
+                    position_quantity=D("250"),
+                    maximum_short_stop_price=D("3.5"),
+                    verified_filled_entry_order_id="123456",
+                )
+                self.assertFalse(result.active_native_full_volume_market_sl_observed)
+                self.assertFalse(result.live_authorization)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -148,6 +148,7 @@ class ReadOnlyGuardianCollector:
                     position_id=owned.position_id,
                     position_quantity=owned.contracts,
                     maximum_short_stop_price=owned.stop_price,
+                    verified_filled_entry_order_id=owned.entry_order_id,
                 )
                 verified_market_sl = (
                     audit.active_native_full_volume_market_sl_observed

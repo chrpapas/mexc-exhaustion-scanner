@@ -270,6 +270,7 @@ def assess_staged_protected_attempts(
                 position_id=pid,
                 position_quantity=deal,
                 maximum_short_stop_price=intent.stop_price,
+                verified_filled_entry_order_id=_identity(order.get("orderId")),
             )
             if (
                 native_market.status

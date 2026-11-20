@@ -13,6 +13,11 @@ from typing import Any
 from app.t100_live_db_inspect import EXPECTED_DATABASE
 from app.t100_live_four_slot_snapshot_coordinator import LedgerSnapshot
 from app.t100_live_role_preflight import TARGET_ROLE
+from app.t100_v40_unreleased_closed_history_audit import (
+    ARCHIVE_COUNTS_SQL,ARCHIVE_ROWS_SQL,V40ArchivedHistoryAudit,
+    verify_closed_archive_rows,
+)
+
 
 
 class FourSlotLedgerReadHalted(RuntimeError):
@@ -98,4 +103,50 @@ class PostgresFourSlotLedgerReader:
             # Do not leak SQL parameters, host, database, or account identifiers.
             raise FourSlotLedgerReadHalted(
                 "FOUR_SLOT_LEDGER_READ_FAILED"
+            ) from None
+
+
+    async def audit_archived_close_history(
+        self, *, expected_intents: list[dict[str,Any]],
+    ) -> V40ArchivedHistoryAudit:
+        """A second restricted SELECT transaction independently audits all history.
+
+        This method must never interpret absent live positions as a close.
+        Callers first need a fully completed, account-wide double signed GET
+        and a matching immutable live-ledger snapshot.
+        """
+        try:
+            async with self.pool.acquire() as conn:
+                async with conn.transaction(
+                    isolation="repeatable_read",readonly=True,
+                ):
+                    if (
+                        await conn.fetchval(
+                            "SELECT current_setting('transaction_read_only')"
+                        )!="on"
+                        or await conn.fetchval(
+                            "SELECT current_setting('transaction_isolation')"
+                        )!="repeatable read"
+                        or await conn.fetchval("SELECT current_database()")
+                        !=EXPECTED_DATABASE
+                        or await conn.fetchval("SELECT current_user")!=TARGET_ROLE
+                    ):
+                        raise FourSlotLedgerReadHalted(
+                            "FOUR_SLOT_ARCHIVED_READONLY_CONTEXT_UNVERIFIED"
+                        )
+                    counts=await conn.fetchrow(ARCHIVE_COUNTS_SQL)
+                    rows=await conn.fetch(ARCHIVE_ROWS_SQL)
+                    if counts is None or type(rows) not in (list,tuple):
+                        raise FourSlotLedgerReadHalted(
+                            "FOUR_SLOT_ARCHIVED_ROWS_INCOMPLETE"
+                        )
+                    return verify_closed_archive_rows(
+                        expected_intents=expected_intents,
+                        counts=dict(counts),rows=[dict(row) for row in rows],
+                    )
+        except FourSlotLedgerReadHalted:
+            raise
+        except Exception:
+            raise FourSlotLedgerReadHalted(
+                "FOUR_SLOT_ARCHIVED_HISTORY_SELECT_FAILED"
             ) from None

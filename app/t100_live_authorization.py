@@ -84,6 +84,85 @@ class LivePilotReadinessEvidence:
         return tuple(name for name, ok in mapping if ok is not True)
 
 
+V40_CANARY_SCOPE = "T100_V40_SUPERVISED_FIRST_SIGNAL"
+V40_PORTFOLIO_SCOPE = "T100_V40_FOUR_SLOT_PRODUCTION_TRIAL"
+
+# Independent from single-canary and legacy transport release switches.
+# Do NOT promote this gate on the strength of offline backtest parity.
+V40_PORTFOLIO_RELEASE_STATUS = "NOT_CERTIFIED"
+
+
+
+@dataclass(frozen=True)
+class V40FirstCanaryReadinessEvidence:
+    """First real-signal canary gates, deliberately NOT full autonomous gates.
+
+    Actual filled-position stop execution, trailing, and restart behavior are
+    what the first live test seeks to measure, so they are not pretended
+    already proven. The independent guardian, native attached-SL API contract,
+    durable journal and controlled emergency runbook must be verified FIRST.
+
+    Callers must derive these fields from independent evidence. This class
+    does not accept environment flags as proof and cannot certify anything.
+    """
+    code_revision_verified: bool
+    frozen_strategy_parity_verified: bool
+    immutable_journal_schema_and_grants_verified: bool
+    genuine_fresh_one_signal_verified: bool
+    current_exact_lot_and_depth_verified: bool
+    dedicated_account_flat_and_hedge_verified: bool
+    private_short_cross_one_x_verified: bool
+    account_open_orders_and_unknown_claims_absent: bool
+    native_attached_market_stop_request_contract_reviewed: bool
+    post_fill_get_and_journal_reconciliation_reviewed: bool
+    independent_nonflat_guardian_live_verified: bool
+    durable_incident_alert_delivery_verified: bool
+    supervised_emergency_exit_runbook_verified: bool
+    operator_explicitly_authorized_first_canary: bool
+    # The FIRST production trade is the intended experiment. The operator
+    # explicitly accepts not having PRIOR nonflat/native-exit observations
+    # and watches the independent guardian and event logs during the trade.
+    # This never skips a native stop REQUEST, actual flat-account precheck,
+    # exact signal/lot/price cap, order journal, or current guardian fence.
+    production_first_trade_observation_waiver: bool = False
+
+    def failures(self) -> tuple[str, ...]:
+        names=(
+            "code_revision_verified",
+            "frozen_strategy_parity_verified",
+            "immutable_journal_schema_and_grants_verified",
+            "genuine_fresh_one_signal_verified",
+            "current_exact_lot_and_depth_verified",
+            "dedicated_account_flat_and_hedge_verified",
+            "private_short_cross_one_x_verified",
+            "account_open_orders_and_unknown_claims_absent",
+            "native_attached_market_stop_request_contract_reviewed",
+            "post_fill_get_and_journal_reconciliation_reviewed",
+            "independent_nonflat_guardian_live_verified",
+            "durable_incident_alert_delivery_verified",
+            "supervised_emergency_exit_runbook_verified",
+            "operator_explicitly_authorized_first_canary",
+        )
+        # There is no circular prerequisite to demonstrate a real exit
+        # before the very first production trade. With the explicit
+        # supervised observation waiver, only these two PREEXISTING
+        # outcome/notification proofs are deferred to the live trial.
+        waived=(
+            frozenset({
+                "independent_nonflat_guardian_live_verified",
+                "durable_incident_alert_delivery_verified",
+            })
+            if self.production_first_trade_observation_waiver is True
+               and self.operator_explicitly_authorized_first_canary is True
+            else frozenset()
+        )
+        return tuple(
+            "canary_"+name+"_missing"
+            for name in names
+            if name not in waived and getattr(self,name) is not True
+        )
+
+
 _PERMIT_SENTINEL = object()
 
 
@@ -94,6 +173,9 @@ class LiveMutationPermit:
     max_daily_loss_usdt: Decimal
     leverage: int
     scope: str
+    signal_id: int | None
+    symbol: str | None
+    production_trial_accepted: bool
 
     def __init__(
         self,
@@ -104,6 +186,9 @@ class LiveMutationPermit:
         leverage: int,
         scope: str,
         _sentinel: object,
+        signal_id: int | None = None,
+        symbol: str | None = None,
+        production_trial_accepted: bool = False,
     ) -> None:
         if _sentinel is not _PERMIT_SENTINEL:
             raise LiveAuthorizationHalted(
@@ -126,6 +211,71 @@ class LiveMutationPermit:
         )
         object.__setattr__(self, "leverage", leverage)
         object.__setattr__(self, "scope", scope)
+        object.__setattr__(self, "signal_id", signal_id)
+        object.__setattr__(self, "symbol", symbol)
+        object.__setattr__(
+            self,"production_trial_accepted",production_trial_accepted,
+        )
+
+
+def issue_v40_supervised_canary_permit(
+    controls: T100ExecutionControls,
+    evidence: V40FirstCanaryReadinessEvidence,
+    *, signal_id: int, symbol: str,
+) -> LiveMutationPermit:
+    """Mint a *signal-bound* first-live-canary permit; not autonomous mode.
+
+    First live trade must not require retrospective successful stop/exit soak.
+    It DOES require a separately running position guardian, durable incident
+    alerts and operator-reviewed emergency procedure ahead of the attempt.
+    No exchange call is made; the transport certification and one-shot
+    journal/claim gates are still checked independently at POST.
+    """
+    import re
+    if type(controls) is not T100ExecutionControls:
+        raise LiveAuthorizationHalted("V40_CANARY_CONTROLS_INVALID")
+    if type(evidence) is not V40FirstCanaryReadinessEvidence:
+        raise LiveAuthorizationHalted("V40_CANARY_EVIDENCE_INVALID")
+    failures=list(evidence.failures())
+    if controls.mode!="live":
+        failures.append("execution_mode_not_live")
+    failures.extend(controls.readiness_failures())
+    if (
+        controls.leverage!=1
+        or type(signal_id) is not int or signal_id<=0
+        or type(symbol) is not str
+        or re.fullmatch(r"[A-Z0-9]+_USDT",symbol) is None
+        or symbol in ("BTC_USDT","ETH_USDT")
+    ):
+        failures.append("V40_CANARY_SIGNAL_OR_CROSS_MODE_INVALID")
+    budget=Decimal("12.50")
+    for key in (
+        "max_position_notional_usdt",
+        "max_total_notional_usdt",
+        "max_daily_loss_usdt",
+    ):
+        value=getattr(controls,key)
+        if (
+            type(value) is not Decimal or not value.is_finite()
+            or not Decimal(0)<value<=budget
+        ):
+            failures.append("V40_CANARY_TINY_CAP_INVALID_"+key)
+    if failures:
+        raise LiveAuthorizationHalted(
+            "V40_CANARY_AUTHORIZATION_BLOCKED:"+",".join(dict.fromkeys(failures))
+        )
+    return LiveMutationPermit(
+        max_position_notional_usdt=controls.max_position_notional_usdt,
+        max_total_notional_usdt=controls.max_total_notional_usdt,
+        max_daily_loss_usdt=controls.max_daily_loss_usdt,
+        leverage=1,scope=V40_CANARY_SCOPE,
+        signal_id=signal_id,symbol=symbol,
+        production_trial_accepted=(
+            evidence.production_first_trade_observation_waiver is True
+            and evidence.operator_explicitly_authorized_first_canary is True
+        ),
+        _sentinel=_PERMIT_SENTINEL,
+    )
 
 
 def issue_live_mutation_permit(
@@ -176,15 +326,57 @@ def require_live_mutation_permit(
     if not isinstance(permit, LiveMutationPermit):
         raise LiveAuthorizationHalted("LIVE_MUTATION_PERMIT_REQUIRED")
     if (
-        permit.scope != "T100_TINY_PILOT"
-        or permit.leverage != 1
-        or permit.max_position_notional_usdt <= 0
-        or permit.max_total_notional_usdt <= 0
-        or permit.max_daily_loss_usdt <= 0
-        or permit.max_position_notional_usdt
-        > permit.max_total_notional_usdt
+        permit.scope not in ("T100_TINY_PILOT",V40_CANARY_SCOPE,V40_PORTFOLIO_SCOPE)
+        or (
+            permit.scope != V40_PORTFOLIO_SCOPE and permit.leverage != 1
+        )
+        or (
+            permit.scope == V40_PORTFOLIO_SCOPE
+            and (type(permit.leverage) is not int or not 1 <= permit.leverage <= 5)
+        )
+        or type(permit.production_trial_accepted) is not bool
+        or any(
+            type(value) is not Decimal
+            or not value.is_finite()
+            or value <= 0
+            for value in (
+                permit.max_position_notional_usdt,
+                permit.max_total_notional_usdt,
+                permit.max_daily_loss_usdt,
+            )
+        )
+        or permit.max_position_notional_usdt > permit.max_total_notional_usdt
     ):
         raise LiveAuthorizationHalted("LIVE_MUTATION_PERMIT_INVALID")
+    if permit.scope==V40_CANARY_SCOPE:
+        import re
+        if (
+            any(value>Decimal("12.50") for value in (
+                permit.max_position_notional_usdt,
+                permit.max_total_notional_usdt,
+                permit.max_daily_loss_usdt,
+            ))
+            or type(permit.signal_id) is not int or permit.signal_id<=0
+            or type(permit.symbol) is not str
+            or re.fullmatch(r"[A-Z0-9]+_USDT",permit.symbol) is None
+            or permit.symbol in ("BTC_USDT","ETH_USDT")
+        ):
+            raise LiveAuthorizationHalted("V40_CANARY_SIGNAL_BOUND_PERMIT_INVALID")
+    elif permit.scope==V40_PORTFOLIO_SCOPE:
+        import re
+        if (
+            type(permit.signal_id) is not int or permit.signal_id<=0
+            or type(permit.symbol) is not str
+            or re.fullmatch(r"[A-Z0-9]+_USDT",permit.symbol) is None
+            or permit.symbol in ("BTC_USDT","ETH_USDT")
+            or permit.production_trial_accepted is not False
+        ):
+            raise LiveAuthorizationHalted("V40_PORTFOLIO_SIGNAL_BOUND_PERMIT_INVALID")
+    elif (
+        permit.signal_id is not None or permit.symbol is not None
+        or permit.production_trial_accepted is not False
+    ):
+        raise LiveAuthorizationHalted("LIVE_LEGACY_PERMIT_CANNOT_PIN_CANARY")
     return permit
 
 
@@ -199,6 +391,189 @@ def require_certified_transport_permit(
     establish live permissions, leader fencing, or current account readiness.
     """
     checked = require_live_mutation_permit(permit)
-    if t100_live_guards.LIVE_ADAPTER_STATUS != "CERTIFIED":
+    if checked.scope==V40_CANARY_SCOPE:
+        # The first production integration order is the experiment.
+        # Its already-issued signal-bound typed permit explicitly records
+        # operator acceptance of unobserved nonflat/alert outcomes.
+        # No global code status is changed, so historical canary and the
+        # legacy paper portfolio remain exactly as blocked as before.
+        if checked.production_trial_accepted is not True and (
+            t100_live_guards.LIVE_ADAPTER_STATUS!="V40_CANARY_RESTRICTED"
+        ):
+            raise LiveAuthorizationHalted("V40_CANARY_ADAPTER_NOT_RELEASED")
+    elif checked.scope==V40_PORTFOLIO_SCOPE:
+        if V40_PORTFOLIO_RELEASE_STATUS!="CERTIFIED_LIVE":
+            raise LiveAuthorizationHalted("V40_PORTFOLIO_PRODUCTION_RELEASE_NOT_CERTIFIED")
+        if t100_live_guards.LIVE_ADAPTER_STATUS!="CERTIFIED":
+            raise LiveAuthorizationHalted("V40_PORTFOLIO_EXCHANGE_ADAPTER_NOT_CERTIFIED")
+        if t100_live_guards.LIVE_NATIVE_STOP_AMENDMENT_STATUS!="CERTIFIED":
+            raise LiveAuthorizationHalted("V40_PORTFOLIO_NATIVE_STOP_NOT_CERTIFIED")
+    elif t100_live_guards.LIVE_ADAPTER_STATUS!="CERTIFIED":
         raise LiveAuthorizationHalted("LIVE_ADAPTER_NOT_CERTIFIED")
     return checked
+
+
+@dataclass(frozen=True)
+class V40FourSlotReleaseEvidence:
+    """Independent, current, account-specific proofs; never environment flags.
+
+    These Boolean attestations have to be produced by separately reviewed
+    signed GET, restricted SQL, cross-margin and native-exit procedures.
+    Merely constructing this dataclass does not authenticate any evidence.
+    The separate immutable release constant is currently NOT_CERTIFIED.
+    """
+    full_strategy_108_trade_parity_verified: bool
+    genuine_stage2_ordering_and_candidate_selection_verified: bool
+    full_account_signed_get_ownership_verified: bool
+    fresh_guardian_unlatched_and_outbox_clear: bool
+    exact_native_market_stop_lifecycle_verified: bool
+    current_contract_lots_ticks_and_liquidity_verified: bool
+    recovered_four_slot_immutable_journal_and_fence_verified: bool
+    independent_current_cross_margin_tiers_verified: bool
+    live_liquidation_survival_through_sl75_verified: bool
+    current_exchange_api_key_trade_scope_verified: bool
+    per_position_trailing_and_delayed_exit_verified: bool
+    stop_amendment_terminal_reconciliation_verified: bool
+    four_slot_positive_close_and_funding_reconciliation_verified: bool
+    emergency_exit_and_orphan_position_recovery_verified: bool
+    independent_live_release_review_verified: bool
+    operator_authorized_exact_full_portfolio_trial: bool
+    observed_equity_usdt: Decimal
+    projected_gross_notional_after_entry_usdt: Decimal
+    projected_open_position_count_after_entry: int
+    modeled_sl75_stress_collateral_surplus_usdt: Decimal
+    # An independently obtained exact-lot leverage review is REQUIRED for
+    # any four-slot permit. This is only nominal initial-margin feasibility,
+    # and cannot substitute for the SL75 liquidation stress proof above.
+    exchange_leverage_plan: "V40CrossLeveragePlan | None" = None
+    # Additional gross-exposure checks need historical strategy sizing
+    # parity, not a hidden reduction to tiny pilot notional caps.
+
+    def failures(self) -> tuple[str, ...]:
+        names=(
+            "full_strategy_108_trade_parity_verified",
+            "genuine_stage2_ordering_and_candidate_selection_verified",
+            "full_account_signed_get_ownership_verified",
+            "fresh_guardian_unlatched_and_outbox_clear",
+            "exact_native_market_stop_lifecycle_verified",
+            "current_contract_lots_ticks_and_liquidity_verified",
+            "recovered_four_slot_immutable_journal_and_fence_verified",
+            "independent_current_cross_margin_tiers_verified",
+            "live_liquidation_survival_through_sl75_verified",
+            "current_exchange_api_key_trade_scope_verified",
+            "per_position_trailing_and_delayed_exit_verified",
+            "stop_amendment_terminal_reconciliation_verified",
+            "four_slot_positive_close_and_funding_reconciliation_verified",
+            "emergency_exit_and_orphan_position_recovery_verified",
+            "independent_live_release_review_verified",
+            "operator_authorized_exact_full_portfolio_trial",
+        )
+        return tuple(name for name in names if getattr(self,name) is not True)
+
+
+def issue_v40_four_slot_portfolio_permit(
+    controls: T100ExecutionControls,
+    evidence: V40FourSlotReleaseEvidence,
+    *, signal_id: int, symbol: str,
+) -> LiveMutationPermit:
+    """Fail-closed signal-bound four-slot permit issuance, not pilot promotion.
+
+    A passed mathematical shock is not sufficient: require explicit positive
+    authenticated exchange liquidation/maintenance-tier evidence. Do not
+    silently downsize the historical strategy. Issuance additionally requires
+    a separately approved production release switch.
+    """
+    import re
+    if type(controls) is not T100ExecutionControls:
+        raise LiveAuthorizationHalted("V40_PORTFOLIO_CONTROLS_INVALID")
+    if type(evidence) is not V40FourSlotReleaseEvidence:
+        raise LiveAuthorizationHalted("V40_PORTFOLIO_EVIDENCE_INVALID")
+    problems=list(evidence.failures())
+    problems.extend(controls.readiness_failures())
+    if controls.mode!="live":
+        problems.append("live_execution_mode_required")
+    if (
+        type(signal_id) is not int or signal_id<=0
+        or type(symbol) is not str
+        or re.fullmatch(r"[A-Z0-9]+_USDT",symbol) is None
+        or symbol in ("BTC_USDT","ETH_USDT")
+    ):
+        problems.append("exact_live_candidate_invalid")
+    if (
+        type(evidence.projected_open_position_count_after_entry) is not int
+        or not 1<=evidence.projected_open_position_count_after_entry<=4
+    ):
+        problems.append("four_slot_occupancy_invalid")
+    equity=evidence.observed_equity_usdt
+    gross=evidence.projected_gross_notional_after_entry_usdt
+    surplus=evidence.modeled_sl75_stress_collateral_surplus_usdt
+    if any(type(v) is not Decimal or not v.is_finite() for v in (equity,gross,surplus)):
+        problems.append("cross_margin_numbers_invalid")
+    elif equity<=0 or gross<=0 or surplus<=0:
+        problems.append("cross_margin_sl75_not_survivable")
+    else:
+        # Necessary, never sufficient: actual MEXC exchange borrowing/margin
+        # capacity and liquidation tiers need independent authenticated proof.
+        if gross>equity*controls.leverage:
+            problems.append("cross_margin_gross_exceeds_leverage_capacity")
+        if (
+            type(controls.max_total_notional_usdt) is Decimal
+            and gross>controls.max_total_notional_usdt
+        ):
+            problems.append("portfolio_cap_below_exact_strategy_gross")
+        if (
+            type(controls.max_daily_loss_usdt) is Decimal
+            and controls.max_daily_loss_usdt>equity
+        ):
+            problems.append("daily_loss_cap_exceeds_collateral")
+    if (
+        type(controls.max_position_notional_usdt) is not Decimal
+        or type(controls.max_total_notional_usdt) is not Decimal
+        or type(controls.max_daily_loss_usdt) is not Decimal
+    ):
+        problems.append("exact_live_limits_required")
+    from app.t100_v40_exchange_leverage_plan import (
+        V40CrossLeveragePlan, STATUS_FEASIBLE,
+    )
+    leverage_plan=evidence.exchange_leverage_plan
+    if (
+        type(leverage_plan) is not V40CrossLeveragePlan
+        or leverage_plan.status!=STATUS_FEASIBLE
+        or leverage_plan.signal_id!=signal_id
+        or leverage_plan.symbol!=symbol
+        or leverage_plan.selected_exchange_cross_leverage!=controls.leverage
+        or leverage_plan.portfolio_gross_after_entry_usdt!=gross
+        or leverage_plan.observed_equity_usdt!=equity
+        or leverage_plan.nominal_initial_margin_fits is not True
+        or leverage_plan.frozen_strategy_notional_unchanged is not True
+        or leverage_plan.account_observations_verified is not True
+        or leverage_plan.liquidation_or_stop_survival_certified is not False
+        or leverage_plan.live_change_allowed is not False
+        or leverage_plan.live_authorization is not False
+        or leverage_plan.mexc_posts!=0
+        or leverage_plan.database_writes!=0
+    ):
+        problems.append("exact_frozen_notional_exchange_leverage_unverified")
+    if problems:
+        raise LiveAuthorizationHalted(
+            "V40_PORTFOLIO_RELEASE_BLOCKED:"+",".join(dict.fromkeys(problems))
+        )
+    if V40_PORTFOLIO_RELEASE_STATUS!="CERTIFIED_LIVE":
+        raise LiveAuthorizationHalted("V40_PORTFOLIO_SEPARATE_PRODUCTION_RELEASE_REQUIRED")
+    if (
+        t100_live_guards.LIVE_ADAPTER_STATUS!="CERTIFIED"
+        or t100_live_guards.LIVE_NATIVE_STOP_AMENDMENT_STATUS!="CERTIFIED"
+    ):
+        raise LiveAuthorizationHalted("V40_PORTFOLIO_TRANSPORT_AND_STOP_RELEASE_REQUIRED")
+    permit=LiveMutationPermit(
+        max_position_notional_usdt=controls.max_position_notional_usdt,
+        max_total_notional_usdt=controls.max_total_notional_usdt,
+        max_daily_loss_usdt=controls.max_daily_loss_usdt,
+        leverage=controls.leverage,
+        scope=V40_PORTFOLIO_SCOPE,
+        signal_id=signal_id,
+        symbol=symbol,
+        production_trial_accepted=False,
+        _sentinel=_PERMIT_SENTINEL,
+    )
+    return require_certified_transport_permit(permit)

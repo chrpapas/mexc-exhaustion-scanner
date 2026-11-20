@@ -51,8 +51,12 @@ class GetOnlyMexcTransport:
     """Restricted GET protocol; deliberately does NOT implement _private_post."""
 
     _FIXED = frozenset({
+        # Account-wide GET-only economic margin witness required by V40
+        # completeness. This transport has NO POST capability.
+        "/api/v1/private/account/assets",
         "/api/v1/private/order/open_order_total_count",
         "/api/v1/private/position/open_positions",
+        "/api/v1/private/position/position_mode",
         "/api/v1/private/stoporder/open_orders",
         "/api/v1/private/stoporder/list/orders",
         "/api/v1/private/position/list/history_positions",
@@ -61,24 +65,32 @@ class GetOnlyMexcTransport:
         r"/api/v1/private/order/external/[A-Z0-9]+_USDT/[A-Za-z0-9_-]{1,128}"
     )
     _ORDER = re.compile(r"/api/v1/private/order/get/[1-9][0-9]*")
+    _ORDER_DEALS = re.compile(
+        r"/api/v1/private/order/deal_details/[1-9][0-9]*"
+    )
     # Official MEXC Futures API domain since January 2026. Do not silently
     # fall back to retired contract.mexc.com or follow credentialed redirects.
     BASE_URL = "https://api.mexc.com"
 
-    def __init__(self, client: Any, *, api_key: str, api_secret: str):
+    def __init__(self, client: Any, *, api_key: str, api_secret: str,
+                 diagnostic_get_errors: bool = False):
+        if type(diagnostic_get_errors) is not bool:
+            raise GuardianOnceHalted("SIGNED_GET_DIAGNOSTIC_POLICY_INVALID")
         if (type(api_key) is not str or len(api_key) < 12 or
                 type(api_secret) is not str or len(api_secret) < 16):
             raise GuardianOnceHalted("SIGNED_GET_CREDENTIALS_NOT_CONFIGURED")
         self._client = client
         self._key = api_key
         self._secret = api_secret
+        self._diagnostic_get_errors = diagnostic_get_errors
 
     @classmethod
     def _allowed(cls, path: str) -> bool:
         return (type(path) is str and
                 (path in cls._FIXED or
                  cls._EXTERNAL.fullmatch(path) is not None or
-                 cls._ORDER.fullmatch(path) is not None))
+                 cls._ORDER.fullmatch(path) is not None or
+                 cls._ORDER_DEALS.fullmatch(path) is not None))
 
     async def _private_get(
         self, path: str, params: dict[str, Any] | None = None,
@@ -111,12 +123,40 @@ class GetOnlyMexcTransport:
             )
             response.raise_for_status()
             payload = response.json()
-        except Exception:
+        except Exception as error:
+            if path == "/api/v1/private/position/position_mode":
+                from app.t100_v40_guardian_get_failure_codes import (
+                    classify_mode_transport_failure,
+                )
+                raise GuardianOnceHalted(
+                    classify_mode_transport_failure(error)
+                ) from None
+            if self._diagnostic_get_errors:
+                from app.t100_v40_guardian_get_failure_codes import (
+                    classify_inventory_get_transport_failure,
+                )
+                raise GuardianOnceHalted(
+                    classify_inventory_get_transport_failure(error)
+                ) from None
             raise GuardianOnceHalted("MEXC_SIGNED_GET_TRANSPORT_FAILED") from None
         if (type(payload) is not dict or
                 payload.get("success") is not True or
                 type(payload.get("code")) is not int or
                 payload["code"] != 0):
+            if path == "/api/v1/private/position/position_mode":
+                from app.t100_v40_guardian_get_failure_codes import (
+                    classify_mode_api_rejection,
+                )
+                raise GuardianOnceHalted(
+                    classify_mode_api_rejection(payload)
+                ) from None
+            if self._diagnostic_get_errors:
+                from app.t100_v40_guardian_get_failure_codes import (
+                    classify_inventory_get_api_rejection,
+                )
+                raise GuardianOnceHalted(
+                    classify_inventory_get_api_rejection(payload)
+                ) from None
             raise GuardianOnceHalted("MEXC_SIGNED_GET_EXPLICITLY_REJECTED")
         return payload.get("data")
 

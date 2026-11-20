@@ -130,3 +130,31 @@ def assess_strategy_parity_report(report: Any) -> dict[str, Any]:
         else "FULL_STRATEGY_PARITY_BLOCKED"
     )
     return result
+
+
+
+def assess_v40_first_canary_entry_parity_report(report: Any) -> dict[str, Any]:
+    """Distinct narrow historical admission gate for ONE capped live canary.
+
+    A first real-money canary is meant to TEST exchange fill/SL75/recovery.
+    Requiring already-observed live execution equivalence is circular.
+    However the historical Stage2/49-bar V40 ENTRY filter must exactly
+    match the frozen archive BEFORE the supervised experiment. This does
+    not certify exit chronology, trailing, full replay, venue safety or
+    unrestricted autonomous execution.
+    """
+    historical=assess_strategy_parity_report(report)
+    ok=historical["historical_entry_parity_verified"] is True
+    return {
+        "status":(
+            "V40_FIRST_CANARY_FROZEN_ENTRY_PARITY_VERIFIED_RESTRICTED"
+            if ok else "V40_FIRST_CANARY_ENTRY_PARITY_UNVERIFIED"
+        ),
+        "first_canary_entry_parity_verified":ok,
+        "full_chronological_replay_verified":(
+            historical["full_chronological_replay_verified"]
+        ),
+        "full_autonomous_mode_certified":False,
+        "entry_allowed":False,
+        "live_authorization":False,
+    }

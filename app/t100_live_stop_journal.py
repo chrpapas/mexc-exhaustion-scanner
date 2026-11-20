@@ -126,9 +126,14 @@ class ReadOnlyStopReconciler:
         self.exchange = exchange
 
     async def verify(self, amendment: StopAmendment) -> str:
-        """Read-only. Uncertain results remain UNKNOWN and prohibit retries."""
+        """Price-only legacy diagnostic: NEVER writes VERIFIED journal state."""
         state = await self.journal.state(amendment.external_id)
-        if state not in {"PREPARED", "UNKNOWN", "SUBMITTING", "VERIFIED"}:
+        if state == "PREPARED":
+            # A matching price can be an independent/manual change, not
+            # proof the durable worker ever owned the exchange mutation.
+            # A PREPARED intent must NEVER be promoted from GET alone.
+            raise StopJournalHalted("PREPARED_STOP_HAS_NO_OWNED_POST_ATTEMPT")
+        if state not in {"UNKNOWN", "SUBMITTING", "VERIFIED"}:
             raise StopJournalHalted("INVALID_STOP_JOURNAL_STATE")
         try:
             orders = await self.exchange.open_stop_orders(amendment.symbol)
@@ -157,14 +162,12 @@ class ReadOnlyStopReconciler:
             # A prepared-but-unapplied amendment is not a failed order
             # and is never authorization to send/retry.
             raise StopJournalHalted("STOP_NOT_TIGHTENED_UNRESOLVED")
-        if state != "VERIFIED":
-            if not await self.journal.mark_verified(
-                amendment.external_id,
-                state,
-                amendment.stop_order_id,
-            ):
-                raise StopJournalHalted("STOP_JOURNAL_CAS_FAILURE")
-        else:
+        # This legacy price-only reader does not inspect the whole native
+        # short MARKET SL row, position volume, durable checkpoint, or
+        # independent account bookends. NEVER write journal VERIFIED from
+        # this path, even for SUBMITTING/UNKNOWN. Only the strict
+        # StopUpdatePersistencePipeline may reconcile and persist.
+        if state == "VERIFIED":
             verified_id = await self.journal.verified_stop_order_id(
                 amendment.external_id
             )
@@ -172,4 +175,4 @@ class ReadOnlyStopReconciler:
                 raise StopJournalHalted(
                     "VERIFIED_STOP_ID_PERSISTENCE_MISMATCH"
                 )
-        return "VERIFIED_READ_ONLY"
+        return "STOP_PRICE_ONLY_OBSERVED_RECONCILIATION_REQUIRED"

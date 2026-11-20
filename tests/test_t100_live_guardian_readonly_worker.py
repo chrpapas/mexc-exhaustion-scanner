@@ -57,6 +57,35 @@ class ConfigTests(unittest.TestCase):
                 with self.assertRaises(Exception):
                     GuardianWorkerConfig.from_env(worker_env(**change))
 
+    def test_fast_v40_guardian_requires_durable_first_failure_alert(self):
+        valid=GuardianWorkerConfig.from_env(worker_env(
+            T100_V40_FAST_GUARDIAN_ENABLED="true",
+            T100_GUARDIAN_DURABLE_ALERTS_ENABLED="true",
+            T100_V40_ACCOUNT_PROFILE="DEDICATED_WEB_PILOT",
+            T100_GUARDIAN_INTERVAL_SECONDS="5",
+            T100_GUARDIAN_MAX_FAILURES="1",
+        ))
+        self.assertEqual(valid.interval_seconds,5)
+        self.assertEqual(valid.maximum_failures,1)
+        for override in (
+            dict(T100_GUARDIAN_DURABLE_ALERTS_ENABLED="false"),
+            dict(T100_V40_ACCOUNT_PROFILE="OTHER"),
+            dict(T100_GUARDIAN_INTERVAL_SECONDS="2"),
+            dict(T100_GUARDIAN_INTERVAL_SECONDS="6"),
+            dict(T100_GUARDIAN_MAX_FAILURES="2"),
+        ):
+            fields={
+                "T100_V40_FAST_GUARDIAN_ENABLED":"true",
+                "T100_GUARDIAN_DURABLE_ALERTS_ENABLED":"true",
+                "T100_V40_ACCOUNT_PROFILE":"DEDICATED_WEB_PILOT",
+                "T100_GUARDIAN_INTERVAL_SECONDS":"5",
+                "T100_GUARDIAN_MAX_FAILURES":"1",
+            }
+            fields.update(override)
+            with self.subTest(override=override):
+                with self.assertRaises(GuardianOnceHalted):
+                    GuardianWorkerConfig.from_env(worker_env(**fields))
+
     def test_invalid_cycle_interval_and_failure_limit_denied(self):
         for changes in (
             dict(T100_GUARDIAN_INTERVAL_SECONDS="10"),

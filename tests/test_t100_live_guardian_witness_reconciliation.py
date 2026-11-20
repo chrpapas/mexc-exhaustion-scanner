@@ -142,6 +142,36 @@ class WitnessTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(w.owned_native_stop_present)
         self.assertEqual(w.foreign_position_count, 1)
 
+    async def test_exact_filled_entry_attached_native_market_stop_is_observed(self):
+        own=own_stop()
+        own.update({
+            "orderId":"666","isFinished":0,"triggerSide":0,
+            "errorCode":0,"positionType":2,"stopLossType":0,
+            "stopLossReverse":2,"lossTrend":1,
+            "volType":1,"profitLossVolType":"SAME","vol":"1",
+        })
+        venue=Venue(
+            positions=[own_position()],stops=[own],n=counts(1),
+        )
+        r=await ReadOnlyGuardianCollector(
+            ReadOnlyMexcProbe(venue),
+        ).observe(owned(),SCOPE)
+        self.assertTrue(r.exact_owned_position_present)
+        self.assertTrue(r.owned_native_stop_protection_semantics_verified)
+        self.assertFalse(r.position_completeness_certified)
+        self.assertFalse(r.emergency_close_authorized)
+        self.assertEqual(venue.post_calls,[])
+        own["orderId"]="668"
+        venue2=Venue(
+            positions=[own_position()],stops=[own],n=counts(1),
+        )
+        bad=await ReadOnlyGuardianCollector(
+            ReadOnlyMexcProbe(venue2),
+        ).observe(owned(),SCOPE)
+        self.assertFalse(bad.owned_native_stop_protection_semantics_verified)
+        self.assertFalse(bad.live_authorization)
+        self.assertEqual(venue2.post_calls,[])
+
     async def test_pnl_drift_tolerated_without_false_certificate(self):
         class PnlVenue(Venue):
             async def _private_get(self, path, params=None):

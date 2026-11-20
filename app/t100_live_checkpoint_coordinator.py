@@ -73,6 +73,7 @@ def _require_native_market_position_stop(
         position_id=checkpoint.position_id,
         position_quantity=checkpoint.contracts,
         maximum_short_stop_price=checkpoint.stop_price,
+        verified_filled_entry_order_id=checkpoint.exchange_order_id,
     )
     if (
         report.status != "NATIVE_MARKET_SHORT_SL_ROW_OBSERVED_NONAUTHORIZING"

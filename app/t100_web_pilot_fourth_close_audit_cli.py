@@ -56,6 +56,8 @@ async def audit_fourth_pilot(client: Any, fingerprint: str) -> dict[str, Any]:
         "close_market_order_type_verified": False,
         "close_contract_quantity_exact_one": False,
         "finished_stop_exact_identity_verified": False,
+        "operator_ui_trigger_market_sl_confirmed_before_amend": False,
+        "supervised_native_stop_full_one_contract_volume_observed": False,
         "finished_stop_price_matches_amended_target": False,
         "finished_stop_canceled_not_triggered": False,
         "finished_stop_error_code": "NOT_VERIFIED",
@@ -83,6 +85,13 @@ async def audit_fourth_pilot(client: Any, fingerprint: str) -> dict[str, Any]:
         report["status"] = "FOURTH_JOURNAL_AMEND_OR_CLOSE_FENCE_UNVERIFIED"
         return report
     report["fourth_amendment_ack_journaled"] = True
+    # The operator confirmed Trigger Market SL in the MEXC UI during the
+    # supervised fourth pilot. This evidence is distinct from an API field
+    # proving stopLossType=MARKET and from continuous protection through
+    # every amendment/restart. Preserve the distinction in downstream reports.
+    report["operator_ui_trigger_market_sl_confirmed_before_amend"] = (
+        journal.get("ui_operator_confirmed_market_sl_before_amend") is True
+    )
 
     before = await run_inventory(client=InventoryGetOnlyClient(client))
     if not _is_flat(before):
@@ -165,6 +174,10 @@ async def audit_fourth_pilot(client: Any, fingerprint: str) -> dict[str, Any]:
             and stop.get("positionType") == 2
             and stop.get("profitLossVolType") == "SEPARATE"
             and pilot.positive(stop.get("stopLossVol")) == D(1)
+        )
+        report["supervised_native_stop_full_one_contract_volume_observed"] = (
+            report["finished_stop_exact_identity_verified"]
+            and report["fourth_entry_filled_verified"]
         )
         report["finished_stop_price_matches_amended_target"] = (
             pilot.positive(stop.get("stopLossPrice"))

@@ -1,0 +1,40 @@
+name: V40 immutable favorable bar checkpoint and restart recovery (offline)
+
+on:
+  push:
+    branches:
+      - "feature/v40-immutable-best-pnl-cursor-parity-*"
+  pull_request:
+    paths:
+      - "app/t100_live_checkpoint_journal.py"
+      - "app/t100_live_durable_recovery.py"
+      - "app/t100_v40_unreleased_bar_cursor.py"
+      - "tests/test_t100_v40_immutable_bar_checkpoint.py"
+      - "migrations/043_v40_immutable_bar_observed_UNRELEASED.sql"
+      - ".github/workflows/v40-bar-observed-durable-revision.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  immutable-profit-restart:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install -e ".[dev]"
+      - run: |
+          python -m compileall -q \
+            app/t100_live_checkpoint_journal.py \
+            app/t100_live_durable_recovery.py \
+            app/t100_v40_unreleased_bar_cursor.py
+      - run: |
+          python -m pytest -q \
+            tests/test_t100_v40_immutable_bar_checkpoint.py \
+            tests/test_t100_live_checkpoint_journal.py \
+            tests/test_t100_live_durable_recovery.py \
+            tests/test_t100_v40_unreleased_bar_cursor.py \
+            tests/test_t100_v40_unreleased_verified_exit_handoff.py \
+            tests/test_t100_v40_unreleased_portfolio_exit_batch.py

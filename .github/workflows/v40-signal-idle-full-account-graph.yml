@@ -1,0 +1,43 @@
+name: V40 full exit lifecycle boots before next Stage2 signal
+
+on:
+  push:
+    branches:
+      - "feat/v40-runtime-idle-account-graph-*"
+  pull_request:
+    paths:
+      - "app/t100_v40_full_portfolio_runtime.py"
+      - "app/t100_v40_concrete_idle_portfolio_factory.py"
+      - "tests/test_t100_v40_concrete_idle_portfolio_factory.py"
+      - "app/t100_v40_render_connected_portfolio_worker.py"
+      - "app/t100_v40_portfolio_signal_binding.py"
+      - "tests/test_t100_v40_portfolio_signal_binding.py"
+      - "app/t100_v40_render_executor_disabled_worker.py"
+      - "tests/test_t100_v40_render_connected_portfolio_worker.py"
+      - ".github/workflows/v40-signal-idle-full-account-graph.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  real-account-ports-no-open:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install -e ".[dev]"
+      - name: All real lifecycle ports, no fabricated signal, no MEXC POST
+        run: |
+          python -m compileall -q app/t100_v40_full_portfolio_runtime.py app/t100_v40_concrete_idle_portfolio_factory.py app/t100_v40_render_connected_portfolio_worker.py app/t100_v40_render_executor_disabled_worker.py app/t100_v40_portfolio_signal_binding.py
+          python -m pytest -q \
+            tests/test_t100_v40_portfolio_signal_binding.py \
+            tests/test_t100_v40_concrete_idle_portfolio_factory.py \
+            tests/test_t100_v40_render_connected_portfolio_worker.py \
+            tests/test_t100_v40_concrete_portfolio_factory.py \
+            tests/test_t100_v40_full_portfolio_runtime.py \
+            tests/test_t100_v40_live_portfolio_supervisor.py \
+            tests/test_t100_v40_forward_close_port_binding.py \
+            tests/test_t100_v40_forward_close_finalizer.py

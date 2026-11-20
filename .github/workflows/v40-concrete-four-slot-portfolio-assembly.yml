@@ -1,0 +1,36 @@
+name: V40 concrete frozen four-slot production dependency assembly
+
+on:
+  push:
+    branches:
+      - "feat/v40-concrete-four-slot-runtime-assembly-*"
+  pull_request:
+    paths:
+      - "app/t100_v40_concrete_portfolio_factory.py"
+      - "tests/test_t100_v40_concrete_portfolio_factory.py"
+      - ".github/workflows/v40-concrete-four-slot-portfolio-assembly.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  real-port-bindings-no-post:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install -e ".[dev]"
+      - name: Instantiate each original production port and existing entry/exit regressions
+        run: |
+          python -m compileall -q app/t100_v40_concrete_portfolio_factory.py
+          python -m pytest -q \
+            tests/test_t100_v40_concrete_portfolio_factory.py \
+            tests/test_t100_v40_full_portfolio_runtime.py \
+            tests/test_t100_v40_forward_close_port_binding.py \
+            tests/test_t100_v40_supervisor_native_exit_settlement.py \
+            tests/test_t100_v40_forward_close_finalizer.py \
+            tests/test_t100_v40_portfolio_stop_supervisor_port.py \
+            tests/test_t100_live_v40_entry_coordinator.py
