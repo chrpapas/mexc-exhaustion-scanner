@@ -13,6 +13,7 @@ or second POST is ever tried after a staged/unknown attempt.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import re
 from datetime import datetime,timezone
 from decimal import Decimal as D
 from typing import Any
@@ -24,7 +25,7 @@ from app.t100_live_authorization import (
 from app.t100_live_execution import LiveCaps
 from app.t100_live_guards import T100ExecutionControls
 from app.t100_live_v40_entry_coordinator import (
-    V40OneShotCoordinator,V40OneShotReport,prepare_candidate,
+    V40OneShotCoordinator,V40OneShotReport,V40CoordinatorHalted,prepare_candidate,
     verify_fresh_exact_depth,
 )
 from app.t100_live_four_slot_snapshot_coordinator import FourSlotSnapshotResult
@@ -32,9 +33,9 @@ from app.t100_live_v40_stage2_source import (
     PostgresV40Stage2Source,V40SourceCandidate,V40SourceBatch,
 )
 from app.t100_live_v40_candidate_market_witness import (
-    MexcV40CandidateMarketWitness,
+    MexcV40CandidateMarketWitness,V40CandidateMarketHalted,
 )
-from app.t100_v40_first_canary_risk_witness import V40FirstCanaryRiskWitness
+from app.t100_v40_first_canary_risk_witness import V40FirstCanaryRiskWitness,V40CanaryRiskHalted
 from app.t100_v40_executor_assembly import (
     assemble_v40_first_pilot,V40ExecutorAssembly,V40FirstPilotGetOnly,
 )
@@ -78,6 +79,24 @@ class V40FirstCanaryExecutionOutcome:
     exchange_post_may_have_occurred:bool=False
     live_order_outcome_certified:bool=False
     further_entry_allowed:bool=False
+    precheck_failure_code:str|None=None
+
+
+def _safe_precheck_failure_code(stage:str, error:Exception)->str:
+    """Whitelist stable program-owned failure codes; never log arbitrary exception text."""
+    if type(error) in (
+        V40CanaryRiskHalted,V40CandidateMarketHalted,V40CoordinatorHalted,
+    ):
+        code=str(error)
+        if re.fullmatch(r"(?:V40_|MARKET_)[A-Z0-9_]{5,120}",code):
+            return code
+    allowed={
+        "RISK_WITNESS","SNAPSHOT","ADMISSION",
+        "DEPTH_QUOTE","DEPTH_VERIFY","FINAL_GUARDIAN",
+        "INITIAL_GUARDIAN",
+    }
+    return ("V40_PRECHECK_"+stage+"_UNEXPECTED_EXCEPTION"
+            if stage in allowed else "V40_PRECHECK_UNEXPECTED_EXCEPTION")
 
 
 def _guardian_verified(e:object)->bool:
@@ -135,9 +154,15 @@ async def attempt_one_real_v40_first_signal(
     holder_id:str,
     observed_at:datetime|None=None,
     caps:LiveCaps|None=None,
+    rejected_signal_ids:frozenset[int]=frozenset(),
 )->V40FirstCanaryExecutionOutcome:
     """One irreversible attempt maximum; never retried on UNKNOWN or crash."""
     blocked=lambda code,**kw:V40FirstCanaryExecutionOutcome(code,**kw)
+    if (
+        type(rejected_signal_ids) is not frozenset
+        or any(type(sid) is not int or sid<=0 for sid in rejected_signal_ids)
+    ):
+        return blocked("V40_FIRST_CANARY_REJECTED_SIGNAL_SET_INVALID")
     if (
         type(source) is not PostgresV40Stage2Source
         or source.restricted_source_reader is not True
@@ -192,12 +217,18 @@ async def attempt_one_real_v40_first_signal(
     if signal is None:
         return blocked("V40_FIRST_CANARY_WAIT_FOR_GENUINE_STAGE2")
     identity={"signal_id":signal.signal_id,"symbol":signal.symbol}
+    # No account mutation, guardian permit, depth or sizing for a signal
+    # that already failed an independent pre-entry check in this process.
+    if signal.signal_id in rejected_signal_ids:
+        return blocked("V40_FIRST_CANARY_REJECTED_SIGNAL_NO_RETRY",**identity)
     if signal.pre24_vol_pct>=VOL_SKIP_THRESHOLD:
         return blocked("V40_FIRST_CANARY_GENUINE_VOL30_SKIP",**identity)
+    stage="INITIAL_GUARDIAN"
     try:
         guardian=await guardian_gate.verify()
         if not _guardian_verified(guardian):
             return blocked("V40_FIRST_CANARY_GUARDIAN_NOT_READY",**identity)
+        stage="RISK_WITNESS"
         risk,terms=await key_and_risk.inspect(signal)
         # Build a strictly disabled assembly ONLY for preflight snapshots.
         # No exchange POST or SQL mutation is available here.
@@ -206,6 +237,7 @@ async def attempt_one_real_v40_first_signal(
             executor_runtime_pool=executor_runtime_pool,
             signed_get=signed_get,public_get=public_get,
         )
+        stage="SNAPSHOT"
         pre=await getonly.coordinator.snapshots.inspect()
         if (
             type(pre) is not FourSlotSnapshotResult
@@ -217,15 +249,18 @@ async def attempt_one_real_v40_first_signal(
             caps.max_order_usdt,risk.current_account_equity_usdt*D(".25"),
             risk.available_margin_usdt,
         )
+        stage="ADMISSION"
         planned=prepare_candidate(
             signal=signal,witness=pre,risk=risk,terms=terms,
             cost_bps=100.,pilot_notional_ceiling=ceiling,
         )
         if planned is None:
             return blocked("V40_FIRST_CANARY_FROZEN_ADMISSION_REJECTED",**identity)
+        stage="DEPTH_QUOTE"
         quote,depth=await key_and_risk.market.quote_exact_intent(
             signal,planned.intent,max_slippage_bps=caps.max_slippage_bps,
         )
+        stage="DEPTH_VERIFY"
         verify_fresh_exact_depth(
             signal=signal,intent=planned.intent,risk=risk,terms=terms,
             caps=caps,quote=quote,depth=depth,
@@ -233,10 +268,15 @@ async def attempt_one_real_v40_first_signal(
         )
         # Repeat the independently maintained guardian gate before issuing
         # a signal-bound permit. The adapter checks this AGAIN at final POST.
+        stage="FINAL_GUARDIAN"
         if not _guardian_verified(await guardian_gate.verify()):
             return blocked("V40_FIRST_CANARY_FINAL_GUARDIAN_PRECHECK_HALT",**identity)
-    except Exception:
-        return blocked("V40_FIRST_CANARY_CURRENT_RISK_DEPTH_OR_ACCOUNT_HALT",**identity)
+    except Exception as error:
+        return blocked(
+            "V40_FIRST_CANARY_CURRENT_RISK_DEPTH_OR_ACCOUNT_HALT",
+            **identity,
+            precheck_failure_code=_safe_precheck_failure_code(stage,error),
+        )
 
     evidence=V40FirstCanaryReadinessEvidence(
         code_revision_verified=external_review.code_revision_verified,
