@@ -71,7 +71,7 @@ async def select_seventh_reviewed_scope(
                 or type(existing["critical_latched"]) is not bool
             ):
                 fail("V40_RECOVERY_007_EXISTING_SCOPE_UNKNOWN")
-            return RECOVERY_SCOPE_007,"EXISTING_RECOVERY_006_SCOPE_STICKY"
+            return RECOVERY_SCOPE_007,"EXISTING_RECOVERY_007_SCOPE_STICKY"
 
         for scope,expected in _OLD_SCOPES:
             state=await conn.fetchrow(
@@ -89,12 +89,12 @@ async def select_seventh_reviewed_scope(
                 or type(state["revision"]) is not int or state["revision"]<3
             ):
                 fail("V40_RECOVERY_007_OLD_STATE_OR_STICKY_LATCH_CHANGED")
-            # A new Render deployment retires the 005 observer BEFORE 006
+            # A new Render deployment retires the 006 observer BEFORE 007
             # can acquire the exclusive PG singleton. Requiring the retired
             # observer's LAST heartbeat <120s is therefore a deadlock under
             # healthy deployment or a prolonged singleton handoff. The
-            # 005 state MUST still be last healthy FLAT, its old critical
-            # MUST stay sticky and exact, and the new 006 scope is initialized
+            # 006 state MUST still be last healthy FLAT, its old critical
+            # MUST stay sticky and exact, and the new 007 scope is initialized
             # only AFTER TWO independent live signed-GET/immutable-ledger
             # bookends below. No stale sample substitutes those fresh GETs.
 
@@ -185,7 +185,7 @@ async def select_seventh_reviewed_scope(
             ):
                 fail("V40_RECOVERY_007_OLD_INCIDENT_TIME_WINDOWS_MISMATCH")
 
-        # New 006 is allowed only after independent signed full exchange
+        # New 007 is allowed only after independent signed full exchange
         # and durable ledger bookends twice, not after an old heartbeat.
         for n in range(2):
             try:
