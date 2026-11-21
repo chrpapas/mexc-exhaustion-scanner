@@ -138,6 +138,21 @@ _SAFE_STARTUP_REASONS=frozenset({
     "V40_RECOVERY_006_005_HTTP_5XX_TIME_WINDOW_MISMATCH",
     "V40_RECOVERY_006_OTHER_EPOCH_NOV19_CRITICAL_PRESENT",
     "V40_RECOVERY_006_OLD_INCIDENT_TIME_WINDOWS_MISMATCH",
+    "V40_RECOVERY_007_005_CRITICAL_CLASS_OR_COUNT_MISMATCH",
+    "V40_RECOVERY_007_005_HTTP_5XX_TIME_WINDOW_MISMATCH",
+    "V40_RECOVERY_007_006_TIMEOUT_INCIDENT_MISMATCH",
+    "V40_RECOVERY_007_CURRENT_FLAT_LEDGER_NOT_VERIFIED",
+    "V40_RECOVERY_007_DB_OR_LIVE_ACCOUNT_REVIEW_UNAVAILABLE",
+    "V40_RECOVERY_007_DISCORD_PENDING_INCIDENT",
+    "V40_RECOVERY_007_EXISTING_SCOPE_UNKNOWN",
+    "V40_RECOVERY_007_EXPLICIT_OPERATOR_APPROVAL_MISSING",
+    "V40_RECOVERY_007_NEW_SCOPE_NOT_CLEAN",
+    "V40_RECOVERY_007_OLDER_CRITICAL_CLASS_OR_COUNT_MISMATCH",
+    "V40_RECOVERY_007_OLD_INCIDENT_TIME_WINDOWS_MISMATCH",
+    "V40_RECOVERY_007_OLD_STATE_OR_STICKY_LATCH_CHANGED",
+    "V40_RECOVERY_007_OTHER_EPOCH_NOV19_CRITICAL_PRESENT",
+    "V40_RECOVERY_007_OUTBOX_SHAPE_INVALID",
+    "V40_RECOVERY_007_SIGNED_GET_FAILED",
 })
 
 
@@ -373,6 +388,9 @@ async def run(
         from app.t100_v40_guardian_recovery_006 import (
             select_sixth_reviewed_scope,V40GuardianRecovery006Halted,
         )
+        from app.t100_v40_guardian_recovery_007 import (
+            select_seventh_reviewed_scope,V40GuardianRecovery007Halted,
+        )
     if shared:
         from app.t100_v40_guardian_shared_db import (
             V40SharedGuardianDatabaseHalted,
@@ -433,6 +451,12 @@ async def run(
             # No opt-in -> unchanged 004 behavior and no release.
             stage="AUDITED_ROLLOVER_REVIEW"
             if env.get(
+                "T100_V40_GUARDIAN_RECOVERY_007_OPERATOR_APPROVED"
+            )=="true":
+                reviewed_scope,reviewed_reason=await select_seventh_reviewed_scope(
+                    conn,env=env,observe=observer,pause=pause,
+                )
+            elif env.get(
                 "T100_V40_GUARDIAN_RECOVERY_006_OPERATOR_APPROVED"
             )=="true":
                 reviewed_scope,reviewed_reason=await select_sixth_reviewed_scope(
@@ -569,6 +593,7 @@ async def run(
         if reviewed and isinstance(error,(
             V40GuardianReviewedGenerationHalted,V40GuardianRecovery004Halted,
             V40GuardianRecovery005Halted,V40GuardianRecovery006Halted,
+            V40GuardianRecovery007Halted,
         )):
             reason=str(error)
             if reason in _SAFE_STARTUP_REASONS:
