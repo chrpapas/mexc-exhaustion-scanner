@@ -358,6 +358,10 @@ async def observe_v40_account_and_owned_network(
                 api_key=env["T100_V40_GUARDIAN_READONLY_API_KEY"],
                 api_secret=env["T100_V40_GUARDIAN_READONLY_API_SECRET"],
                 diagnostic_get_errors=True,
+                retry_transient_positions_get=(
+                    env.get("T100_V40_GUARDIAN_TRANSIENT_POSITIONS_RETRY_ENABLED")
+                    == "true"
+                ),
             )
             return await asyncio.wait_for(
                 observe_v40_account_and_owned(
