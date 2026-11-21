@@ -1,0 +1,35 @@
+name: V40 guardian audited recovery 007 (no live orders)
+
+on:
+  pull_request:
+    paths:
+      - "app/t100_v40_guardian_recovery_007.py"
+      - "app/t100_v40_canary_durable_guardian.py"
+      - "app/t100_v40_guardian_post_gate.py"
+      - "app/t100_v40_emergency_nonflat_gate.py"
+      - "tests/test_t100_v40_guardian_recovery_007.py"
+      - "tests/test_t100_v40_guardian_post_gate.py"
+      - ".github/workflows/v40-guardian-audited-recovery-007.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  exact-audit-no-bypass:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install -e ".[dev]"
+      - name: Compile and offline regression verification
+        run: |
+          python -m compileall -q app/t100_v40_guardian_recovery_007.py app/t100_v40_canary_durable_guardian.py app/t100_v40_guardian_post_gate.py app/t100_v40_emergency_nonflat_gate.py
+          python -m pytest -q \
+            tests/test_t100_v40_guardian_recovery_007.py \
+            tests/test_t100_v40_guardian_recovery_006.py \
+            tests/test_t100_v40_guardian_post_gate.py \
+            tests/test_t100_v40_canary_durable_guardian.py
