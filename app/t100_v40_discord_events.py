@@ -8,6 +8,7 @@ webhook does not change order decisions or protection.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import re
 from typing import Any, Mapping
@@ -186,20 +187,46 @@ async def send_v40_notice(
     timeout_seconds: float = 3.0,
 ) -> bool:
     """Best-effort transport; cannot change any live trading outcome."""
+    # Explicit JSON stdout makes delivery auditable on the trader, whose
+    # minimal runtime does not configure Python INFO logging. Never output
+    # webhook URL, HTTP response content, or arbitrary error text.
+    safe_event=(notice.key if type(notice.key) is str
+                and re.fullmatch(r"[A-Za-z0-9_-]{1,128}",notice.key)
+                else "unclassified")
     webhook = webhook_from_env(env)
     if not webhook:
-        LOG.warning("V40_DISCORD_NOT_CONFIGURED event=%s",notice.key)
+        LOG.warning("V40_DISCORD_NOT_CONFIGURED event=%s",safe_event)
+        print(json.dumps({
+            "status":"V40_DISCORD_DELIVERY",
+            "event":safe_event,"success":False,"reason":"NOT_CONFIGURED",
+        },sort_keys=True),flush=True)
         return False
-    sender = T100LiveOpsNotifier(webhook, cooldown_seconds=0)
+    sender = None
     try:
+        sender = T100LiveOpsNotifier(webhook, cooldown_seconds=0)
         sent = await asyncio.wait_for(sender.send(notice), timeout_seconds)
         LOG.info(
             "V40_DISCORD_DELIVERY event=%s success=%s",
-            notice.key, bool(sent),
+            safe_event, bool(sent),
         )
+        print(json.dumps({
+            "status":"V40_DISCORD_DELIVERY",
+            "event":safe_event,"success":bool(sent),
+            "reason":"DELIVERED" if sent else "NOT_ACKNOWLEDGED",
+        },sort_keys=True),flush=True)
         return bool(sent)
     except Exception:
-        LOG.warning("V40_DISCORD_DELIVERY_FAILED event=%s",notice.key)
+        LOG.warning("V40_DISCORD_DELIVERY_FAILED event=%s",safe_event)
+        print(json.dumps({
+            "status":"V40_DISCORD_DELIVERY",
+            "event":safe_event,"success":False,
+            "reason":"SEND_OR_TIMEOUT_FAILED",
+        },sort_keys=True),flush=True)
         return False
     finally:
-        await sender.close()
+        if sender is not None:
+            try:
+                await sender.close()
+            except Exception:
+                # Notification teardown is never allowed to halt execution.
+                LOG.warning("V40_DISCORD_CLOSE_FAILED event=%s",safe_event)
