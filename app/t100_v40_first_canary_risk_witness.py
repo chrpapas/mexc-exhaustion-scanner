@@ -13,6 +13,9 @@ guardian/POST gates still control the actual exchange mutation.
 """
 from __future__ import annotations
 
+import asyncio
+import json
+import re
 from dataclasses import dataclass,replace
 from datetime import datetime,timezone
 from decimal import Decimal as D,InvalidOperation
@@ -22,7 +25,7 @@ from app.t100_live_v40_entry_coordinator import V40ContractTerms
 from app.t100_live_v40_dispatch_executor import V40CurrentRiskEvidence
 from app.t100_live_v40_stage2_source import V40SourceCandidate
 from app.t100_live_v40_candidate_market_witness import (
-    V40CandidateQuote,MexcV40CandidateMarketWitness,
+    V40CandidateQuote,MexcV40CandidateMarketWitness,V40CandidateMarketHalted,
 )
 from app.t100_v40_canary_daily_loss import (
     V40DailyLossEvidence,V40HistoryReader,observe_daily_loss,
@@ -41,6 +44,51 @@ _JOURNAL_STATUS="V40_FIRST_POSITION_JOURNAL_EMPTY_AND_READONLY_VERIFIED"
 
 class V40CanaryRiskHalted(RuntimeError):
     """Stable redacted status; no raw venue/SQL body or credentials."""
+
+
+# Idempotent GET-only market inspection: one optional second observation after
+# a typed transport-read failure. The entire exchange account/market bookend
+# gets repeated from scratch; no stale quote or failed GET can be accepted.
+# Never retry schema, margin, account, contract, price, or risk validation.
+_RETRYABLE_MARKET_GET=frozenset({
+    "MARKET_SIGNED_GET_FAILED","MARKET_PUBLIC_GET_FAILED",
+})
+_MARKET_STAGES=frozenset({"MARKET_FIRST","MARKET_SECOND"})
+_RISK_STAGES=_MARKET_STAGES | frozenset({
+    "KEY_PERMISSIONS","DAILY_LOSS","RUNTIME_JOURNAL",
+    "SIGNED_ASSETS","ASSESSMENT",
+})
+
+
+async def _fresh_market_observation(
+    market:MexcV40CandidateMarketWitness,
+    signal:V40SourceCandidate,
+    *,
+    stage:str,
+)->V40CandidateQuote:
+    if stage not in _MARKET_STAGES:
+        raise V40CanaryRiskHalted("V40_CANARY_RISK_STAGE_INVALID")
+    for attempt in (0,1):
+        try:
+            return await market.observe(signal)
+        except V40CandidateMarketHalted as error:
+            # Typed, internally generated, fixed-format code only.
+            raw=error.args[0] if len(error.args)==1 else None
+            code=(raw if type(raw) is str and
+                  re.fullmatch(r"MARKET_[A-Z0-9_]{5,100}",raw)
+                  else "MARKET_REDACTED_UNCLASSIFIED")
+            if code in _RETRYABLE_MARKET_GET and attempt==0:
+                print(json.dumps({
+                    "status":"V40_CANARY_MARKET_READ_RETRY",
+                    "stage":stage,"reason":code,"attempt":2,
+                    "exchange_posts":0,
+                },sort_keys=True),flush=True)
+                await asyncio.sleep(0.35)
+                continue
+            raise V40CanaryRiskHalted(
+                "V40_CANARY_RISK_"+stage+"_"+code
+            ) from None
+    raise V40CanaryRiskHalted("V40_CANARY_RISK_MARKET_RETRY_EXHAUSTED")
 
 
 def _num(raw:Any)->D:
@@ -284,13 +332,24 @@ class V40FirstCanaryRiskWitness:
     async def inspect(
         self,signal:V40SourceCandidate,
     )->tuple[V40CurrentRiskEvidence,V40ContractTerms]:
+        stage="MARKET_FIRST"
         try:
-            q1=await self.market.observe(signal)
+            q1=await _fresh_market_observation(
+                self.market,signal,stage=stage,
+            )
+            stage="KEY_PERMISSIONS"
             key=await self._permissions()
+            stage="DAILY_LOSS"
             history=await self._loss()
+            stage="RUNTIME_JOURNAL"
             journal=await self._journal()
+            stage="SIGNED_ASSETS"
             assets=await self.market.private.raw_account_assets()
-            q2=await self.market.observe(signal)
+            stage="MARKET_SECOND"
+            q2=await _fresh_market_observation(
+                self.market,signal,stage=stage,
+            )
+            stage="ASSESSMENT"
             report=assess_v40_first_canary_risk(
                 signal=signal,quote_first=q1,quote_second=q2,
                 assets=assets,key=key,pnl=history,journal=journal,
@@ -306,6 +365,9 @@ class V40FirstCanaryRiskWitness:
         except V40CanaryRiskHalted:
             raise
         except Exception:
+            # Preserve which independent GET/SQL step failed without ever
+            # logging a raw venue payload, database URL, key, or exception.
+            safe_stage=stage if stage in _RISK_STAGES else "UNKNOWN"
             raise V40CanaryRiskHalted(
-                "V40_CANARY_CURRENT_MARKET_DB_OR_HISTORY_READ_FAILED"
+                "V40_CANARY_RISK_"+safe_stage+"_UNEXPECTED"
             ) from None
