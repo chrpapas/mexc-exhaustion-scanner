@@ -67,7 +67,10 @@ async def test_second_transport_failure_halts_without_third_attempt(monkeypatch)
         V40CandidateMarketHalted(code),
         V40CandidateMarketHalted(code),quote(),
     ])
-    monkeypatch.setattr(m.asyncio,"sleep",lambda _:asyncio.sleep(0))
+    pauses=[]
+    async def pause(delay):
+        pauses.append(delay)
+    monkeypatch.setattr(m.asyncio,"sleep",pause)
     with pytest.raises(m.V40CanaryRiskHalted,match=(
         "V40_CANARY_RISK_MARKET_SECOND_MARKET_SIGNED_GET_FAILED"
     )):
@@ -75,6 +78,7 @@ async def test_second_transport_failure_halts_without_third_attempt(monkeypatch)
             market,signal(),stage="MARKET_SECOND",
         )
     assert len(calls)==2
+    assert pauses==[.35]
 
 
 @pytest.mark.asyncio
