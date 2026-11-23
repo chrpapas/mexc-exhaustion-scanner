@@ -75,13 +75,19 @@ class GetOnlyMexcTransport:
     def __init__(self, client: Any, *, api_key: str, api_secret: str,
                  diagnostic_get_errors: bool = False,
                  retry_transient_positions_get: bool = False,
-                 retry_transient_stops_get: bool = False):
+                 retry_transient_stops_get: bool = False,
+                 transient_inventory_get_retries: int = 0):
         if type(diagnostic_get_errors) is not bool:
             raise GuardianOnceHalted("SIGNED_GET_DIAGNOSTIC_POLICY_INVALID")
         if type(retry_transient_positions_get) is not bool:
             raise GuardianOnceHalted("SIGNED_GET_POSITIONS_RETRY_POLICY_INVALID")
         if type(retry_transient_stops_get) is not bool:
             raise GuardianOnceHalted("SIGNED_GET_STOPS_RETRY_POLICY_INVALID")
+        if (
+            type(transient_inventory_get_retries) is not int
+            or not 0 <= transient_inventory_get_retries <= 2
+        ):
+            raise GuardianOnceHalted("SIGNED_GET_INVENTORY_RETRY_COUNT_INVALID")
         if (type(api_key) is not str or len(api_key) < 12 or
                 type(api_secret) is not str or len(api_secret) < 16):
             raise GuardianOnceHalted("SIGNED_GET_CREDENTIALS_NOT_CONFIGURED")
@@ -91,6 +97,7 @@ class GetOnlyMexcTransport:
         self._diagnostic_get_errors = diagnostic_get_errors
         self._retry_transient_positions_get = retry_transient_positions_get
         self._retry_transient_stops_get = retry_transient_stops_get
+        self._transient_inventory_get_retries = transient_inventory_get_retries
 
     @classmethod
     def _allowed(cls, path: str) -> bool:
@@ -112,11 +119,26 @@ class GetOnlyMexcTransport:
             raise GuardianOnceHalted("MEXC_GET_QUERY_NOT_CANONICAL")
         pairs = sorted((params or {}).items())
         query_string = urlencode(pairs)
-        # Opt-in, exactly one second chance for idempotent open-positions
-        # or open-stops GET on typed transient transport failures only.
-        # Each attempt uses a fresh signature; downstream independent
-        # full-inventory bookends are always required to prove safety.
-        for attempt in range(2):
+        # Only signed, read-only, idempotent guardian inventory GETs.
+        # Operational failures are invisible to the incident system until the
+        # strictly bounded retry count is exhausted. Authentication, API,
+        # content/schema and account-inconsistency failures are never retried.
+        # The position-mode endpoint has its own independent existing policy.
+        inventory_paths=frozenset((
+            "/api/v1/private/account/assets",
+            "/api/v1/private/order/open_order_total_count",
+            "/api/v1/private/position/open_positions",
+            "/api/v1/private/stoporder/open_orders",
+        ))
+        max_retries=(
+            self._transient_inventory_get_retries
+            if path in inventory_paths else 0
+        )
+        if path == "/api/v1/private/position/open_positions":
+            max_retries=max(max_retries,int(self._retry_transient_positions_get))
+        if path == "/api/v1/private/stoporder/open_orders":
+            max_retries=max(max_retries,int(self._retry_transient_stops_get))
+        for attempt in range(max_retries+1):
             stamp = str(int(time.time() * 1000))
             signature = hmac.new(
                 self._secret.encode(),
@@ -151,17 +173,7 @@ class GetOnlyMexcTransport:
                     )
                     code = classify_inventory_get_transport_failure(error)
                     if (
-                        attempt == 0
-                        and (
-                            (
-                                self._retry_transient_positions_get
-                                and path == "/api/v1/private/position/open_positions"
-                            )
-                            or (
-                                self._retry_transient_stops_get
-                                and path == "/api/v1/private/stoporder/open_orders"
-                            )
-                        )
+                        attempt<max_retries
                         and code in (
                             "GUARDIAN_GET_TIMEOUT",
                             "GUARDIAN_GET_NETWORK",
@@ -169,10 +181,12 @@ class GetOnlyMexcTransport:
                             "GUARDIAN_GET_HTTP_5XX",
                         )
                     ):
-                        # Short idempotent retry only. Repeated failures
-                        # still become the original sticky critical incident.
+                        # No alert, error log or state mutation while retrying.
+                        # Freshly sign each attempt and fail closed on
+                        # attempt max_retries+1 if the transport still fails.
                         await asyncio.sleep(
-                            3.0 if code == "GUARDIAN_GET_HTTP_429" else 1.0
+                            (3.0 if code=="GUARDIAN_GET_HTTP_429" else 1.0)
+                            * (attempt+1)
                         )
                         continue
                     raise GuardianOnceHalted(code) from None
