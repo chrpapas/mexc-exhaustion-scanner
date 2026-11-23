@@ -185,7 +185,7 @@ def test_existing_fifth_scope_invalid_never_overwritten():
     assert db.inserts==[]
 
 
-def test_all_eight_scope_ids_are_distinct_and_new_production_gates_pin_007():
+def test_all_nine_scope_ids_are_distinct_and_current_gates_pin_008():
     from app.t100_v40_guardian_post_gate import ACTIVE_REVIEWED_SCOPE as flat_gate
     from app.t100_v40_unreleased_nonflat_guardian_evidence import (
         ACTIVE_REVIEWED_SCOPE as nonflat_gate,
@@ -195,8 +195,9 @@ def test_all_eight_scope_ids_are_distinct_and_new_production_gates_pin_007():
     )
     from app.t100_v40_guardian_recovery_006 import RECOVERY_SCOPE_006
     from app.t100_v40_guardian_recovery_007 import RECOVERY_SCOPE_007
+    from app.t100_v40_guardian_recovery_008 import RECOVERY_SCOPE_008
     predecessors={scope for scope,_ in m._PREDECESSORS}
-    all_scopes=predecessors|{m.RECOVERY_SCOPE_005,RECOVERY_SCOPE_006,RECOVERY_SCOPE_007}
+    all_scopes=predecessors|{m.RECOVERY_SCOPE_005,RECOVERY_SCOPE_006,RECOVERY_SCOPE_007,RECOVERY_SCOPE_008}
     assert len(predecessors)==5
-    assert len(all_scopes)==8
-    assert flat_gate==nonflat_gate==emergency_gate==RECOVERY_SCOPE_007
+    assert len(all_scopes)==9
+    assert flat_gate==nonflat_gate==emergency_gate==RECOVERY_SCOPE_008
