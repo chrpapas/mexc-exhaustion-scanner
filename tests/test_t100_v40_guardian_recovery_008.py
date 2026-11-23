@@ -77,7 +77,7 @@ async def run(db,*,readings=None,e=None):
         return x
     async def pause(s):
         pauses.append(s)
-    result=await m.select_seventh_reviewed_scope(
+    result=await m.select_eighth_reviewed_scope(
         db,env=e if e is not None else env(),
         observe=observer,pause=pause,
     )
