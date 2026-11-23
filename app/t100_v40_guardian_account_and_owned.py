@@ -358,6 +358,9 @@ async def observe_v40_account_and_owned_network(
                 api_key=env["T100_V40_GUARDIAN_READONLY_API_KEY"],
                 api_secret=env["T100_V40_GUARDIAN_READONLY_API_SECRET"],
                 diagnostic_get_errors=True,
+                transient_inventory_get_retries=int(env.get(
+                    "T100_V40_GUARDIAN_TRANSIENT_INVENTORY_GET_RETRIES","0"
+                )),
                 retry_transient_positions_get=(
                     env.get("T100_V40_GUARDIAN_TRANSIENT_POSITIONS_RETRY_ENABLED")
                     == "true"
