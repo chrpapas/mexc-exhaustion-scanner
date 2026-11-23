@@ -362,6 +362,10 @@ async def observe_v40_account_and_owned_network(
                     env.get("T100_V40_GUARDIAN_TRANSIENT_POSITIONS_RETRY_ENABLED")
                     == "true"
                 ),
+                retry_transient_stops_get=(
+                    env.get("T100_V40_GUARDIAN_TRANSIENT_STOPS_RETRY_ENABLED")
+                    == "true"
+                ),
             )
             return await asyncio.wait_for(
                 observe_v40_account_and_owned(
