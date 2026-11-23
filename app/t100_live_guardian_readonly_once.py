@@ -74,11 +74,14 @@ class GetOnlyMexcTransport:
 
     def __init__(self, client: Any, *, api_key: str, api_secret: str,
                  diagnostic_get_errors: bool = False,
-                 retry_transient_positions_get: bool = False):
+                 retry_transient_positions_get: bool = False,
+                 retry_transient_stops_get: bool = False):
         if type(diagnostic_get_errors) is not bool:
             raise GuardianOnceHalted("SIGNED_GET_DIAGNOSTIC_POLICY_INVALID")
         if type(retry_transient_positions_get) is not bool:
             raise GuardianOnceHalted("SIGNED_GET_POSITIONS_RETRY_POLICY_INVALID")
+        if type(retry_transient_stops_get) is not bool:
+            raise GuardianOnceHalted("SIGNED_GET_STOPS_RETRY_POLICY_INVALID")
         if (type(api_key) is not str or len(api_key) < 12 or
                 type(api_secret) is not str or len(api_secret) < 16):
             raise GuardianOnceHalted("SIGNED_GET_CREDENTIALS_NOT_CONFIGURED")
@@ -87,6 +90,7 @@ class GetOnlyMexcTransport:
         self._secret = api_secret
         self._diagnostic_get_errors = diagnostic_get_errors
         self._retry_transient_positions_get = retry_transient_positions_get
+        self._retry_transient_stops_get = retry_transient_stops_get
 
     @classmethod
     def _allowed(cls, path: str) -> bool:
@@ -108,10 +112,10 @@ class GetOnlyMexcTransport:
             raise GuardianOnceHalted("MEXC_GET_QUERY_NOT_CANONICAL")
         pairs = sorted((params or {}).items())
         query_string = urlencode(pairs)
-        # Opt-in, exactly one second chance ONLY for the idempotent positions
-        # GET on an explicitly classified transient transport failure. Every
-        # attempt uses a fresh signature. No failed GET is treated as proof
-        # of inventory, and downstream independent bookends still run.
+        # Opt-in, exactly one second chance for idempotent open-positions
+        # or open-stops GET on typed transient transport failures only.
+        # Each attempt uses a fresh signature; downstream independent
+        # full-inventory bookends are always required to prove safety.
         for attempt in range(2):
             stamp = str(int(time.time() * 1000))
             signature = hmac.new(
@@ -148,8 +152,16 @@ class GetOnlyMexcTransport:
                     code = classify_inventory_get_transport_failure(error)
                     if (
                         attempt == 0
-                        and self._retry_transient_positions_get
-                        and path == "/api/v1/private/position/open_positions"
+                        and (
+                            (
+                                self._retry_transient_positions_get
+                                and path == "/api/v1/private/position/open_positions"
+                            )
+                            or (
+                                self._retry_transient_stops_get
+                                and path == "/api/v1/private/stoporder/open_orders"
+                            )
+                        )
                         and code in (
                             "GUARDIAN_GET_TIMEOUT",
                             "GUARDIAN_GET_NETWORK",
