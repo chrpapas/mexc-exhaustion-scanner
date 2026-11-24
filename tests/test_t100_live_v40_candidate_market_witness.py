@@ -188,7 +188,7 @@ def test_exact_lot_depth_vwap_and_slippage_are_recomputed_not_assumed():
     ("private_leverage_two","MARKET_PRIVATE_RISK_LEVERAGE_CONFLICT"),
     ("real_private_isolated","MARKET_PRIVATE_CROSS_ONE_X_UNVERIFIED"),
     ("real_private_leverage_two","MARKET_PRIVATE_CROSS_ONE_X_UNVERIFIED"),
-    ("stale_depth","MARKET_BOOK_TIMESTAMP_OR_VERSION_STALE"),
+    ("stale_depth","MARKET_BOOK_STALE_AFTER_FINAL_REFRESH"),
     ("unsorted_bids","MARKET_DEPTH_NOT_STRICTLY_SORTED"),
     ("crossed_book","MARKET_CROSSED_ORDER_BOOK"),
 ])
@@ -209,7 +209,9 @@ def test_unverified_exchange_economics_are_rejected(fault,expect):
         pub.private_leverage[1]["openType"]=1
     if fault=="real_private_leverage_two":
         pub.private_leverage[1]["leverage"]=2
-    if fault=="stale_depth":public.depth["timestamp"]=START-10_000
+    if fault=="stale_depth":
+        public.depth["timestamp"]=START-10_000
+        c.clock_ms=Clock(START,END,END+100)
     if fault=="unsorted_bids":public.depth["bids"]=[[99,10],[100,10]]
     if fault=="crossed_book":public.depth["asks"]=[[99,10],[100,10]]
     with pytest.raises(V40CandidateMarketHalted,match=expect):
@@ -561,3 +563,110 @@ def test_current_v40_candidate_excludes_btc_and_eth_without_mexc_get():
             asyncio.run(c.observe(wrong))
         assert private.calls==[]
         assert public.calls==[]
+
+
+# Regression: the original intermediate book can become old during the
+# post-depth signed GET bookends. A later, freshly timestamped public depth
+# can be used ONLY if its version/clock advance, the entire signed account
+# read remains valid and both original freshness/cycle caps still hold.
+class SequencedDepth(Public):
+    def __init__(self,*,replacement=None):
+        super().__init__()
+        self.depth_calls=0
+        self.replacement=deepcopy(replacement) if replacement is not None else None
+    async def get(self,path,*,params=None):
+        if path==_DEPTH_PREFIX+SYM:
+            self.depth_calls+=1
+            if self.depth_calls==2 and self.replacement is not None:
+                self.depth=deepcopy(self.replacement)
+        return await super().get(path,params=params)
+
+
+def refreshed_case(*,old_timestamp=START+100,replacement_timestamp=START+2600,
+                   replacement_version=13,end=START+2500,refresh_end=START+2700):
+    c,private,old_public=setup()
+    public=SequencedDepth()
+    public.depth["timestamp"]=old_timestamp
+    if replacement_timestamp is not None:
+        replacement=deepcopy(public.depth)
+        replacement["timestamp"]=replacement_timestamp
+        replacement["version"]=replacement_version
+        public.replacement=replacement
+    c.public=public
+    c.clock_ms=Clock(START,end,refresh_end)
+    return c,private,public
+
+
+def test_aged_intermediate_book_is_refreshed_once_after_signed_bookends():
+    c,private,public=refreshed_case()
+    q=run(c)
+    assert q.book_age_ms==100
+    assert q.observed_at_ms==START+2700
+    assert q.bookended_flat_account
+    assert q.private_short_cross_1x_settings_bookended
+    assert q.current_private_short_max_vol==D("1000")
+    assert public.depth_calls==2
+    assert len(private.calls)==14
+    assert all(op=="GET" for op,*_ in private.calls)
+    assert all(op=="GET" for op,*_ in public.calls)
+
+
+def test_refreshed_depth_is_used_for_exact_lot_vwap_not_old_snapshot():
+    c,private,public=refreshed_case()
+    public.replacement["bids"]=[[100,10,1],[99.8,10,1],[99.7,10,1]]
+    q,d=asyncio.run(c.quote_exact_intent(
+        candidate(),intent(notional="1500"),max_slippage_bps=D("100"),
+    ))
+    assert public.depth_calls==2
+    assert d.age_ms==q.book_age_ms==100
+    assert d.order_fits_depth
+    assert d.sell_vwap==D("99.93333333333333333333333333")
+    assert not q.entry_allowed and not q.live_authorization
+    assert not d.entry_allowed and not d.live_authorization
+
+
+@pytest.mark.parametrize("kind,expected",[
+    ("second_still_old","MARKET_BOOK_STALE_AFTER_FINAL_REFRESH"),
+    ("version_regresses","MARKET_BOOK_SNAPSHOT_REGRESSED"),
+    ("timestamp_regresses","MARKET_BOOK_SNAPSHOT_REGRESSED"),
+    ("future_timestamp","MARKET_BOOK_TIMESTAMP_OR_VERSION_STALE"),
+    ("bad_version","MARKET_BOOK_TIMESTAMP_OR_VERSION_STALE"),
+    ("cycle_expired","MARKET_TOTAL_CYCLE_STALE"),
+])
+def test_invalid_refresh_never_passes_or_retries_again(kind,expected):
+    c,private,public=refreshed_case()
+    if kind=="second_still_old":
+        public.replacement=None
+    elif kind=="version_regresses":
+        public.replacement["version"]=11
+    elif kind=="timestamp_regresses":
+        public.replacement["timestamp"]=START
+    elif kind=="future_timestamp":
+        public.replacement["timestamp"]=START+5000
+    elif kind=="bad_version":
+        public.replacement["version"]=0
+    elif kind=="cycle_expired":
+        c.clock_ms=Clock(START,START+4800,START+5200)
+        public.replacement["timestamp"]=START+5100
+    with pytest.raises(V40CandidateMarketHalted,match=expected):
+        run(c)
+    assert public.depth_calls==2
+    assert len(private.calls)==14
+
+
+@pytest.mark.parametrize("field",["timestamp","version"])
+def test_malformed_initial_depth_metadata_never_triggers_refresh(field):
+    c,private,public=refreshed_case()
+    public.depth[field]=None
+    with pytest.raises(V40CandidateMarketHalted,match="MARKET_BOOK_TIMESTAMP_OR_VERSION_STALE"):
+        run(c)
+    assert public.depth_calls==1
+    assert len(private.calls)==14
+
+
+def test_account_or_risk_drift_blocks_before_any_final_depth_refresh():
+    c,private,public=refreshed_case()
+    private.assets[0]["positionMargin"]="4"
+    with pytest.raises(V40CandidateMarketHalted,match="MARKET_FLAT_ASSET_ECONOMICS_UNVERIFIED"):
+        run(c)
+    assert public.depth_calls==1
