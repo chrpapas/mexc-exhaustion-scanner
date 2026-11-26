@@ -16,6 +16,7 @@ venue payloads or secrets.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import math
 import re
@@ -443,13 +444,13 @@ class MexcV40CandidateMarketWitness:
         private_max=_decimal(short.get("maxVol"))
         if private_max<minimum:
             raise V40CandidateMarketHalted("MARKET_PRIVATE_VOLUME_BELOW_MINIMUM")
-        # A depth snapshot sampled between the signed account bookends can
-        # age beyond 1.5s while the remaining signed GETs finish. A single
-        # extra PUBLIC GET after the account is independently rechecked can
-        # rescue this *transport timing* case without relaxing freshness.
-        # Never retry an invalid/missing version, future clock, malformed
-        # snapshot, or an account/collateral mismatch. The total-cycle cap
-        # still applies to the refresh and no exchange POST is possible here.
+        # A mid-bookend snapshot may age during signed inventory reads.
+        # Once the account/risk/leverage checks succeed, permit up to 3
+        # additional PUBLIC depth GETs (with small bounded backoff).
+        # No alert is emitted until those checks are exhausted. This is
+        # NOT a bypass for an old/unchanged book, bad schema, version
+        # regression, future timestamp, changed account or exhausted
+        # five-second TOTAL-cycle deadline.
         if (
             type(depth.get("timestamp")) is not int
             or type(depth.get("version")) is not int
@@ -458,41 +459,64 @@ class MexcV40CandidateMarketWitness:
         ):
             raise V40CandidateMarketHalted("MARKET_BOOK_TIMESTAMP_OR_VERSION_STALE")
         if ended-depth["timestamp"]>self.max_book_age_ms:
-            initial_ts=depth["timestamp"]
-            initial_version=depth["version"]
-            depth=await self._public_data(
-                _DEPTH_PREFIX+signal.symbol,{"limit":"100"},
-            )
-            refreshed_at=self.clock_ms()
-            if (
-                type(refreshed_at) is not int
-                or refreshed_at<ended
-                or refreshed_at-started>self.max_cycle_ms
-            ):
-                raise V40CandidateMarketHalted("MARKET_TOTAL_CYCLE_STALE")
-            if (
-                type(depth.get("timestamp")) is not int
-                or type(depth.get("version")) is not int
-                or depth["version"]<=0
-                or depth["timestamp"]>refreshed_at+100
-            ):
-                raise V40CandidateMarketHalted(
-                    "MARKET_BOOK_TIMESTAMP_OR_VERSION_STALE"
+            latest_ts=depth["timestamp"]
+            latest_version=depth["version"]
+            first_version=latest_version
+            for refresh_idx in range(1,4):
+                # These sleeps are only for read-only public GETs. Sending
+                # a private order is NOT retried anywhere in this path.
+                if refresh_idx>1:
+                    await asyncio.sleep(0.15*(refresh_idx-1))
+                depth=await self._public_data(
+                    _DEPTH_PREFIX+signal.symbol,{"limit":"100"},
                 )
-            if (
-                depth["timestamp"]<initial_ts
-                or depth["version"]<initial_version
-            ):
-                raise V40CandidateMarketHalted(
-                    "MARKET_BOOK_SNAPSHOT_REGRESSED"
-                )
-            ended=refreshed_at
-            if ended-depth["timestamp"]>self.max_book_age_ms:
+                refreshed_at=self.clock_ms()
+                if (
+                    type(refreshed_at) is not int
+                    or refreshed_at<ended
+                    or refreshed_at-started>self.max_cycle_ms
+                ):
+                    raise V40CandidateMarketHalted("MARKET_TOTAL_CYCLE_STALE")
+                if (
+                    type(depth.get("timestamp")) is not int
+                    or type(depth.get("version")) is not int
+                    or depth["version"]<=0
+                    or depth["timestamp"]>refreshed_at+100
+                ):
+                    raise V40CandidateMarketHalted(
+                        "MARKET_BOOK_TIMESTAMP_OR_VERSION_STALE"
+                    )
+                if (
+                    depth["timestamp"]<latest_ts
+                    or depth["version"]<latest_version
+                ):
+                    raise V40CandidateMarketHalted(
+                        "MARKET_BOOK_SNAPSHOT_REGRESSED"
+                    )
+                latest_ts=depth["timestamp"]
+                latest_version=depth["version"]
+                ended=refreshed_at
+                if ended-latest_ts<=self.max_book_age_ms:
+                    break
+            else:
+                # Operational, redacted diagnostics once, after attempts.
+                # Values are bounded latency/versions-only; no balances,
+                # secret URLs, raw payloads or order details are logged.
+                print(json.dumps({
+                    "status":"V40_MARKET_DEPTH_FRESHNESS_EXHAUSTED",
+                    "symbol":signal.symbol,
+                    "public_depth_gets":4,
+                    "last_book_age_ms":ended-latest_ts,
+                    "freshness_limit_ms":self.max_book_age_ms,
+                    "elapsed_cycle_ms":ended-started,
+                    "book_version_advanced":latest_version>first_version,
+                    "exchange_posts":0,
+                },sort_keys=True),flush=True)
                 raise V40CandidateMarketHalted(
                     "MARKET_BOOK_STALE_AFTER_FINAL_REFRESH"
                 )
-        # A successful refresh is still subject to the exact original
-        # strict order-book level/sort/cross and risk/lot/slippage gates.
+        # A successful refresh still requires the exact original
+        # strict book-level/sort/cross and risk/lot/slippage gates.
         bids=_level_rows(depth.get("bids"),side="sell")
         asks=_level_rows(depth.get("asks"),side="buy")
         if bids[0][0]>=asks[0][0]:

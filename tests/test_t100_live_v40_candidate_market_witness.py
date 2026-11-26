@@ -211,7 +211,7 @@ def test_unverified_exchange_economics_are_rejected(fault,expect):
         pub.private_leverage[1]["leverage"]=2
     if fault=="stale_depth":
         public.depth["timestamp"]=START-10_000
-        c.clock_ms=Clock(START,END,END+100)
+        c.clock_ms=Clock(START,END,END+100,END+200,END+300)
     if fault=="unsorted_bids":public.depth["bids"]=[[99,10],[100,10]]
     if fault=="crossed_book":public.depth["asks"]=[[99,10],[100,10]]
     with pytest.raises(V40CandidateMarketHalted,match=expect):
@@ -637,6 +637,7 @@ def test_invalid_refresh_never_passes_or_retries_again(kind,expected):
     c,private,public=refreshed_case()
     if kind=="second_still_old":
         public.replacement=None
+        c.clock_ms=Clock(START,START+2500,START+2700,START+3100,START+3500)
     elif kind=="version_regresses":
         public.replacement["version"]=11
     elif kind=="timestamp_regresses":
@@ -650,7 +651,7 @@ def test_invalid_refresh_never_passes_or_retries_again(kind,expected):
         public.replacement["timestamp"]=START+5100
     with pytest.raises(V40CandidateMarketHalted,match=expected):
         run(c)
-    assert public.depth_calls==2
+    assert public.depth_calls==(4 if kind=="second_still_old" else 2)
     assert len(private.calls)==14
 
 
@@ -670,3 +671,67 @@ def test_account_or_risk_drift_blocks_before_any_final_depth_refresh():
     with pytest.raises(V40CandidateMarketHalted,match="MARKET_FLAT_ASSET_ECONOMICS_UNVERIFIED"):
         run(c)
     assert public.depth_calls==1
+
+
+# ARIA #687 regression: a single last-mile public depth retry remained stale.
+# A healthy full exchange snapshot can arrive on the next read; if not,
+# fail closed and emit ONE diagnostic only after the retries are exhausted.
+def test_stale_second_depth_get_can_be_rescued_by_third_fresh_get(capsys):
+    c,private,public=refreshed_case(replacement_timestamp=None)
+    fresh=deepcopy(public.depth)
+    fresh["timestamp"]=START+2900
+    fresh["version"]=13
+    original=public.get
+    async def delayed_fresh(path,*,params=None):
+        if path==_DEPTH_PREFIX+SYM and public.depth_calls==2:
+            public.depth=deepcopy(fresh)
+        return await original(path,params=params)
+    public.get=delayed_fresh
+    c.clock_ms=Clock(START,START+2500,START+2700,START+3100)
+    q=run(c)
+    assert q.book_age_ms==200
+    assert q.observed_at_ms==START+3100
+    assert q.bookended_flat_account is True
+    assert public.depth_calls==3
+    assert len(private.calls)==14
+    assert all(op=="GET" for op,*_ in private.calls)
+    assert capsys.readouterr().out==""
+
+
+def test_all_three_final_depth_reads_stale_logs_once_only_after_exhaustion(capsys):
+    c,private,public=refreshed_case(replacement_timestamp=None)
+    c.clock_ms=Clock(START,START+2500,START+2700,START+3100,START+3500)
+    with pytest.raises(V40CandidateMarketHalted,match="^MARKET_BOOK_STALE_AFTER_FINAL_REFRESH$"):
+        run(c)
+    assert public.depth_calls==4
+    assert len(private.calls)==14
+    lines=capsys.readouterr().out.splitlines()
+    assert len(lines)==1
+    import json
+    msg=json.loads(lines[0])
+    assert msg["status"]=="V40_MARKET_DEPTH_FRESHNESS_EXHAUSTED"
+    assert msg["symbol"]==SYM
+    assert msg["public_depth_gets"]==4
+    assert msg["book_version_advanced"] is False
+    assert msg["last_book_age_ms"]==3400
+    assert msg["freshness_limit_ms"]==1500
+    assert msg["elapsed_cycle_ms"]==3500
+    assert msg["exchange_posts"]==0
+
+
+def test_retries_remain_bounded_to_total_cycle_five_seconds(capsys):
+    c,private,public=refreshed_case(replacement_timestamp=None)
+    c.clock_ms=Clock(START,START+2500,START+2700,START+5200)
+    with pytest.raises(V40CandidateMarketHalted,match="^MARKET_TOTAL_CYCLE_STALE$"):
+        run(c)
+    assert public.depth_calls==3
+    assert len(private.calls)==14
+    # A total-cycle failure never pretends the refresh was just stale.
+    assert "V40_MARKET_DEPTH_FRESHNESS_EXHAUSTED" not in capsys.readouterr().out
+
+
+def test_bad_refresh_version_stops_without_silent_third_get():
+    c,private,public=refreshed_case(replacement_version=0)
+    with pytest.raises(V40CandidateMarketHalted,match="^MARKET_BOOK_TIMESTAMP_OR_VERSION_STALE$"):
+        run(c)
+    assert public.depth_calls==2 and len(private.calls)==14
