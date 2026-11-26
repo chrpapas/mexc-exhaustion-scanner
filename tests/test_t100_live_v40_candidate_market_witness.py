@@ -211,7 +211,7 @@ def test_unverified_exchange_economics_are_rejected(fault,expect):
         pub.private_leverage[1]["leverage"]=2
     if fault=="stale_depth":
         public.depth["timestamp"]=START-10_000
-        c.clock_ms=Clock(START,END,END+100)
+        c.clock_ms=Clock(START,END,END+100,END+200,END+300)
     if fault=="unsorted_bids":public.depth["bids"]=[[99,10],[100,10]]
     if fault=="crossed_book":public.depth["asks"]=[[99,10],[100,10]]
     with pytest.raises(V40CandidateMarketHalted,match=expect):
