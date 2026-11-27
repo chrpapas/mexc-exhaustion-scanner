@@ -490,17 +490,22 @@ class MexcV40CandidateMarketWitness:
                         "MARKET_BOOK_TIMESTAMP_OR_VERSION_STALE"
                     )
                 ended=refreshed_at
-                if (
-                    depth["timestamp"]<latest_ts
-                    or depth["version"]<latest_version
-                ):
-                    # Transient out-of-order REST read. Never use its
-                    # prices, quantities, age or version for an order.
+                seen_ts=depth["timestamp"]
+                seen_version=depth["version"]
+                regressed=(
+                    seen_ts<latest_ts or seen_version<latest_version
+                )
+                # Independently preserve the maximum observed value of
+                # BOTH fields even when this particular response is
+                # unusable. Otherwise mixed timestamp/version regressions
+                # from different REST nodes could slip past on the next
+                # read. Do NOT let a rejected book become an entry quote.
+                latest_ts=max(latest_ts,seen_ts)
+                latest_version=max(latest_version,seen_version)
+                if regressed:
                     regression_count+=1
                     continue
-                latest_ts=depth["timestamp"]
-                latest_version=depth["version"]
-                if ended-latest_ts<=self.max_book_age_ms:
+                if ended-seen_ts<=self.max_book_age_ms:
                     break
             else:
                 # Only one error after all allowed public reads are used.

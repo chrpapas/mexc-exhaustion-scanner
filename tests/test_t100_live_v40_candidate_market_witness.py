@@ -806,7 +806,12 @@ def test_regressions_exhaust_without_order_or_intermediate_errors(
     assert record["regressed_snapshots"]==3
     assert record["public_depth_gets"]==4
     assert record["exchange_posts"]==0
-    assert record["last_book_age_ms"]>=1500
+    # A recent timestamp is NOT sufficient if its version regressed.
+    # The metric is the age of the highest timestamp observed, never an
+    # authorization to use that snapshot for prices or order submission.
+    assert record["last_book_age_ms"]==(
+        900 if regression=="version" else 3400
+    )
 
 
 def test_regressed_book_never_becomes_eligible_when_cycle_expires(capsys):
@@ -818,3 +823,53 @@ def test_regressed_book_never_becomes_eligible_when_cycle_expires(capsys):
     assert len(private.calls)==14
     # Cycle-expiry is its own immediate, unambiguous failure.
     assert "V40_MARKET_DEPTH_SNAPSHOT_REGRESSION_EXHAUSTED" not in capsys.readouterr().out
+
+
+
+# BIGTIME follow-up: a rejected REST snapshot may advance timestamp but
+# regress version. A later response with newer version yet older timestamp
+# must ALSO be discarded, even though either one field alone looks good.
+def test_timestamp_version_high_waters_are_independent_across_rejected_books(capsys):
+    c,private,_=setup()
+    class Sequence(Public):
+        def __init__(self):
+            super().__init__()
+            self.snapshots=[]
+            self.depth_reads=0
+        async def get(self,path,*,params=None):
+            if path==_DEPTH_PREFIX+SYM:
+                self.depth=deepcopy(self.snapshots[self.depth_reads])
+                self.depth_reads+=1
+            return await super().get(path,params=params)
+    p=Sequence()
+    initial=deepcopy(p.depth)
+    initial["timestamp"]=START+100
+    initial["version"]=12
+    # Newer timestamp, *lower* version: never a safe price source.
+    a=deepcopy(initial)
+    a["timestamp"]=START+2700
+    a["version"]=11
+    # Newer version, but timestamp has regressed relative to rejected a.
+    # This is only 550ms old at the second GET and must still be refused.
+    b=deepcopy(initial)
+    b["timestamp"]=START+2600
+    b["version"]=14
+    # Finally, both high-water marks advance within the unchanged cap.
+    good=deepcopy(initial)
+    good["timestamp"]=START+3550
+    good["version"]=15
+    good["bids"]=[[100,10,1],[99.8,10,1],[99.7,10,1]]
+    p.snapshots=[initial,a,b,good]
+    c.public=p
+    c.clock_ms=Clock(START,START+2500,START+2750,START+3150,START+3650)
+    q,exact=asyncio.run(c.quote_exact_intent(
+        candidate(),intent(notional="1500"),max_slippage_bps=D("100"),
+    ))
+    assert p.depth_reads==4
+    assert q.book_age_ms==100
+    assert exact.age_ms==100
+    assert exact.sell_vwap==D("99.93333333333333333333333333")
+    assert len(private.calls)==14
+    assert all(call[0]=="GET" for call in private.calls)
+    assert not q.entry_allowed and not q.live_authorization
+    assert capsys.readouterr().out==""
