@@ -806,7 +806,12 @@ def test_regressions_exhaust_without_order_or_intermediate_errors(
     assert record["regressed_snapshots"]==3
     assert record["public_depth_gets"]==4
     assert record["exchange_posts"]==0
-    assert record["last_book_age_ms"]>=1500
+    # A recent timestamp is NOT sufficient if its version regressed.
+    # The metric is the age of the highest timestamp observed, never an
+    # authorization to use that snapshot for prices or order submission.
+    assert record["last_book_age_ms"]==(
+        900 if regression=="version" else 3400
+    )
 
 
 def test_regressed_book_never_becomes_eligible_when_cycle_expires(capsys):
