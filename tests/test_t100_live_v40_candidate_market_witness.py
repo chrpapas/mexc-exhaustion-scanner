@@ -640,8 +640,10 @@ def test_invalid_refresh_never_passes_or_retries_again(kind,expected):
         c.clock_ms=Clock(START,START+2500,START+2700,START+3100,START+3500)
     elif kind=="version_regresses":
         public.replacement["version"]=11
+        c.clock_ms=Clock(START,START+2500,START+2700,START+3100,START+3500)
     elif kind=="timestamp_regresses":
         public.replacement["timestamp"]=START
+        c.clock_ms=Clock(START,START+2500,START+2700,START+3100,START+3500)
     elif kind=="future_timestamp":
         public.replacement["timestamp"]=START+5000
     elif kind=="bad_version":
@@ -651,7 +653,10 @@ def test_invalid_refresh_never_passes_or_retries_again(kind,expected):
         public.replacement["timestamp"]=START+5100
     with pytest.raises(V40CandidateMarketHalted,match=expected):
         run(c)
-    assert public.depth_calls==(4 if kind=="second_still_old" else 2)
+    assert public.depth_calls==(
+        4 if kind in ("second_still_old","version_regresses",
+                      "timestamp_regresses") else 2
+    )
     assert len(private.calls)==14
 
 
@@ -735,3 +740,81 @@ def test_bad_refresh_version_stops_without_silent_third_get():
     with pytest.raises(V40CandidateMarketHalted,match="^MARKET_BOOK_TIMESTAMP_OR_VERSION_STALE$"):
         run(c)
     assert public.depth_calls==2 and len(private.calls)==14
+
+
+
+# BIGTIME #708 (2026-11-27): a public REST book can regress relative to
+# the previous read. It must NEVER become a pricing candidate; retry a
+# bounded number of times and accept only a newer + age-valid snapshot.
+@pytest.mark.parametrize("regression",["timestamp","version"])
+def test_regressed_rest_snapshot_can_recover_without_using_bad_book(
+    regression,capsys,
+):
+    c,private,public=refreshed_case()
+    if regression=="timestamp":
+        public.replacement["timestamp"]=START
+    else:
+        public.replacement["version"]=11
+    repaired=deepcopy(public.depth)
+    repaired["timestamp"]=START+3050
+    repaired["version"]=14
+    repaired["bids"]=[[100,10,1],[99.8,10,1],[99.7,10,1]]
+    get_original=public.get
+    async def get_with_repair(path,*,params=None):
+        if path==_DEPTH_PREFIX+SYM and public.depth_calls==2:
+            public.depth=deepcopy(repaired)
+        return await get_original(path,params=params)
+    public.get=get_with_repair
+    c.clock_ms=Clock(START,START+2500,START+2700,START+3200)
+    q,exact=asyncio.run(c.quote_exact_intent(
+        candidate(),intent(notional="1500"),
+        max_slippage_bps=D("100"),
+    ))
+    assert q.book_age_ms==150
+    assert exact.age_ms==150
+    assert exact.sell_vwap==D("99.93333333333333333333333333")
+    assert public.depth_calls==3
+    assert len(private.calls)==14
+    assert not q.entry_allowed and not exact.entry_allowed
+    assert capsys.readouterr().out==""
+
+
+@pytest.mark.parametrize("regression",["timestamp","version"])
+def test_regressions_exhaust_without_order_or_intermediate_errors(
+    regression,capsys,
+):
+    c,private,public=refreshed_case()
+    if regression=="timestamp":
+        public.replacement["timestamp"]=START
+    else:
+        public.replacement["version"]=11
+    c.clock_ms=Clock(START,START+2500,START+2700,START+3100,START+3500)
+    with pytest.raises(
+        V40CandidateMarketHalted,
+        match="^MARKET_BOOK_SNAPSHOT_REGRESSED$",
+    ):
+        run(c)
+    assert public.depth_calls==4
+    assert len(private.calls)==14
+    assert all(op=="GET" for op,*_ in private.calls)
+    assert all(op=="GET" for op,*_ in public.calls)
+    import json
+    notices=capsys.readouterr().out.splitlines()
+    assert len(notices)==1
+    record=json.loads(notices[0])
+    assert record["status"]=="V40_MARKET_DEPTH_SNAPSHOT_REGRESSION_EXHAUSTED"
+    assert record["regressed_snapshots"]==3
+    assert record["public_depth_gets"]==4
+    assert record["exchange_posts"]==0
+    assert record["last_book_age_ms"]>=1500
+
+
+def test_regressed_book_never_becomes_eligible_when_cycle_expires(capsys):
+    c,private,public=refreshed_case(replacement_version=11)
+    c.clock_ms=Clock(START,START+2500,START+2700,START+5200)
+    with pytest.raises(V40CandidateMarketHalted,match="MARKET_TOTAL_CYCLE_STALE"):
+        run(c)
+    assert public.depth_calls==3
+    assert len(private.calls)==14
+    # Cycle-expiry is its own immediate, unambiguous failure.
+    assert "V40_MARKET_DEPTH_SNAPSHOT_REGRESSION_EXHAUSTED" not in capsys.readouterr().out

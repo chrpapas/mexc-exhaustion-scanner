@@ -444,13 +444,15 @@ class MexcV40CandidateMarketWitness:
         private_max=_decimal(short.get("maxVol"))
         if private_max<minimum:
             raise V40CandidateMarketHalted("MARKET_PRIVATE_VOLUME_BELOW_MINIMUM")
-        # A mid-bookend snapshot may age during signed inventory reads.
-        # Once the account/risk/leverage checks succeed, permit up to 3
-        # additional PUBLIC depth GETs (with small bounded backoff).
-        # No alert is emitted until those checks are exhausted. This is
-        # NOT a bypass for an old/unchanged book, bad schema, version
-        # regression, future timestamp, changed account or exhausted
-        # five-second TOTAL-cycle deadline.
+        # An intermediate snapshot can age during independent signed
+        # inventory/risk bookends. Permit three final PUBLIC depth reads.
+        # An out-of-order REST snapshot is not usable evidence: ignore it
+        # while keeping the highest observed timestamp AND version as a
+        # high-water mark. Only a later non-regressed, genuinely fresh book
+        # can pass. No error alert is emitted for intermediate regressions;
+        # fail and emit one redacted diagnostic when attempts run out.
+        # Invalid schema, future timestamps, account drift and the original
+        # five-second overall cycle deadline remain immediate safety halts.
         if (
             type(depth.get("timestamp")) is not int
             or type(depth.get("version")) is not int
@@ -462,6 +464,7 @@ class MexcV40CandidateMarketWitness:
             latest_ts=depth["timestamp"]
             latest_version=depth["version"]
             first_version=latest_version
+            regression_count=0
             for refresh_idx in range(1,4):
                 # These sleeps are only for read-only public GETs. Sending
                 # a private order is NOT retried anywhere in this path.
@@ -486,35 +489,43 @@ class MexcV40CandidateMarketWitness:
                     raise V40CandidateMarketHalted(
                         "MARKET_BOOK_TIMESTAMP_OR_VERSION_STALE"
                     )
+                ended=refreshed_at
                 if (
                     depth["timestamp"]<latest_ts
                     or depth["version"]<latest_version
                 ):
-                    raise V40CandidateMarketHalted(
-                        "MARKET_BOOK_SNAPSHOT_REGRESSED"
-                    )
+                    # Transient out-of-order REST read. Never use its
+                    # prices, quantities, age or version for an order.
+                    regression_count+=1
+                    continue
                 latest_ts=depth["timestamp"]
                 latest_version=depth["version"]
-                ended=refreshed_at
                 if ended-latest_ts<=self.max_book_age_ms:
                     break
             else:
-                # Operational, redacted diagnostics once, after attempts.
-                # Values are bounded latency/versions-only; no balances,
-                # secret URLs, raw payloads or order details are logged.
+                # Only one error after all allowed public reads are used.
+                # High-water mark is not reduced by any rejected snapshot.
+                reason=(
+                    "MARKET_BOOK_SNAPSHOT_REGRESSED"
+                    if regression_count else
+                    "MARKET_BOOK_STALE_AFTER_FINAL_REFRESH"
+                )
                 print(json.dumps({
-                    "status":"V40_MARKET_DEPTH_FRESHNESS_EXHAUSTED",
+                    "status":(
+                        "V40_MARKET_DEPTH_SNAPSHOT_REGRESSION_EXHAUSTED"
+                        if regression_count else
+                        "V40_MARKET_DEPTH_FRESHNESS_EXHAUSTED"
+                    ),
                     "symbol":signal.symbol,
                     "public_depth_gets":4,
+                    "regressed_snapshots":regression_count,
                     "last_book_age_ms":ended-latest_ts,
                     "freshness_limit_ms":self.max_book_age_ms,
                     "elapsed_cycle_ms":ended-started,
                     "book_version_advanced":latest_version>first_version,
                     "exchange_posts":0,
                 },sort_keys=True),flush=True)
-                raise V40CandidateMarketHalted(
-                    "MARKET_BOOK_STALE_AFTER_FINAL_REFRESH"
-                )
+                raise V40CandidateMarketHalted(reason)
         # A successful refresh still requires the exact original
         # strict book-level/sort/cross and risk/lot/slippage gates.
         bids=_level_rows(depth.get("bids"),side="sell")
