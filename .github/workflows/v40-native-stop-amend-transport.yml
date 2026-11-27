@@ -1,0 +1,38 @@
+name: V40 MEXC native stop amend transport contract (offline)
+
+on:
+  push:
+    branches:
+      - "feat/v40-native-stop-amendment-contract-*"
+  pull_request:
+    paths:
+      - "app/t100_v40_native_stop_amend_transport.py"
+      - "tests/test_t100_v40_native_stop_amend_transport.py"
+      - ".github/workflows/v40-native-stop-amend-transport.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  native-stop-journal-provenance:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install
+        run: python -m pip install -e ".[dev]"
+      - name: Compile
+        run: |
+          python -m compileall -q \
+            app/t100_v40_native_stop_amend_transport.py \
+            app/t100_live_stop_mutation_executor.py
+      - name: Test native-stop contract, journal CAS and account inventory
+        run: |
+          python -m pytest -q \
+            tests/test_t100_v40_native_stop_amend_transport.py \
+            tests/test_t100_live_stop_mutation_executor.py \
+            tests/test_t100_live_native_stop_execution_audit.py \
+            tests/test_t100_live_stop_amendment_coordinator.py \
+            tests/test_t100_v40_unreleased_native_stop_cycle.py

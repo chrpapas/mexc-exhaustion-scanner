@@ -1,0 +1,23 @@
+name: V40 pinned historical stage candidates regeneration
+
+on:
+  pull_request:
+    paths:
+      - "scripts/v40_pinned_stage_candidate_regeneration.py"
+      - "tests/test_t100_v40_pinned_stage_candidate_regeneration.py"
+      - ".github/workflows/v40-pinned-stage-candidate-regeneration.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  offline-source-audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install -e ".[dev]"
+      - run: python -m compileall -q scripts/v40_pinned_stage_candidate_regeneration.py
+      - run: python -m pytest -q tests/test_t100_v40_pinned_stage_candidate_regeneration.py

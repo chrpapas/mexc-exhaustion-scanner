@@ -1,0 +1,46 @@
+name: V40 guardian recovery and historical-risk parity (offline)
+
+on:
+  pull_request:
+    paths:
+      - "app/t100_v40_guardian_recovery_003.py"
+      - "app/t100_v40_guardian_post_gate.py"
+      - "app/t100_v40_canary_durable_guardian.py"
+      - "app/t100_v40_historical_margin_preview.py"
+      - "tests/test_t100_v40_guardian_recovery_003.py"
+      - "tests/test_t100_v40_historical_margin_preview.py"
+      - ".github/workflows/v40-guardian-recovery-margin-parity.yml"
+  push:
+    branches:
+      - "fix/v40-guardian-recovery-003-and-risk-parity-*"
+
+jobs:
+  no-unverified-live-authorizations:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install offline test prerequisites
+        run: python -m pip install -e ".[dev]"
+      - name: Compile new code
+        run: |
+          python -m compileall -q \
+            app/t100_v40_guardian_recovery_003.py \
+            app/t100_v40_historical_margin_preview.py
+      - name: Test guardian audited recovery and historical sizing
+        run: |
+          python -m pytest -q \
+            tests/test_t100_v40_guardian_recovery_003.py \
+            tests/test_t100_v40_guardian_recovery_002.py \
+            tests/test_t100_v40_guardian_post_gate.py \
+            tests/test_t100_v40_canary_durable_guardian.py \
+            tests/test_t100_v40_historical_margin_preview.py
+      - name: Confirm sizing preview is never imported as a live order permit
+        run: |
+          ! grep -R "t100_v40_historical_margin_preview" \
+              app/t100_v40_render_real_canary_worker.py \
+              app/t100_v40_first_signal_execution.py

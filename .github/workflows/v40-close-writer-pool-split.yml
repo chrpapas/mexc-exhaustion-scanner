@@ -1,0 +1,41 @@
+name: V40 separate readonly ledger and financial write connection
+
+on:
+  push:
+    branches:
+      - "fix/v40-close-writer-pool-isolation-*"
+  pull_request:
+    paths:
+      - "app/t100_v40_close_financial_artifact_staging.py"
+      - "app/t100_v40_forward_close_finalizer.py"
+      - "app/t100_v40_full_portfolio_runtime.py"
+      - "tests/test_t100_v40_close_financial_artifact_staging.py"
+      - "tests/test_t100_v40_forward_close_finalizer.py"
+      - "tests/test_t100_v40_forward_close_port_binding.py"
+      - "tests/test_t100_v40_full_portfolio_runtime.py"
+      - ".github/workflows/v40-close-writer-pool-split.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  distinct-sql-roles:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install -e ".[dev]"
+      - name: Exact real runtime SQL pool isolation, final financial settlement and no-POST unit tests
+        run: |
+          python -m compileall -q app/t100_v40_close_financial_artifact_staging.py app/t100_v40_forward_close_finalizer.py app/t100_v40_full_portfolio_runtime.py
+          python -m pytest -q \
+            tests/test_t100_v40_close_financial_artifact_staging.py \
+            tests/test_t100_v40_forward_close_finalizer.py \
+            tests/test_t100_v40_forward_close_port_binding.py \
+            tests/test_t100_v40_full_portfolio_runtime.py \
+            tests/test_t100_v40_portfolio_close_financial_reader.py \
+            tests/test_t100_v40_native_close_mismatch_recovery.py \
+            tests/test_t100_v40_native_close_release_handoff.py

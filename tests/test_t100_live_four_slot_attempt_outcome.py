@@ -171,21 +171,33 @@ class ProtectedOutcomeTests(unittest.IsolatedAsyncioTestCase):
                 self.assertFalse(result.live_authorization)
                 self.assertFalse(result.mexc_orders_sent)
 
-    async def test_order_attached_or_triggered_sl_is_not_position_native(self):
-        for field, value in (
-            ("orderId", "990"),
-            ("orderId", None),
-            ("triggerSide", 2),
-            ("errorCode", 1),
+    async def test_only_exact_filled_entry_attached_market_stop_is_accepted(self):
+        # The current venue supports both position-origin (orderId=0)
+        # and entry-order-attached (orderId=exact filled order). Never
+        # accept unrelated orderIds just because the stop is active.
+        for rows in (self.venue.first_stops, self.venue.last_stops):
+            rows[-1]["orderId"]="990"
+        result=await self.observe()
+        self.assertEqual(
+            result.status,
+            "ATTEMPT_ALL_NEW_POSITIONS_PROTECTED_OBSERVED_NONAUTHORIZING",
+        )
+        self.assertFalse(result.live_authorization)
+        self.assertFalse(result.mexc_orders_sent)
+
+    async def test_wrong_origin_or_triggered_attached_stop_halts(self):
+        for field,value in (
+            ("orderId","989"),("orderId",None),
+            ("triggerSide",2),("errorCode",1),
         ):
-            with self.subTest(field=field, value=value):
+            with self.subTest(field=field,value=value):
                 await self.asyncSetUp()
-                self.venue.first_stops[-1][field] = value
-                self.venue.last_stops[-1][field] = value
-                result = await self.observe()
+                for rows in (self.venue.first_stops,self.venue.last_stops):
+                    rows[-1]["orderId"]="990"
+                    rows[-1][field]=value
+                result=await self.observe()
                 self.assertEqual(
-                    result.status,
-                    "ATTEMPT_NATIVE_MARKET_STOP_SEMANTICS_UNVERIFIED",
+                    result.status,"ATTEMPT_NATIVE_MARKET_STOP_SEMANTICS_UNVERIFIED",
                 )
                 self.assertFalse(result.all_staged_attempts_fully_filled_and_protected)
                 self.assertFalse(result.native_stop_witness_observed)

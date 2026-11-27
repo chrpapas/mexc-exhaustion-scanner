@@ -218,9 +218,18 @@ class CoordinatorTests(unittest.IsolatedAsyncioTestCase):
                 positions=[position()],
                 stops=[stop(), stop()], **initial_gates())
 
+    async def test_exact_filled_entry_attached_market_stop_is_valid(self):
+        one=await self.coordinator.persist_initial_protected(
+            intent=intent(),order=order(),positions=[position()],
+            stops=[stop(orderId="100")],**initial_gates(),
+        )
+        self.assertEqual(one.exchange_order_id,"100")
+        self.assertEqual(one.stop_order_id,"99")
+        self.assertEqual(len(self.writer.calls),1)
+
     async def test_initial_checkpoint_writer_rejects_nonmarket_native_stop(self):
         for field, value in (
-            ("stopLossType", 1), ("orderId", 100),
+            ("stopLossType", 1), ("orderId", 101),
             ("triggerSide", 2), ("errorCode", 1),
             ("profitLossVolType", "UNKNOWN"),
         ):
@@ -239,7 +248,7 @@ class CoordinatorTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_verified_checkpoint_writer_rejects_nonmarket_native_stop(self):
         for field, value in (
-            ("stopLossType", 1), ("orderId", "100"),
+            ("stopLossType", 1), ("orderId", "101"),
             ("triggerSide", 2), ("errorCode", 1),
             ("volType", None), ("stopLossReverse", 1),
         ):

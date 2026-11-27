@@ -1,0 +1,35 @@
+name: V40 four-slot exit batch replay (offline only)
+
+on:
+  push:
+    branches:
+      - "feature/v40-four-slot-exit-batch-orchestration-*"
+  pull_request:
+    paths:
+      - "app/t100_v40_unreleased_portfolio_exit_batch.py"
+      - "app/t100_v40_unreleased_exit_policy.py"
+      - "tests/test_t100_v40_unreleased_portfolio_exit_batch.py"
+      - ".github/workflows/v40-four-slot-exit-batch.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  offline-portfolio-exit-policy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install
+        run: python -m pip install -e ".[dev]"
+      - name: Compile
+        run: python -m compileall -q app/t100_v40_unreleased_portfolio_exit_batch.py
+      - name: Test per-slot and 1–4-slot exit policy
+        run: |
+          python -m pytest -q \
+            tests/test_t100_v40_unreleased_portfolio_exit_batch.py \
+            tests/test_t100_v40_unreleased_exit_policy.py \
+            tests/test_t100_v40_unreleased_portfolio_native_close.py \
+            tests/test_t100_v40_unreleased_bar_cursor.py

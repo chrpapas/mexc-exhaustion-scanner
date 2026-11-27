@@ -187,8 +187,14 @@ class LiveMexcAdapterContractTests(unittest.IsolatedAsyncioTestCase):
         # This checks transport shape only, not live stop efficacy or V40 parity.
         self.assertEqual(body["lossTrend"], 1)
 
-    async def test_entry_requires_order_id_in_unwrapped_data(self):
-        for bad in (None, {}, {"ts": 1}, "123"):
+    async def test_entry_requires_numeric_order_id_in_unwrapped_data(self):
+        # A scalar order ID is the current documented MEXC response data.
+        self.client.post_result = "123"
+        self.assertEqual(
+            await self.adapter.submit_short_with_stop(intent(), permit=permit()),
+            "123",
+        )
+        for bad in (None, {}, {"ts": 1}, "abc", "0", False):
             with self.subTest(bad=bad):
                 self.client.posts = []
                 self.client.post_result = bad

@@ -56,7 +56,7 @@ class FakeConnection:
         if "has_table_privilege" in sql:
             row=dict(read_only="off",incident_insert=True,
                      incident_update=True,outbox_select=True,
-                     outbox_update=True,
+                     outbox_insert=True,outbox_update=True,
                      incident_delete=False,incident_truncate=False,
                      outbox_delete=False,outbox_truncate=False,
                      checkpoint_insert=False,checkpoint_update=False,
@@ -362,3 +362,16 @@ class DurableWorkerTests(unittest.IsolatedAsyncioTestCase):
 
 if __name__=="__main__":
     unittest.main()
+
+
+
+def test_incident_writer_without_trigger_outbox_insert_privilege_is_denied():
+    import asyncio
+    from app.t100_live_guardian_durable_worker import verify_alert_writer_role
+    missing=FakeConnection(privilege={"outbox_insert":False})
+    with unittest.TestCase().assertRaisesRegex(
+        GuardianDurableHalted,"UNSAFE_PRIVILEGES"
+    ):
+        asyncio.run(verify_alert_writer_role(missing))
+    good=FakeConnection()
+    asyncio.run(verify_alert_writer_role(good))

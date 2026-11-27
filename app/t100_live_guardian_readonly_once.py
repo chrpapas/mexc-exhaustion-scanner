@@ -51,8 +51,12 @@ class GetOnlyMexcTransport:
     """Restricted GET protocol; deliberately does NOT implement _private_post."""
 
     _FIXED = frozenset({
+        # Account-wide GET-only economic margin witness required by V40
+        # completeness. This transport has NO POST capability.
+        "/api/v1/private/account/assets",
         "/api/v1/private/order/open_order_total_count",
         "/api/v1/private/position/open_positions",
+        "/api/v1/private/position/position_mode",
         "/api/v1/private/stoporder/open_orders",
         "/api/v1/private/stoporder/list/orders",
         "/api/v1/private/position/list/history_positions",
@@ -61,24 +65,47 @@ class GetOnlyMexcTransport:
         r"/api/v1/private/order/external/[A-Z0-9]+_USDT/[A-Za-z0-9_-]{1,128}"
     )
     _ORDER = re.compile(r"/api/v1/private/order/get/[1-9][0-9]*")
+    _ORDER_DEALS = re.compile(
+        r"/api/v1/private/order/deal_details/[1-9][0-9]*"
+    )
     # Official MEXC Futures API domain since January 2026. Do not silently
     # fall back to retired contract.mexc.com or follow credentialed redirects.
     BASE_URL = "https://api.mexc.com"
 
-    def __init__(self, client: Any, *, api_key: str, api_secret: str):
+    def __init__(self, client: Any, *, api_key: str, api_secret: str,
+                 diagnostic_get_errors: bool = False,
+                 retry_transient_positions_get: bool = False,
+                 retry_transient_stops_get: bool = False,
+                 transient_inventory_get_retries: int = 0):
+        if type(diagnostic_get_errors) is not bool:
+            raise GuardianOnceHalted("SIGNED_GET_DIAGNOSTIC_POLICY_INVALID")
+        if type(retry_transient_positions_get) is not bool:
+            raise GuardianOnceHalted("SIGNED_GET_POSITIONS_RETRY_POLICY_INVALID")
+        if type(retry_transient_stops_get) is not bool:
+            raise GuardianOnceHalted("SIGNED_GET_STOPS_RETRY_POLICY_INVALID")
+        if (
+            type(transient_inventory_get_retries) is not int
+            or not 0 <= transient_inventory_get_retries <= 2
+        ):
+            raise GuardianOnceHalted("SIGNED_GET_INVENTORY_RETRY_COUNT_INVALID")
         if (type(api_key) is not str or len(api_key) < 12 or
                 type(api_secret) is not str or len(api_secret) < 16):
             raise GuardianOnceHalted("SIGNED_GET_CREDENTIALS_NOT_CONFIGURED")
         self._client = client
         self._key = api_key
         self._secret = api_secret
+        self._diagnostic_get_errors = diagnostic_get_errors
+        self._retry_transient_positions_get = retry_transient_positions_get
+        self._retry_transient_stops_get = retry_transient_stops_get
+        self._transient_inventory_get_retries = transient_inventory_get_retries
 
     @classmethod
     def _allowed(cls, path: str) -> bool:
         return (type(path) is str and
                 (path in cls._FIXED or
                  cls._EXTERNAL.fullmatch(path) is not None or
-                 cls._ORDER.fullmatch(path) is not None))
+                 cls._ORDER.fullmatch(path) is not None or
+                 cls._ORDER_DEALS.fullmatch(path) is not None))
 
     async def _private_get(
         self, path: str, params: dict[str, Any] | None = None,
@@ -92,31 +119,96 @@ class GetOnlyMexcTransport:
             raise GuardianOnceHalted("MEXC_GET_QUERY_NOT_CANONICAL")
         pairs = sorted((params or {}).items())
         query_string = urlencode(pairs)
-        stamp = str(int(time.time() * 1000))
-        signature = hmac.new(
-            self._secret.encode(),
-            f"{self._key}{stamp}{query_string}".encode(),
-            hashlib.sha256,
-        ).hexdigest()
-        try:
-            response = await self._client.get(
-                path, params=pairs,
-                headers={
-                    "ApiKey": self._key,
-                    "Request-Time": stamp,
-                    "Signature": signature,
-                    "Recv-Window": "10",
-                    "Language": "en-US",
-                },
-            )
-            response.raise_for_status()
-            payload = response.json()
-        except Exception:
-            raise GuardianOnceHalted("MEXC_SIGNED_GET_TRANSPORT_FAILED") from None
+        # Only signed, read-only, idempotent guardian inventory GETs.
+        # Operational failures are invisible to the incident system until the
+        # strictly bounded retry count is exhausted. Authentication, API,
+        # content/schema and account-inconsistency failures are never retried.
+        # The position-mode endpoint has its own independent existing policy.
+        inventory_paths=frozenset((
+            "/api/v1/private/account/assets",
+            "/api/v1/private/order/open_order_total_count",
+            "/api/v1/private/position/open_positions",
+            "/api/v1/private/stoporder/open_orders",
+        ))
+        max_retries=(
+            self._transient_inventory_get_retries
+            if path in inventory_paths else 0
+        )
+        if path == "/api/v1/private/position/open_positions":
+            max_retries=max(max_retries,int(self._retry_transient_positions_get))
+        if path == "/api/v1/private/stoporder/open_orders":
+            max_retries=max(max_retries,int(self._retry_transient_stops_get))
+        for attempt in range(max_retries+1):
+            stamp = str(int(time.time() * 1000))
+            signature = hmac.new(
+                self._secret.encode(),
+                f"{self._key}{stamp}{query_string}".encode(),
+                hashlib.sha256,
+            ).hexdigest()
+            try:
+                response = await self._client.get(
+                    path, params=pairs,
+                    headers={
+                        "ApiKey": self._key,
+                        "Request-Time": stamp,
+                        "Signature": signature,
+                        "Recv-Window": "10",
+                        "Language": "en-US",
+                    },
+                )
+                response.raise_for_status()
+                payload = response.json()
+                break
+            except Exception as error:
+                if path == "/api/v1/private/position/position_mode":
+                    from app.t100_v40_guardian_get_failure_codes import (
+                        classify_mode_transport_failure,
+                    )
+                    raise GuardianOnceHalted(
+                        classify_mode_transport_failure(error)
+                    ) from None
+                if self._diagnostic_get_errors:
+                    from app.t100_v40_guardian_get_failure_codes import (
+                        classify_inventory_get_transport_failure,
+                    )
+                    code = classify_inventory_get_transport_failure(error)
+                    if (
+                        attempt<max_retries
+                        and code in (
+                            "GUARDIAN_GET_TIMEOUT",
+                            "GUARDIAN_GET_NETWORK",
+                            "GUARDIAN_GET_HTTP_429",
+                            "GUARDIAN_GET_HTTP_5XX",
+                        )
+                    ):
+                        # No alert, error log or state mutation while retrying.
+                        # Freshly sign each attempt and fail closed on
+                        # attempt max_retries+1 if the transport still fails.
+                        await asyncio.sleep(
+                            (3.0 if code=="GUARDIAN_GET_HTTP_429" else 1.0)
+                            * (attempt+1)
+                        )
+                        continue
+                    raise GuardianOnceHalted(code) from None
+                raise GuardianOnceHalted("MEXC_SIGNED_GET_TRANSPORT_FAILED") from None
         if (type(payload) is not dict or
                 payload.get("success") is not True or
                 type(payload.get("code")) is not int or
                 payload["code"] != 0):
+            if path == "/api/v1/private/position/position_mode":
+                from app.t100_v40_guardian_get_failure_codes import (
+                    classify_mode_api_rejection,
+                )
+                raise GuardianOnceHalted(
+                    classify_mode_api_rejection(payload)
+                ) from None
+            if self._diagnostic_get_errors:
+                from app.t100_v40_guardian_get_failure_codes import (
+                    classify_inventory_get_api_rejection,
+                )
+                raise GuardianOnceHalted(
+                    classify_inventory_get_api_rejection(payload)
+                ) from None
             raise GuardianOnceHalted("MEXC_SIGNED_GET_EXPLICITLY_REJECTED")
         return payload.get("data")
 

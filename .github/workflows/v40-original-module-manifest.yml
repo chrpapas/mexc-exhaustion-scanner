@@ -1,0 +1,22 @@
+name: V40 frozen original module manifest
+
+on:
+  pull_request:
+    paths:
+      - "scripts/v40_original_module_manifest_audit.py"
+      - "tests/test_t100_v40_original_module_manifest_audit.py"
+      - ".github/workflows/v40-original-module-manifest.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  original-module-sha:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install -e ".[dev]"
+      - run: python -m pytest -q tests/test_t100_v40_original_module_manifest_audit.py

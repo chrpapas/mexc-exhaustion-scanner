@@ -102,6 +102,7 @@ class StopUpdatePersistencePipeline:
             position_id=previous.position_id,
             position_quantity=previous.contracts,
             maximum_short_stop_price=previous.stop_price,
+            verified_filled_entry_order_id=previous.exchange_order_id,
         )
         if (
             report.status
@@ -156,6 +157,7 @@ class StopUpdatePersistencePipeline:
                 after_stops=after_stops,
                 position_quantity=previous.contracts,
                 finished_stops=finished_stops,
+                verified_filled_entry_order_id=previous.exchange_order_id,
             )
         )
         return await self._persist(
@@ -194,6 +196,7 @@ class StopUpdatePersistencePipeline:
                 current_stops=current_stops,
                 position_quantity=previous.contracts,
                 finished_stops=finished_stops,
+                verified_filled_entry_order_id=previous.exchange_order_id,
             )
         )
         return await self._persist(

@@ -16,7 +16,7 @@ from decimal import Decimal as D
 from app.t100_live_execution import EntryIntent
 from app.t100_live_four_slot_attempt_journal import (
     FourSlotAttemptHalted, PostgresFourSlotAttemptJournal,
-    SLOT_ROW_SQL, PREPARE_INTENT_SQL, INTENT_SUBMITTING_SQL,
+    SLOT_ROW_SQL, ENTRY_SPEC_INSERT_SQL, PREPARE_INTENT_SQL, INTENT_SUBMITTING_SQL,
     SLOT_SUBMITTING_SQL, INTENT_UNKNOWN_SQL, SLOT_UNKNOWN_SQL,
 )
 from app.t100_live_four_slot_reservations import PostgresFourSlotReservations
@@ -35,12 +35,14 @@ class AttemptTx(FakeTx):
     async def __aenter__(self):
         self.initial_reservations = copy.deepcopy(self.conn.pg.reserved)
         self.initial_intents = copy.deepcopy(self.conn.pg.new_intents)
+        self.initial_specs = copy.deepcopy(self.conn.pg.entry_specs)
         return await super().__aenter__()
 
     async def __aexit__(self, exc_type, exc, tb):
         if exc_type is not None:
             self.conn.pg.reserved = self.initial_reservations
             self.conn.pg.new_intents = self.initial_intents
+            self.conn.pg.entry_specs = self.initial_specs
         return await super().__aexit__(exc_type, exc, tb)
 
 
@@ -56,6 +58,21 @@ class AttemptConn(FakeConn):
         return await super().fetchrow(query)
 
     async def fetchval(self, query, *args):
+        if query == ENTRY_SPEC_INSERT_SQL:
+            self._require_lock()
+            if self.pg.fail_entry_spec:
+                raise RuntimeError("SECRET entry spec table not deployed")
+            if any(x["signal_id"] == args[0] or x["external_oid"] == args[1]
+                   for x in self.pg.entry_specs):
+                return None
+            fields=(
+                "signal_id","external_oid","symbol","contract_size",
+                "volume_step","price_tick","reference_price",
+                "notional_usdt","volume_contracts","stop_price",
+                "ledger_sha256","inventory_sha256",
+            )
+            self.pg.entry_specs.append(dict(zip(fields,args)))
+            return args[1]
         if query == PREPARE_INTENT_SQL:
             self._require_lock()
             sid, sym, oid, ref, notional, vol, stop = args
@@ -127,6 +144,8 @@ class AttemptPool(FakePool):
     def __init__(self, snapshot):
         super().__init__(snapshot)
         self.new_intents = []
+        self.entry_specs = []
+        self.fail_entry_spec = False
         self.fail_slot_cas = False
         self.fail_unknown_cas = False
 
@@ -204,6 +223,41 @@ class AttemptJournalTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.pg.reserved[0]["state"], "SUBMITTING")
         self.assertEqual(self.pg.new_intents[0]["state"], "SUBMITTING")
         self.assertEqual(self.pg.locks, 2)
+
+    async def test_four_slot_strict_stage_archives_contract_terms_before_post(self):
+        r = await self.reserve()
+        args={**self.params(r),"strict_entry_contract_archive":True}
+        outcome=await self.journal.stage(**args)
+        self.assertEqual(outcome.state,"SUBMITTING")
+        self.assertEqual(len(self.pg.entry_specs),1)
+        row=self.pg.entry_specs[0]
+        self.assertEqual(row["external_oid"],r.external_oid)
+        self.assertEqual(row["contract_size"],D("1"))
+        self.assertEqual(row["stop_price"],D("3.5"))
+        self.assertEqual(row["ledger_sha256"],self.witness.ledger_hash)
+        self.assertFalse(outcome.post_attempted)
+
+    async def test_unmigrated_entry_spec_rolls_back_before_intent_or_post(self):
+        r=await self.reserve()
+        self.pg.fail_entry_spec=True
+        with self.assertRaisesRegex(FourSlotAttemptHalted,"ATTEMPT_DB_FAILED"):
+            await self.journal.stage(
+                **{**self.params(r),"strict_entry_contract_archive":True}
+            )
+        self.assertEqual(self.pg.entry_specs,[])
+        self.assertEqual(self.pg.new_intents,[])
+        self.assertEqual(self.pg.reserved[0]["state"],"RESERVED")
+
+    async def test_strict_entry_spec_rolls_back_with_failed_slot_cas(self):
+        r=await self.reserve()
+        self.pg.fail_slot_cas=True
+        with self.assertRaisesRegex(FourSlotAttemptHalted,"ATOMIC_ATTEMPT_LATCH_FAILED"):
+            await self.journal.stage(
+                **{**self.params(r),"strict_entry_contract_archive":True}
+            )
+        self.assertEqual(self.pg.entry_specs,[])
+        self.assertEqual(self.pg.new_intents,[])
+        self.assertEqual(self.pg.reserved[0]["state"],"RESERVED")
 
     async def test_duplicate_stage_never_rearms_order_attempt(self):
         r = await self.reserve()

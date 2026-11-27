@@ -44,6 +44,26 @@ class FundingEquityAuditTests(unittest.TestCase):
                 with (root / (name+'.csv')).open('w') as file:
                     writer=csv.DictWriter(file,fieldnames=list(values[0]));writer.writeheader();writer.writerows(values)
             result = audit_module.audit(root, {'baseline':root,'filtered':root})
+            # Exercise the explicit SSD copy paths and immutable read option.
+            source = directory / 'historical-market-data-min30-v1.sqlite'
+            funding_file = root / 'mexc-certification-cache-v1.sqlite'
+            copy_result = audit_module.audit(
+                root, {'ssd':root}, candles_path=source,
+                funding_path=funding_file, immutable_candles=True)
+            self.assertEqual(Decimal(copy_result['ssd_100']['funding_difference']), 0)
+            self.assertEqual(Decimal(copy_result['ssd_100']['final_equity_difference']), 0)
+            # Immutable readers must refuse potentially uncheckpointed data.
+            for suffix in ('-wal', '-journal'):
+                side = Path(str(source)+suffix)
+                side.write_bytes(b'pending')
+                try:
+                    with self.assertRaisesRegex(
+                        ValueError, 'IMMUTABLE_DATABASE_PENDING_JOURNAL'
+                    ):
+                        audit_module.audit(root,{'ssd':root},candles_path=source,
+                                           funding_path=funding_file,immutable_candles=True)
+                finally:
+                    side.unlink()
             for report in result.values():
                 self.assertEqual(report['funding_events'],1)
                 self.assertEqual(Decimal(report['funding_difference']),0)
@@ -62,6 +82,39 @@ class FundingEquityAuditTests(unittest.TestCase):
                 expected_high = Decimal('-1.054') if name.endswith('_100') else Decimal('-1.104')
                 self.assertEqual(Decimal(report['high_drawdown_pct']), expected_high)
                 self.assertFalse(report['strategy_decisions_independently_certified'])
+
+            # Exercise verified SSD immutable candles and explicit funding path
+            # for the existing marked-equity/drawdown reconstruction.
+            ssd_reports = marked.audit(
+                root, {'ssd': root}, epoch, epoch+3600,
+                candles_path=source, funding_path=funding_file,
+                immutable_candles=True)
+            for cost in (100, 200):
+                self.assertEqual(
+                    ssd_reports[f'ssd_{cost}'], reports[f'baseline_{cost}'])
+            # Never silently ignore an uncheckpointed rollback/WAL file.
+            for path in (source, funding_file):
+                for suffix in ('-wal', '-journal'):
+                    side_file = Path(str(path) + suffix)
+                    side_file.write_bytes(b'pending')
+                    try:
+                        with self.assertRaisesRegex(
+                            ValueError, 'UNSNAPSHOTTED_SQLITE_JOURNAL'
+                        ):
+                            marked.audit(
+                                root, {'ssd': root}, epoch, epoch+3600,
+                                candles_path=source, funding_path=funding_file,
+                                immutable_candles=True)
+                    finally:
+                        side_file.unlink()
+            # Also refuse a missing database; mode=ro must never create one.
+            missing_db = root / 'missing.sqlite'
+            with self.assertRaisesRegex(ValueError, 'HISTORICAL_DATABASE_NOT_FOUND'):
+                marked.audit(
+                    root, {'ssd': root}, epoch, epoch+3600,
+                    candles_path=missing_db, funding_path=funding_file,
+                    immutable_candles=True)
+            self.assertFalse(missing_db.exists())
 
             # Prescribed entry records must not bypass missing causal history.
             with self.assertRaisesRegex(ValueError, 'RECONSTRUCTED_ENTRY_NOT_ADMITTED'):

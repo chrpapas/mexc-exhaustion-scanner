@@ -181,15 +181,30 @@ class FourSlotSnapshotCoordinator:
         except Exception:
             return FourSlotSnapshotResult("LEDGER_READ_OR_CONTRACT_FAILED")
 
+        # Record only a finite probe stage and an allowlisted reason. Never
+        # preserve an exception string, URL, response body or account detail.
+        inventory_stage="FIRST_POSITIONS"
         try:
             before_positions = await self.venue.open_positions()
+            inventory_stage="FIRST_STOPS"
             before_stops = await self.venue.open_stop_orders()
+            inventory_stage="FIRST_DIGEST"
             before_hash = _venue_digest(before_positions, before_stops)
             if len(before_positions) > MAX_SLOTS:
                 return FourSlotSnapshotResult("ACCOUNT_EXCEEDS_FOUR_SLOTS")
+            inventory_stage="COMPLETENESS"
             report = await self.completeness.inspect()
-        except Exception:
-            return FourSlotSnapshotResult("INVENTORY_READ_OR_FORMAT_FAILED")
+        except Exception as error:
+            from app.t100_v40_guardian_get_failure_codes import (
+                safe_inventory_exception_category,
+            )
+            return FourSlotSnapshotResult(
+                "INVENTORY_READ_OR_FORMAT_FAILED",
+                mismatch_diagnostic={
+                    "stage": inventory_stage,
+                    "category": safe_inventory_exception_category(error),
+                },
+            )
 
         # Fetch the exact order origins from durable checkpoint identities.
         # A non-flat account without a checkpoint cannot be adopted.
@@ -218,7 +233,11 @@ class FourSlotSnapshotCoordinator:
         if before_hash != after_hash:
             return FourSlotSnapshotResult("VENUE_CRITICAL_INVENTORY_CHANGED")
         if not _valid_counts(report, len(after_positions), len(after_stops)):
-            return FourSlotSnapshotResult("INVENTORY_COMPLETENESS_UNVERIFIED")
+            # Retain bounded GET-only completeness evidence for independent
+            # guardian diagnostics. No account identifiers are logged here.
+            return FourSlotSnapshotResult(
+                "INVENTORY_COMPLETENESS_UNVERIFIED", inventory=report,
+            )
         if shared_manual_observation:
             # Full-account counts, critical hashes and read-only ledger
             # equality are already proven above. Partition by durable
@@ -293,11 +312,44 @@ class FourSlotSnapshotCoordinator:
         if n != len(checkpoints):
             return FourSlotSnapshotResult("UNOWNED_OR_MISSING_CHECKPOINTS")
         if n == 0:
-            # Historical ACKs can exist after completed trades. This
-            # coordinator has not yet certified the CLOSED lifecycle,
-            # so it must not declare a dirty historical ledger safe/flat.
+            # Closed histories remain immutable forever. A flat wallet
+            # with old trade history is allowed only after a second,
+            # independently READ-ONLY, full archive/finality audit.
             if first.revisions or first.intents or first.stop_amendments:
-                return FourSlotSnapshotResult("FLAT_HISTORY_REQUIRES_CLOSED_LEDGER_AUDIT")
+                try:
+                    from app.t100_v40_unreleased_closed_history_audit import (
+                        V40ArchivedHistoryAudit,
+                    )
+                    audit_method=getattr(
+                        self.ledger,"audit_archived_close_history",None,
+                    )
+                    if not callable(audit_method):
+                        return FourSlotSnapshotResult(
+                            "FLAT_HISTORY_REQUIRES_CLOSED_LEDGER_AUDIT"
+                        )
+                    archived=await audit_method(
+                        expected_intents=first.intents,
+                    )
+                except Exception:
+                    return FourSlotSnapshotResult(
+                        "FLAT_HISTORY_ARCHIVED_AUDIT_UNAVAILABLE"
+                    )
+                if not (
+                    type(archived) is V40ArchivedHistoryAudit
+                    and archived.status==
+                        "V40_ALL_ARCHIVED_NATIVE_CLOSES_ACCOUNTED_NONAUTHORIZING"
+                    and archived.every_archived_intent_accounted is True
+                    and archived.every_immutable_close_and_release_verified is True
+                    and archived.journal_unresolved_absent is True
+                    and archived.verified_closed_positions==len(first.intents)
+                    and archived.account_flat_signed_get_verified is False
+                    and archived.new_entry_allowed is False
+                    and archived.live_authorization is False
+                    and archived.database_writes==archived.mexc_posts==0
+                ):
+                    return FourSlotSnapshotResult(
+                        "FLAT_HISTORY_ARCHIVED_CLOSE_FINALITY_UNVERIFIED"
+                    )
             return FourSlotSnapshotResult(
                 status="FLAT_OBSERVED_NONAUTHORIZING",
                 inventory=report, ledger_hash=first_hash,

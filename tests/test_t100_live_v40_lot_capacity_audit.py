@@ -68,6 +68,21 @@ class LotCapacityAuditTests(unittest.TestCase):
 
             write()
             self.assertEqual(audit(root, dbpath, spec)["100"]["remaining_known_positions"], 0)
+            immutable_result = audit(root, dbpath, spec, immutable=True)
+            self.assertEqual(immutable_result["100"]["known_lot_fills"], 2)
+            self.assertFalse(immutable_result["100"]["snapshot_historical_point_in_time"])
+            # Fail closed when immutable reads would ignore transaction logs.
+            for suffix in ("-wal", "-journal"):
+                side = Path(str(dbpath) + suffix)
+                side.write_bytes(b"uncheckpointed")
+                try:
+                    with self.assertRaisesRegex(
+                        ValueError, "IMMUTABLE_CANDLE_DB_HAS_PENDING_JOURNAL"
+                    ):
+                        audit(root, dbpath, spec, immutable=True)
+                finally:
+                    side.unlink()
+
             # A future candle's larger turnover cannot justify the preceding fill.
             rows[0]["quota_total_usdt"] = "1000"
             write()

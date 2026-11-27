@@ -1,0 +1,32 @@
+name: V40 execution schema inventory is SELECT only (offline)
+
+on:
+  push:
+    branches:
+      - "feat/v40-live-schema-readiness-*"
+  pull_request:
+    paths:
+      - "app/t100_v40_runtime_schema_probe.py"
+      - "app/t100_v40_render_four_slot_readonly_worker.py"
+      - "tests/test_t100_v40_runtime_schema_probe.py"
+      - ".github/workflows/v40-runtime-schema-inventory.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  readonly-catalog-no-mutations:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install -e ".[dev]"
+      - name: Test missing schema and redact unknown query results
+        run: |
+          python -m compileall -q app/t100_v40_runtime_schema_probe.py app/t100_v40_render_four_slot_readonly_worker.py
+          python -m pytest -q \
+            tests/test_t100_v40_runtime_schema_probe.py \
+            tests/test_t100_v40_render_four_slot_readonly_worker.py \
+            tests/test_t100_v40_guardian_four_slot_live_wiring.py

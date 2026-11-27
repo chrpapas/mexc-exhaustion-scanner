@@ -2,6 +2,9 @@
 
 Recorded fills only: does not prove optimal requested size, absent orders,
 current account rights, historical contract rules or executable liquidity.
+The current contract snapshot is deliberately marked NOT_HISTORICAL and must
+never be treated as timestamped historical exchange specification evidence.
+Immutable SQLite reads are explicit and fail closed on -wal/-journal files.
 """
 
 import csv
@@ -12,7 +15,7 @@ from decimal import ROUND_CEILING, ROUND_FLOOR
 from decimal import Decimal as D
 from pathlib import Path
 
-from scripts.v40_exit_trigger_audit import timestamp
+from scripts.v40_exit_trigger_audit import timestamp, open_candle_database
 
 
 def child_count(quantity, step, minimum, maximum):
@@ -33,7 +36,7 @@ def child_count(quantity, step, minimum, maximum):
     return int(children)
 
 
-def audit(folder, candles_path, snapshot_path):
+def audit(folder, candles_path, snapshot_path, *, immutable=False):
     payload = json.loads(snapshot_path.read_text())
     if (
         payload.get("NOT_HISTORICAL") is not True
@@ -43,8 +46,7 @@ def audit(folder, candles_path, snapshot_path):
     specs = payload["specifications"]
     with (folder / "fills.csv").open() as handle:
         fills = list(csv.DictReader(handle))
-    db = sqlite3.connect(candles_path.resolve().as_uri() + "?mode=ro", uri=True)
-    db.execute("PRAGMA query_only=ON")
+    db = open_candle_database(candles_path, immutable=immutable)
     db.execute("BEGIN")
     results = {}
     try:
@@ -100,6 +102,7 @@ def audit(folder, candles_path, snapshot_path):
                 "unknown_spec_fills": unknown,
                 "quota_groups": len(used),
                 "remaining_known_positions": sum(q > 0 for q in inventory.values()),
+                "snapshot_historical_point_in_time": False,
                 "full_sizing_decisions_certified": False,
                 "venue_execution_certified": False,
                 "live_authorization": False,
@@ -116,5 +119,10 @@ if __name__ == "__main__":
     p.add_argument("--folder", required=True, type=Path)
     p.add_argument("--candles", required=True, type=Path)
     p.add_argument("--snapshot", required=True, type=Path)
+    p.add_argument("--immutable", action="store_true",
+                   help="Only for a verified dormant historical SQLite copy; refuses pending WAL/journals")
     args = p.parse_args()
-    print(json.dumps(audit(args.folder, args.candles, args.snapshot), indent=2))
+    print(json.dumps(
+        audit(args.folder, args.candles, args.snapshot, immutable=args.immutable),
+        indent=2,
+    ))

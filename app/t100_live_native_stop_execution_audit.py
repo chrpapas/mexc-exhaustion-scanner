@@ -65,6 +65,7 @@ def assess_native_short_market_stop_row(
     position_id: str,
     position_quantity: Decimal,
     maximum_short_stop_price: Decimal,
+    verified_filled_entry_order_id: str | None = None,
 ) -> NativeMarketShortStopAudit:
     """Strict static current-GET field witness, not execution certification."""
     def fail(code: str) -> NativeMarketShortStopAudit:
@@ -93,15 +94,24 @@ def assess_native_short_market_stop_row(
         row_shape_verified=True,
         owned_position_match_verified=True,
     )
-    # The current MEXC GET contract distinguishes a position TP/SL
-    # (orderId=0) from TP/SL attached to a limit order. Requiring the
-    # position origin avoids treating an entry-order attachment as
-    # independently confirmed native position protection.
+    # MEXC supports both whole-position TP/SL (orderId=0) and
+    # entry-order-attached TP/SL (orderId=entry order ID). We previously
+    # rejected ALL attached stops here, even after the originating entry
+    # had been independently verified filled by 4-slot recovery.
+    #
+    # The optional exact origin is admissible only for that stronger
+    # caller: its separate signed order/fill provenance MUST already be
+    # verified, and the exchange stop's own orderId must be an exact
+    # matching ASCII positive ID. Default callers still require 0.
     origin_order_id = stop.get("orderId")
-    if (
-        type(origin_order_id) not in (int, str)
-        or str(origin_order_id) != "0"
-    ):
+    position_origin=type(origin_order_id) in (int,str) and str(origin_order_id)=="0"
+    filled_entry_origin=all((
+        type(verified_filled_entry_order_id) is str,
+        _positive_id(verified_filled_entry_order_id),
+        type(origin_order_id) in (int,str),
+        str(origin_order_id)==verified_filled_entry_order_id,
+    ))
+    if not position_origin and not filled_entry_origin:
         return NativeMarketShortStopAudit(
             status="NATIVE_SL_POSITION_ORDER_ORIGIN_UNVERIFIED", **verified,
         )

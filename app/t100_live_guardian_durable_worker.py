@@ -98,6 +98,8 @@ async def verify_alert_writer_role(conn: Any) -> None:
                 has_table_privilege(current_user,
                     'public.t100_guardian_incident_outbox','SELECT') AS outbox_select,
                 has_table_privilege(current_user,
+                    'public.t100_guardian_incident_outbox','INSERT') AS outbox_insert,
+                has_table_privilege(current_user,
                     'public.t100_guardian_incident_outbox','UPDATE') AS outbox_update,
                 has_table_privilege(current_user,
                     'public.t100_guardian_incident_outbox','DELETE') AS outbox_delete,
@@ -157,7 +159,8 @@ async def verify_alert_writer_role(conn: Any) -> None:
         raise GuardianDurableHalted("GUARDIAN_ALERT_ROLE_CANNOT_BE_VERIFIED") from None
     if (row is None or row["read_only"]!="off" or
             any(row[x] is not True for x in (
-                "incident_insert","incident_update","outbox_select","outbox_update")) or
+                "incident_insert","incident_update","outbox_select",
+                "outbox_insert","outbox_update")) or
             type(unrelated_access) is not int or unrelated_access != 0 or
             any(row[x] is not False for x in (
                 "incident_delete","incident_truncate",

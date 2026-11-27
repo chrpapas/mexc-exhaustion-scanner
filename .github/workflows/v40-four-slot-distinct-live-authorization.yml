@@ -1,0 +1,35 @@
+name: V40 separate four-slot live authorization and margin envelope
+
+on:
+  push:
+    branches:
+      - "feat/v40-four-slot-distinct-authorization-*"
+  pull_request:
+    paths:
+      - "app/t100_live_authorization.py"
+      - "tests/test_t100_v40_four_slot_release_policy.py"
+      - ".github/workflows/v40-four-slot-distinct-live-authorization.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  failclosed-portfolio-permit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install
+        run: python -m pip install -e ".[dev]"
+      - name: Compile
+        run: python -m compileall -q app/t100_live_authorization.py
+      - name: Test independent portfolio release and original canary boundaries
+        run: |
+          python -m pytest -q \
+            tests/test_t100_v40_four_slot_release_policy.py \
+            tests/test_t100_live_authorization.py \
+            tests/test_t100_v40_live_portfolio_supervisor.py \
+            tests/test_t100_v40_render_real_canary_worker.py \
+            tests/test_t100_live_stop_mutation_executor.py

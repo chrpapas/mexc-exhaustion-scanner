@@ -123,6 +123,11 @@ def prepare_protected_entries(
                 position_id=position_id,
                 position_quantity=fill_set.deal_volume,
                 maximum_short_stop_price=intent.stop_price,
+                # MEXC can attach the native MARKET SL to the exact
+                # filled entry order. The caller already verified a single
+                # final SHORT order, matching externalOid and fill volume;
+                # an unrelated stop origin remains strictly rejected.
+                verified_filled_entry_order_id=oid,
             )
             if (
                 stop_audit.status

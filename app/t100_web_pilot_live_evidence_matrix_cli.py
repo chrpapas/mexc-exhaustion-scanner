@@ -76,8 +76,32 @@ def evaluate_exchange_observations(
         fifth_result.get("no_take_profit_price_observed") is True
     )
     live_amendment_observed = fourth_ok
+    supervised_full_position_stop = (
+        fourth_ok
+        and fourth_result.get(
+            "supervised_native_stop_full_one_contract_volume_observed"
+        ) is True
+    )
+    supervised_ui_market_stop = (
+        supervised_full_position_stop
+        and fourth_result.get(
+            "operator_ui_trigger_market_sl_confirmed_before_amend"
+        ) is True
+    )
     native_attached_exit_observed = fifth_ok
     corroborated_sl_like_exit = fifth_ok and no_tp_price_observed
+    # Venue history labels the completed stop-linked market exit as TP,
+    # despite a complete full-market close and no positive TP price.
+    # Treat that ONE historical label inconsistency as nonblocking for
+    # historical close accounting. Do not rewrite triggerSide or grant
+    # any authority to attach/modify future stops.
+    historical_label_exception = all((
+        fourth_ok,
+        fifth_ok,
+        corroborated_sl_like_exit,
+        fifth_result.get("historical_stop_loss_type") != "LIMIT",
+        fifth_result.get("native_sl_trigger_certified") is False,
+    ))
     return {
         "status": (
             "FOURTH_AND_FIFTH_LIVE_VENUE_OBSERVATIONS_RECONCILED"
@@ -87,6 +111,23 @@ def evaluate_exchange_observations(
         ),
         "credential_scope": "T100_WEB_PILOT_SUBACCOUNT",
         "fourth_pilot_exact_manual_market_close_verified": fourth_ok,
+        # Already verified in the supervised pilot: one owned short
+        # contract had one exactly sized attached native protective stop;
+        # the operator independently confirmed Trigger Market SL in UI.
+        # MEXC did not reliably expose stopLossType=MARKET via API.
+        # These facts must not be conflated with future unattended
+        # exchange-side protection, replacement/atomic amendment or
+        # restart safety.
+        "supervised_native_stop_full_position_quantity_verified": (
+            supervised_full_position_stop
+        ),
+        "supervised_trigger_market_sl_confirmed_in_exchange_ui": (
+            supervised_ui_market_stop
+        ),
+        "supervised_full_position_native_market_sl_observed": (
+            supervised_ui_market_stop
+        ),
+        "supervised_native_market_type_api_field_verified": False,
         "one_supervised_native_stop_price_edit_observed": live_amendment_observed,
         "fifth_native_attached_exit_full_market_fill_verified": (
             native_attached_exit_observed
@@ -97,6 +138,20 @@ def evaluate_exchange_observations(
         ),
         "fifth_historical_trigger_side": (
             "TP_CONFLICT" if fifth_ok else "UNVERIFIED"
+        ),
+        "fifth_historical_trigger_interpretation": (
+            "PROBABLE_SL_TRIGGER_API_LABEL_CONFLICT"
+            if historical_label_exception
+            else "UNVERIFIED"
+        ),
+        "fifth_probable_sl_label_conflict_observed": historical_label_exception,
+        # This exception applies ONLY to historical exit accounting, not
+        # stop-protection provenance or entry/mutation release gates.
+        "fifth_historical_tp_label_standalone_release_blocker": (
+            fifth_ok and not historical_label_exception
+        ),
+        "fifth_historical_exit_accounting_accepted_despite_label": (
+            historical_label_exception
         ),
         "fifth_explicit_stop_market_type": (
             fifth_result.get("historical_stop_loss_type")

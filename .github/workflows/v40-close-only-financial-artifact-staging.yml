@@ -1,0 +1,35 @@
+name: V40 fenced close-only financial artifacts (no live orders)
+
+on:
+  push:
+    branches:
+      - "feat/v40-close-only-financial-artifact-persistence-*"
+  pull_request:
+    paths:
+      - "app/t100_v40_close_financial_artifact_staging.py"
+      - "tests/test_t100_v40_close_financial_artifact_staging.py"
+      - ".github/workflows/v40-close-only-financial-artifact-staging.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  immutable-close-only:
+    runs-on: ubuntu-latest
+    timeout-minutes: 9
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install -e ".[dev]"
+      - name: Atomic close-only financial artifact custody and regression tests
+        run: |
+          python -m compileall -q app/t100_v40_close_financial_artifact_staging.py
+          python -m pytest -q \
+            tests/test_t100_v40_close_financial_artifact_staging.py \
+            tests/test_t100_v40_portfolio_close_financial_reader.py \
+            tests/test_t100_v40_native_close_mismatch_recovery.py \
+            tests/test_t100_v40_native_close_release_handoff.py \
+            tests/test_t100_v40_unreleased_verified_slot_release.py \
+            tests/test_t100_v40_full_portfolio_runtime.py

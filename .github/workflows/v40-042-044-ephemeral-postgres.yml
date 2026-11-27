@@ -1,0 +1,57 @@
+name: V40 042-044 schema and privileges on isolated PostgreSQL
+
+on:
+  push:
+    branches:
+      - "feat/v40-schema-migration-verified-*"
+  pull_request:
+    paths:
+      - "migrations/042_v40_exit_bar_cursor_UNRELEASED.sql"
+      - "migrations/043_v40_immutable_bar_observed_UNRELEASED.sql"
+      - "migrations/044_v40_immutable_entry_contract_specs_UNRELEASED.sql"
+      - "tests/test_t100_v40_schema_migrations_ephemeral.py"
+      - ".github/workflows/v40-042-044-ephemeral-postgres.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  disposable-postgres-only:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: mexc_exhaustion
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: t100-ci-only-local-postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d mexc_exhaustion"
+          --health-interval 3s
+          --health-timeout 3s
+          --health-retries 12
+    env:
+      CI: 'true'
+      T100_V40_PG_SCHEMA_CI_ONLY: 'yes'
+      T100_EXECUTION_MODE: paper
+      T100_LIVE_ORDER_API_ENABLED: 'false'
+      T100_LIVE_KILL_SWITCH: 'true'
+      EXECUTION_ENABLED: 'false'
+      PGHOST: 127.0.0.1
+      PGPORT: '5432'
+      PGDATABASE: mexc_exhaustion
+      PGUSER: postgres
+      PGPASSWORD: t100-ci-only-local-postgres
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install -e ".[dev]"
+      - name: Real PG16 DDL, atomic constraints, restricted grants, no orders
+        run: |
+          python -m compileall -q tests/test_t100_v40_schema_migrations_ephemeral.py
+          python -m pytest -q tests/test_t100_v40_schema_migrations_ephemeral.py

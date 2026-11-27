@@ -1,0 +1,28 @@
+name: V40 immutable emergency close migration (scanner source)
+
+on:
+  pull_request:
+    paths:
+      - "app/t100_v40_scanner_migrate_040.py"
+      - "app/t100_v40_render_stage2_scanner.py"
+      - "app/v40_emergency_040.sql"
+      - "migrations/040_v40_emergency_close_once_claim.sql"
+      - "pyproject.toml"
+      - "tests/test_t100_v40_scanner_migrate_040.py"
+      - ".github/workflows/v40-scanner-emergency-migration.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  safe-migration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install -e ".[dev]"
+      - run: python -m pytest -q tests/test_t100_v40_scanner_migrate_040.py tests/test_t100_v40_render_stage2_scanner.py
